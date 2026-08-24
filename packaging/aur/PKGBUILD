@@ -29,6 +29,12 @@ license=('AGPL-3.0-only')
 # libgcc, not gcc-libs. gcc-libs is now a metapackage that also pulls libasan,
 # libgfortran, libgomp, libstdc++ and nine others. The binary needs libgcc_s.so.1
 # and nothing else from that set.
+#
+# hicolor-icon-theme is the one entry here that is not a linked library. package()
+# writes into /usr/share/icons/hicolor, and that hierarchy plus its index.theme
+# belong to hicolor-icon-theme. It is pulled in transitively by gtk3 in practice,
+# but a package that owns files inside another package's directory tree should
+# depend on it outright. namcap flags the omission.
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
@@ -40,6 +46,7 @@ depends=(
   'dbus'
   'libgcc'
   'glibc'
+  'hicolor-icon-theme'
 )
 makedepends=('cargo' 'git' 'nodejs' 'pnpm')
 
@@ -101,6 +108,16 @@ build() {
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
 
+  # Rust bakes file!() paths into every panic and tracing call site, and those are
+  # string literals in .rodata, so `strip = true` does not remove them. Left
+  # alone, the shipped binary carries 700-odd absolute paths from whoever built
+  # it, of the form /home/you/.cache/yay/consort-git/src/..., and makepkg reports
+  # "Package contains reference to $srcdir". makepkg does set this remap itself,
+  # but only in DEBUG_RUSTFLAGS, which the !debug option above turns off, so it
+  # has to be set here. check() sets the identical value: if the two disagree,
+  # cargo sees a different fingerprint and recompiles all 459 crates.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+
   # Tauri embeds app/dist into the binary at compile time via its build script,
   # and `cargo build` does not run `beforeBuildCommand`. Building the frontend
   # is therefore not optional and not implied: skip it and you get a binary that
@@ -127,6 +144,8 @@ check() {
   export CARGO_HOME="$srcdir/cargo-home"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
+  # Must match build() exactly, or cargo rebuilds the whole graph. See there.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
   cargo test --frozen --release --workspace
 }
 
