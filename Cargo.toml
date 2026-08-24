@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/consort-matrix", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+repository = "https://github.com/consort-chat/consort"
+rust-version = "1.97"
+
+[workspace.dependencies]
+# The Matrix SDK pin.
+#
+# This rev is NOT arbitrary and MUST NOT be bumped in isolation. It is the rev
+# `matrix-rust-rtc` pins for every one of its crates, and when we add the voice
+# layer we link against that crate. If the two revs diverge, cargo resolves two
+# copies of matrix-sdk, and the `Client` this workspace builds is a different
+# type from the one matrix-rust-rtc's call API accepts. The failure is a wall of
+# "expected Client, found Client" at the call site, not a version warning.
+#
+# Bumping means bumping both, together, and rebuilding both.
+matrix-sdk = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", default-features = false, features = [
+    "e2e-encryption",
+    "sqlite",
+    "rustls-aws-lc-rs",
+    "automatic-room-key-forwarding",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+# libwebrtc arrives with the voice layer and makes debug symbols enormous.
+# Stripping keeps the shipped binary something a person will actually download.
+strip = true
+lto = "thin"
+codegen-units = 1

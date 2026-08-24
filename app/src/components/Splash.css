@@ -1,0 +1,57 @@
+.splash {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-6);
+  height: 100%;
+  background:
+    radial-gradient(
+      70% 55% at 50% 38%,
+      oklch(24% 0.05 285) 0%,
+      var(--surface-void) 70%
+    );
+  animation: splash-in 600ms var(--ease-out-expo) both;
+  animation-delay: 220ms;
+}
+
+.splash__mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--violet);
+  animation: splash-spin 1.4s linear infinite;
+}
+
+.splash__label {
+  margin: 0;
+  font-size: var(--text-sm);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+@keyframes splash-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes splash-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash {
+    animation-delay: 0ms;
+  }
+
+  .splash__mark {
+    animation: none;
+    border-top-color: var(--line-strong);
+  }
+}

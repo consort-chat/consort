@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline permissions for the main window. Nothing here grants filesystem, shell, or network access to the frontend: every privileged operation goes through a Rust command instead, so the webview cannot reach the disk or the homeserver directly.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

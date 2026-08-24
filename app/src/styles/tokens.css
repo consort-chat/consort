@@ -1,0 +1,75 @@
+/*
+ * Design tokens.
+ *
+ * Direction: dark, slightly editorial. A violet primary carried over from the
+ * app mark, a mint accent reserved for one job only (voice and presence), and
+ * surfaces that layer rather than sit flat. Not a neutral grey shell with an
+ * accent bolted on.
+ *
+ * Mint is semantic, not decorative. If it starts appearing on buttons and
+ * links, the speaking indicator stops reading as special, which is the one
+ * thing the voice work needs it to do.
+ */
+:root {
+  color-scheme: dark;
+
+  --surface-void: oklch(16% 0.018 285);
+  --surface-base: oklch(20% 0.02 285);
+  --surface-raised: oklch(24% 0.022 285);
+  --surface-overlay: oklch(28% 0.024 285);
+
+  --line-subtle: oklch(32% 0.02 285);
+  --line-strong: oklch(42% 0.03 285);
+
+  --text-primary: oklch(96% 0.005 285);
+  --text-secondary: oklch(74% 0.012 285);
+  --text-muted: oklch(58% 0.014 285);
+
+  --violet: oklch(58% 0.21 284);
+  --violet-hover: oklch(64% 0.21 284);
+  --violet-press: oklch(52% 0.2 284);
+  --violet-glow: oklch(58% 0.21 284 / 0.28);
+
+  --mint: oklch(84% 0.13 168);
+  --danger: oklch(64% 0.19 22);
+  --danger-surface: oklch(30% 0.08 22);
+
+  --font-sans:
+    ui-sans-serif, system-ui, "Inter", "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, "JetBrains Mono", "SFMono-Regular", "Cascadia Code", Menlo,
+    Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-display: clamp(1.75rem, 1.2rem + 1.6vw, 2.5rem);
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --shadow-raised: 0 1px 2px oklch(0% 0 0 / 0.4), 0 8px 24px oklch(0% 0 0 / 0.28);
+  --shadow-focus: 0 0 0 3px var(--violet-glow);
+
+  --duration-fast: 120ms;
+  --duration-normal: 220ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 1ms;
+    --duration-normal: 1ms;
+  }
+}

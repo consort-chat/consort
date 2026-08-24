@@ -1,0 +1,25 @@
+[package]
+name = "consort-matrix"
+description = "Matrix authentication and session persistence for Consort. No UI, no Tauri."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+matrix-sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = "0.10"
+# Only for `install_crypto_provider`. Pinned here rather than in the binary so
+# the version cannot drift away from the rustls that matrix-sdk resolves, which
+# would put two rustls crates in the graph and make the installed provider apply
+# to the wrong one.
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }

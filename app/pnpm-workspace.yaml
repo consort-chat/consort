@@ -1,0 +1,7 @@
+# pnpm 11 reads settings from here, not from a "pnpm" field in package.json.
+#
+# esbuild is allowed to run its install script because that script places the
+# platform-specific binary Vite shells out to. Blocked, `pnpm build` fails
+# before it starts with an error that reads like a corrupt node_modules.
+allowBuilds:
+  esbuild: true

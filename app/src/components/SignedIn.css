@@ -1,0 +1,109 @@
+.signed-in {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  background: var(--surface-base);
+}
+
+.signed-in__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-void);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.signed-in__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Mint is the presence colour and only the presence colour. */
+.signed-in__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0 3px oklch(84% 0.13 168 / 0.16);
+}
+
+.button--small {
+  padding: 0.3rem 0.7rem;
+  font-size: var(--text-sm);
+}
+
+.signed-in__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-8);
+}
+
+.signed-in__avatar {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: oklch(99% 0 0);
+  background: linear-gradient(150deg, var(--violet-hover), var(--violet-press));
+  border-radius: 50%;
+  box-shadow: var(--shadow-raised);
+}
+
+.signed-in__name {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.signed-in__facts {
+  display: grid;
+  gap: 1px;
+  margin: var(--space-2) 0 0;
+  overflow: hidden;
+  background: var(--line-subtle);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+}
+
+.signed-in__facts > div {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+}
+
+.signed-in__facts dt {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.signed-in__facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.signed-in__next {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

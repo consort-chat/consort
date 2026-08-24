@@ -1,0 +1,36 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# Node
+node_modules
+dist
+dist-ssr
+.pnpm-store
+*.local
+
+# Tauri
+app/src-tauri/gen
+app/src-tauri/target
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and local config. Nothing here is ever committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local Consort data (sessions, sqlite stores) if a dev points the app here
+/.consort-data

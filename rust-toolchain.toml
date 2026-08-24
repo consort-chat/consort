@@ -1,0 +1,8 @@
+# Pinned so every contributor and CI runner compiles with the same rustc.
+#
+# 1.97.1 is not arbitrary: the workspace is edition 2024 (needs >= 1.85), and
+# matrix-rust-rtc pins the same edition. An older toolchain fails with a
+# confusing "feature `edition2024` is required" rather than a clear message.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

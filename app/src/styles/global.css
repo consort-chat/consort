@@ -1,0 +1,55 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--surface-void);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A desktop app is not a document. Selecting the chrome is never intentional,
+   but selecting a user ID to copy it is, so inputs and marked text opt back in. */
+body {
+  user-select: none;
+  cursor: default;
+}
+
+input,
+textarea,
+[data-selectable] {
+  user-select: text;
+  cursor: auto;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+/* Focus rings are for keyboard users. Removing them entirely is the usual
+   mistake; scoping them to :focus-visible keeps mouse clicks quiet without
+   stranding anyone navigating by Tab. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
