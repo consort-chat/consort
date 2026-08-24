@@ -7,11 +7,32 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+# The installed command is `consort`, not `consort-app`. Tauri's own guidance is
+# to set this rather than `mainBinaryName`, so that plain `cargo build` and
+# `tauri build` agree on the filename. Distro packaging cares: the GTK WM_CLASS
+# is derived from argv[0], so a binary installed under a different name than the
+# one the .desktop file declares gets a blank icon in the dock.
+[[bin]]
+name = "consort"
+path = "src/main.rs"
+
 [lib]
 # Tauri v2 keeps the app in a lib so the mobile targets can link it. Desktop
 # `main.rs` is a three-line shim over `run()`.
 name = "consort_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# DO NOT REMOVE. tauri's build script computes `dev = !custom_protocol`, so
+# without this feature even a --release binary is a dev build: it ignores the
+# embedded frontendDist and tries to load devUrl (http://localhost:1420), then
+# renders "Could not connect to localhost: Connection refused".
+#
+# The tauri CLI passes `--features tauri/custom-protocol`, enabling the
+# dependency feature directly rather than this one, so `tauri build` was always
+# correct and the deb and rpm were never affected. Anything driving cargo
+# itself, the AUR PKGBUILD included, has to ask for it.
+[features]
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -30,6 +30,62 @@ Everything else. No room list, no messages, no voice. See
 
 ---
 
+## Installing
+
+Nothing is released yet. There are no signed binaries and no package
+repository, so every route below builds from source. See
+[Known limitations](#known-limitations) before you install this on a machine
+you care about.
+
+### Arch Linux
+
+A PKGBUILD lives in [`packaging/aur/`](packaging/aur/). It is not on the AUR
+yet, so build it in place:
+
+```sh
+git clone https://github.com/consort-chat/consort.git
+cd consort/packaging/aur
+makepkg -si
+```
+
+That installs a `consort-git` package: the `consort` binary in `/usr/bin`, a
+desktop entry, and icons in the hicolor theme. When the package is published,
+`yay -S consort-git` will do the same thing.
+
+If `makepkg` stops with a missing `pnpm` dependency even though `pnpm --version`
+works, your pnpm comes from corepack rather than the `pnpm` package. makepkg
+checks installed packages, not `$PATH`. Either `pacman -S pnpm`, or pass `-d` to
+skip the check.
+
+Arch is the distro this is developed on, so it is the one most likely to work.
+
+### Debian, Ubuntu, Fedora
+
+`pnpm tauri build` writes a `.deb` and an `.rpm` to `target/release/bundle/`:
+
+```sh
+sudo apt install ./target/release/bundle/deb/Consort_0.1.0_amd64.deb
+sudo dnf install ./target/release/bundle/rpm/Consort-0.1.0-1.x86_64.rpm
+```
+
+Both are built and installed locally. Neither is signed, and neither is served
+from anywhere.
+
+### AppImage
+
+There isn't one, on purpose. Two separate reasons:
+
+- linuxdeploy carries its own ancient binutils `strip`, which cannot parse the
+  `.relr.dyn` relocation section current Arch libraries use. The bundler dies
+  on `libzstd` before it reaches anything of ours.
+- Even with that worked around, an AppImage built here still links the host
+  glibc, so it would refuse to start on an older distro. That is the exact
+  problem AppImage is supposed to solve, so shipping a broken one is worse
+  than shipping none.
+
+It has to be built in CI on an old base image. Until that exists, use the
+`.deb`, the `.rpm`, or the PKGBUILD.
+
 ## Building from source
 
 ### Prerequisites
@@ -37,6 +93,12 @@ Everything else. No room list, no messages, no voice. See
 **Rust.** The toolchain is pinned in `rust-toolchain.toml`, so
 [rustup](https://rustup.rs) will fetch the right version on the first build.
 Nothing to do beyond having rustup installed.
+
+A distro rust package works too, as long as it is 1.85 or newer. The pin only
+exists to guarantee an edition 2024 compiler. Note that `rust-toolchain.toml`
+is a rustup mechanism: a distro toolchain ignores it, and the AUR PKGBUILD
+deletes it during `prepare()` so that a builder who does have rustup is not
+sent to the network mid-build.
 
 **Node and pnpm.** Node 20 or newer, and pnpm:
 
@@ -66,8 +128,11 @@ git clone https://github.com/consort-chat/consort.git
 cd consort/app
 pnpm install
 pnpm tauri dev      # development, with hot reload on the frontend
-pnpm tauri build    # release bundle in app/src-tauri/target/release/bundle
+pnpm tauri build    # .deb and .rpm under target/release/bundle
 ```
+
+`target/` is at the workspace root, not under `app/src-tauri`, because the
+Rust crates and the Tauri app share one cargo workspace.
 
 The first build compiles the Matrix SDK from source and takes a while. Later
 builds are incremental and fast.

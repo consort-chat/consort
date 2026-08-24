@@ -1,0 +1,156 @@
+# Maintainer: Consort contributors <https://github.com/consort-chat/consort>
+
+# Built from the latest commit on main, which is what the `-git` suffix means in
+# the AUR. When there is a tagged release this gets a sibling `consort` package
+# built from the tag, and the two carry the provides/conflicts pair below so
+# pacman treats them as alternatives rather than letting both install.
+
+_pkgname=consort
+pkgname=consort-git
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="Matrix chat client with voice, in a Tauri desktop shell"
+arch=('x86_64' 'aarch64')
+url="https://github.com/consort-chat/consort"
+license=('AGPL-3.0-only')
+
+# Every one of these is a direct DT_NEEDED entry of the built binary, read off
+# with `readelf -d` on the packaged binary and mapped back with `pacman -Qoq`,
+# not guessed from what Tauri usually wants. gtk3, cairo, glib2 and gdk-pixbuf2
+# would arrive transitively through webkit2gtk-4.1, but the binary links them
+# itself, so they are listed. pango, atk and harfbuzz appear on the link line
+# and are deliberately absent here: --as-needed drops them, so they are not
+# DT_NEEDED entries and depending on them would be wrong.
+#
+# sqlite is the one that is easy to miss: matrix-sdk-sqlite links the system
+# library rather than bundling it, and the crypto store will not open without
+# it.
+#
+# libgcc, not gcc-libs. gcc-libs is now a metapackage that also pulls libasan,
+# libgfortran, libgomp, libstdc++ and nine others. The binary needs libgcc_s.so.1
+# and nothing else from that set.
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsoup3'
+  'sqlite'
+  'glib2'
+  'cairo'
+  'gdk-pixbuf2'
+  'dbus'
+  'libgcc'
+  'glibc'
+)
+makedepends=('cargo' 'git' 'nodejs' 'pnpm')
+
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+
+# !lto is not a preference, it is required for this package to link at all.
+#
+# makepkg.conf ships OPTIONS=(... lto), which appends -flto=auto to CFLAGS. The
+# cc crate passes those straight through when it compiles aws-lc-sys' C sources,
+# so gcc emits GIMPLE bytecode in .gnu.lto_* sections instead of machine code.
+# rustc then links with -fuse-ld=lld, and lld cannot read GCC LTO bytecode, so
+# every aws_lc_0_44_0_* symbol comes out undefined and the link fails. Confirmed
+# by readelf: the objects carry .gnu.lto_* and no executable text.
+#
+# This only removes makepkg's C-side flags. `lto = "thin"` in the workspace
+# release profile governs Rust codegen and is untouched, so the Rust LTO stays.
+#
+# !debug because the release profile already sets strip = true, so there are no
+# debug symbols left to split out and the debug package would ship empty.
+options=('!lto' '!debug')
+
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/$_pkgname"
+  printf '%s.r%s.g%s' \
+    "$(awk -F'"' '/^version/ {print $2; exit}' Cargo.toml)" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$srcdir/$_pkgname"
+
+  # rust-toolchain.toml is a rustup mechanism, and rustup is not what a clean
+  # chroot uses. It is still removed rather than ignored, because plenty of
+  # people who install from the AUR do have rustup, and its shims honour the
+  # file: cargo would try to download the pinned toolchain from inside build(),
+  # where there is meant to be no network. The pin only exists to guarantee an
+  # edition 2024 compiler, and Arch's rust is far past that.
+  rm -f rust-toolchain.toml
+
+  # Keep both package managers inside $srcdir. Writing to ~/.cargo or the global
+  # pnpm store during a package build leaks state onto the builder's machine and
+  # breaks in a chroot.
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+
+  cd app
+  pnpm install --frozen-lockfile --store-dir "$srcdir/pnpm-store"
+}
+
+build() {
+  cd "$srcdir/$_pkgname"
+
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+
+  # Tauri embeds app/dist into the binary at compile time via its build script,
+  # and `cargo build` does not run `beforeBuildCommand`. Building the frontend
+  # is therefore not optional and not implied: skip it and you get a binary that
+  # compiles, launches, and shows a white window.
+  ( cd app && pnpm build )
+
+  # --frozen is --locked plus --offline, which is what the no-network-in-build
+  # rule wants. The git dependency on matrix-rust-sdk is already in the cargo
+  # cache from prepare().
+  #
+  # --features custom-protocol is load-bearing and easy to leave off. tauri's
+  # build script sets `dev = !custom_protocol`, so without it this release
+  # binary ignores the frontend embedded above and tries to fetch devUrl
+  # (http://localhost:1420) at runtime. It compiles, links, opens a window, and
+  # displays "Could not connect to localhost: Connection refused". The tauri CLI
+  # passes --features tauri/custom-protocol itself, so `tauri build` never hit
+  # this; driving cargo directly does.
+  cargo build --frozen --release --package consort-app --bin consort \
+    --features custom-protocol
+}
+
+check() {
+  cd "$srcdir/$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd "$srcdir/$_pkgname"
+
+  install -Dm755 target/release/consort "$pkgdir/usr/bin/consort"
+  install -Dm644 packaging/linux/consort.desktop \
+    "$pkgdir/usr/share/applications/consort.desktop"
+
+  # The SVG is the one that matters for HiDPI; the PNGs cover toolkits that will
+  # not rasterise one.
+  install -Dm644 app/src-tauri/icons/icon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/consort.svg"
+  install -Dm644 app/src-tauri/icons/32x32.png \
+    "$pkgdir/usr/share/icons/hicolor/32x32/apps/consort.png"
+  install -Dm644 app/src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/consort.png"
+  install -Dm644 'app/src-tauri/icons/128x128@2x.png' \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/consort.png"
+  install -Dm644 app/src-tauri/icons/icon.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/consort.png"
+
+  # AGPL-3.0 is not in Arch's `licenses` package, so the text ships with the
+  # package rather than being symlinked to a shared copy.
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

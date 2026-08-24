@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Consort
+GenericName=Matrix Client
+Comment=Matrix client with voice
+Exec=consort
+Icon=consort
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=matrix;chat;voice;messaging;
+# GTK derives WM_CLASS from argv[0], so this is the binary name, capitalised by
+# GTK for the class half of the pair. Measured, not guessed: the running window
+# reports WM_CLASS(STRING) = "consort", "Consort". Get this wrong and the window
+# shows a blank icon in the dock instead of the one installed below.
+StartupWMClass=Consort
+StartupNotify=true
