@@ -107,3 +107,21 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/*
+  The fallback notice. Deliberately quiet: it is information, not a failure,
+  and styling it as a warning would make a working install look broken.
+*/
+.signed-in__notice {
+  max-width: 46ch;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: left;
+  text-wrap: pretty;
+}

@@ -32,19 +32,31 @@
 //! # }
 //! ```
 //!
+//! ## Where the access token goes
+//!
+//! [`SessionStore::new`] puts it in the platform keyring: Secret Service on
+//! Linux and the BSDs, the Credential Manager on Windows, Keychain on macOS.
+//! When no keyring answers, and on a bare window manager or in a container
+//! none will, it falls back to an owner-only file and says so through
+//! [`SessionStore::backend_kind`]. See [`secrets`] for why that fallback
+//! exists rather than a hard failure.
+//!
 //! ## The rustls provider
 //!
 //! Nothing here installs a rustls `CryptoProvider`, but something must, exactly
 //! once per process, before the first TLS connection. It is the binary's job,
 //! not a library's. See [`install_crypto_provider`] for why it is not automatic.
 
+pub mod atomic;
 pub mod auth;
 pub mod error;
+pub mod secrets;
 pub mod session;
 
 pub use auth::{Credentials, Profile};
 pub use error::{Error, Result};
-pub use session::{SessionStore, StoredSession};
+pub use secrets::{Backend, BackendKind};
+pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
 
 // Re-exported so a consumer holding a `Client` needs only this crate as a
 // dependency, and cannot accidentally depend on a *different* matrix-sdk rev.

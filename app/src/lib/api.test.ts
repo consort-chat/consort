@@ -1,0 +1,135 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+import {
+  asCommandError,
+  login,
+  logout,
+  sessionStatus,
+  tokenStorage,
+  type Profile,
+} from "./api";
+
+const profile: Profile = {
+  user_id: "@bob:example.org",
+  device_id: "HZTIUXZKUU",
+  homeserver: "https://example.org/",
+  display_name: "Bob",
+  avatar_url: null,
+};
+
+describe("command wrappers", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("calls session_status with no arguments", async () => {
+    invoke.mockResolvedValue({ status: "signedOut" });
+
+    await expect(sessionStatus()).resolves.toEqual({ status: "signedOut" });
+    expect(invoke).toHaveBeenCalledWith("session_status");
+  });
+
+  it("passes the login fields under the names the Rust command expects", async () => {
+    // The names are the contract. A rename on either side has to break here
+    // rather than at runtime with an unhelpful deserialisation error.
+    invoke.mockResolvedValue(profile);
+
+    await login("example.org", "bob", "hunter2");
+
+    expect(invoke).toHaveBeenCalledWith("login", {
+      server: "example.org",
+      username: "bob",
+      password: "hunter2",
+    });
+  });
+
+  it("returns the profile the login command produced", async () => {
+    invoke.mockResolvedValue(profile);
+    await expect(login("example.org", "bob", "hunter2")).resolves.toEqual(profile);
+  });
+
+  it("propagates a rejected login rather than swallowing it", async () => {
+    invoke.mockRejectedValue({ message: "Incorrect username or password.", detail: "M_FORBIDDEN" });
+
+    await expect(login("example.org", "bob", "wrong")).rejects.toMatchObject({
+      message: "Incorrect username or password.",
+    });
+  });
+
+  it("calls logout with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await logout();
+
+    expect(invoke).toHaveBeenCalledWith("logout");
+  });
+
+  it("calls token_storage and returns the shape the UI renders", async () => {
+    invoke.mockResolvedValue({
+      kind: "keyring",
+      description: "Your sign-in is stored in your system keyring.",
+      isPreferred: true,
+    });
+
+    await expect(tokenStorage()).resolves.toMatchObject({
+      kind: "keyring",
+      isPreferred: true,
+    });
+    expect(invoke).toHaveBeenCalledWith("token_storage");
+  });
+});
+
+describe("asCommandError", () => {
+  it("passes a real CommandError straight through", () => {
+    const error = { message: "Could not reach that homeserver.", detail: "dns failure" };
+    expect(asCommandError(error)).toBe(error);
+  });
+
+  it("wraps a thrown Error, keeping its text as the detail", () => {
+    const result = asCommandError(new Error("boom"));
+
+    expect(result.message).toBe("Something went wrong.");
+    expect(result.detail).toBe("boom");
+  });
+
+  it("wraps a thrown string", () => {
+    expect(asCommandError("just a string")).toEqual({
+      message: "Something went wrong.",
+      detail: "just a string",
+    });
+  });
+
+  it("wraps null without dereferencing it", () => {
+    // `typeof null === "object"`, so the null check is load-bearing and this
+    // is the test that fails if someone removes it.
+    expect(asCommandError(null)).toEqual({
+      message: "Something went wrong.",
+      detail: "null",
+    });
+  });
+
+  it("wraps undefined", () => {
+    expect(asCommandError(undefined).detail).toBe("undefined");
+  });
+
+  it("rejects an object whose message is not a string", () => {
+    const result = asCommandError({ message: 42 });
+
+    expect(result.message).toBe("Something went wrong.");
+  });
+
+  it("rejects an object with no message at all", () => {
+    expect(asCommandError({ detail: "only a detail" }).message).toBe(
+      "Something went wrong.",
+    );
+  });
+
+  it("never returns a message that is empty", () => {
+    for (const input of [null, undefined, 0, "", [], {}, new Error("")]) {
+      expect(asCommandError(input).message.length).toBeGreaterThan(0);
+    }
+  });
+});

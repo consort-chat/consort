@@ -30,6 +30,12 @@ license=('AGPL-3.0-only')
 # libgfortran, libgomp, libstdc++ and nine others. The binary needs libgcc_s.so.1
 # and nothing else from that set.
 #
+# The keyring support added in the verification milestone does NOT change this
+# list. `keyring` reaches Secret Service through zbus, which speaks the DBus
+# wire protocol over a unix socket in pure Rust, so it links no libdbus and
+# adds no -sys crate. Re-derive with `readelf -d` anyway after any dependency
+# change; that is where every entry below came from.
+#
 # hicolor-icon-theme is the one entry here that is not a linked library. package()
 # writes into /usr/share/icons/hicolor, and that hierarchy plus its index.theme
 # belong to hicolor-icon-theme. It is pulled in transitively by gtk3 in practice,
@@ -146,6 +152,22 @@ check() {
   export CARGO_TARGET_DIR=target
   # Must match build() exactly, or cargo rebuilds the whole graph. See there.
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+
+  # This costs real time, and it is worth knowing why before deleting it.
+  #
+  # The test suite uses matrix-sdk's `testing` feature for MatrixMockServer, as
+  # a dev-dependency. Resolver 3 keeps that feature out of build(), which is
+  # what we want, but it means cargo resolves two feature sets for matrix-sdk
+  # and compiles it twice: once here and once above. matrix-sdk is the largest
+  # thing in the graph, so this roughly doubles the package build.
+  #
+  # Left in because a check() that does not run the tests is not a check. If
+  # the build time becomes the problem, gate the mock-server tests behind a
+  # cargo feature and skip that one target here, rather than dropping check()
+  # altogether.
+  #
+  # No test needs the network, and none touches a keyring: the tests that would
+  # are #[ignore]d, and everything else goes through an in-memory backend.
   cargo test --frozen --release --workspace
 }
 

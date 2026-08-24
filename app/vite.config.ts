@@ -17,6 +17,10 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    // Off deliberately. Tauri embeds everything under dist/ into the binary,
+    // so a source map is weight shipped to every user for the benefit of
+    // nobody: the webview devtools are not open in a release build. Turn it
+    // back on locally if you are chasing something in a production bundle.
+    sourcemap: false,
   },
 });

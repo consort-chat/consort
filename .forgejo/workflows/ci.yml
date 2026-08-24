@@ -1,0 +1,184 @@
+# Consort CI, on Forgejo Actions.
+#
+# ## Who can make this run
+#
+# Nothing here gates on the author, and it does not need to. Forgejo blocks
+# workflow runs for pull requests from untrusted authors by default, where
+# untrusted means anyone with only read access opening a PR from a fork or over
+# AGit. Their first pull request waits until somebody with write access presses
+# "Approve once" or "Approve always" on the conversation page, so a drive-by
+# cannot burn runner minutes. Trust also expires after three months of
+# inactivity, and blocking a user revokes it.
+#
+# Two consequences worth knowing:
+#
+#   - `pull_request_target` bypasses that block entirely. It is deliberately
+#     not used anywhere in this file, and it should not be added. A workflow
+#     using it runs untrusted branches with repository secrets in scope.
+#   - For an untrusted author, Forgejo runs the workflows from the *target*
+#     branch rather than the ones in the pull request. Editing this file in a
+#     PR therefore cannot change what CI does to that same PR.
+#
+# ## Why not GitHub
+#
+# GitHub is a mirror for now. When it becomes the place pull requests arrive,
+# this file gets a sibling under .github/workflows with the same jobs plus
+# GitHub's own "require approval for first-time contributors" setting, which is
+# the equivalent control and is not on by default there.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A failed build should not also cost a fetch of the whole crates.io index.
+  CARGO_NET_RETRY: 3
+  RUSTUP_MAX_RETRIES: 3
+  # Debug info is the bulk of the target directory and nothing here reads a
+  # backtrace off a CI machine.
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: docker
+    container:
+      image: node:24-bookworm
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare --activate
+
+      - name: Install dependencies
+        # --frozen-lockfile so a pull request that edits package.json without
+        # regenerating the lockfile fails here rather than silently resolving
+        # something nobody reviewed.
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Test with coverage
+        # Thresholds live in vitest.config.ts, so this fails on its own if
+        # coverage drops below them.
+        run: pnpm test:coverage
+
+      - name: Build
+        run: pnpm build
+
+  rust:
+    name: Rust
+    runs-on: docker
+    container:
+      image: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        # webkit2gtk and friends are needed to compile the Tauri crate at all,
+        # not just to run it. libssl and pkg-config are for the C half of
+        # aws-lc-sys.
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            pkg-config \
+            cmake \
+            clang
+
+      - name: Toolchain components
+        run: rustup component add rustfmt clippy llvm-tools-preview
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Coverage
+        # There is no keyring daemon in a container, so the secrets backend
+        # under test is the file fallback and the keyring adapter is skipped.
+        # The exclusions are spelled out in COVERAGE.md; keep the two in step.
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --workspace \
+            --ignore-filename-regex '(keyring_store\.rs|src-tauri/src/(main|lib)\.rs)' \
+            --fail-under-lines 90 \
+            --lcov --output-path lcov.info
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v3
+        with:
+          name: rust-coverage
+          path: lcov.info
+
+  hygiene:
+    name: Hygiene
+    runs-on: docker
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: apt-get update && apt-get install --yes --no-install-recommends git ripgrep
+
+      - name: No em dashes or en dashes
+        # House style. They are banned in source, comments, commit messages and
+        # docs; a plain hyphen is fine.
+        run: |
+          if git ls-files -z -- ':!:.claude/**' | xargs -0 rg --no-messages --line-number '[\x{2014}\x{2013}]'; then
+            echo
+            echo "Found an em dash or en dash. Use a comma, a colon, parentheses, or two sentences."
+            exit 1
+          fi
+          echo "None found."
+
+      - name: No private homeserver names
+        # The maintainer's own homeserver has leaked into examples before. The
+        # placeholder everywhere is example.org.
+        run: |
+          if git ls-files -z | xargs -0 rg --no-messages --line-number 'lamp\.stream'; then
+            echo
+            echo "Use example.org in documentation and tests."
+            exit 1
+          fi
+          echo "None found."
+
+      - name: No stray debugging
+        run: |
+          if git ls-files -z -- '*.rs' | xargs -0 rg --no-messages --line-number '\bdbg!\(|\bprintln!\("DEBUG'; then
+            echo
+            echo "Remove the debugging statements."
+            exit 1
+          fi
+          echo "None found."

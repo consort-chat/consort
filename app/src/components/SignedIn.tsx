@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { asCommandError, logout, type Profile } from "../lib/api";
+import {
+  asCommandError,
+  logout,
+  tokenStorage,
+  type Profile,
+  type TokenStorage,
+} from "../lib/api";
 import "./SignedIn.css";
 
 interface Props {
@@ -18,6 +24,25 @@ interface Props {
  */
 export function SignedIn({ profile, onSignedOut }: Props) {
   const [pending, setPending] = useState(false);
+  const [storage, setStorage] = useState<TokenStorage | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    tokenStorage()
+      .then((value) => {
+        if (!cancelled) setStorage(value);
+      })
+      .catch((raw: unknown) => {
+        // Cosmetic. Not knowing where the token is kept is no reason to
+        // interrupt someone who is already signed in.
+        console.error("token_storage failed", asCommandError(raw).detail);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleLogout() {
     setPending(true);
@@ -71,8 +96,20 @@ export function SignedIn({ profile, onSignedOut }: Props) {
           </div>
         </dl>
 
+        {/*
+          Shown only when we had to fall back. Storing the token in the system
+          keyring is the expected case and does not need announcing; storing it
+          in a file is a real, if small, reduction in protection and the person
+          it affects should be the one who knows about it.
+        */}
+        {storage !== null && !storage.isPreferred && (
+          <p className="signed-in__notice" role="status">
+            {storage.description}
+          </p>
+        )}
+
         <p className="signed-in__next">
-          Authentication works. Voice channels are next.
+          Authentication works. Session verification is next.
         </p>
       </main>
     </div>

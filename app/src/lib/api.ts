@@ -19,6 +19,15 @@ export type SessionStatus =
   | { status: "signedOut" }
   | { status: "signedIn"; profile: Profile };
 
+/** Where the Rust side is keeping the access token on this machine. */
+export interface TokenStorage {
+  kind: "keyring" | "file" | "memory";
+  /** One sentence, already written for a person. Safe to render as-is. */
+  description: string;
+  /** False when no system keyring was available and a file was used instead. */
+  isPreferred: boolean;
+}
+
 /** The `CommandError` shape every command rejects with. */
 export interface CommandError {
   /** Written for a person. Safe to render. */
@@ -31,13 +40,25 @@ export interface CommandError {
  * Tauri rejects with whatever the command returned, so a rejection is a
  * `CommandError` and not an `Error`. Narrow before touching `.message`, since
  * a genuine JS exception can also land here.
+ *
+ * The `instanceof Error` exclusion is not redundant. An `Error` also has a
+ * string `message`, so a plain duck-type check accepts one and the UI ends up
+ * rendering "Cannot read properties of undefined" at the user as though the
+ * homeserver had said it. A JS exception is a bug in this code, and what a
+ * person should see for that is the generic sentence, with the real text left
+ * in the console where it is useful.
+ *
+ * The emptiness check is the same idea. An error object whose message is `""`
+ * satisfies every type check and renders as blank space.
  */
 export function asCommandError(error: unknown): CommandError {
   if (
     typeof error === "object" &&
     error !== null &&
+    !(error instanceof Error) &&
     "message" in error &&
-    typeof (error as CommandError).message === "string"
+    typeof (error as CommandError).message === "string" &&
+    (error as CommandError).message !== ""
   ) {
     return error as CommandError;
   }
@@ -61,4 +82,8 @@ export function login(
 
 export function logout(): Promise<void> {
   return invoke<void>("logout");
+}
+
+export function tokenStorage(): Promise<TokenStorage> {
+  return invoke<TokenStorage>("token_storage");
 }

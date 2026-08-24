@@ -31,12 +31,28 @@ pnpm tauri dev
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd app && pnpm build
+cd app && pnpm test && pnpm build
 ```
 
-All four have to pass. Clippy is denied at warning level on purpose, so a lint
-you disagree with needs an `#[allow]` with a comment explaining why, not a
+All of them have to pass. Clippy is denied at warning level on purpose, so a
+lint you disagree with needs an `#[allow]` with a comment explaining why, not a
 silent pass.
+
+House style bans the em dash and the en dash, in code, comments, commit
+messages and documentation alike. A plain hyphen in a compound word or a list
+bullet is fine. CI checks this, so it is worth catching first.
+
+## What CI does, and when it runs
+
+CI lives in `.forgejo/workflows/ci.yml` and runs three jobs: frontend
+(typecheck, tests with coverage thresholds, build), Rust (fmt, clippy, tests,
+coverage) and hygiene (the dash rule and a couple of other greps).
+
+If this is your first pull request, **the run will not start until a maintainer
+approves it.** That is Forgejo blocking workflows from authors it does not yet
+trust, and it is deliberate rather than something going wrong. Once somebody
+presses "Approve always" your later pull requests run without waiting. Nothing
+is required from you but patience on the first one.
 
 ## What makes a change easy to accept
 
@@ -79,8 +95,19 @@ New behaviour needs a test. Test the behaviour, not the implementation: a test
 that asserts a particular function was called will break on every refactor and
 catch no bugs.
 
-Tests that need a live homeserver are not run in CI. Mark them `#[ignore]` and
-document what they need, the way `consort-matrix` does.
+Coverage has to stay above 90% on both halves, and CI fails below that. It is
+currently 96% on the Rust side and 100% on the frontend, so there is room, but
+not much. [COVERAGE.md](COVERAGE.md) explains what is excluded and why.
+
+Code that talks to a homeserver is still testable. `MatrixMockServer` answers
+like Synapse, and `crates/consort-matrix/tests/against_a_mock_homeserver.rs`
+shows the pattern for login, restore, logout and token rotation. Reach for
+`#[ignore]` only when a test genuinely needs something a container cannot have,
+such as a live platform keyring, and say so in the ignore reason.
+
+Anything that only a running Tauri app can produce, `State<'_, AppState>` above
+all, belongs behind a one-line delegate. Put the logic in a plain function
+taking `&AppState` and test that.
 
 ## AI assistance
 

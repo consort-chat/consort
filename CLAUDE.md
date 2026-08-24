@@ -28,9 +28,14 @@ cargo fmt --all
 # Frontend (from app/)
 pnpm install
 pnpm build          # tsc --noEmit && vite build
+pnpm test           # vitest
+pnpm test:coverage  # vitest with the thresholds enforced
 pnpm tauri dev      # run the app with frontend hot reload
 pnpm tauri build    # release bundle
 ```
+
+On this machine `pnpm tauri dev` needs `WEBKIT_DISABLE_DMABUF_RENDERER=1` or
+the window comes up blank.
 
 Use **pnpm**, not npm or yarn. The lockfile is pnpm's and `pnpm-workspace.yaml`
 carries settings the build needs.
@@ -100,11 +105,28 @@ presence; using it decoratively breaks the one signal the voice work needs.
 
 ## Testing
 
-`cargo test --workspace` must stay green and must not need a network. Tests
-requiring a live homeserver are `#[ignore]` with a comment saying what they
-need.
+`cargo test --workspace` must stay green and must not reach the network.
+Coverage must stay above 90% on both halves; CI fails below it. See
+[COVERAGE.md](COVERAGE.md).
 
 New behaviour needs a test. Test behaviour, not implementation.
+
+Three patterns this codebase relies on, worth following rather than
+rediscovering:
+
+- **Homeserver code is testable.** `MatrixMockServer`, from matrix-sdk's
+  `testing` feature, is a dev-dependency of both crates.
+  `crates/consort-matrix/tests/against_a_mock_homeserver.rs` covers login,
+  restore, logout and token rotation. `#[ignore]` is for things a container
+  genuinely cannot have, which here means a live platform keyring and nothing
+  else.
+- **Tauri commands are one-line delegates.** `State<'_, AppState>` only exists
+  inside a running app, so logic written directly in a `#[tauri::command]` is
+  logic no test can reach. Every command calls a plain `*_for(&AppState, ..)`
+  function, and that is what the tests drive.
+- **Secrets go through a trait.** `secrets::Backend` has a `MemoryBackend`
+  implementation, and `SessionStore::with_backend` takes one. No test should
+  ever touch the developer's real keyring.
 
 ## AI-assisted contribution policy
 

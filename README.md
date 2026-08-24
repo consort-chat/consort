@@ -9,8 +9,9 @@ down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
 > **Status: early.** Right now Consort signs you in and remembers you. That is
-> the whole feature set. Voice is next, and the README will stop saying this when
-> it lands.
+> the whole feature set, and the session it gives you is unverified. Session
+> verification is next, then voice, and the README will stop saying this when
+> they land.
 
 ---
 
@@ -18,15 +19,16 @@ at whatever homeserver you already run.
 
 - Password login against any homeserver, entered as a plain server name
   (`example.org`) with `.well-known` discovery handled for you.
-- Sessions persist across restarts, so you log in once.
+- Sessions persist across restarts, so you log in once. The access token goes
+  in your system keyring.
 - Cross-signing is bootstrapped on first login, which the voice layer will
   require later (MSC4153 only accepts media keys from cross-signed devices).
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Everything else. No room list, no messages, no voice. See
-[the roadmap](#roadmap).
+Everything else. No session verification, no room list, no messages, no voice.
+See [the roadmap](#roadmap).
 
 ---
 
@@ -147,6 +149,26 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
+### Tests
+
+Both halves have to stay above 90% line coverage, and CI enforces it.
+
+```sh
+cargo test --workspace          # 157 tests
+cd app && pnpm test             # 55 tests
+cd app && pnpm test:coverage    # thresholds enforced from vitest.config.ts
+```
+
+A few Rust tests are marked `#[ignore]` because they need a live platform
+keyring, which no CI container has. Run them on a desktop with:
+
+```sh
+cargo test -p consort-matrix -- --ignored keyring
+```
+
+[COVERAGE.md](COVERAGE.md) explains what is measured, what is excluded, and
+why.
+
 ### If the window comes up blank on Linux
 
 WebKitGTK's DMA-BUF renderer does not get along with every driver, and when it
@@ -244,25 +266,48 @@ whether a model wrote them or you did.
 
 | Milestone | State |
 |---|---|
-| Authentication and session persistence | done |
-| Room list and voice channel discovery | next |
+| Password login and session persistence | working |
+| Session verification (emoji and recovery key) | in progress, [planned here](docs/PLAN-verification.md) |
+| Room list and voice channel discovery | planned |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
 | Text messaging | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 
+"Working" is doing some work in that first row, and it is not a synonym for
+done. Signing in gets you an authenticated session, and that session is
+unverified: it cannot decrypt encrypted history, and no encrypted call will
+accept it. Authentication is not finished until the row under it is, because a
+session you cannot verify is an account rather than a usable client.
+
 ## Known limitations
 
-- **The access token is stored in a file, not the OS keyring.** It lives in the
-  per-user application data directory with `0600` permissions on Unix, which
-  matches what the SDK's own SQLite stores get. The keyring is the better
-  answer and it is on the list. It is not the default yet because the Linux
-  keyring backends are not reliably running, and a first launch that dies on a
-  missing keyring daemon is a worse failure than this one. See
-  `crates/consort-matrix/src/session.rs`.
+- **On a machine with no keyring, the access token falls back to a file.** The
+  default is the platform credential store: Secret Service on Linux and the
+  BSDs, the Credential Manager on Windows, Keychain on macOS. Secret Service is
+  a DBus service rather than a kernel feature, though, and a bare window
+  manager, a container or an SSH session may not have one running. Refusing to
+  start there would be worse, so Consort falls back to a file in the per-user
+  application data directory with `0600` permissions, and says so on the
+  signed-in screen rather than letting you assume otherwise. See
+  `crates/consort-matrix/src/secrets/`.
+- **One Consort at a time.** A second launch focuses the first window and
+  exits. Two processes would share one SQLite crypto store, and racing on that
+  is how device keys get lost.
 - **Builds are unsigned.** Windows SmartScreen and macOS Gatekeeper will warn
   about them. Linux packages are unaffected.
+- **Signing out leaves the encryption store on disk.** The session and the
+  access token go, but the per-account SQLite store holding this device's room
+  keys stays until the next sign-in on that account removes it. Those keys
+  belong to a device the server has already destroyed, so nothing can be done
+  with them, but they are decrypted room keys sitting in your data directory
+  after you asked to be signed out. Removing them at sign-out is the right end
+  state and is not done yet, because the removal has to happen after the client
+  is dropped and that is shutdown-ordering work.
 - **Password login only.** No SSO or OIDC yet.
+- **Sessions are not verified yet**, so encrypted history will not decrypt and
+  encrypted calls will refuse this device. That is the [next
+  milestone](docs/PLAN-verification.md).
 
 ## Licence
 

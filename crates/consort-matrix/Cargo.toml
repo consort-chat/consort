@@ -13,7 +13,17 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Only for the broadcast receiver in `persist_token_refreshes`. The SDK hands
+# out a `tokio::sync::broadcast::Receiver`, so naming its error type means
+# depending on the same tokio the SDK resolves.
+tokio = { workspace = true }
 sha2 = "0.10"
+# The platform credential store: Secret Service on Linux and the BSDs, the
+# Credential Manager on Windows, Keychain on macOS. The `v1` feature (the
+# default) is the one that selects a store per platform automatically and
+# exposes the flat Entry API; without it the caller has to pick and register a
+# store crate by hand.
+keyring = "4"
 # Only for `install_crypto_provider`. Pinned here rather than in the binary so
 # the version cannot drift away from the rustls that matrix-sdk resolves, which
 # would put two rustls crates in the graph and make the installed provider apply
@@ -22,4 +32,10 @@ rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+# `testing` brings in MatrixMockServer, which is how login, restore and logout
+# get exercised without a homeserver. It is a dev-dependency feature, so with
+# resolver 3 it does not leak into `cargo build`: the two feature sets compile
+# to separate artifacts that both stay cached.
+matrix-sdk = { workspace = true, features = ["testing"] }
+wiremock = "0.6"

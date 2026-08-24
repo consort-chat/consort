@@ -14,6 +14,14 @@ interface Props {
  * about themselves ("I'm on example.org"), not a homeserver URL. Resolving it
  * is the SDK's job via `.well-known`, so the form does not ask the user to
  * know the difference.
+ *
+ * It is also the field that takes focus, because it is the first one in the
+ * form and the one a first-time user has to think about. Focusing the username
+ * instead leaves the caret in the middle of the form and the field above it
+ * empty, which reads as though it has already been filled in.
+ *
+ * Every input carries an `id` and a `name`. Password managers key their saved
+ * entries on `name`, and without one they offer to save nothing.
  */
 export function LoginScreen({ onSignedIn }: Props) {
   const [server, setServer] = useState("");
@@ -67,7 +75,7 @@ export function LoginScreen({ onSignedIn }: Props) {
       </aside>
 
       <main className="login__panel">
-        <form className="login__form" onSubmit={handleSubmit} noValidate>
+        <form className="login__form" name="signin" onSubmit={handleSubmit} noValidate>
           <header className="login__header">
             <h2>Sign in</h2>
             <p>Use your Matrix account.</p>
@@ -77,6 +85,8 @@ export function LoginScreen({ onSignedIn }: Props) {
             <span className="field__label">Homeserver</span>
             <input
               className="field__input"
+              id="homeserver"
+              name="homeserver"
               type="text"
               value={server}
               onChange={(event) => setServer(event.target.value)}
@@ -84,6 +94,7 @@ export function LoginScreen({ onSignedIn }: Props) {
               spellCheck={false}
               disabled={pending}
               placeholder="example.org"
+              autoFocus
             />
             <span className="field__hint">
               The server your account lives on, not a web address.
@@ -94,6 +105,8 @@ export function LoginScreen({ onSignedIn }: Props) {
             <span className="field__label">Username</span>
             <input
               className="field__input"
+              id="username"
+              name="username"
               type="text"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -101,7 +114,6 @@ export function LoginScreen({ onSignedIn }: Props) {
               spellCheck={false}
               disabled={pending}
               placeholder="bob"
-              autoFocus
             />
           </label>
 
@@ -109,6 +121,8 @@ export function LoginScreen({ onSignedIn }: Props) {
             <span className="field__label">Password</span>
             <input
               className="field__input"
+              id="password"
+              name="password"
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
