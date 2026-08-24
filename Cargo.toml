@@ -38,5 +38,21 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # libwebrtc arrives with the voice layer and makes debug symbols enormous.
 # Stripping keeps the shipped binary something a person will actually download.
 strip = true
+# Thin LTO is the cheap part of the size win and stays.
 lto = "thin"
-codegen-units = 1
+
+# `codegen-units = 1` is deliberately NOT set here.
+#
+# It compiles each crate as one LLVM module instead of sixteen that build in
+# parallel, so peak rustc memory scales with the whole crate rather than a
+# slice. On matrix-sdk that is gigabytes, and cargo builds several such crates
+# at once: measured on a 30 GB machine it produced three simultaneous
+# multi-gigabyte rustc processes and exhausted a 15 GB swap file.
+#
+# Measured on this workspace it is worth 33 MB of binary against 40 MB, so
+# roughly 21%. Real, but not worth making the project hostile to build for: the
+# packaged .deb is 16 MB either way once compressed, and libwebrtc lands with
+# the voice layer and is larger than matrix-sdk.
+#
+# If binary size ever does matter, `codegen-units = 4` recovers most of the
+# difference at a quarter of the peak memory. Do not go to 1.
