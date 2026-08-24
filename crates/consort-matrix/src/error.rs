@@ -61,7 +61,7 @@ impl Error {
         match self {
             Self::InvalidServer(server) => {
                 format!(
-                    "`{server}` does not look like a server address. Try something like `lamp.stream`."
+                    "`{server}` does not look like a server address. Try something like `example.org`."
                 )
             }
             Self::Discovery(_) => {

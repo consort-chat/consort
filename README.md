@@ -17,7 +17,7 @@ at whatever homeserver you already run.
 ## What works today
 
 - Password login against any homeserver, entered as a plain server name
-  (`lamp.stream`) with `.well-known` discovery handled for you.
+  (`example.org`) with `.well-known` discovery handled for you.
 - Sessions persist across restarts, so you log in once.
 - Cross-signing is bootstrapped on first login, which the voice layer will
   require later (MSC4153 only accepts media keys from cross-signed devices).

@@ -19,11 +19,11 @@ const DEVICE_DISPLAY_NAME: &str = "Consort";
 /// What the login form collects.
 #[derive(Clone, Debug)]
 pub struct Credentials {
-    /// A server name (`lamp.stream`) or a full URL. Server names go through
+    /// A server name (`example.org`) or a full URL. Server names go through
     /// `.well-known` discovery, which is why a user should be able to type the
     /// short form.
     pub server: String,
-    /// A localpart (`bob`) or a full user ID (`@bob:lamp.stream`).
+    /// A localpart (`bob`) or a full user ID (`@bob:example.org`).
     pub username: String,
     pub password: String,
 }
@@ -205,7 +205,7 @@ fn normalise_server(input: &str) -> Result<String> {
     Ok(trimmed.to_owned())
 }
 
-/// Reduce `@bob:lamp.stream`, `@bob`, and `bob` to `bob`.
+/// Reduce `@bob:example.org`, `@bob`, and `bob` to `bob`.
 ///
 /// Only used to key the local store directory, so that the same account typed
 /// two different ways does not produce two devices. The homeserver still
@@ -228,16 +228,16 @@ mod tests {
     fn normalises_the_three_ways_of_writing_a_username() {
         assert_eq!(normalise_localpart("bob"), "bob");
         assert_eq!(normalise_localpart("@bob"), "bob");
-        assert_eq!(normalise_localpart("@bob:lamp.stream"), "bob");
-        assert_eq!(normalise_localpart("  @Bob:lamp.stream  "), "bob");
+        assert_eq!(normalise_localpart("@bob:example.org"), "bob");
+        assert_eq!(normalise_localpart("  @Bob:example.org  "), "bob");
     }
 
     #[test]
     fn strips_trailing_slashes_and_surrounding_space_from_the_server() {
-        assert_eq!(normalise_server("  lamp.stream  ").unwrap(), "lamp.stream");
+        assert_eq!(normalise_server("  example.org  ").unwrap(), "example.org");
         assert_eq!(
-            normalise_server("https://matrix.lamp.stream/").unwrap(),
-            "https://matrix.lamp.stream"
+            normalise_server("https://matrix.example.org/").unwrap(),
+            "https://matrix.example.org"
         );
     }
 
@@ -245,17 +245,17 @@ mod tests {
     fn rejects_an_empty_or_spaced_server() {
         assert!(normalise_server("").is_err());
         assert!(normalise_server("   ").is_err());
-        assert!(normalise_server("lamp stream").is_err());
+        assert!(normalise_server("example org").is_err());
     }
 
     #[test]
     fn the_same_account_typed_two_ways_shares_one_store_directory() {
         let store = SessionStore::new("/tmp/consort-test");
-        let typed_short = format!("{}|{}", "lamp.stream", normalise_localpart("bob"));
+        let typed_short = format!("{}|{}", "example.org", normalise_localpart("bob"));
         let typed_full = format!(
             "{}|{}",
-            "lamp.stream",
-            normalise_localpart("@bob:lamp.stream")
+            "example.org",
+            normalise_localpart("@bob:example.org")
         );
         assert_eq!(
             store.store_path_for(&typed_short),
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn different_accounts_get_different_store_directories() {
         let store = SessionStore::new("/tmp/consort-test");
-        let bob = store.store_path_for("lamp.stream|bob");
-        let alice = store.store_path_for("lamp.stream|alice");
+        let bob = store.store_path_for("example.org|bob");
+        let alice = store.store_path_for("example.org|alice");
         assert_ne!(bob, alice);
     }
 }

@@ -18,7 +18,7 @@
 //!     Some(stored) => auth::restore(&stored).await?,
 //!     None => {
 //!         auth::login(&store, &Credentials {
-//!             server: "lamp.stream".to_owned(),
+//!             server: "example.org".to_owned(),
 //!             username: "bob".to_owned(),
 //!             password: "hunter2".to_owned(),
 //!         })

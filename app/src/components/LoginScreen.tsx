@@ -11,12 +11,12 @@ interface Props {
  * Password login against a homeserver.
  *
  * The server field takes a bare server name because that is what people know
- * about themselves ("I'm on lamp.stream"), not a homeserver URL. Resolving it
+ * about themselves ("I'm on example.org"), not a homeserver URL. Resolving it
  * is the SDK's job via `.well-known`, so the form does not ask the user to
  * know the difference.
  */
 export function LoginScreen({ onSignedIn }: Props) {
-  const [server, setServer] = useState("lamp.stream");
+  const [server, setServer] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
@@ -83,7 +83,7 @@ export function LoginScreen({ onSignedIn }: Props) {
               autoComplete="url"
               spellCheck={false}
               disabled={pending}
-              placeholder="lamp.stream"
+              placeholder="example.org"
             />
             <span className="field__hint">
               The server your account lives on, not a web address.
