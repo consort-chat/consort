@@ -39,3 +39,6 @@ Thumbs.db
 
 # Local Consort data (sessions, sqlite stores) if a dev points the app here
 /.consort-data
+
+# The throwaway Synapse's state. Recreated by testing/synapse/up.sh.
+/testing/synapse/data

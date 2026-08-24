@@ -137,7 +137,11 @@ export function LoginScreen({ onSignedIn }: Props) {
             </p>
           )}
 
-          <button className="button button--primary" type="submit" disabled={!canSubmit}>
+          <button
+            className="button button--primary login__submit"
+            type="submit"
+            disabled={!canSubmit}
+          >
             {pending ? "Signing in…" : "Sign in"}
           </button>
         </form>

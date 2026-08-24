@@ -6,12 +6,27 @@ const sessionStatus = vi.hoisted(() => vi.fn());
 const login = vi.hoisted(() => vi.fn());
 const logout = vi.hoisted(() => vi.fn());
 const tokenStorage = vi.hoisted(() => vi.fn());
+// Mocked even though nothing here asserts on it: the signed-in screen
+// subscribes on mount, and the real one reaches for a Tauri global that does
+// not exist in jsdom.
+const onConnection = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
+const onVerification = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve(() => {})),
+);
+const onVerificationFlow = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve(() => {})),
+);
+const resendState = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("./lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/api")>()),
   sessionStatus,
   login,
   logout,
   tokenStorage,
+  onConnection,
+  onVerification,
+  onVerificationFlow,
+  resendState,
 }));
 
 import { App } from "./App";

@@ -3,11 +3,78 @@ import { useEffect, useState } from "react";
 import {
   asCommandError,
   logout,
+  onConnection,
+  onVerification,
+  onVerificationFlow,
+  resendState,
   tokenStorage,
+  type Connection,
   type Profile,
   type TokenStorage,
+  type Verification,
+  type VerificationFlow,
 } from "../lib/api";
+import { VerificationFlowPanel } from "./VerificationFlow";
 import "./SignedIn.css";
+
+/**
+ * One short phrase per state, for the header.
+ *
+ * A stopped loop is the only case that does not imply a message might still
+ * arrive, and a session the homeserver has rejected is the only one the user
+ * has to do something about, so those two do not share a label.
+ */
+function connectionLabel(connection: Connection): string {
+  switch (connection.state) {
+    case "connecting":
+      return "Connecting";
+    case "live":
+      return "Connected";
+    case "offline":
+      return "Reconnecting";
+    case "stopped":
+      return connection.reason === "sessionEnded"
+        ? "Session ended"
+        : "Disconnected";
+  }
+}
+
+/**
+ * What to say about this session's verification, and why it matters.
+ *
+ * `unknown` gets its own sentence rather than borrowing either of the others.
+ * It is a real state, it is the one every launch starts in, and rendering it
+ * as "verified" would tell somebody their messages are safe before anything
+ * had checked.
+ */
+function VerificationBanner({ state }: { state: Verification["state"] }) {
+  const headline =
+    state === "verified"
+      ? "This session is verified."
+      : state === "unverified"
+        ? "This session is not verified."
+        : "Checking whether this session is verified.";
+
+  return (
+    <section
+      className="verification"
+      data-verification={state}
+      role="status"
+      aria-live="polite"
+      aria-label="Session verification"
+    >
+      <p className="verification__headline">{headline}</p>
+      {state === "unverified" && (
+        <p className="verification__detail">
+          Messages encrypted before you signed in will not open here, and
+          encrypted calls will not accept this device. Start a verification
+          from a client you are already signed in to, and the request will
+          appear above.
+        </p>
+      )}
+    </section>
+  );
+}
 
 interface Props {
   profile: Profile;
@@ -25,6 +92,78 @@ interface Props {
 export function SignedIn({ profile, onSignedOut }: Props) {
   const [pending, setPending] = useState(false);
   const [storage, setStorage] = useState<TokenStorage | null>(null);
+  // Not `live`. Claiming a connection before the sync loop has said anything
+  // is the lie this replaced: the old header was the literal string
+  // "Connected", written into the markup and true only by coincidence.
+  const [connection, setConnection] = useState<Connection>({
+    state: "connecting",
+  });
+  // Same reasoning, and it matters more here. Starting at `verified` would be
+  // a claim about somebody's messages made before anything had looked.
+  const [verification, setVerification] = useState<Verification>({
+    state: "unknown",
+  });
+  // Keyed by flow id rather than a single slot. A request goes to every device
+  // on the account and two can arrive, and one slot would silently drop the
+  // second, leaving somebody waiting on a device that will never answer.
+  const [flows, setFlows] = useState<Record<string, VerificationFlow>>({});
+
+  function dismiss(flowId: string) {
+    setFlows((current) => {
+      const { [flowId]: _gone, ...rest } = current;
+      return rest;
+    });
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    const stops: Array<() => void> = [];
+
+    // Subscribing is asynchronous, so a listener can be handed over after the
+    // screen is gone. Stopping it straight away is the difference between one
+    // that ends with the component and one that lives as long as the process,
+    // handling events into unmounted state and duplicating every event once
+    // per sign-in.
+    function keep(stop: () => void) {
+      if (cancelled) stop();
+      else stops.push(stop);
+    }
+
+    const listening = Promise.all([
+      onConnection((state) => {
+        if (!cancelled) setConnection(state);
+      }).then(keep),
+      onVerification((state) => {
+        if (!cancelled) setVerification(state);
+      }).then(keep),
+      onVerificationFlow((flow) => {
+        if (!cancelled) {
+          setFlows((current) => ({ ...current, [flow.flowId]: flow }));
+        }
+      }).then(keep),
+    ]);
+
+    listening
+      // Only once both listeners are attached, and only if this screen is
+      // still here. Asking earlier would be answered into the void, which is
+      // the exact race it exists to close.
+      .then(() => (cancelled ? undefined : resendState()))
+      .catch((raw: unknown) => {
+        // Handled at subscribe time rather than in the cleanup below, because
+        // a rejection nobody has attached to yet is an unhandled rejection for
+        // as long as this screen is open. Cosmetic in effect: the banners stay
+        // on their initial states, neither of which claims anything works.
+        console.error(
+          "could not follow the session state",
+          asCommandError(raw).detail,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      for (const stop of stops) stop();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,9 +201,13 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   return (
     <div className="signed-in">
       <header className="signed-in__bar">
-        <span className="signed-in__status">
+        <span
+          className="signed-in__status"
+          data-connection={connection.state}
+          aria-live="polite"
+        >
           <i className="signed-in__dot" aria-hidden="true" />
-          Connected
+          {connectionLabel(connection)}
         </span>
         <button
           className="button button--ghost button--small"
@@ -103,14 +246,24 @@ export function SignedIn({ profile, onSignedOut }: Props) {
           it affects should be the one who knows about it.
         */}
         {storage !== null && !storage.isPreferred && (
-          <p className="signed-in__notice" role="status">
+          <p
+            className="signed-in__notice"
+            role="status"
+            aria-label="Where your sign-in is stored"
+          >
             {storage.description}
           </p>
         )}
 
-        <p className="signed-in__next">
-          Authentication works. Session verification is next.
-        </p>
+        {Object.values(flows).map((flow) => (
+          <VerificationFlowPanel
+            key={flow.flowId}
+            flow={flow}
+            onDismiss={() => dismiss(flow.flowId)}
+          />
+        ))}
+
+        <VerificationBanner state={verification.state} />
       </main>
     </div>
   );

@@ -4,8 +4,8 @@ Target is 90% or better, and the suite currently clears it on both sides.
 
 | | Lines | Tests |
 |---|---|---|
-| Rust | 96.0% | 141 |
-| Frontend | 100% | 55 |
+| Rust | 93.8% | 281 |
+| Frontend | 100% | 117 |
 
 Run them:
 
@@ -71,3 +71,33 @@ Both artifacts stay cached, so it is disk rather than repeated time.
 Endpoints those tests do not mount answer 404, which is deliberate. A login has
 to succeed on a homeserver with key backup switched off, and that is what an
 unmounted endpoint looks like.
+
+## The one file that measures low, and why
+
+`crates/consort-matrix/src/verification/flow.rs` sits around 80%, well below
+everything else. It is not excluded, because most of it is measured and the
+rest is worth seeing as a gap rather than hiding.
+
+What is missing is the two functions that drive a live handshake, `drive` and
+`follow_sas`, plus the five action wrappers and the two event handlers. All of
+them need an olm exchange between two real devices, and `MatrixMockServer`
+cannot produce one: the crypto machine will not even build a request object
+from an injected to-device event, because it looks the sender's device up in
+its own store first and a mocked `/keys/query` has no devices in it.
+
+They are covered, in `crates/consort-matrix/tests/against_a_real_homeserver.rs`,
+against the throwaway Synapse in `testing/synapse/`. Those tests are `#[ignore]`d
+so a plain `cargo test` and CI both skip them, which is what leaves the number
+here low. Run them deliberately:
+
+```sh
+testing/synapse/up.sh
+CONSORT_TEST_HOMESERVER=http://localhost:8008 cargo test --workspace -- --ignored
+testing/synapse/down.sh
+```
+
+Everything in that file that is ordinary logic has been pulled out so that it
+is measured normally: the state mappings live in `dto.rs`, the dedup and
+identity handling in `Report` take plain strings rather than an SDK request
+object, and the task ownership in `Flows` and `run` is generic over what a flow
+is. What is left uncovered is genuinely the cryptography.

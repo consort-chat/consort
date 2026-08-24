@@ -52,11 +52,15 @@ pub mod auth;
 pub mod error;
 pub mod secrets;
 pub mod session;
+pub mod sync;
+pub mod verification;
 
 pub use auth::{Credentials, Profile};
 pub use error::{Error, Result};
 pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
+pub use sync::{Connection, StopReason};
+pub use verification::{Flow, FlowState, SessionVerification};
 
 // Re-exported so a consumer holding a `Client` needs only this crate as a
 // dependency, and cannot accidentally depend on a *different* matrix-sdk rev.

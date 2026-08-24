@@ -1,0 +1,126 @@
+/*
+  A verification in progress.
+
+  Violet-edged rather than amber, and that is the point of the distinction: the
+  banner beneath it uses amber for a session nobody has verified, which is a
+  standing condition, while this is something happening right now that wants an
+  answer. Two different urgencies deserve two different treatments, and the one
+  asking for a decision is the one that gets the accent colour.
+
+  Red is spent on exactly one state. A mismatch is the only outcome here that
+  means somebody might be listening, and if a declined or expired flow looked
+  the same, the colour would stop carrying the meaning.
+*/
+.flow {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 46ch;
+  margin: var(--space-4) 0 0;
+  padding: var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-left: 3px solid var(--violet);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
+  text-align: left;
+  text-wrap: pretty;
+}
+
+/* Finished, one way or another. Nothing is being asked, so it recedes. */
+.flow[data-kind="done"],
+.flow[data-kind="cancelled"] {
+  border-left-color: var(--line-strong);
+  box-shadow: none;
+}
+
+.flow[data-kind="done"] {
+  border-left-color: var(--violet-press);
+}
+
+.flow[data-outcome="alarming"] {
+  border-left-color: var(--danger);
+  background: var(--danger-surface);
+}
+
+.flow__headline {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.flow__detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/*
+  The seven pictures.
+
+  Wrapping rather than scrolling: seven of these fit at any width the window
+  can be dragged to, and a row that scrolls sideways is a row where somebody
+  compares five of the seven and presses yes.
+*/
+.flow__emoji-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flow__emoji {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: center;
+  min-width: 4.5rem;
+  padding: var(--space-2);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+}
+
+.flow__symbol {
+  font-size: 1.75rem;
+  line-height: 1.1;
+}
+
+.flow__word {
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--text-secondary);
+}
+
+/* The fallback when the other side cannot do emoji. Same job, three numbers. */
+.flow__decimals {
+  margin: var(--space-2) 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--text-primary);
+}
+
+.flow__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/*
+  Quiet, because the likeliest cause is not a fault: the flow expired, the
+  other side cancelled, or another session answered first. Loud red for a
+  button pressed a moment too late would be a lie about the severity.
+*/
+.flow__failure {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--amber);
+}

@@ -59,6 +59,53 @@ fn credentials(server: &MatrixMockServer) -> Credentials {
     }
 }
 
+/// A signed-in client against a freshly mocked server.
+async fn signed_in(server: &MatrixMockServer) -> (tempfile::TempDir, matrix_sdk::Client) {
+    mount_login(server, "syt_first").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+    let (client, _) = auth::login(&store, &credentials(server)).await.unwrap();
+    (dir, client)
+}
+
+/// A sink that keeps everything it was handed.
+fn recorder<T: Send + 'static>() -> (
+    Arc<std::sync::Mutex<Vec<T>>>,
+    impl Fn(T) + Send + Sync + 'static,
+) {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = {
+        let seen = seen.clone();
+        move |state: T| seen.lock().unwrap().push(state)
+    };
+    (seen, sink)
+}
+
+/// Poll until the recorded states satisfy `done`, or give up loudly.
+///
+/// Polling rather than a channel because the assertions are about the whole
+/// sequence, including what did *not* appear in it.
+async fn wait_until<T: Clone + std::fmt::Debug>(
+    seen: &Arc<std::sync::Mutex<Vec<T>>>,
+    done: impl Fn(&[T]) -> bool,
+) -> Vec<T> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        {
+            let states = seen.lock().unwrap();
+            if done(&states) {
+                return states.clone();
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out; saw {:?}",
+            seen.lock().unwrap()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn a_successful_login_returns_the_profile_and_persists_the_session() {
     let server = MatrixMockServer::new().await;
@@ -631,4 +678,449 @@ async fn a_rejected_access_token_is_the_one_failure_that_invalidates_the_session
         error.invalidates_session(),
         "a rejected token must be recognised as a dead session"
     );
+}
+
+/// The sync loop.
+///
+/// Everything here needs a homeserver that answers `/sync`, and the point of
+/// most of it is what happens when that answer is not a good one. A loop that
+/// only works against a server that is up is not a loop worth having.
+mod sync_loop {
+    use super::*;
+    use consort_matrix::{Connection, StopReason, sync};
+    use std::time::Duration;
+    use wiremock::ResponseTemplate;
+
+    #[tokio::test]
+    async fn a_loop_that_reaches_the_server_reports_itself_live() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (seen, sink) = recorder();
+
+        let task = sync::start(client, sink);
+        let states = wait_until(&seen, |s| s.contains(&Connection::Live)).await;
+        task.abort();
+
+        assert_eq!(
+            states.first(),
+            Some(&Connection::Connecting),
+            "the loop should say it is trying before it says it succeeded: {states:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_loop_reports_live_once_rather_than_on_every_sync() {
+        // Sync fires every thirty seconds forever. An event per response is a
+        // webview wake-up and a re-render that carry no news.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (seen, sink) = recorder();
+
+        let task = sync::start(client, sink);
+        wait_until(&seen, |s| s.contains(&Connection::Live)).await;
+        // Long enough for several more syncs against a mock that answers at once.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        task.abort();
+
+        let states = seen.lock().unwrap().clone();
+        let live = states.iter().filter(|s| **s == Connection::Live).count();
+        assert_eq!(live, 1, "{states:?}");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_failing_moves_the_loop_to_offline() {
+        // The failure this exists for. Without it a sync loop that cannot
+        // reach anything is indistinguishable from a quiet homeserver, and
+        // the UI keeps saying "Connected" at someone whose messages are not
+        // arriving.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_sync()
+            .respond_with(ResponseTemplate::new(502))
+            .mount()
+            .await;
+        let (seen, sink) = recorder();
+
+        let task = sync::start(client, sink);
+        let states = wait_until(&seen, |s| {
+            s.iter().any(|c| matches!(c, Connection::Offline { .. }))
+        })
+        .await;
+        task.abort();
+
+        assert_eq!(states.first(), Some(&Connection::Connecting));
+        assert!(
+            !states.contains(&Connection::Live),
+            "nothing ever succeeded: {states:?}"
+        );
+        let Some(Connection::Offline { attempt, .. }) = states
+            .iter()
+            .find(|c| matches!(c, Connection::Offline { .. }))
+        else {
+            unreachable!()
+        };
+        assert_eq!(*attempt, 1, "the first failure is attempt one");
+    }
+
+    #[tokio::test]
+    async fn a_rejected_access_token_stops_the_loop_instead_of_retrying_forever() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_sync()
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "errcode": "M_UNKNOWN_TOKEN",
+                "error": "Invalid access token",
+                "soft_logout": false,
+            })))
+            .mount()
+            .await;
+        let (seen, sink) = recorder();
+
+        let task = sync::start(client, sink);
+        let states = wait_until(&seen, |s| {
+            s.iter().any(|c| matches!(c, Connection::Stopped { .. }))
+        })
+        .await;
+
+        assert!(
+            states.contains(&Connection::Stopped {
+                reason: StopReason::SessionEnded
+            }),
+            "{states:?}"
+        );
+        assert!(
+            !states
+                .iter()
+                .any(|c| matches!(c, Connection::Offline { .. })),
+            "a dead session is not a retryable failure: {states:?}"
+        );
+
+        // And the task ends by itself rather than waiting to be aborted.
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the task should finish on its own")
+            .expect("and not by panicking");
+    }
+
+    #[tokio::test]
+    async fn a_to_device_verification_request_reaches_an_event_handler() {
+        // Phase 0 exists for this. Verification is delivered as to-device
+        // events and nothing else delivers them, so proving one arrives
+        // through the loop is what says the next milestone can be built.
+        use matrix_sdk::ruma::events::key::verification::request::ToDeviceKeyVerificationRequestEvent;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let arrived = Arc::new(AtomicBool::new(false));
+        client.add_event_handler({
+            let arrived = arrived.clone();
+            move |_: ToDeviceKeyVerificationRequestEvent| {
+                let arrived = arrived.clone();
+                async move {
+                    arrived.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+
+        server
+            .mock_sync()
+            .ok(|builder| {
+                builder.add_to_device_event(serde_json::json!({
+                    "sender": "@bob:example.org",
+                    "type": "m.key.verification.request",
+                    "content": {
+                        "from_device": "OTHERDEVICE",
+                        "transaction_id": "the-only-flow",
+                        "methods": ["m.sas.v1"],
+                        "timestamp": 1_600_000_000_000u64,
+                    },
+                }));
+            })
+            .mount()
+            .await;
+
+        let (seen, sink) = recorder();
+        let task = sync::start(client, sink);
+        wait_until(&seen, |s| s.contains(&Connection::Live)).await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !arrived.load(Ordering::SeqCst) {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the verification request never reached the handler"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_failing_homeserver_gives_up_promptly_instead_of_retrying_for_minutes() {
+        // matrix-sdk retries a 5xx on its own for fifteen minutes by default,
+        // with no way for a caller to see it happening. Left alone that makes
+        // the offline state above unreachable in practice: the loop would sit
+        // inside one `sync_once` for a quarter of an hour while the UI went on
+        // claiming everything was fine.
+        let server = MatrixMockServer::new().await;
+        server.mock_versions().ok().mount().await;
+        server.mock_well_known().ok().mount().await;
+        server
+            .mock_login()
+            .respond_with(ResponseTemplate::new(502))
+            .mount()
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = store(&dir);
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(30),
+            auth::login(&store, &credentials(&server)),
+        )
+        .await;
+
+        assert!(
+            outcome.is_ok(),
+            "the login was still retrying after thirty seconds"
+        );
+        assert!(outcome.unwrap().is_err());
+    }
+}
+
+/// Reporting whether this session is verified.
+mod verification_watcher {
+    use super::*;
+    use consort_matrix::{SessionVerification, verification};
+
+    #[tokio::test]
+    async fn a_new_login_is_reported_unverified() {
+        // Nothing has signed this device, and until something does it cannot
+        // read encrypted history or join an encrypted call. The whole point of
+        // the channel is that the user is told so.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (seen, sink) = recorder();
+
+        let task = verification::watch(client, sink);
+        let states = wait_until(&seen, |s: &[SessionVerification]| {
+            s.contains(&SessionVerification::Unverified)
+        })
+        .await;
+        task.abort();
+
+        assert!(
+            !states.contains(&SessionVerification::Verified),
+            "a session nobody has verified was reported verified: {states:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_first_report_does_not_wait_for_a_sync() {
+        // No `mock_sync` here and no sync loop running. The state is read from
+        // the crypto store, so a client that is signed in but not yet syncing
+        // still knows the answer, and the banner does not sit on "checking"
+        // until the first sync response arrives.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (seen, sink) = recorder();
+
+        let task = verification::watch(client, sink);
+        let states = wait_until(&seen, |s: &[SessionVerification]| !s.is_empty()).await;
+        task.abort();
+
+        assert!(!states.is_empty());
+    }
+
+    #[tokio::test]
+    async fn aborting_the_watcher_stops_it() {
+        // `AppState` aborts this on sign-out and on a second sign-in. A task
+        // that survived that would keep a whole `Client` alive, SQLite handles
+        // included, for as long as the process runs.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (_seen, sink) = recorder::<SessionVerification>();
+
+        let task = verification::watch(client, sink);
+        task.abort();
+
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// Verification flows, as far as a mock can drive them.
+///
+/// Less far than it first looks. `MatrixMockServer` can put an
+/// `m.key.verification.request` into a sync response, and Phase 0 proved one
+/// reaches an event handler, but the crypto machine will not build a request
+/// object out of it: it looks the sender's device up in its own store first,
+/// and a mocked `/keys/query` has no devices in it. Producing one means a
+/// device key blob carrying a signature the SDK verifies, which is a real
+/// olm identity and not something a JSON literal can fake.
+///
+/// So what is testable here is the wiring that does not need a counterparty:
+/// the supervisor's lifetime, the actions' behaviour when the flow they name
+/// has gone, and the fact that nothing is announced when nothing happened. The
+/// handshake, and a request that actually produces a flow, are in
+/// `against_a_real_homeserver.rs`.
+mod verification_flows {
+    use super::*;
+    use consort_matrix::{Connection, Flow, sync, verification};
+    use std::time::Duration;
+
+    const FLOW: &str = "the-only-flow";
+
+    /// A to-device request, as if from another of this account's own devices.
+    ///
+    /// Written out rather than built with a helper because
+    /// `SyncResponseBuilder` lives in `matrix-sdk-test`, which matrix-sdk does
+    /// not re-export, and one JSON literal is cheaper than another
+    /// dev-dependency pinned to the same rev.
+    fn a_request_from_a_device_we_have_never_seen() -> serde_json::Value {
+        // Current, not a constant. The crypto machine drops a request whose
+        // timestamp is far from now, and a fixed one from 2020 would make this
+        // test pass for a reason it is not about.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        serde_json::json!({
+            "sender": USER,
+            "type": "m.key.verification.request",
+            "content": {
+                "from_device": "OTHERDEVICE",
+                "transaction_id": FLOW,
+                "methods": ["m.sas.v1"],
+                "timestamp": now,
+            },
+        })
+    }
+
+    /// A signed-in client with its supervisor and sync loop running.
+    async fn watching(
+        server: &MatrixMockServer,
+    ) -> (
+        tempfile::TempDir,
+        Arc<std::sync::Mutex<Vec<Flow>>>,
+        tokio::task::JoinHandle<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (dir, client) = signed_in(server).await;
+
+        let (flows, flow_sink) = recorder::<Flow>();
+        let flow_task = verification::supervise(client.clone(), flow_sink);
+
+        let (connections, sink) = recorder();
+        let sync_task = sync::start(client, sink);
+        wait_until(&connections, |s| s.contains(&Connection::Live)).await;
+
+        (dir, flows, flow_task, sync_task)
+    }
+
+    #[tokio::test]
+    async fn a_request_from_a_device_we_cannot_identify_is_not_shown() {
+        // The SDK drops it, and we take the SDK's word for that rather than
+        // building a flow out of the raw event ourselves. The difference
+        // matters: synthesising one would put "somebody wants to verify this
+        // session" in front of the user for a device nobody can verify, which
+        // is both useless and exactly the shape of a nuisance.
+        let server = MatrixMockServer::new().await;
+        server
+            .mock_sync()
+            .ok(|builder| {
+                builder.add_to_device_event(a_request_from_a_device_we_have_never_seen());
+            })
+            .mount()
+            .await;
+
+        let (_dir, flows, flow_task, sync_task) = watching(&server).await;
+
+        // Two sync round trips' worth, so this is not just winning a race.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        sync_task.abort();
+        flow_task.abort();
+
+        let seen = flows.lock().unwrap().clone();
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn nothing_is_reported_when_no_request_arrives() {
+        // The regression this guards is a supervisor that announces a flow on
+        // every sync, which would put a "somebody wants to verify" prompt in
+        // front of the user for the life of the session.
+        let server = MatrixMockServer::new().await;
+        server.mock_sync().ok(|_| {}).mount().await;
+
+        let (_dir, flows, flow_task, sync_task) = watching(&server).await;
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        sync_task.abort();
+        flow_task.abort();
+
+        let seen = flows.lock().unwrap().clone();
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn acting_on_a_flow_that_does_not_exist_says_so_instead_of_panicking() {
+        // The interface draws a button from an event, and by the time somebody
+        // presses it the flow may have expired, been cancelled by the other
+        // side, or been answered on another of the account's devices. All
+        // three are ordinary and none of them is a broken session.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        for outcome in [
+            verification::accept(&client, USER, "gone").await,
+            verification::start_sas(&client, USER, "gone").await,
+            verification::confirm(&client, USER, "gone").await,
+            verification::mismatch(&client, USER, "gone").await,
+            verification::cancel(&client, USER, "gone").await,
+        ] {
+            let error = outcome.expect_err("acting on a missing flow should be an error");
+            assert!(!error.invalidates_session(), "{error}");
+            assert!(
+                error.user_message().contains("no longer"),
+                "{}",
+                error.user_message()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_user_id_is_an_error_rather_than_a_panic() {
+        // Nothing in our own interface can send one, but a command is reachable
+        // from anything running in the webview, and `OwnedUserId::try_from`
+        // would otherwise be an unwrap on attacker-shaped input.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = verification::accept(&client, "not a user id", FLOW)
+            .await
+            .expect_err("a malformed user id should be rejected");
+
+        assert!(!error.invalidates_session(), "{error}");
+    }
+
+    #[tokio::test]
+    async fn stopping_the_supervisor_stops_it() {
+        // `AppState` aborts this on sign-out, and it has to be an abort that
+        // takes the flow tasks with it: each one holds the `Client` and
+        // watches a stream belonging to that same client, so none of them can
+        // end on its own.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (_flows, flow_sink) = recorder::<Flow>();
+
+        let task = verification::supervise(client, flow_sink);
+        task.abort();
+
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
 }

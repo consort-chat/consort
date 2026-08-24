@@ -52,6 +52,10 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The mock runtime, so the one thing in `events.rs` that needs a real
+# `AppHandle` is covered by a test rather than by the fact that it compiles.
+# Dev-only: resolver 3 keeps the feature out of `cargo build`.
+tauri = { version = "2", features = ["test"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 # MatrixMockServer, so the login and restore commands are exercised against
 # something that answers like a homeserver. Dev-only: resolver 3 keeps the

@@ -3,14 +3,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
+const listen = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/event", () => ({ listen }));
+
 import {
   asCommandError,
   login,
   logout,
+  onConnection,
+  onVerification,
+  onVerificationFlow,
+  resendState,
   sessionStatus,
   tokenStorage,
+  type Connection,
   type Profile,
+  type Verification,
+  type VerificationFlow,
+  verificationAccept,
+  verificationCancel,
+  verificationConfirm,
+  verificationMismatch,
+  verificationStartSas,
 } from "./api";
+
+const flow: VerificationFlow = {
+  flowId: "the-only-flow",
+  otherUserId: "@bob:example.org",
+  isSelfVerification: true,
+  state: { kind: "requested" },
+};
 
 const profile: Profile = {
   user_id: "@bob:example.org",
@@ -131,5 +153,134 @@ describe("asCommandError", () => {
     for (const input of [null, undefined, 0, "", [], {}, new Error("")]) {
       expect(asCommandError(input).message.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("event subscriptions", () => {
+  beforeEach(() => {
+    listen.mockReset().mockResolvedValue(() => {});
+  });
+
+  it("subscribes to the channel the Rust side emits on", async () => {
+    // The name is a contract with `AppEvent::CONNECTION`, and Tauri does not
+    // complain about a listener for a channel nothing sends on. Getting it
+    // wrong is silence, not an error.
+    await onConnection(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("connection", expect.any(Function));
+  });
+
+  it("hands the handler the payload rather than the event envelope", async () => {
+    const handler = vi.fn();
+    await onConnection(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: Connection }) => void,
+    ];
+
+    forward({ payload: { state: "live" } });
+
+    expect(handler).toHaveBeenCalledWith({ state: "live" });
+  });
+
+  it("returns the unlisten function so an effect can clean up after itself", async () => {
+    // A listener leaked across a sign out and a sign in shows up as every
+    // event arriving twice, which is easy to ship and unpleasant to find.
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+
+    const returned = await onConnection(vi.fn());
+    returned();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("subscribes to the verification channel by the name Rust emits on", async () => {
+    await onVerification(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("verification", expect.any(Function));
+  });
+
+  it("hands the verification handler the payload rather than the envelope", async () => {
+    const handler = vi.fn();
+    await onVerification(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: Verification }) => void,
+    ];
+
+    forward({ payload: { state: "unverified" } });
+
+    expect(handler).toHaveBeenCalledWith({ state: "unverified" });
+  });
+
+  it("returns the verification unlisten function too", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+
+    const returned = await onVerification(vi.fn());
+    returned();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("subscribes to the verification-flow channel by the name Rust emits on", async () => {
+    await onVerificationFlow(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("verification-flow", expect.any(Function));
+  });
+
+  it("hands the flow handler the payload rather than the envelope", async () => {
+    const handler = vi.fn();
+    await onVerificationFlow(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: VerificationFlow }) => void,
+    ];
+
+    forward({ payload: flow });
+
+    expect(handler).toHaveBeenCalledWith(flow);
+  });
+
+  it("returns the flow unlisten function too", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+
+    const returned = await onVerificationFlow(vi.fn());
+    returned();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("names the flow on every verification action", async () => {
+    // Every one of them takes the same pair, because nothing on this side
+    // holds a flow: the identifiers from the event are the address.
+    const actions = [
+      [verificationAccept, "verification_accept"],
+      [verificationStartSas, "verification_start_sas"],
+      [verificationConfirm, "verification_confirm"],
+      [verificationMismatch, "verification_mismatch"],
+      [verificationCancel, "verification_cancel"],
+    ] as const;
+
+    for (const [call, command] of actions) {
+      invoke.mockReset().mockResolvedValue(undefined);
+
+      await call("@bob:example.org", "the-only-flow");
+
+      expect(invoke).toHaveBeenCalledWith(command, {
+        userId: "@bob:example.org",
+        flowId: "the-only-flow",
+      });
+    }
+  });
+
+  it("asks to be caught up with no arguments", async () => {
+    invoke.mockReset().mockResolvedValue(undefined);
+
+    await resendState();
+
+    expect(invoke).toHaveBeenCalledWith("resend_state");
   });
 });

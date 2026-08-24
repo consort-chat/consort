@@ -38,6 +38,21 @@ All of them have to pass. Clippy is denied at warning level on purpose, so a
 lint you disagree with needs an `#[allow]` with a comment explaining why, not a
 silent pass.
 
+Nothing in that list needs the network or a homeserver. The tests that do are
+`#[ignore]`d, so CI skips them and so does everybody who has not asked for
+them. If you are touching encryption or verification, ask for them:
+
+```sh
+testing/synapse/up.sh        # a throwaway Synapse with two accounts
+export CONSORT_TEST_HOMESERVER=http://localhost:8008
+cargo test --workspace -- --ignored
+testing/synapse/down.sh      # deletes every trace of it
+```
+
+It needs Docker and it downloads a Synapse image the first time. A SAS
+handshake is real cryptography between two real devices, so there is no mock
+that can stand in for this.
+
 House style bans the em dash and the en dash, in code, comments, commit
 messages and documentation alike. A plain hyphen in a compound word or a list
 bullet is fine. CI checks this, so it is worth catching first.

@@ -9,6 +9,7 @@
 //! without driving a webview.
 
 mod commands;
+mod events;
 mod state;
 
 use std::path::PathBuf;
@@ -61,7 +62,13 @@ pub fn run() {
                 "using application data directory"
             );
 
-            app.manage(AppState::new(store));
+            // The handle is the event sink. Cloning it is the documented way
+            // to keep one past `setup`, and it is what every background task
+            // emits through.
+            app.manage(AppState::new(
+                store,
+                std::sync::Arc::new(app.handle().clone()),
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -74,6 +81,12 @@ pub fn run() {
             commands::login,
             commands::logout,
             commands::token_storage,
+            commands::resend_state,
+            commands::verification_accept,
+            commands::verification_start_sas,
+            commands::verification_confirm,
+            commands::verification_mismatch,
+            commands::verification_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Consort");

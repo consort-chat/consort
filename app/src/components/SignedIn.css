@@ -34,6 +34,40 @@
   box-shadow: 0 0 0 3px oklch(84% 0.13 168 / 0.16);
 }
 
+/*
+  Colour reinforces the label; it never carries the state on its own. The word
+  next to the dot says the same thing, which is what makes this readable to
+  somebody who cannot tell mint from amber.
+*/
+.signed-in__status[data-connection="connecting"] .signed-in__dot,
+.signed-in__status[data-connection="offline"] .signed-in__dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px oklch(80% 0.15 75 / 0.16);
+  animation: signed-in-pulse 1.6s ease-in-out infinite;
+}
+
+.signed-in__status[data-connection="stopped"] .signed-in__dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px oklch(64% 0.19 22 / 0.16);
+}
+
+/* Opacity only, so the pulse stays on the compositor. */
+@keyframes signed-in-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .signed-in__status .signed-in__dot {
+    animation: none;
+  }
+}
+
 .button--small {
   padding: 0.3rem 0.7rem;
   font-size: var(--text-sm);
@@ -102,10 +136,59 @@
   overflow-wrap: anywhere;
 }
 
-.signed-in__next {
+/*
+  The verification banner.
+
+  Amber only for `unverified`, and deliberately not red: a session nobody has
+  verified yet is the state every new login starts in, not a fault. The other
+  two states stay on the plain surface, because "verified" is the unremarkable
+  case and dressing it up would leave nothing spare for the case that needs
+  attention.
+
+  Mint is not used here on purpose. It is reserved for voice and presence, and
+  spending it on a second meaning is how a semantic colour stops being one.
+*/
+.verification {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 46ch;
   margin: var(--space-4) 0 0;
-  font-size: var(--text-sm);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-align: left;
+  text-wrap: pretty;
+}
+
+.verification[data-verification="unverified"] {
+  border-left-color: var(--amber);
+  background: oklch(80% 0.15 75 / 0.07);
+}
+
+.verification__headline {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.verification[data-verification="unverified"] .verification__headline {
+  color: var(--text-primary);
+}
+
+/* Still checking is not news. Say it, quietly. */
+.verification[data-verification="unknown"] .verification__headline {
+  font-weight: 400;
   color: var(--text-muted);
+}
+
+.verification__detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 /*

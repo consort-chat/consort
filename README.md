@@ -8,10 +8,10 @@ alternative that actually works. The protocol underneath is Matrix, all the way
 down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
-> **Status: early.** Right now Consort signs you in and remembers you. That is
-> the whole feature set, and the session it gives you is unverified. Session
-> verification is next, then voice, and the README will stop saying this when
-> they land.
+> **Status: early.** Consort signs you in, remembers you, and can now be
+> verified by emoji from a client you are already signed in to. No rooms, no
+> messages, no voice yet. Recovery-key verification and key backup are next,
+> then voice, and the README will stop saying this when they land.
 
 ---
 
@@ -23,12 +23,22 @@ at whatever homeserver you already run.
   in your system keyring.
 - Cross-signing is bootstrapped on first login, which the voice layer will
   require later (MSC4153 only accepts media keys from cross-signed devices).
+- The signed-in screen says whether the sync loop is connected and whether this
+  session is verified, and says "checking" rather than guessing while it does
+  not know.
+- Emoji verification, answering a request. Start one from Element or another
+  Consort on the same account, compare the seven pictures, and this session
+  becomes verified: encrypted history opens and MSC4153 calls will accept it.
+  Declining, a mismatch and an expiry are each reported as themselves rather
+  than as one generic failure.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Everything else. No session verification, no room list, no messages, no voice.
-See [the roadmap](#roadmap).
+Starting a verification from Consort rather than answering one, verifying with
+a recovery key, and restoring key backup, so history that predates this session
+still will not decrypt. No room list, no messages, no voice. See
+[the roadmap](#roadmap).
 
 ---
 
@@ -154,17 +164,33 @@ cargo fmt --all --check
 Both halves have to stay above 90% line coverage, and CI enforces it.
 
 ```sh
-cargo test --workspace          # 157 tests
-cd app && pnpm test             # 55 tests
+cargo test --workspace          # 281 tests
+cd app && pnpm test             # 117 tests
 cd app && pnpm test:coverage    # thresholds enforced from vitest.config.ts
 ```
 
-A few Rust tests are marked `#[ignore]` because they need a live platform
-keyring, which no CI container has. Run them on a desktop with:
+Twelve Rust tests are marked `#[ignore]` because they need something a CI
+container does not have. Four want a live platform keyring:
 
 ```sh
 cargo test -p consort-matrix -- --ignored keyring
 ```
+
+The other eight want a homeserver, because a SAS verification handshake is real
+cryptography between two real devices and no mock produces one. They drive both
+sides of the emoji exchange unattended, so accepting, confirming, declining and
+reporting a mismatch are all exercised end to end. There is a throwaway Synapse
+for that:
+
+```sh
+testing/synapse/up.sh
+export CONSORT_TEST_HOMESERVER=http://localhost:8008
+cargo test --workspace -- --ignored
+testing/synapse/down.sh
+```
+
+See [testing/synapse/README.md](testing/synapse/README.md) for what it is and,
+more importantly, what it is not.
 
 [COVERAGE.md](COVERAGE.md) explains what is measured, what is excluded, and
 why.
@@ -187,10 +213,13 @@ Consort one, and there is nothing to fix on this side.
 ## How it is put together
 
 ```
-crates/consort-matrix/    Matrix authentication and session persistence.
-                          No Tauri, no UI. This is the testable half.
-app/src-tauri/            The Tauri shell. Commands, state, wiring.
+crates/consort-matrix/    Matrix authentication, session persistence, sync,
+                          verification state. No Tauri, no UI. This is the
+                          testable half.
+app/src-tauri/            The Tauri shell. Commands, state, events, wiring.
 app/src/                  React + TypeScript frontend.
+testing/synapse/          A homeserver to throw away, for the tests that
+                          cannot use a mock.
 ```
 
 The split is deliberate and worth keeping. Anything that can live in
@@ -267,7 +296,8 @@ whether a model wrote them or you did.
 | Milestone | State |
 |---|---|
 | Password login and session persistence | working |
-| Session verification (emoji and recovery key) | in progress, [planned here](docs/PLAN-verification.md) |
+| Session verification by emoji, answering a request | working |
+| Starting a verification from Consort, recovery key, key backup | in progress, [planned here](docs/PLAN-verification.md) |
 | Room list and voice channel discovery | planned |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |

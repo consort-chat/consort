@@ -7,6 +7,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+use matrix_sdk::config::RequestConfig;
 use matrix_sdk::encryption::EncryptionSettings;
 use matrix_sdk::store::RoomLoadSettings;
 use matrix_sdk::{Client, ClientBuilder, SessionChange};
@@ -313,6 +314,19 @@ pub async fn persist_token_refreshes(client: Client, store: SessionStore) {
 /// cross-signed device.
 fn base_builder() -> ClientBuilder {
     Client::builder()
+        // Bounded retries, because the default is unbounded and invisible.
+        //
+        // Left alone, matrix-sdk retries a 5xx behind the caller's back for
+        // fifteen minutes with no way to observe it. For a login that is a
+        // form which never comes back. For the sync loop it is worse: the loop
+        // sits inside one `sync_once` for a quarter of an hour while the UI
+        // goes on saying "Connected", which is the exact failure
+        // `consort_matrix::sync` exists to make impossible.
+        //
+        // Three attempts, roughly a second and a half, then the error reaches
+        // us and we decide what it means. Retrying is still the right answer
+        // to most of them; it just belongs somewhere it can be reported.
+        .request_config(RequestConfig::short_retry())
         .with_encryption_settings(EncryptionSettings {
             auto_enable_cross_signing: true,
             ..EncryptionSettings::default()

@@ -1,8 +1,8 @@
 # Plan: end-to-end encryption verification
 
-Status: **accepted, not started.** Every API named here was checked against the
-pinned SDK rev rather than recalled, and the file and function names are the
-ones to create.
+Status: **Phases 0 to 2 done, Phase 3 next.** Every API named here was checked
+against the pinned SDK rev rather than recalled, and the file and function
+names are the ones to create.
 
 This is the milestone after authentication and before voice. Not by preference:
 MSC4153 requires a cross-signed device to join an encrypted call, so the voice
@@ -105,11 +105,11 @@ Commands stay one-line delegates.
 
 Each phase lists what to build and what has to be true before it is finished.
 
-### Phase 0: prerequisites
+### Phase 0: prerequisites (done)
 
 Produces nothing a user can see, and is the bulk of the work.
 
-Build:
+Built:
 
 - `crates/consort-matrix/src/sync.rs`. A `start(client, on_event) ->
   JoinHandle<()>` over `client.sync_with_result_callback`, not `client.sync`.
@@ -128,66 +128,132 @@ Build:
   open, plus a script that creates two accounts. This is a deliverable, not
   scaffolding, because every later phase is tested against it.
 
-Done when: signing in starts a sync loop that survives a homeserver restart,
-signing out stops it, killing the network moves the UI to a disconnected state
-and restoring it moves back, and no task outlives the client that owns it.
+Done. Signing in starts the loop, signing out stops it and says so, a failing
+homeserver moves the header to "Reconnecting", and no task outlives the client
+that owns it.
 
-### Phase 1: surface the state
+Two things came out of building it that the plan did not predict.
 
-Build:
+**matrix-sdk retries a 5xx for fifteen minutes on its own**, with no way for a
+caller to see it happening, so the connection state above would have been
+unreachable in practice: the loop sits inside one `sync_once` for a quarter of
+an hour while the UI says everything is fine. `base_builder` now sets
+`RequestConfig::short_retry()`, which bounds it to three attempts and roughly a
+second and a half. Retrying is still right for most failures; it just has to
+happen somewhere it can be reported. This changes login too, and for the
+better: a login that hangs for fifteen minutes on a bad gateway is a form that
+never comes back.
 
-- Subscribe to `encryption().verification_state()`, which is a `Subscriber<
-  VerificationState>`, and emit on change.
-- Map `Verified` / `Unverified(level)` onto the DTO. The level is worth keeping:
-  "unverified" and "signed by an identity we do not trust" are different
-  sentences.
-- Replace the "Session verification is next" placeholder on the signed-in
-  screen with a real unverified-session banner.
+**The throwaway Synapse earned two live tests immediately** rather than waiting
+for Phase 2. `tests/against_a_real_homeserver.rs` proves the harness end to
+end, and proves that two logins to one account produce two devices that can
+see each other, which is the precondition for every phase from 2 onwards and
+was worth knowing before building on it.
 
-Small, and it makes every later phase observable. Do it before Phase 2, not
-after, because otherwise the first flow is debugged with no way to see whether
-it worked.
+### Phase 1: surface the state (done)
 
-Done when: the banner is correct on a fresh login, on a restored session, and
-after an SDK-side change with no user action, and it renders an unknown state
-as unknown rather than as verified.
+Built:
 
-### Phase 2: emoji verification, responder path
+- `crates/consort-matrix/src/verification/`. A `watch(client, on_change) ->
+  JoinHandle<()>` over `encryption().verification_state()`, filtered down to
+  the changes: the SDK republishes the same answer after every `/keys/query`
+  mentioning one of our own devices.
+- A third task slot in `AppState` beside the sync loop and the token refresher,
+  started and aborted in the same two places.
+- A `verification` channel carrying `unknown` / `verified` / `unverified`.
+- A real banner on the signed-in screen, replacing the "Session verification is
+  next" placeholder. Amber for unverified, and not red: a session nobody has
+  verified yet is where every login starts, not a fault.
+
+Done. The banner is right on a fresh login, on a restored session, and after a
+change with no user action, and an unknown state renders as "checking" rather
+than as either answer.
+
+Two corrections came out of building it.
+
+**`Unverified` carries no level.** There are two types called
+`VerificationState` in the SDK. The one describing who sent a message, in
+`matrix_sdk_common::deserialized_responses`, has an `Unverified(VerificationLevel)`
+carrying the detail this plan wanted to keep. The one describing our own
+device, in `matrix_sdk::encryption`, is three plain variants and no payload,
+which is right: for our own device there is only ever one signature in
+question. The DTO is three states.
+
+**The webview loses a race nobody had noticed, and it was losing it in Phase 0
+too.** Both channels carry state rather than incidents, and both publish from
+tasks that start with the session. On a restored session that is inside Tauri's
+`setup`, before the webview has run a line of JavaScript. Whatever they said in
+the meantime went to nobody, so the header could sit on "Connecting" against a
+perfectly healthy sync loop for as long as the session lasted, since a working
+loop has no further transitions to report. Fixed for every channel at once with
+a sink that remembers the last event per channel and a `resend_state` command
+the frontend calls once its listeners are attached. Phase 0's connection header
+was wrong in exactly the same way and is fixed by the same change.
+
+### Phase 2: emoji verification, responder path (done)
 
 The one actually asked for. Consort accepts a request that Element started.
 
-Build:
+Built:
 
-- `crates/consort-matrix/src/verification/` as a directory, not one file:
-  `mod.rs` for the entry points, `flow.rs` for the state machine driver,
-  `dto.rs` for the wire types and the `From` impls.
-- An event handler for `ToDeviceKeyVerificationRequestEvent` plus the in-room
-  `OriginalSyncRoomMessageEvent` with an `m.key.verification.request` body.
-  Element sends the in-room flow for self-verification in some versions, so
-  handling only the to-device one gets a request that never appears.
-- On arrival, resolve `encryption().get_verification_request(user_id, flow_id)`
-  and spawn the flow task on its `changes()` stream.
-- Commands: `verification_accept`, `verification_start_sas`,
-  `verification_confirm`, `verification_mismatch`, `verification_cancel`, each
-  taking a `flow_id`.
-- `VerificationRequestState::Transitioned { verification }` is where a
-  `SasVerification` appears. Switch to its `changes()` stream there.
-- Render the seven emoji from `.emoji()` with their descriptions. `emoji()`
-  returns `Option<[Emoji; 7]>` and is `None` until `SasState::KeysExchanged`,
-  so the UI needs a real waiting state rather than an empty row.
-- `supports_emoji()` can be false. Fall back to `decimals()` rather than
-  showing nothing.
-- Cancellation and expiry as first-class states, driven by
-  `SasState::Cancelled` and `cancel_info()`. Expiry needs our own timer: the
-  ten-minute window is in the protocol, not in a stream event.
+- `verification/dto.rs`. `Flow`, `FlowState` and the mappings onto them. Seven
+  states, and the two that look redundant are not: `Ready` means both sides
+  agreed and nobody has started the comparison, which is where the "show me the
+  emoji" button belongs, and `Waiting` means it has started and the keys are in
+  flight, which is a spinner.
+- `verification/flow.rs`. Both event handlers, the state machine driver, and
+  the five actions. Every action re-resolves through the SDK's registry from
+  the `(user_id, flow_id)` pair the event carried, so nothing holds a flow.
+- A `verification-flow` channel, and a panel that renders each state: the
+  request with accept and decline, the seven emoji with their words, the
+  decimal fallback, and each ending phrased as itself.
+- `testing/synapse/` grew what the live tests need: open registration and no
+  rate limits.
 
-Done when: Element starts a self-verification, Consort shows the request,
-accepting it shows seven matching emoji, confirming on both sides leaves both
-verified, and rejecting on either side leaves both cancelled with the reason
-named. All four of accept, confirm, mismatch and cancel are exercised against
-the live Synapse from Phase 0.
+Done. Both sides of the emoji exchange run unattended against a real Synapse in
+`against_a_real_homeserver.rs`, and accept, confirm, mismatch, cancel and
+`start_sas` are each exercised there. The session reports itself verified
+afterwards, which is the milestone rather than the protocol working.
 
-### Phase 3: initiator path
+Three corrections came out of building it.
+
+**The responder has to accept the SAS as well as the request, and that is not a
+second question for the user.** After `Transitioned` the flow sits in
+`SasState::Started` and goes nowhere until `SasVerification::accept()` sends
+`m.key.verification.accept`. It looks like a decision and is not one: it settles
+which hash and which MAC the two devices will use, and the human decision was
+made when they accepted the request. Putting a button in front of a choice
+between `hkdf-hmac-sha256` and `hkdf-hmac-sha256.v2` would be asking somebody a
+question they cannot have an opinion about. It is called automatically, and only
+when `we_started()` is false.
+
+**Expiry needs no timer of ours.** The plan said the ten-minute window is in the
+protocol rather than in a stream event. It is in both: the SDK's crypto machine
+garbage-collects timed-out flows at the start of every sync response and sets
+the observable, so a `Cancelled(Timeout)` arrives on `changes()` within one sync
+of the deadline. A timer here would race that and send a second cancel. What was
+worth doing instead is making `timedOut` a reason of its own, so the interface
+says the request expired rather than that somebody refused.
+
+**A cancellation is not one thing.** `CancelCode::Accepted` means another of the
+account's own devices answered first, which happens on every self-verification
+because the request goes to all of them. Rendering that as "cancelled" reports a
+problem to somebody whose verification is going fine on their phone. The DTO
+narrows eleven cancel codes to four answers plus `Other`, and only `Mismatch`
+gets the alarming treatment, because it is the only one that means somebody may
+be listening.
+
+Two things the mock cannot reach, recorded so they are not rediscovered.
+`MatrixMockServer` can inject an `m.key.verification.request` to-device event,
+but the crypto machine will not build a request object from it: it looks the
+sender's device up in its own store first, and a mocked `/keys/query` has no
+devices in it. So the mock proves the negative, that a request from a device we
+cannot identify is not shown, and the live suite proves the rest. Separately,
+Synapse's default `rc_login` is three attempts per burst, which turns a suite
+that signs in twice per test into a wall of 429s that matrix-sdk waits out; the
+symptom is a test that hangs for minutes with nothing in the log.
+
+### Phase 3: initiator path (next)
 
 Consort starts the request.
 
@@ -201,7 +267,9 @@ Build:
 
 Reuses Phase 2's state machine almost entirely: the same `changes()` stream,
 the same DTO, the same task. What differs is who called first, which
-`we_started()` already reports.
+`we_started()` already reports. Two small things Phase 2 left for it: `Flow`
+gains a `we_started` field, since the responder never needed one, and
+`follow_sas` already skips its automatic accept when we started the exchange.
 
 Done when: the flow works in the opposite direction and the emoji screen is the
 same code.
@@ -262,7 +330,7 @@ to-device event produces the event our frontend expects, and that a 5xx from
 sync surfaces as disconnected rather than as silence. It is not enough to drive
 a handshake: the mock cannot do olm.
 
-**Live, in `tests/two_devices.rs`, `#[ignore]`d.** The second device is
+**Live, in `tests/against_a_real_homeserver.rs`, `#[ignore]`d.** The second device is
 matrix-sdk driven from the test itself, not Element, so the whole flow runs
 unattended in one `cargo test` against the Phase 0 Synapse. Gate on
 `CONSORT_TEST_HOMESERVER` being set so a normal `cargo test` and CI both skip

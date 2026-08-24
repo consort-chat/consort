@@ -120,6 +120,11 @@
   max-width: 360px;
 }
 
+/* The breathing room the sign-in button wants above it, on top of the form gap. */
+.login__submit {
+  margin-top: var(--space-2);
+}
+
 .login__header {
   margin-bottom: var(--space-2);
 }
@@ -219,8 +224,15 @@
   opacity: 0.5;
 }
 
+/*
+  No margin here, deliberately. This class is shared with the verification
+  panels, where a primary button sits in a flex row beside a ghost one. A
+  margin-top on the primary would push it down and, under the row's default
+  align-items: stretch, shorten it by the same amount, so the two buttons would
+  no longer match. Spacing that belongs to one layout lives with that layout:
+  see .login__submit below.
+*/
 .button--primary {
-  margin-top: var(--space-2);
   color: oklch(99% 0 0);
   background: var(--violet);
   box-shadow: 0 1px 0 oklch(100% 0 0 / 0.12) inset;

@@ -68,6 +68,15 @@ pub enum Error {
     /// identifier. Same practical outcome as `CorruptSession`, different cause.
     #[error("stored session contains an invalid {field}: {value}")]
     InvalidStoredIdentifier { field: &'static str, value: String },
+
+    /// A command named a verification flow the SDK no longer has.
+    ///
+    /// Not necessarily a bug. Flows expire after ten minutes, either side can
+    /// cancel at any point, and a request that another of the account's
+    /// devices answered is dropped as soon as that is known. Any of those can
+    /// happen between the interface drawing a button and somebody pressing it.
+    #[error("verification flow {flow_id} is no longer active")]
+    NoSuchFlow { flow_id: String },
 }
 
 impl Error {
@@ -108,6 +117,9 @@ impl Error {
             }
             Self::CorruptSession(_) | Self::InvalidStoredIdentifier { .. } => {
                 "The saved session was unreadable, so you have been signed out.".to_owned()
+            }
+            Self::NoSuchFlow { .. } => {
+                "That verification is no longer waiting for an answer. Start a new one.".to_owned()
             }
         }
     }
@@ -230,7 +242,23 @@ mod tests {
                 field: "user_id",
                 value: "nonsense".to_owned(),
             },
+            Error::NoSuchFlow {
+                flow_id: "the-only-flow".to_owned(),
+            },
         ]
+    }
+
+    #[test]
+    fn a_verification_that_has_already_ended_does_not_sign_anybody_out() {
+        // Flows expire after ten minutes and either side can cancel at any
+        // point, so naming a flow that has gone is ordinary. Treating it as a
+        // broken session would sign somebody out for pressing a button a
+        // moment too late.
+        let error = Error::NoSuchFlow {
+            flow_id: "the-only-flow".to_owned(),
+        };
+
+        assert!(!error.invalidates_session());
     }
 
     /// Every branch of `login_message`, driven directly.

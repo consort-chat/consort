@@ -31,6 +31,8 @@
   --violet-glow: oklch(58% 0.21 284 / 0.28);
 
   --mint: oklch(84% 0.13 168);
+  /* Not yet failed, not yet fine. The reconnecting state and nothing else. */
+  --amber: oklch(80% 0.15 75);
   --danger: oklch(64% 0.19 22);
   --danger-surface: oklch(30% 0.08 22);
 

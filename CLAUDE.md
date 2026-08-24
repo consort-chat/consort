@@ -11,9 +11,10 @@ and LiveKit is the next milestone.
 ## Layout
 
 ```
-crates/consort-matrix/   Matrix auth and session persistence. No Tauri, no UI.
-app/src-tauri/           Tauri v2 shell: commands, state, wiring.
+crates/consort-matrix/   Matrix auth, session persistence, sync. No Tauri, no UI.
+app/src-tauri/           Tauri v2 shell: commands, state, events, wiring.
 app/src/                 React 19 + TypeScript frontend, Vite.
+testing/synapse/         A throwaway homeserver for the tests a mock cannot cover.
 ```
 
 ## Commands
@@ -82,6 +83,84 @@ HTTP from the webview. Everything privileged goes through a Rust command. If a
 frontend change seems to need a new capability, that is a signal the logic
 belongs in Rust.
 
+### The IPC runs both ways now
+
+Commands are request and response; anything push-driven is an event.
+`app/src-tauri/src/events.rs` owns every channel name, and `AppEvent` is the
+only thing that names one. Do not write an event name as a string literal at a
+call site: Tauri validates names at emit time, so a typo is a listener that
+silently never fires rather than anything that fails to build.
+
+On the frontend, `onConnection`, `onVerification`, `onVerificationFlow` and any
+sibling in `app/src/lib/api.ts` return their unlisten function. Call it from the effect
+cleanup. A leaked listener survives a sign out, and every later event then
+arrives once per leak.
+
+### Every channel carries state, so a late subscriber has to ask
+
+The background tasks start with the session, which on a restored session is
+inside Tauri's `setup`, before the webview has run any JavaScript. Whatever
+they published before the listeners existed went to nobody, and because these
+are state channels rather than streams of incidents, missing one is not a
+missed message: it leaves the interface on its initial guess until something
+happens to change, which on a healthy session may be never.
+
+`LatestSink` in `events.rs` keeps the last event per channel, and the
+`resend_state` command replays them. A component subscribes to everything it
+needs, then calls `resendState()` once, and gets the current state through the
+same handler as every later change. Any new channel gets this for free; do not
+add a getter command per channel alongside it.
+
+Not every channel is a state channel, and `AppEvent::is_worth_keeping` is where
+that is decided. A verification flow is state while it is running and history
+once it is over, so an ending clears what the channel was holding rather than
+replacing it. Without that, a remount resurrects "the emoji did not match" for
+a flow that finished twenty minutes ago.
+
+### The sync loop reports its own health
+
+`consort_matrix::sync` uses `sync_with_result_callback` rather than `sync`,
+because `sync` swallows failed iterations and retries invisibly, which makes a
+client that has been offline for an hour indistinguishable from one that is
+connected and idle. Relatedly, `base_builder` sets
+`RequestConfig::short_retry()`: matrix-sdk otherwise retries a 5xx for fifteen
+minutes on its own, inside a single `sync_once`, with nothing able to observe
+it.
+
+### Two types are called VerificationState
+
+`matrix_sdk::encryption::VerificationState` describes our own device and has
+three plain variants: `Unknown`, `Verified`, `Unverified`. That is the one
+`consort_matrix::verification` watches and maps onto `SessionVerification`.
+
+`matrix_sdk_common::deserialized_responses::VerificationState` describes who
+sent a message and its `Unverified` carries a `VerificationLevel`. Reaching for
+that one when the question is "is this session verified" gets you a level that
+does not apply. `Unknown` is a real state and must never be rendered as either
+answer.
+
+### Verification flows are addressed, not held
+
+Nothing keeps a `SasVerification` in a field. The SDK has a registry keyed by
+`(user_id, flow_id)`, every action in `verification::flow` re-resolves through
+it, and the frontend passes back the pair the event carried. A
+`Mutex<Option<SasVerification>>` in `AppState` would be a second lifetime to
+manage and would make two concurrent requests unrepresentable, which they are
+not: a request goes to every device on the account and two can answer.
+
+What is owned is one task per flow, all of them inside the `JoinSet` that
+`supervise` holds. Each flow task holds the `Client` and watches a stream
+belonging to that same client, so nothing about signing out can make one end on
+its own. Aborting the supervisor drops the set, which aborts the lot. Detaching
+them with a bare `tokio::spawn` leaks a client per abandoned verification.
+
+Two more things worth not rediscovering. As the responder you must call
+`SasVerification::accept()` after `Transitioned` or the exchange stops dead;
+`follow_sas` does it automatically, because it settles hash and MAC algorithms
+rather than asking the user anything. And expiry needs no timer of ours: the
+crypto machine garbage-collects timed-out flows on every sync response and the
+`Cancelled(Timeout)` arrives on `changes()` by itself.
+
 ## Conventions
 
 **Put logic in `consort-matrix`.** Tauri commands are adapters: translate
@@ -117,9 +196,19 @@ rediscovering:
 - **Homeserver code is testable.** `MatrixMockServer`, from matrix-sdk's
   `testing` feature, is a dev-dependency of both crates.
   `crates/consort-matrix/tests/against_a_mock_homeserver.rs` covers login,
-  restore, logout and token rotation. `#[ignore]` is for things a container
-  genuinely cannot have, which here means a live platform keyring and nothing
-  else.
+  restore, logout, token rotation and the sync loop. Its `SyncResponseBuilder`
+  has `add_to_device_event`, so a to-device event reaching a handler is
+  testable without a homeserver. A verification *flow* is not: the crypto
+  machine looks the sender's device up in its own store before building a
+  request object, and a mocked `/keys/query` has no devices in it. `#[ignore]`
+  is for things a container genuinely cannot have: a live platform keyring, and
+  a homeserver for the eight tests in
+  `crates/consort-matrix/tests/against_a_real_homeserver.rs`, which
+  `testing/synapse/up.sh` provides. Those drive both sides of a real emoji
+  handshake, so they are the coverage for `verification/flow.rs`, and each one
+  registers an account of its own: two logins to a reused account produce two
+  devices where neither holds the cross-signing private keys, so nothing can
+  sign anything and the test passes only the first time.
 - **Tauri commands are one-line delegates.** `State<'_, AppState>` only exists
   inside a running app, so logic written directly in a `#[tauri::command]` is
   logic no test can reach. Every command calls a plain `*_for(&AppState, ..)`

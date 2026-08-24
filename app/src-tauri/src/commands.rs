@@ -9,7 +9,7 @@
 //! inside a command is logic no test can reach. The delegates below are the
 //! only untested lines in this file, and there is nothing in them to break.
 
-use consort_matrix::{BackendKind, Credentials, Profile, auth};
+use consort_matrix::{BackendKind, Credentials, Profile, auth, verification};
 use serde::Serialize;
 use tauri::State;
 
@@ -167,6 +167,69 @@ pub async fn logout_for(state: &AppState) -> Result<(), CommandError> {
     Ok(())
 }
 
+/// The signed-in client, or an error the interface can render.
+///
+/// Every verification action needs one, and none of them can do anything
+/// useful without it. Reaching this with nobody signed in is not a bug in the
+/// application: any script running in the webview can invoke a command, and
+/// unwrapping here would turn that into a panic in a command thread.
+async fn signed_in_client(state: &AppState) -> Result<consort_matrix::Client, CommandError> {
+    state
+        .client()
+        .await
+        .ok_or_else(|| consort_matrix::Error::NotLoggedIn.into())
+}
+
+/// Agree to a verification somebody else asked for.
+pub async fn verification_accept_for(
+    state: &AppState,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::accept(&client, &user_id, &flow_id).await?)
+}
+
+/// Start the emoji comparison from this side.
+pub async fn verification_start_sas_for(
+    state: &AppState,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::start_sas(&client, &user_id, &flow_id).await?)
+}
+
+/// Say the emoji matched.
+pub async fn verification_confirm_for(
+    state: &AppState,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::confirm(&client, &user_id, &flow_id).await?)
+}
+
+/// Say the emoji did not match.
+pub async fn verification_mismatch_for(
+    state: &AppState,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::mismatch(&client, &user_id, &flow_id).await?)
+}
+
+/// Call the verification off.
+pub async fn verification_cancel_for(
+    state: &AppState,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::cancel(&client, &user_id, &flow_id).await?)
+}
+
 /// Report where the access token is being kept.
 pub fn token_storage_for(state: &AppState) -> TokenStorage {
     let kind = state.store().backend_kind();
@@ -206,9 +269,86 @@ pub fn token_storage(state: State<'_, AppState>) -> TokenStorage {
     token_storage_for(&state)
 }
 
+/// Re-send the current state of every push channel.
+///
+/// Called by the frontend once its listeners are attached. The background
+/// tasks start with the session, which on a restored session is before the
+/// webview has run a line of JavaScript, so their first states are published
+/// to nobody. These are state channels rather than streams of incidents:
+/// missing one is not a missed message, it is an interface stuck on its
+/// initial guess until something else happens to change.
+#[tauri::command]
+pub fn resend_state(state: State<'_, AppState>) {
+    state.resend_state();
+}
+
+// The five verification actions.
+//
+// Each takes the pair of identifiers the `verification-flow` event carried,
+// rather than the frontend holding a handle to anything. Nothing on either
+// side of the boundary owns a flow: the SDK has a registry keyed by exactly
+// this pair, and naming the flow every time is what makes two concurrent
+// verifications representable, which they are.
+//
+// The user id looks redundant while only self-verification exists, since it is
+// always our own. Taking it anyway costs one string and means verifying
+// another person, when it arrives, is not a change to five signatures and the
+// TypeScript that calls them.
+
+/// Agree to a verification somebody else asked for.
+#[tauri::command]
+pub async fn verification_accept(
+    state: State<'_, AppState>,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    verification_accept_for(&state, user_id, flow_id).await
+}
+
+/// Start the emoji comparison from this side.
+#[tauri::command]
+pub async fn verification_start_sas(
+    state: State<'_, AppState>,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    verification_start_sas_for(&state, user_id, flow_id).await
+}
+
+/// Say the emoji matched.
+#[tauri::command]
+pub async fn verification_confirm(
+    state: State<'_, AppState>,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    verification_confirm_for(&state, user_id, flow_id).await
+}
+
+/// Say the emoji did not match.
+#[tauri::command]
+pub async fn verification_mismatch(
+    state: State<'_, AppState>,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    verification_mismatch_for(&state, user_id, flow_id).await
+}
+
+/// Call the verification off.
+#[tauri::command]
+pub async fn verification_cancel(
+    state: State<'_, AppState>,
+    user_id: String,
+    flow_id: String,
+) -> Result<(), CommandError> {
+    verification_cancel_for(&state, user_id, flow_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::RecordingSink;
     use consort_matrix::Backend;
     use consort_matrix::SessionStore;
     use consort_matrix::secrets::MemoryBackend;
@@ -218,13 +358,67 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend = Arc::new(MemoryBackend::new());
         let store = SessionStore::with_backend(dir.path(), backend.clone());
-        (dir, AppState::new(store), backend)
+        let state = AppState::new(store, Arc::new(RecordingSink::new()));
+        (dir, state, backend)
     }
 
     pub(super) fn status_name(status: &SessionStatus) -> &'static str {
         match status {
             SessionStatus::SignedOut => "signedOut",
             SessionStatus::SignedIn { .. } => "signedIn",
+        }
+    }
+
+    /// The five verification actions, as `(name, run it)`.
+    ///
+    /// A list rather than five near-identical tests, because what is being
+    /// checked is that none of them behaves differently, and five copies of
+    /// one assertion is how the odd one out gets missed.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn every_action() -> Vec<(
+        &'static str,
+        fn(
+            &AppState,
+            String,
+            String,
+        )
+            -> std::pin::Pin<Box<dyn Future<Output = Result<(), CommandError>> + Send + '_>>,
+    )> {
+        vec![
+            ("accept", |state, user, flow| {
+                Box::pin(verification_accept_for(state, user, flow))
+            }),
+            ("start_sas", |state, user, flow| {
+                Box::pin(verification_start_sas_for(state, user, flow))
+            }),
+            ("confirm", |state, user, flow| {
+                Box::pin(verification_confirm_for(state, user, flow))
+            }),
+            ("mismatch", |state, user, flow| {
+                Box::pin(verification_mismatch_for(state, user, flow))
+            }),
+            ("cancel", |state, user, flow| {
+                Box::pin(verification_cancel_for(state, user, flow))
+            }),
+        ]
+    }
+
+    #[tokio::test]
+    async fn no_verification_action_works_without_a_signed_in_session() {
+        // Reachable: the webview can invoke a command directly, and a signed
+        // out app still has a page that could. Every one of these has to be an
+        // error rather than an unwrap on `Option<Client>`.
+        let (_dir, state, _) = state();
+
+        for (name, run) in every_action() {
+            let error = run(&state, "@bob:example.org".to_owned(), "flow".to_owned())
+                .await
+                .expect_err("{name} succeeded with nobody signed in");
+            assert!(
+                error.message().contains("No user is signed in"),
+                "{name}: {}",
+                error.message()
+            );
         }
     }
 
@@ -423,18 +617,20 @@ mod tests {
 mod against_a_mock_homeserver {
     use super::tests::status_name;
     use super::*;
-    use consort_matrix::SessionStore;
+    use crate::events::RecordingSink;
     use consort_matrix::secrets::MemoryBackend;
+    use consort_matrix::{Connection, SessionStore, SessionVerification, StopReason};
     use matrix_sdk::ruma;
     use matrix_sdk::test_utils::mocks::{LoginResponseTemplate200, MatrixMockServer};
     use std::sync::Arc;
 
     const DEVICE: &str = "HZTIUXZKUU";
 
-    fn state() -> (tempfile::TempDir, AppState) {
+    fn state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
-        (dir, AppState::new(store))
+        let sink = Arc::new(RecordingSink::new());
+        (dir, AppState::new(store, sink.clone()), sink)
     }
 
     async fn mount_login(server: &MatrixMockServer) {
@@ -454,10 +650,35 @@ mod against_a_mock_homeserver {
     }
 
     #[tokio::test]
+    async fn a_verification_action_on_a_flow_that_has_gone_is_reported_not_swallowed() {
+        // Proves the delegation, which is the only thing these commands do:
+        // the identifiers reach the SDK, it finds nothing, and the error comes
+        // back as something the interface can render rather than a panic in a
+        // command thread.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        for (name, run) in super::tests::every_action() {
+            let error = run(&state, "@bob:example.org".to_owned(), "gone".to_owned())
+                .await
+                .expect_err("{name} succeeded on a flow that does not exist");
+            assert!(
+                error.message().contains("no longer"),
+                "{name}: {}",
+                error.message()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn a_successful_login_returns_the_profile() {
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
 
         let profile = login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
             .await
@@ -471,7 +692,7 @@ mod against_a_mock_homeserver {
     async fn a_successful_login_leaves_the_client_in_state() {
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
 
         login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
             .await
@@ -496,7 +717,7 @@ mod against_a_mock_homeserver {
             ))
             .mount()
             .await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
 
         let error = login_for(&state, server.uri(), "bob".to_owned(), "wrong".to_owned())
             .await
@@ -510,7 +731,7 @@ mod against_a_mock_homeserver {
     async fn asking_for_the_status_with_a_live_client_does_not_touch_the_store() {
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
         login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
             .await
             .unwrap();
@@ -525,13 +746,13 @@ mod against_a_mock_homeserver {
     async fn a_stored_session_is_restored_on_startup() {
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
-        let (dir, first) = state();
+        let (dir, first, _sink) = state();
         login_for(&first, server.uri(), "bob".to_owned(), "hunter2".to_owned())
             .await
             .unwrap();
         // A second run of the app over the same data directory, sharing the
         // secret backend the way a real keyring would be shared.
-        let fresh = AppState::new(first.store().clone());
+        let fresh = AppState::new(first.store().clone(), Arc::new(RecordingSink::new()));
 
         let status = session_status_for(&fresh).await.unwrap();
 
@@ -545,7 +766,7 @@ mod against_a_mock_homeserver {
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
         server.mock_logout().ok().mount().await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
         login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
             .await
             .unwrap();
@@ -561,13 +782,250 @@ mod against_a_mock_homeserver {
         );
     }
 
+    /// Poll until the sink has seen a connection state matching `want`.
+    ///
+    /// The sync loop is a spawned task, so nothing it reports is available on
+    /// the line after `login_for` returns.
+    async fn wait_for_connection(sink: &RecordingSink, want: impl Fn(&Connection) -> bool) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, crate::events::AppEvent::Connection(c) if want(c)))
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out; saw {:?}",
+                sink.events()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Poll until the sink has seen a verification state matching `want`.
+    async fn wait_for_verification(
+        sink: &RecordingSink,
+        want: impl Fn(&SessionVerification) -> bool,
+    ) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if sink
+                .events()
+                .iter()
+                .any(|event| matches!(event, crate::events::AppEvent::Verification(v) if want(v)))
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out; saw {:?}",
+                sink.events()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn signing_in_reports_the_session_unverified() {
+        // A brand new device is signed by nobody. Saying so is the whole of
+        // this milestone: until it is verified it cannot read encrypted
+        // history and no encrypted call will have it.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, sink) = state();
+
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert!(state.has_verification_task().await);
+        wait_for_verification(&sink, |v| *v == SessionVerification::Unverified).await;
+    }
+
+    #[tokio::test]
+    async fn a_restored_session_reports_its_verification_state_too() {
+        // The startup path again. Restoring goes through a different function
+        // from logging in, so it is its own way to end up with a session that
+        // never says whether it is verified.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, first, _sink) = state();
+        login_for(&first, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let sink = Arc::new(RecordingSink::new());
+        let fresh = AppState::new(first.store().clone(), sink.clone());
+        session_status_for(&fresh).await.unwrap();
+
+        assert!(fresh.has_verification_task().await);
+        wait_for_verification(&sink, |v| *v == SessionVerification::Unverified).await;
+    }
+
+    #[tokio::test]
+    async fn signing_out_stops_the_verification_watcher() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        server.mock_logout().ok().mount().await;
+        let (_dir, state, sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+        wait_for_verification(&sink, |v| *v == SessionVerification::Unverified).await;
+
+        logout_for(&state).await.unwrap();
+
+        assert!(!state.has_verification_task().await);
+    }
+
+    #[tokio::test]
+    async fn a_late_subscriber_can_ask_for_the_state_it_missed() {
+        // The race this exists for: the tasks publish while the webview is
+        // still loading, and a listener attached afterwards hears nothing
+        // until the next change, which on a healthy session may be never.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+        wait_for_connection(&sink, |c| *c == Connection::Live).await;
+        wait_for_verification(&sink, |v| *v == SessionVerification::Unverified).await;
+        let before = sink.events().len();
+
+        state.resend_state();
+
+        let resent = &sink.events()[before..];
+        assert_eq!(
+            resent.len(),
+            2,
+            "expected one state per channel, got {resent:?}"
+        );
+        assert_eq!(sink.last_connection(), Some(Connection::Live));
+        assert_eq!(
+            sink.last_verification(),
+            Some(SessionVerification::Unverified)
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_in_starts_the_sync_loop() {
+        // Without this a signed-in Consort can be talked to and cannot hear:
+        // to-device events, and therefore every verification request, arrive
+        // through sync and nowhere else.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, _sink) = state();
+
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert!(state.has_sync_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_in_tells_the_frontend_the_connection_is_live() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, sink) = state();
+
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        wait_for_connection(&sink, |c| *c == Connection::Live).await;
+    }
+
+    #[tokio::test]
+    async fn a_restored_session_starts_syncing_too() {
+        // The startup path. Restoring is the common case and it goes through
+        // a different function from logging in, so it is its own way to end
+        // up with a client that never syncs.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, first, _sink) = state();
+        login_for(&first, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let sink = Arc::new(RecordingSink::new());
+        let fresh = AppState::new(first.store().clone(), sink.clone());
+        session_status_for(&fresh).await.unwrap();
+
+        assert!(fresh.has_sync_task().await);
+        wait_for_connection(&sink, |c| *c == Connection::Live).await;
+    }
+
+    #[tokio::test]
+    async fn signing_out_stops_the_sync_loop_and_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        server.mock_logout().ok().mount().await;
+        let (_dir, state, sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+        wait_for_connection(&sink, |c| *c == Connection::Live).await;
+
+        logout_for(&state).await.unwrap();
+
+        assert!(!state.has_sync_task().await);
+        assert_eq!(
+            sink.last_connection(),
+            Some(Connection::Stopped {
+                reason: StopReason::SignedOut
+            }),
+            "the UI was left believing it was still connected"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_sign_in_does_not_leave_the_first_loop_running() {
+        // Two sync loops on one account is two clients holding the same
+        // SQLite crypto store and two sets of to-device events being claimed.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, _sink) = state();
+        let (client, _) = consort_matrix::auth::login(
+            state.store(),
+            &consort_matrix::Credentials {
+                server: server.uri(),
+                username: "bob".to_owned(),
+                password: "hunter2".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        state.set_client(client.clone()).await;
+        let first = state.sync_task_id().await;
+        state.set_client(client).await;
+        let second = state.sync_task_id().await;
+
+        assert_ne!(first, second, "the second sign-in reused the first loop");
+        assert!(state.has_sync_task().await);
+    }
+
     #[tokio::test]
     async fn a_second_login_that_arrives_after_the_first_reuses_it() {
         // Both calls take the gate. The loser finds a client already in place
         // and must not register a second device on the homeserver.
         let server = MatrixMockServer::new().await;
         mount_login(&server).await;
-        let (_dir, state) = state();
+        let (_dir, state, _sink) = state();
         let state = Arc::new(state);
 
         let one = {

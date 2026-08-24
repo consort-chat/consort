@@ -6,6 +6,7 @@
  * them in step with that file rather than reaching for `any` at a call site.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface Profile {
   user_id: string;
@@ -26,6 +27,88 @@ export interface TokenStorage {
   description: string;
   /** False when no system keyring was available and a file was used instead. */
   isPreferred: boolean;
+}
+
+/**
+ * What the sync loop is doing, mirrored from `consort_matrix::sync`.
+ *
+ * `stopped` means it will not restart on its own, so it is the only state
+ * where the interface should stop implying that a message might arrive.
+ */
+export type Connection =
+  | { state: "connecting" }
+  | { state: "live" }
+  | { state: "offline"; attempt: number; retryInSeconds: number }
+  | { state: "stopped"; reason: "signedOut" | "sessionEnded" | "failed" };
+
+/**
+ * Whether this session is verified, mirrored from
+ * `consort_matrix::verification`.
+ *
+ * Three states rather than a boolean because the third one is real: the SDK
+ * has not always worked out the answer yet, and rendering "not yet known" as
+ * either answer is a lie. `unknown` is the state the interface starts in.
+ */
+export type Verification =
+  | { state: "unknown" }
+  | { state: "verified" }
+  | { state: "unverified" };
+
+/** One of the seven pictures both devices compare. */
+export interface EmojiPair {
+  symbol: string;
+  /** The English word from the spec's table, for reading down a phone line. */
+  description: string;
+}
+
+/**
+ * Why a verification flow ended without verifying anything.
+ *
+ * `mismatch` is the one that matters and the only one to look alarmed about:
+ * it is what the whole comparison exists to detect. `acceptedElsewhere` is the
+ * opposite and is easy to get wrong. A request goes to every device on the
+ * account, so every device that did not answer is told the flow was accepted,
+ * and rendering that as a failure reports a problem to somebody whose
+ * verification is going fine on their phone.
+ */
+export type CancelReason =
+  | "declined"
+  | "mismatch"
+  | "timedOut"
+  | "acceptedElsewhere"
+  | "other";
+
+/**
+ * Where a verification flow has got to, mirrored from
+ * `consort_matrix::verification::dto`.
+ *
+ * `ready` and `waiting` are not the same. `ready` means both sides agreed and
+ * nobody has started the comparison, which is where the "show me the emoji"
+ * button belongs. `waiting` means it has started and the keys are in flight,
+ * which is a spinner. Merging them puts a button on a screen where pressing it
+ * does nothing.
+ */
+export type VerificationFlowState =
+  | { kind: "requested" }
+  | { kind: "ready" }
+  | { kind: "waiting" }
+  | { kind: "comparing"; emoji: EmojiPair[]; decimals: [number, number, number] }
+  | { kind: "confirmed" }
+  | { kind: "done" }
+  | {
+      kind: "cancelled";
+      reason: CancelReason;
+      /** Developer English from the SDK. For the console, never the screen. */
+      detail: string;
+      byUs: boolean;
+    };
+
+/** One verification flow, addressed by the pair every action takes. */
+export interface VerificationFlow {
+  flowId: string;
+  otherUserId: string;
+  isSelfVerification: boolean;
+  state: VerificationFlowState;
 }
 
 /** The `CommandError` shape every command rejects with. */
@@ -86,4 +169,115 @@ export function logout(): Promise<void> {
 
 export function tokenStorage(): Promise<TokenStorage> {
   return invoke<TokenStorage>("token_storage");
+}
+
+/**
+ * Listen for changes in the sync loop's health.
+ *
+ * Resolves to the function that stops listening. Call it from an effect's
+ * cleanup: a listener that outlives its component keeps handling events
+ * against unmounted state, and after a sign out and a sign in every event
+ * arrives once per leaked listener.
+ *
+ * The channel name matches `AppEvent::CONNECTION` in
+ * `app/src-tauri/src/events.rs`. Tauri does not object to a listener for a
+ * channel nothing emits on, so a mismatch here is silence rather than an
+ * error.
+ */
+export function onConnection(
+  handler: (state: Connection) => void,
+): Promise<UnlistenFn> {
+  return listen<Connection>("connection", (event) => handler(event.payload));
+}
+
+/**
+ * Listen for changes in whether this session is verified.
+ *
+ * Same contract as `onConnection`: the channel name matches
+ * `AppEvent::VERIFICATION`, and the returned function stops listening.
+ */
+export function onVerification(
+  handler: (state: Verification) => void,
+): Promise<UnlistenFn> {
+  return listen<Verification>("verification", (event) =>
+    handler(event.payload),
+  );
+}
+
+/**
+ * Listen for verification flows starting, moving on, and ending.
+ *
+ * Unlike the two channels above this one carries incidents rather than state,
+ * so `resendState` repeats it only while a flow is still running. A flow that
+ * has finished is history, and replaying it would put "the emoji did not
+ * match" back on screen for something that ended twenty minutes ago.
+ */
+export function onVerificationFlow(
+  handler: (flow: VerificationFlow) => void,
+): Promise<UnlistenFn> {
+  return listen<VerificationFlow>("verification-flow", (event) =>
+    handler(event.payload),
+  );
+}
+
+/**
+ * The five things a person can do to a verification flow.
+ *
+ * All of them take the same pair of identifiers, straight off the event that
+ * announced the flow. Nothing on this side holds a handle to anything: the
+ * SDK's own registry is keyed by exactly this pair, and naming the flow every
+ * time is what lets two verifications be in progress at once.
+ *
+ * Every one of them can reject, and the likeliest reason is not a bug: flows
+ * expire after ten minutes, either side can cancel, and a request another of
+ * your sessions answered is dropped. Handle the rejection; do not assume the
+ * button is only pressed while the flow is alive.
+ */
+export function verificationAccept(
+  userId: string,
+  flowId: string,
+): Promise<void> {
+  return invoke<void>("verification_accept", { userId, flowId });
+}
+
+export function verificationStartSas(
+  userId: string,
+  flowId: string,
+): Promise<void> {
+  return invoke<void>("verification_start_sas", { userId, flowId });
+}
+
+export function verificationConfirm(
+  userId: string,
+  flowId: string,
+): Promise<void> {
+  return invoke<void>("verification_confirm", { userId, flowId });
+}
+
+export function verificationMismatch(
+  userId: string,
+  flowId: string,
+): Promise<void> {
+  return invoke<void>("verification_mismatch", { userId, flowId });
+}
+
+export function verificationCancel(
+  userId: string,
+  flowId: string,
+): Promise<void> {
+  return invoke<void>("verification_cancel", { userId, flowId });
+}
+
+/**
+ * Ask the Rust side to publish the current state of every channel again.
+ *
+ * Call it once, after the listeners are attached. Both channels above carry
+ * state rather than incidents, and the tasks that publish them start with the
+ * session, which on a restored session is before this webview has run any
+ * JavaScript at all. Whatever they said in the meantime went to nobody, and
+ * without asking for it again the interface sits on its initial guess until
+ * something happens to change, which on a healthy session may be never.
+ */
+export function resendState(): Promise<void> {
+  return invoke<void>("resend_state");
 }
