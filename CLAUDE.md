@@ -5,8 +5,9 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 ## What this is
 
 Consort is a desktop Matrix chat client in Rust and Tauri, aimed at voice-first
-team chat. Today it does authentication and nothing else. Voice over MatrixRTC
-and LiveKit is the next milestone.
+team chat. Today it does authentication, session verification (emoji and
+recovery key) and room key backup. There is no room list and no messages yet.
+Voice over MatrixRTC and LiveKit is the next milestone.
 
 ## Layout
 
@@ -31,17 +32,43 @@ pnpm install
 pnpm build          # tsc --noEmit && vite build
 pnpm test           # vitest
 pnpm test:coverage  # vitest with the thresholds enforced
-pnpm tauri dev      # run the app with frontend hot reload
 pnpm tauri build    # release bundle
-```
 
-On this machine `pnpm tauri dev` needs `WEBKIT_DISABLE_DMABUF_RENDERER=1` or
-the window comes up blank.
+# The dev build. The variable is not optional on this machine. See below.
+WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+```
 
 Use **pnpm**, not npm or yarn. The lockfile is pnpm's and `pnpm-workspace.yaml`
 carries settings the build needs.
 
 ## Things that will waste your time if you do not know them
+
+### Never start the dev build without WEBKIT_DISABLE_DMABUF_RENDERER=1
+
+```sh
+cd app && WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+```
+
+Leave the variable off and the window opens, the title bar says Consort, and
+the content area is a blank rectangle. This is the single most repeated mistake
+in this repository's history.
+
+What makes it a trap is that nothing reports it. The process stays up, the
+frontend compiles, and the Rust side logs a textbook boot: session restored,
+verification state Verified, key backup state Enabled. Tailing the log and
+checking that the process is alive both say the app is fine while the user is
+looking at an empty window. The only tell is `Failed to create GBM buffer` on
+stderr, sitting among GTK theme warnings that are harmless and always present.
+
+It is a WebKitGTK and driver problem on this machine rather than a Consort bug,
+which is why the workaround is not baked into `package.json` or the Tauri
+config: doing that would disable the fast rendering path for every user to
+paper over one machine. It belongs on the command line, every time.
+
+When stopping the dev build, kill the Vite process too, not just the window.
+Vite holds port 1420 with `strictPort`, so a leftover one makes the next
+`pnpm tauri dev` abort with `Port 1420 is already in use` before it ever
+compiles. `ss -ltnp | grep 1420` names the process still holding it.
 
 ### The matrix-sdk pin is load-bearing
 
