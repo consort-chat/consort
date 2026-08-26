@@ -54,6 +54,23 @@ export type Verification =
   | { state: "verified" }
   | { state: "unverified" };
 
+/**
+ * What is happening to this session's room keys, mirrored from
+ * `consort_matrix::backup`.
+ *
+ * Five states rather than a boolean because "no backup is active here" is two
+ * different pieces of news. `unusable` means one exists and this session
+ * cannot read it, which verification fixes and which is the ordinary state of
+ * a session nobody has verified yet. `missing` means there is nothing to read,
+ * for anybody, ever. Only the second is worth interrupting somebody about.
+ */
+export type KeyBackup =
+  | { state: "enabled" }
+  | { state: "preparing" }
+  | { state: "unusable" }
+  | { state: "missing" }
+  | { state: "unknown" };
+
 /** One of the seven pictures both devices compare. */
 export interface EmojiPair {
   symbol: string;
@@ -226,6 +243,22 @@ export function onVerificationFlow(
   return listen<VerificationFlow>("verification-flow", (event) =>
     handler(event.payload),
   );
+}
+
+/**
+ * Listen for changes in whether room keys are being backed up.
+ *
+ * Same contract as `onConnection`: the channel name matches
+ * `AppEvent::KEY_BACKUP`, and the returned function stops listening.
+ *
+ * A separate channel from `onVerification` because the two can disagree. A
+ * verified session with no backup reads every new message and no old one, and
+ * folding that into "verified" would bury it.
+ */
+export function onKeyBackup(
+  handler: (state: KeyBackup) => void,
+): Promise<UnlistenFn> {
+  return listen<KeyBackup>("key-backup", (event) => handler(event.payload));
 }
 
 /**

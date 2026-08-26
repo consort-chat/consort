@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use matrix_sdk::config::RequestConfig;
-use matrix_sdk::encryption::EncryptionSettings;
+use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
 use matrix_sdk::store::RoomLoadSettings;
 use matrix_sdk::{Client, ClientBuilder, SessionChange};
 use serde::{Deserialize, Serialize};
@@ -329,7 +329,28 @@ fn base_builder() -> ClientBuilder {
         .request_config(RequestConfig::short_retry())
         .with_encryption_settings(EncryptionSettings {
             auto_enable_cross_signing: true,
-            ..EncryptionSettings::default()
+            // Create a key backup when the account has none.
+            //
+            // The SDK does this once per login and does it properly: it skips
+            // the creation when a backup already exists on the server and when
+            // the account carries the MSC4287 event saying somebody turned
+            // backups off on purpose. Hand-rolling the same check would miss
+            // the second one and quietly override a deliberate choice.
+            //
+            // Without it, a person whose only client is Consort has every room
+            // key on one machine and loses the lot when they sign out.
+            auto_enable_backups: true,
+            // Fetch the one room key an undecryptable message needs, when it
+            // is needed.
+            //
+            // Not `OneShot`, which downloads the whole backup the moment the
+            // key arrives. The room keys endpoint is not paginated, so that is
+            // one response holding every key the account has ever had and a
+            // decrypt of all of them; the SDK's own comment on it says it does
+            // not work for any sizeable account. This way the cost is paid per
+            // message that actually needs it, which is what opening a channel
+            // and scrolling up does anyway.
+            backup_download_strategy: BackupDownloadStrategy::AfterDecryptionFailure,
         })
         // Refresh tokens are handled by the SDK rather than surfacing an expiry
         // to the UI as a spurious "you have been logged out". See

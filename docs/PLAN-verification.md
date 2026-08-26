@@ -1,6 +1,6 @@
 # Plan: end-to-end encryption verification
 
-Status: **Phases 0 to 4 done, Phase 5 next.** Every API named here was checked
+Status: **Phases 0 to 5 done, Phase 6 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create.
 
@@ -355,24 +355,61 @@ Done: a correct key verifies the session against a real Synapse, a wrong one
 says which kind of wrong and leaves the session usable, and an account with no
 recovery is told so rather than shown a box.
 
-### Phase 5: key backup (next)
+### Phase 5: key backup (done)
 
-Build:
+Built:
 
-- Inspect `backups().state()` and act on it: `Unknown` needs
-  `fetch_exists_on_server()`, `Enabled` needs a restore, absent needs a
-  `create()`.
-- Restore room keys from the server-side backup after verification succeeds.
+- `consort_matrix::backup`, a fourth push channel reporting what is happening
+  to room keys.
+- Two encryption settings in `base_builder`, which is where most of this phase
+  turned out to live.
+- One notice on the signed-in screen, for the one state nothing else covers.
 
-Without this, verification succeeds and old messages still do not decrypt,
-which reads to a user as a broken client rather than a missing feature. It is
-the difference between the milestone working and the milestone looking like it
-worked.
+Four things worth recording.
 
-Done when: a session verified by either route decrypts history that predates
-it, and an account with no backup gets one created rather than an error.
+**Most of it is a setting, not code.** "Absent needs a `create()`" is
+`auto_enable_backups: true`, and the SDK's version of that check is better than
+a hand-rolled one: it also honours the MSC4287 account data that says somebody
+turned backups off deliberately. Writing the create loop by hand would have
+overridden that choice silently.
 
-### Phase 6: gate voice on it
+**`OneShot` is the wrong download strategy and looks like the right one.** It
+pulls the whole backup the moment the key arrives, which sounds like exactly
+what "restore room keys after verification" means. The room keys endpoint is
+not paginated, so that is one response holding every key the account has ever
+had, decrypted in one go, and the SDK's own comment on the code says it does
+not work for any sizeable account. `AfterDecryptionFailure` fetches the one key
+a message needs when the message fails, which is what opening a channel and
+scrolling up does anyway.
+
+**`BackupState::Unknown` is two answers wearing one name.** It means "no backup
+is active in this session", which covers both "there is one and this session
+cannot read it yet" and "there is none, for anybody". Those are opposite pieces
+of news: the first is fixed by verifying and the second means every key on this
+machine dies with it. The SDK cannot tell them apart because homeservers do not
+announce backups being created or deleted, so `backup::describe` resolves it
+with `fetch_exists_on_server()` and reports `Unusable` or `Missing`.
+
+**The mock harness was hiding a cliff.** An unmounted account data endpoint is
+a 404 with no Matrix error in it, which the SDK reads as a transport failure
+rather than "no such event", and one of those makes it abandon the whole of
+recovery and backup setup at login. Nothing noticed until a test needed the
+setup to have run. Mock tests that care about any of this now mount
+`m.secret_storage.default_key` and friends with a real `M_NOT_FOUND` body.
+
+Done: a message sent before a second session existed decrypts on it after a
+recovery key, against a real Synapse. The first login on an account creates a
+backup, and a second session reports `Unusable` until it is verified and
+`Enabled` after.
+
+**What is left over.** The live test asks for the room key download by hand.
+In the application that call is the SDK's, triggered by a message failing to
+decrypt, and there is no timeline for a message to fail in yet. So the strategy
+is configured and the keys are proven readable, and the automatic trigger is
+first exercised when the room list arrives. Worth re-checking there rather than
+assuming.
+
+### Phase 6: gate voice on it (next)
 
 The MSC4153 check finally has something real to check. Refuse to join an
 encrypted call from an unverified session, and say why.

@@ -1157,7 +1157,7 @@ mod against_a_mock_homeserver {
         let resent = &sink.events()[before..];
         assert_eq!(
             resent.len(),
-            2,
+            3,
             "expected one state per channel, got {resent:?}"
         );
         assert_eq!(sink.last_connection(), Some(Connection::Live));
@@ -1165,6 +1165,7 @@ mod against_a_mock_homeserver {
             sink.last_verification(),
             Some(SessionVerification::Unverified)
         );
+        assert!(sink.last_key_backup().is_some());
     }
 
     #[tokio::test]

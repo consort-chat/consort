@@ -12,11 +12,13 @@ import {
   logout,
   onConnection,
   onVerification,
+  onKeyBackup,
   onVerificationFlow,
   resendState,
   sessionStatus,
   tokenStorage,
   type Connection,
+  type KeyBackup,
   type Profile,
   type Verification,
   type VerificationFlow,
@@ -253,6 +255,35 @@ describe("event subscriptions", () => {
     listen.mockResolvedValue(unlisten);
 
     const returned = await onVerificationFlow(vi.fn());
+    returned();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("subscribes to the key-backup channel by the name Rust emits on", async () => {
+    await onKeyBackup(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("key-backup", expect.any(Function));
+  });
+
+  it("hands the key backup handler the payload rather than the envelope", async () => {
+    const handler = vi.fn();
+    await onKeyBackup(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: KeyBackup }) => void,
+    ];
+
+    forward({ payload: { state: "missing" } });
+
+    expect(handler).toHaveBeenCalledWith({ state: "missing" });
+  });
+
+  it("returns the key backup unlisten function too", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+
+    const returned = await onKeyBackup(vi.fn());
     returned();
 
     expect(unlisten).toHaveBeenCalled();

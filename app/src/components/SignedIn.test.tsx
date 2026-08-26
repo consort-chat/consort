@@ -7,6 +7,7 @@ const tokenStorage = vi.hoisted(() => vi.fn());
 const onConnection = vi.hoisted(() => vi.fn());
 const onVerification = vi.hoisted(() => vi.fn());
 const onVerificationFlow = vi.hoisted(() => vi.fn());
+const onKeyBackup = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
@@ -19,6 +20,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onConnection,
   onVerification,
   onVerificationFlow,
+  onKeyBackup,
   resendState,
   verificationVerifyThisSession,
   verificationOtherSessionsExist,
@@ -29,6 +31,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { SignedIn } from "./SignedIn";
 import type {
   Connection,
+  KeyBackup,
   Profile,
   TokenStorage,
   Verification,
@@ -50,6 +53,15 @@ function verificationHandler(): (state: Verification) => void {
     | [(state: Verification) => void]
     | undefined;
   if (!call) throw new Error("the component never subscribed to verification");
+  return call[0];
+}
+
+/** The same, for the key backup channel. */
+function keyBackupHandler(): (state: KeyBackup) => void {
+  const call = onKeyBackup.mock.calls.at(-1) as
+    | [(state: KeyBackup) => void]
+    | undefined;
+  if (!call) throw new Error("the component never subscribed to key backup");
   return call[0];
 }
 
@@ -100,6 +112,7 @@ function resetApiMocks() {
   onConnection.mockReset().mockResolvedValue(() => {});
   onVerification.mockReset().mockResolvedValue(() => {});
   onVerificationFlow.mockReset().mockResolvedValue(() => {});
+  onKeyBackup.mockReset().mockResolvedValue(() => {});
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
   // The common case: another session is signed in, so the button is offered.
@@ -671,6 +684,81 @@ describe("SignedIn starting a verification", () => {
     expect(
       await screen.findByRole("button", { name: /verify this session/i }),
     ).toBeVisible();
+  });
+});
+
+describe("SignedIn key backup", () => {
+  beforeEach(() => {
+    resetApiMocks();
+  });
+
+  /** The notice, if it is showing. Named, because the screen has three. */
+  function backupNotice(): HTMLElement | null {
+    return screen.queryByRole("status", {
+      name: "Whether your message keys are backed up",
+    });
+  }
+
+  async function mounted() {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onKeyBackup).toHaveBeenCalled());
+  }
+
+  it("says nothing before anything has been reported", async () => {
+    // The state every launch starts in. Warning here would put "your messages
+    // are not safe" on screen for the moment before anything had looked.
+    await mounted();
+
+    expect(backupNotice()).not.toBeInTheDocument();
+  });
+
+  it("warns when the account has no backup at all", async () => {
+    // The one case nothing else on this screen covers: no backup exists, so
+    // every key this device holds dies with it.
+    await mounted();
+
+    act(() => keyBackupHandler()({ state: "missing" }));
+
+    expect(backupNotice()).toBeVisible();
+    expect(backupNotice()).toHaveTextContent(/no key backup/i);
+  });
+
+  it("says nothing when keys are going up", async () => {
+    // The expected case. A third box saying everything is fine is a box
+    // nobody reads.
+    await mounted();
+
+    act(() => keyBackupHandler()({ state: "enabled" }));
+
+    expect(backupNotice()).not.toBeInTheDocument();
+  });
+
+  it("says nothing about a backup this session cannot read yet", async () => {
+    // Not silence for lack of anything to say. There is a backup and
+    // verifying is what opens it, which is exactly what the banner above is
+    // already telling them to do.
+    await mounted();
+
+    act(() => keyBackupHandler()({ state: "unusable" }));
+
+    expect(backupNotice()).not.toBeInTheDocument();
+  });
+
+  it("says nothing while a backup is being set up", async () => {
+    await mounted();
+
+    act(() => keyBackupHandler()({ state: "preparing" }));
+
+    expect(backupNotice()).not.toBeInTheDocument();
+  });
+
+  it("stops warning once a backup appears", async () => {
+    await mounted();
+    act(() => keyBackupHandler()({ state: "missing" }));
+
+    act(() => keyBackupHandler()({ state: "enabled" }));
+
+    expect(backupNotice()).not.toBeInTheDocument();
   });
 });
 

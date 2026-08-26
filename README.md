@@ -37,13 +37,15 @@ at whatever homeserver you already run.
   or does not exist. A passphrase works too if the account has one. The four
   ways it can fail get four different answers, because "that did not work" is a
   bad reply to a key that is fine and simply belongs to another account.
+- Key backup. The first session on an account creates one, both routes to
+  verification unlock it, and a message sent before this session existed can be
+  read on it afterwards. When an account has no backup at all the screen says
+  so, because that is the case where losing this machine loses the messages.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Restoring key backup, so history that predates this session still will not
-decrypt even once the session is verified. No room list, no messages, no voice.
-See [the roadmap](#roadmap).
+No room list, no messages, no voice. See [the roadmap](#roadmap).
 
 ---
 
@@ -303,7 +305,7 @@ whether a model wrote them or you did.
 | Password login and session persistence | working |
 | Session verification by emoji, in either direction | working |
 | Verifying with a recovery key | working |
-| Key backup, so history older than this session decrypts | in progress, [planned here](docs/PLAN-verification.md) |
+| Key backup, so history older than this session decrypts | working |
 | Room list and voice channel discovery | planned |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
@@ -341,10 +343,11 @@ session you cannot verify is an account rather than a usable client.
   state and is not done yet, because the removal has to happen after the client
   is dropped and that is shutdown-ordering work.
 - **Password login only.** No SSO or OIDC yet.
-- **A verified session still cannot read history that predates it.** Both
-  routes to verification work, and neither restores the server-side key backup
-  yet, so messages sent before you signed in here stay unreadable. That is the
-  [next step of that milestone](docs/PLAN-verification.md).
+- **Nothing has asked the key backup for a key on its own yet.** The setting
+  that does it fetches the one key a message needs at the moment that message
+  fails to decrypt, and there is no timeline for a message to fail in. The keys
+  are provably readable, the trigger is the SDK's, and neither has been watched
+  working together. The room list is where that gets checked.
 
 ## Licence
 

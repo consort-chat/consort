@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use consort_matrix::{Connection, Flow, SessionVerification};
+use consort_matrix::{Connection, Flow, KeyBackup, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +27,8 @@ pub enum AppEvent {
     Verification(SessionVerification),
     /// A verification flow started, moved on, or ended.
     VerificationFlow(Flow),
+    /// What is happening to this session's room keys changed.
+    KeyBackup(KeyBackup),
 }
 
 impl AppEvent {
@@ -36,6 +38,8 @@ impl AppEvent {
     pub const VERIFICATION: &'static str = "verification";
     /// The channel carrying the progress of one verification flow.
     pub const VERIFICATION_FLOW: &'static str = "verification-flow";
+    /// The channel carrying whether room keys are being backed up.
+    pub const KEY_BACKUP: &'static str = "key-backup";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -43,15 +47,16 @@ impl AppEvent {
             Self::Connection(_) => Self::CONNECTION,
             Self::Verification(_) => Self::VERIFICATION,
             Self::VerificationFlow(_) => Self::VERIFICATION_FLOW,
+            Self::KeyBackup(_) => Self::KEY_BACKUP,
         }
     }
 
     /// Whether a late subscriber should be caught up on this.
     ///
-    /// Two of the three channels carry state: there is always a current
-    /// connection and a current verification state, and a webview that missed
-    /// the last one is a webview showing the wrong thing until something else
-    /// happens to change.
+    /// Three of the four channels carry state: there is always a current
+    /// connection, a current verification state and a current answer about
+    /// room keys, and a webview that missed the last one is a webview showing
+    /// the wrong thing until something else happens to change.
     ///
     /// A flow is state only while it is running. Once it is done or cancelled
     /// it is history, and replaying it on the next mount would put "the emoji
@@ -60,7 +65,7 @@ impl AppEvent {
     /// is waiting, and there is no way to ask for the emoji again.
     pub fn is_worth_keeping(&self) -> bool {
         match self {
-            Self::Connection(_) | Self::Verification(_) => true,
+            Self::Connection(_) | Self::Verification(_) | Self::KeyBackup(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
         }
     }
@@ -75,6 +80,7 @@ impl AppEvent {
             Self::Connection(state) => serde_json::to_value(state),
             Self::Verification(state) => serde_json::to_value(state),
             Self::VerificationFlow(flow) => serde_json::to_value(flow),
+            Self::KeyBackup(state) => serde_json::to_value(state),
         }
     }
 }
@@ -222,6 +228,19 @@ impl RecordingSink {
             .rev()
             .find_map(|event| match event {
                 AppEvent::Connection(state) => Some(state.clone()),
+                _ => None,
+            })
+    }
+
+    /// The most recent key backup state, if any.
+    pub fn last_key_backup(&self) -> Option<KeyBackup> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                AppEvent::KeyBackup(state) => Some(*state),
                 _ => None,
             })
     }

@@ -1059,3 +1059,199 @@ mod recovering {
         );
     }
 }
+
+/// What happens to room keys, which is the half of this milestone that only a
+/// real homeserver can show.
+///
+/// The mock suite covers every state the reporting can be in. What it cannot
+/// do is put a real room key into a real backup and take it out again on
+/// another device, and that is the only thing that proves the point: a session
+/// verified after the fact can read what was said before it existed.
+mod key_backup {
+    use std::time::Duration;
+
+    use consort_matrix::{KeyBackup, backup};
+    use matrix_sdk::deserialized_responses::TimelineEventKind;
+    use matrix_sdk::ruma::api::client::room::create_room;
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+    use matrix_sdk::ruma::{OwnedEventId, RoomId};
+
+    use super::*;
+
+    /// The message the second session must be able to read.
+    const SAID_BEFORE: &str = "said before the second session existed";
+
+    /// Everything the key backup watcher has reported so far.
+    fn watch(device: &Device) -> (Arc<Mutex<Vec<KeyBackup>>>, tokio::task::JoinHandle<()>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let task = backup::watch(device.client.clone(), {
+            let seen = seen.clone();
+            move |state: KeyBackup| seen.lock().unwrap().push(state)
+        });
+        (seen, task)
+    }
+
+    async fn wait_for_backup(seen: &Arc<Mutex<Vec<KeyBackup>>>, want: KeyBackup) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if seen.lock().unwrap().contains(&want) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "waited for {want:?}; saw {:?}",
+                seen.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Wait for a session's own sync to hand it a room it is already in.
+    async fn wait_for_room(device: &Device, room_id: &RoomId) -> matrix_sdk::Room {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(room) = device.client.get_room(room_id) {
+                return room;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the session never saw room {room_id}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn the_first_session_on_an_account_creates_a_backup() {
+        // Without this, somebody whose only client is Consort keeps every room
+        // key on one machine. Signing out or losing the machine takes the lot,
+        // and nothing warns them because there is nothing to warn about until
+        // it is too late.
+        let account = a_brand_new_account("backup-created").await;
+        let only = Device::new(&account).await;
+        let (states, watcher) = watch(&only);
+
+        wait_for_backup(&states, KeyBackup::Enabled).await;
+
+        assert!(
+            only.client
+                .encryption()
+                .backups()
+                .fetch_exists_on_server()
+                .await
+                .unwrap(),
+            "the login reported a working backup that the server does not have"
+        );
+        watcher.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_second_session_cannot_use_the_backup_until_it_is_verified() {
+        // The distinction the reporting exists to draw. There is a backup and
+        // this session cannot read it, which is not the same news as there
+        // being no backup, and it is fixed by verifying rather than by
+        // panicking about lost messages.
+        let account = a_brand_new_account("backup-unusable").await;
+        let first = Device::new(&account).await;
+        let key = first
+            .client
+            .encryption()
+            .recovery()
+            .enable()
+            .await
+            .expect("could not set recovery up on the test account");
+
+        let fresh = Device::new(&account).await;
+        let (states, watcher) = watch(&fresh);
+
+        wait_for_backup(&states, KeyBackup::Unusable).await;
+
+        consort_matrix::verification::recover(&fresh.client, &key)
+            .await
+            .unwrap();
+
+        wait_for_backup(&states, KeyBackup::Enabled).await;
+        watcher.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_message_sent_before_this_session_existed_can_be_read_after_recovery() {
+        // The whole point of the phase, and the claim the README makes. A
+        // session that verifies and still cannot read a word of history is a
+        // client that looks broken rather than one that is missing a feature.
+        //
+        // The download is asked for by hand here. In the application it is the
+        // SDK's, triggered by a message failing to decrypt, which needs a
+        // timeline to fail in and there is not one yet. What this proves is
+        // the part that has to be true either way: the key is in the backup,
+        // this session can open it, and the message comes out.
+        let account = a_brand_new_account("backup-history").await;
+        let first = Device::new(&account).await;
+        let key = first
+            .client
+            .encryption()
+            .recovery()
+            .enable()
+            .await
+            .expect("could not set recovery up on the test account");
+
+        let room = first
+            .client
+            .create_room(create_room::v3::Request::new())
+            .await
+            .unwrap();
+        room.enable_encryption().await.unwrap();
+        let said: OwnedEventId = room
+            .send(RoomMessageEventContent::text_plain(SAID_BEFORE))
+            .await
+            .unwrap()
+            .response
+            .event_id;
+
+        // The room key has to be in the backup before another session can find
+        // it there, and the upload is a background task.
+        first
+            .client
+            .encryption()
+            .backups()
+            .wait_for_steady_state()
+            .await
+            .unwrap();
+
+        let fresh = Device::new(&account).await;
+        let their_room = wait_for_room(&fresh, room.room_id()).await;
+
+        // Before: the message is there and unreadable, which is what every
+        // freshly signed-in session sees today.
+        let before = their_room.event(&said, None).await.unwrap();
+        assert!(
+            matches!(before.kind, TimelineEventKind::UnableToDecrypt { .. }),
+            "a session that has never been verified could already read this"
+        );
+
+        consort_matrix::verification::recover(&fresh.client, &key)
+            .await
+            .unwrap();
+        fresh
+            .client
+            .encryption()
+            .backups()
+            .download_room_keys_for_room(room.room_id())
+            .await
+            .unwrap();
+
+        let after = their_room.event(&said, None).await.unwrap();
+        assert!(
+            matches!(after.kind, TimelineEventKind::Decrypted(_)),
+            "the message still will not decrypt: {:?}",
+            after.kind
+        );
+        assert!(
+            after.raw().json().get().contains(SAID_BEFORE),
+            "the event decrypted into something else"
+        );
+    }
+}

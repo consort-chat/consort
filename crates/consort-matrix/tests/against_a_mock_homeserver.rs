@@ -106,6 +106,55 @@ async fn wait_until<T: Clone + std::fmt::Debug>(
     }
 }
 
+/// Answer one global account data type with `response`.
+///
+/// Hand-rolled rather than through `mock_get_default_secret_storage_key`,
+/// which only offers the 200 and insists on the mock crate's own access token.
+/// Several of the tests below are about what happens when the answer is not a
+/// 200.
+async fn account_data(
+    server: &MatrixMockServer,
+    event_type: &str,
+    response: wiremock::ResponseTemplate,
+) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(format!(
+            "/_matrix/client/v3/user/{USER}/account_data/{event_type}"
+        )))
+        .respond_with(response)
+        .mount(server.server())
+        .await;
+}
+
+/// The 404 a homeserver gives for account data that was never set.
+///
+/// The body matters. matrix-sdk reads `M_NOT_FOUND` and turns it into "no such
+/// event"; a bare 404 with no Matrix error in it is a transport failure and
+/// comes back as an error instead. Nothing in a mocked login notices the
+/// difference until the SDK's own startup work needs an answer, at which point
+/// it gives up on the whole of recovery and backup setup.
+/// Accept a write of one global account data type.
+///
+/// Only the ones a test's code path actually writes. An unmounted PUT is a 404
+/// with no Matrix error in it, which the SDK reports as a transport failure and
+/// which stops whatever was in the middle of happening.
+async fn accepting_account_data(server: &MatrixMockServer, event_type: &str) {
+    wiremock::Mock::given(wiremock::matchers::method("PUT"))
+        .and(wiremock::matchers::path(format!(
+            "/_matrix/client/v3/user/{USER}/account_data/{event_type}"
+        )))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(server.server())
+        .await;
+}
+
+fn never_set() -> wiremock::ResponseTemplate {
+    wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+        "errcode": "M_NOT_FOUND",
+        "error": "Account data not found",
+    }))
+}
+
 #[tokio::test]
 async fn a_successful_login_returns_the_profile_and_persists_the_session() {
     let server = MatrixMockServer::new().await;
@@ -1263,38 +1312,6 @@ mod recovery {
         })
     }
 
-    /// Answer one global account data type with `response`.
-    ///
-    /// Hand-rolled rather than through `mock_get_default_secret_storage_key`,
-    /// which only offers the 200 and insists on the mock crate's own access
-    /// token. Half of these tests are about what happens when the answer is
-    /// not a 200.
-    async fn account_data(
-        server: &MatrixMockServer,
-        event_type: &str,
-        response: wiremock::ResponseTemplate,
-    ) {
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path(format!(
-                "/_matrix/client/v3/user/{USER}/account_data/{event_type}"
-            )))
-            .respond_with(response)
-            .mount(server.server())
-            .await;
-    }
-
-    /// The 404 a homeserver gives for account data that was never set.
-    ///
-    /// The body matters. matrix-sdk reads `M_NOT_FOUND` and turns it into "no
-    /// such event"; a bare 404 with no Matrix error in it is a transport
-    /// failure and comes back as an error instead.
-    fn never_set() -> wiremock::ResponseTemplate {
-        wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
-            "errcode": "M_NOT_FOUND",
-            "error": "Account data not found",
-        }))
-    }
-
     fn found(body: serde_json::Value) -> wiremock::ResponseTemplate {
         wiremock::ResponseTemplate::new(200).set_body_json(body)
     }
@@ -1487,5 +1504,121 @@ mod recovery {
             matches!(error, consort_matrix::Error::NoRecoverySetUp),
             "{error}"
         );
+    }
+}
+
+/// What is happening to this session's room keys.
+///
+/// Every one of these is decided by a single request the mock can answer, so
+/// the whole state machine is testable without a homeserver. The one thing
+/// that is not is a backup being read from, which needs real keys in a real
+/// backup and lives in the live suite.
+mod key_backup {
+    use super::*;
+    use consort_matrix::{KeyBackup, backup};
+
+    /// Start the watcher and wait for its first report.
+    ///
+    /// The first is the one worth asserting on: the SDK's stream yields the
+    /// current state before any update, so it is the answer as of now rather
+    /// than whatever happened to change next.
+    async fn first_report(client: matrix_sdk::Client) -> KeyBackup {
+        let (seen, sink) = recorder::<KeyBackup>();
+        let task = backup::watch(client, sink);
+
+        let states = wait_until(&seen, |states| !states.is_empty()).await;
+
+        task.abort();
+        states[0]
+    }
+
+    #[tokio::test]
+    async fn a_backup_this_session_cannot_read_is_not_the_same_as_no_backup() {
+        // The distinction the SDK does not draw and a person needs. Its own
+        // `Unknown` covers both, and they are opposite pieces of news: one
+        // says verify this session and your history comes back, the other
+        // says nothing is coming back for anybody.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_room_keys_version()
+            .expect_any_access_token()
+            .exists()
+            .mount()
+            .await;
+
+        assert_eq!(first_report(client).await, KeyBackup::Unusable);
+    }
+
+    #[tokio::test]
+    async fn an_account_with_no_backup_at_all_says_so() {
+        // The one worth interrupting somebody about. Every room key this
+        // session holds is on this machine and nowhere else.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_room_keys_version()
+            .expect_any_access_token()
+            .none()
+            .mount()
+            .await;
+
+        assert_eq!(first_report(client).await, KeyBackup::Missing);
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_that_will_not_answer_is_reported_as_not_known() {
+        // Neither guess is safe. One tells somebody their messages are safe
+        // when nothing has checked, and the other raises an alarm about a
+        // backup that is probably fine.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_room_keys_version()
+            .expect_any_access_token()
+            .error429()
+            .mount()
+            .await;
+
+        assert_eq!(first_report(client).await, KeyBackup::Unknown);
+    }
+
+    #[tokio::test]
+    async fn signing_in_to_an_account_with_no_backup_creates_one() {
+        // The half that cannot be seen from the state afterwards, because the
+        // mock still says there is no backup. What is asserted is the request:
+        // wiremock checks the expectation when the server drops, so a login
+        // that quietly skipped the creation fails here.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server, "syt_first").await;
+        // Mounted because the SDK asks before it decides. Without an answer it
+        // abandons the whole of recovery and backup setup, and the creation
+        // this test is about never happens for a reason that has nothing to do
+        // with backups.
+        account_data(&server, "m.secret_storage.default_key", never_set()).await;
+        account_data(&server, "m.key_backup", never_set()).await;
+        account_data(&server, "m.org.matrix.custom.backup_disabled", never_set()).await;
+        accepting_account_data(&server, "m.key_backup").await;
+        accepting_account_data(&server, "m.org.matrix.custom.backup_disabled").await;
+        server
+            .mock_room_keys_version()
+            .expect_any_access_token()
+            .none()
+            .mount()
+            .await;
+        server
+            .mock_add_room_keys_version()
+            .expect_any_access_token()
+            .ok()
+            .expect(1)
+            .named("the backup this login should create")
+            .mount()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (session_store, _) = store(&dir);
+        auth::login(&session_store, &credentials(&server))
+            .await
+            .unwrap();
     }
 }

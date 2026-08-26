@@ -49,6 +49,7 @@
 
 pub mod atomic;
 pub mod auth;
+pub mod backup;
 pub mod error;
 pub mod secrets;
 pub mod session;
@@ -56,6 +57,7 @@ pub mod sync;
 pub mod verification;
 
 pub use auth::{Credentials, Profile};
+pub use backup::KeyBackup;
 pub use error::{Error, Result};
 pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};

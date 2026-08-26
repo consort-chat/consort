@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use consort_matrix::{Client, Connection, SessionStore, StopReason, sync, verification};
+use consort_matrix::{Client, Connection, SessionStore, StopReason, backup, sync, verification};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
@@ -13,8 +13,8 @@ use crate::events::{AppEvent, EventSink, LatestSink};
 
 /// One background task's handle.
 ///
-/// Four of these now, all owned the same way and all aborted at the same two
-/// moments, so the abort-and-replace is written once rather than four times
+/// Five of these now, all owned the same way and all aborted at the same two
+/// moments, so the abort-and-replace is written once rather than five times
 /// with one of them subtly different.
 type TaskSlot = Mutex<Option<JoinHandle<()>>>;
 
@@ -108,6 +108,13 @@ pub struct AppState {
     /// the previous account's flow running for the life of the process, still
     /// holding the client it was started with.
     flow_task: TaskSlot,
+    /// The watcher reporting whether room keys are being backed up.
+    ///
+    /// A fourth channel rather than a field on the verification one, because
+    /// the two answer different questions and one can be true while the other
+    /// is not. A verified session with no backup still cannot read a word of
+    /// history, and reporting that as part of "verified" would bury it.
+    backup_task: TaskSlot,
     /// The way to start a verification rather than answer one.
     ///
     /// Beside `flow_task` rather than inside it because the two are different
@@ -133,6 +140,7 @@ impl AppState {
             sync_task: Mutex::new(None),
             verification_task: Mutex::new(None),
             flow_task: Mutex::new(None),
+            backup_task: Mutex::new(None),
             initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
         }
@@ -208,6 +216,15 @@ impl AppState {
         .await;
 
         let events = self.events.clone();
+        replace_task(
+            &self.backup_task,
+            backup::watch(client.clone(), move |state| {
+                events.emit(AppEvent::KeyBackup(state));
+            }),
+        )
+        .await;
+
+        let events = self.events.clone();
         let (flow_task, initiator) = verification::supervise(client, move |flow| {
             events.emit(AppEvent::VerificationFlow(flow));
         });
@@ -241,6 +258,7 @@ impl AppState {
         // whose decision it was.
         stop_task(&self.verification_task).await;
         stop_task(&self.flow_task).await;
+        stop_task(&self.backup_task).await;
         *self.initiator.lock().await = None;
 
         // Aborting the sync task means it never runs its own final report, so
@@ -294,6 +312,14 @@ impl AppState {
         task_running(&self.flow_task).await
     }
 
+    /// Whether the key backup watcher is running.
+    ///
+    /// Test-only, for the same reason as `has_refresh_task`.
+    #[cfg(test)]
+    pub async fn has_backup_task(&self) -> bool {
+        task_running(&self.backup_task).await
+    }
+
     /// Which task is currently the sync loop.
     ///
     /// Test-only. Enough to tell "the same loop is still running" from "a new
@@ -314,6 +340,7 @@ impl AppState {
         *self.sync_task.lock().await = Some(tokio::spawn(std::future::pending()));
         *self.verification_task.lock().await = Some(tokio::spawn(std::future::pending()));
         *self.flow_task.lock().await = Some(tokio::spawn(std::future::pending()));
+        *self.backup_task.lock().await = Some(tokio::spawn(std::future::pending()));
     }
 }
 
@@ -506,6 +533,37 @@ mod tests {
         state.clear_client().await;
 
         assert!(!state.has_flow_task().await);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_state_watches_nothing_about_key_backup() {
+        let (_dir, state, _sink) = state();
+        assert!(!state.has_backup_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_out_stops_the_key_backup_watcher() {
+        // Same as the other three: it holds a `Client` and watches a stream
+        // belonging to it, so nothing else can end it.
+        let (_dir, state, _sink) = state();
+        state.pretend_to_be_signed_in().await;
+
+        state.clear_client().await;
+
+        assert!(!state.has_backup_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_out_says_nothing_about_key_backup() {
+        // Same reasoning as the verification state. Nothing true is left to
+        // say about the keys of a session that has gone, and "your messages
+        // are not backed up" is the wrong last word to leave on screen.
+        let (_dir, state, sink) = state();
+        state.pretend_to_be_signed_in().await;
+
+        state.clear_client().await;
+
+        assert_eq!(sink.last_key_backup(), None);
     }
 
     #[tokio::test]

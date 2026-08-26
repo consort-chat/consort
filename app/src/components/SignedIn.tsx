@@ -4,6 +4,7 @@ import {
   asCommandError,
   logout,
   onConnection,
+  onKeyBackup,
   onVerification,
   onVerificationFlow,
   resendState,
@@ -12,6 +13,7 @@ import {
   verificationRecoveryExists,
   verificationVerifyThisSession,
   type Connection,
+  type KeyBackup,
   type Profile,
   type TokenStorage,
   type Verification,
@@ -203,6 +205,36 @@ function VerificationBanner({
   );
 }
 
+/**
+ * The one thing worth saying about room keys, said only when it is true.
+ *
+ * Four of the five states get silence, and that is deliberate rather than
+ * lazy. `enabled` is the expected case and announcing it would be one more
+ * box on a screen that already has two. `preparing` is a state that lasts a
+ * second. `unknown` is not knowing, which is not news. `unusable` means there
+ * is a backup this session cannot read yet, and the verification banner right
+ * above is already saying exactly what to do about that.
+ *
+ * `missing` is the one nothing else covers. There is no backup, for anybody,
+ * and every key this device holds dies with it. Somebody should be told that
+ * while they can still do something about it.
+ */
+function KeyBackupNotice({ state }: { state: KeyBackup["state"] }) {
+  if (state !== "missing") return null;
+
+  return (
+    <p
+      className="signed-in__notice"
+      role="status"
+      aria-label="Whether your message keys are backed up"
+    >
+      This account has no key backup, so the messages you receive here can only
+      be read on this device. Set one up from a client that can, and they will
+      follow you.
+    </p>
+  );
+}
+
 /** Whether a flow is still going, and so worth not starting a second one beside. */
 function isRunning(flow: VerificationFlow): boolean {
   return flow.state.kind !== "done" && flow.state.kind !== "cancelled";
@@ -235,6 +267,9 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   const [verification, setVerification] = useState<Verification>({
     state: "unknown",
   });
+  // Starts at `unknown` for the same reason as the two above. Every other
+  // value is a claim about whether somebody's messages survive this machine.
+  const [keyBackup, setKeyBackup] = useState<KeyBackup>({ state: "unknown" });
   // Keyed by flow id rather than a single slot. A request goes to every device
   // on the account and two can arrive, and one slot would silently drop the
   // second, leaving somebody waiting on a device that will never answer.
@@ -272,6 +307,9 @@ export function SignedIn({ profile, onSignedOut }: Props) {
         if (!cancelled) {
           setFlows((current) => ({ ...current, [flow.flowId]: flow }));
         }
+      }).then(keep),
+      onKeyBackup((state) => {
+        if (!cancelled) setKeyBackup(state);
       }).then(keep),
     ]);
 
@@ -399,6 +437,8 @@ export function SignedIn({ profile, onSignedOut }: Props) {
           state={verification.state}
           canStart={!Object.values(flows).some(isRunning)}
         />
+
+        <KeyBackupNotice state={keyBackup.state} />
       </main>
     </div>
   );
