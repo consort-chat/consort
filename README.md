@@ -300,6 +300,8 @@ whether a model wrote them or you did.
 
 ## Roadmap
 
+<img width="1095" height="716" alt="image" src="https://github.com/user-attachments/assets/25fa2323-34d6-479b-9a6a-7f10abe747e1" />
+
 | Milestone | State |
 |---|---|
 | Password login and session persistence | working |
