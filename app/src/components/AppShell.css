@@ -18,22 +18,6 @@
   background: var(--surface-base);
 }
 
-.shell__rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) 0;
-  overflow-y: auto;
-  background: var(--surface-void);
-  border-right: 1px solid var(--line-subtle);
-  scrollbar-width: none;
-}
-
-.shell__rail::-webkit-scrollbar {
-  display: none;
-}
-
 /*
   The channel column is itself a two-row grid: the list scrolls, the user panel
   does not. `minmax(0, 1fr)` on the first row for the same reason as above, and
@@ -48,10 +32,14 @@
   border-right: 1px solid var(--line-subtle);
 }
 
+/*
+  The scroll container, and nothing else. The channel list owns its own
+  padding, because its header is sticky against this box and padding here would
+  push the header off the top of it.
+*/
 .shell__channels {
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) var(--space-2) var(--space-4);
 }
 
 .shell__main {

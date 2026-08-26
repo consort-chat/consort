@@ -1,0 +1,139 @@
+.channels {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  min-height: 0;
+  padding-bottom: var(--space-4);
+}
+
+/*
+  Sticky rather than scrolling away, so the space you are looking at is always
+  named. It sits on the void surface so that channel rows pass underneath it
+  rather than showing through.
+*/
+.channels__header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-base);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.channels__space {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channels__group {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+}
+
+.channels__label {
+  margin: 0 0 var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.channels__list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.channels__entry {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2);
+  color: var(--text-muted);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) linear,
+    background var(--duration-fast) linear;
+}
+
+.channels__entry:hover:not(:disabled) {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+}
+
+.channels__entry[data-selected="true"] {
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+.channels__entry:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  A channel this account is not in. Dimmed and not clickable, and the cursor
+  says so before the click does.
+*/
+.channels__entry:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.channels__hash {
+  font-size: var(--text-lg);
+  font-weight: 400;
+  line-height: 1;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.channels__glyph {
+  width: 18px;
+  height: 18px;
+  margin: 0 auto;
+}
+
+/* Mint is the presence colour, and a voice channel is where presence lives. */
+.channels__entry[data-kind="voice"] .channels__glyph {
+  color: var(--mint);
+}
+
+.channels__entry:disabled .channels__glyph {
+  color: currentColor;
+}
+
+.channels__name {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channels__empty {
+  margin: 0;
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channels__entry {
+    transition: none;
+  }
+}

@@ -4,6 +4,7 @@ import {
   asCommandError,
   onConnection,
   onKeyBackup,
+  onRooms,
   onVerification,
   onVerificationFlow,
   resendState,
@@ -11,6 +12,7 @@ import {
   type Connection,
   type KeyBackup,
   type Profile,
+  type Rooms,
   type TokenStorage,
   type Verification,
   type VerificationFlow,
@@ -54,6 +56,10 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // Starts at `unknown` for the same reason as the two above. Every other
   // value is a claim about whether somebody's messages survive this machine.
   const [keyBackup, setKeyBackup] = useState<KeyBackup>({ state: "unknown" });
+  // Empty rather than absent, which is what an account in no rooms looks like
+  // too. There is no third state to render: the shell draws whatever it has,
+  // and what it has before the first report is nothing.
+  const [rooms, setRooms] = useState<Rooms>({ spaces: [] });
   // Keyed by flow id rather than a single slot. A request goes to every device
   // on the account and two can arrive, and one slot would silently drop the
   // second, leaving somebody waiting on a device that will never answer.
@@ -94,6 +100,12 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       }).then(keep),
       onKeyBackup((state) => {
         if (!cancelled) setKeyBackup(state);
+      }).then(keep),
+      onRooms((tree) => {
+        // Assigned, never merged. The whole tree arrives every time any part
+        // of it changes, which is what stops this copy drifting away from the
+        // account it is meant to describe.
+        if (!cancelled) setRooms(tree);
       }).then(keep),
     ]);
 
@@ -142,6 +154,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   return (
     <AppShell
       profile={profile}
+      rooms={rooms}
       connection={connection}
       verification={verification}
       keyBackup={keyBackup}

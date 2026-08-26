@@ -1,11 +1,18 @@
-import type {
-  Connection,
-  KeyBackup,
-  Profile,
-  TokenStorage,
-  Verification,
-  VerificationFlow,
+import { useState } from "react";
+
+import {
+  HOME_ID,
+  type Channel,
+  type Connection,
+  type KeyBackup,
+  type Profile,
+  type Rooms,
+  type TokenStorage,
+  type Verification,
+  type VerificationFlow,
 } from "../lib/api";
+import { ChannelList, channelLabel } from "./ChannelList";
+import { SpaceRail } from "./SpaceRail";
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";
 import { VerificationFlowPanel } from "./VerificationFlow";
@@ -41,8 +48,27 @@ function KeyBackupNotice({ state }: { state: KeyBackup["state"] }) {
   );
 }
 
+/** What the main pane says about whatever is selected. */
+function paneDetail(channel: Channel | null): string {
+  if (channel === null) return "Messages come after voice.";
+  return channel.kind === "voice"
+    ? "Joining a voice channel comes next."
+    : "Messages come after voice.";
+}
+
+/** The heading of the main pane: the channel, or the honest absence of one. */
+function paneHeadline(channel: Channel | null): string {
+  if (channel === null) return "Nothing here yet";
+  // The hash is the text channel's, and only the text channel's. It is how
+  // every client anybody already uses says which of the two this is.
+  return channel.kind === "voice"
+    ? channelLabel(channel)
+    : `#${channelLabel(channel)}`;
+}
+
 interface Props {
   profile: Profile;
+  rooms: Rooms;
   connection: Connection;
   verification: Verification;
   keyBackup: KeyBackup;
@@ -72,6 +98,7 @@ interface Props {
  */
 export function AppShell({
   profile,
+  rooms,
   connection,
   verification,
   keyBackup,
@@ -83,15 +110,51 @@ export function AppShell({
   onSigningOut,
   onSignedOut,
 }: Props) {
+  const [spaceId, setSpaceId] = useState(HOME_ID);
+  const [channelId, setChannelId] = useState<string | null>(null);
+
+  /*
+    Both selections are derived rather than trusted. A space can be left and a
+    channel can be removed from one while either is selected, and the room list
+    that says so arrives as a whole new tree. Looking the selection up in that
+    tree every render means a selection that no longer exists simply stops
+    being one, instead of leaving the shell pointing at a room that is gone.
+
+    Falling back to the first entry rather than to `HOME_ID` because Home is
+    always the first entry, and this way there is one fact about the order
+    rather than two.
+  */
+  const space =
+    rooms.spaces.find((candidate) => candidate.id === spaceId) ??
+    rooms.spaces[0] ??
+    null;
+  const channel =
+    space?.channels.find((candidate) => candidate.id === channelId) ?? null;
+
+  function selectSpace(id: string) {
+    setSpaceId(id);
+    // A channel belongs to the space it was picked in. Carrying the selection
+    // across would leave a channel highlighted in a list it is not in.
+    setChannelId(null);
+  }
+
   return (
     <div className="shell">
-      <nav className="shell__rail" aria-label="Spaces">
-        {/* Filled in by the rail. Until then it is furniture with no content. */}
-      </nav>
+      <SpaceRail
+        spaces={rooms.spaces}
+        selectedId={space?.id ?? HOME_ID}
+        onSelect={selectSpace}
+      />
 
       <div className="shell__sidebar">
-        <div className="shell__channels" aria-label="Channels">
-          {/* Filled in by the channel list. */}
+        <div className="shell__channels">
+          {space !== null && (
+            <ChannelList
+              space={space}
+              selectedId={channel?.id ?? null}
+              onSelect={setChannelId}
+            />
+          )}
         </div>
         <UserPanel
           profile={profile}
@@ -140,11 +203,11 @@ export function AppShell({
           {/*
             The page's `h1`. It moved here from the account name, which was
             this screen's heading back when the screen was one centred card.
-            When a channel can be selected this becomes its name; until then
-            the honest heading is the one that says there is nothing here.
+            It names the selected channel, and says there is nothing here when
+            nothing is selected, which is the state the app opens in.
           */}
-          <h1 className="shell__empty-headline">Nothing here yet</h1>
-          <p className="shell__empty-detail">Messages come after voice.</p>
+          <h1 className="shell__empty-headline">{paneHeadline(channel)}</h1>
+          <p className="shell__empty-detail">{paneDetail(channel)}</p>
         </div>
 
         {/*

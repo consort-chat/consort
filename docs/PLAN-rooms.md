@@ -1,6 +1,6 @@
 # Plan: the room list and the app shell
 
-Status: **Phases 1 to 3 done, Phase 4 next.** Every API named here was checked
+Status: **Phases 1 to 4 done, Phase 5 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create. The numbers under "What the account actually
 looks like" were read out of the local state store of a signed-in Consort, not
@@ -261,21 +261,38 @@ lines, and every piece of the old signed-in view is still reachable. What is
 not yet done is looking at it: there is no session on this machine to restore,
 so the shell has not been on screen.
 
-### Phase 4: the rail and the channel list (next)
+### Phase 4: the rail and the channel list (done)
 
-- `SpaceRail.tsx`: Home first, then spaces. Selected state, hover state, the
-  Discord pill on the active entry.
-- `ChannelList.tsx`: the space name as a header, then TEXT and VOICE groups.
-  Unjoined children greyed and not selectable.
-- `RoomAvatar.tsx`: the mxc-to-data-URL fetch, an in-memory cache keyed by room
-  ID, and initials as the fallback. Used by both of the above.
-- `UserPanel.tsx`: avatar, name, connection dot, sign out.
+- `SpaceRail.tsx`: Home first, then spaces. The selection marker is Discord's
+  pill, and the avatar squares off from a circle when hovered or selected,
+  which is a shape change rather than a colour change and so reads the same to
+  somebody who cannot tell the colours apart. Every entry carries its space's
+  name as both an `aria-label` and a `title`, because a rail of wordless icons
+  has no accessible name otherwise.
+- `ChannelList.tsx`: the space name as a sticky header, then Text and Voice
+  groups. Filtered rather than re-sorted, so a channel keeps its place relative
+  to its neighbours even when it moves between the groups. An empty group is
+  omitted entirely, because a "Voice" header over nothing reads as a list that
+  failed to load. Unjoined children are dimmed, disabled, and called "Unknown
+  channel" rather than their room ID.
+- `RoomAvatar.tsx`: the mxc-to-data-URL fetch, a module-level cache keyed by
+  room ID with in-flight requests shared, and an initial as the fallback. It
+  skips the ask entirely when the snapshot says there is no avatar, which is
+  four rooms in ten, so those draw their initial with no round trip and no
+  flicker.
+- Selection lives in `AppShell` and is derived from the tree rather than
+  trusted: a space that is left or a channel that is removed simply stops being
+  selected, because the room list that says so arrives as a whole new value.
 
-Done when the account's real space, its eighteen joined channels split three
-voice to fifteen text, and its seven direct messages under Home all render, and
-`pnpm test:coverage` passes the 90% thresholds.
+Done: 202 frontend tests at 100% statements, branches, functions and lines. The
+account's shape is exercised end to end in a seeded local Synapse rather than
+only in fixtures.
 
-### Phase 5: the hierarchy fetch
+Not done: nobody has looked at it. There is no session on this machine and no
+way to drive the login form from here, so the shell has still not been on a
+screen.
+
+### Phase 5: the hierarchy fetch (next)
 
 The one network call. Per space, on the child set changing, cached. Fills in
 the names of children that are listed but not joined.

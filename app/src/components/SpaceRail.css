@@ -1,0 +1,122 @@
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-3) 0;
+  overflow-y: auto;
+  background: var(--surface-void);
+  border-right: 1px solid var(--line-subtle);
+  /* A scrollbar in a 72px column takes a fifth of it. */
+  scrollbar-width: none;
+}
+
+.rail::-webkit-scrollbar {
+  display: none;
+}
+
+.rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+  Wider than the avatar so the selection pill has somewhere to sit outside it.
+  The button is the whole 72px column; the picture is centred in it.
+*/
+.rail__entry {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 72px;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.rail__entry:focus-visible {
+  outline: none;
+}
+
+.rail__entry:focus-visible .avatar,
+.rail__entry:focus-visible .rail__home {
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  Discord's squircle. The avatar starts as a circle and squares off when it is
+  selected or hovered, which is a shape change rather than a colour change and
+  so reads the same to somebody who cannot tell the colours apart.
+*/
+.rail__entry:hover .avatar,
+.rail__entry[data-selected="true"] .avatar,
+.rail__entry:hover .rail__home,
+.rail__entry[data-selected="true"] .rail__home {
+  --avatar-radius: var(--radius-lg);
+  border-radius: var(--radius-lg);
+}
+
+.rail__avatar {
+  --avatar-size: 48px;
+}
+
+.rail__home {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: var(--text-secondary);
+  background: var(--surface-overlay);
+  border-radius: 50%;
+  transition: border-radius var(--duration-normal) var(--ease-out-expo),
+    color var(--duration-fast) linear,
+    background var(--duration-fast) linear;
+}
+
+.rail__entry:hover .rail__home,
+.rail__entry[data-selected="true"] .rail__home {
+  color: oklch(99% 0 0);
+  background: var(--violet);
+}
+
+.rail__glyph {
+  width: 24px;
+  height: 24px;
+}
+
+/*
+  The selection marker, on the left edge and outside the icon.
+
+  Height rather than opacity, so the three states read as one control growing
+  rather than three separate marks: nothing when idle, a stub on hover, a bar
+  when selected.
+*/
+.rail__pill {
+  position: absolute;
+  left: 0;
+  width: 4px;
+  height: 0;
+  background: var(--text-primary);
+  border-radius: 0 4px 4px 0;
+  transition: height var(--duration-normal) var(--ease-out-expo);
+}
+
+.rail__entry:hover .rail__pill {
+  height: 20px;
+}
+
+.rail__entry[data-selected="true"] .rail__pill {
+  height: 40px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail__pill,
+  .rail__home,
+  .avatar {
+    transition: none;
+  }
+}

@@ -1,0 +1,35 @@
+/*
+  One avatar, sized by whatever is drawing it.
+
+  `--avatar-size` rather than a fixed width, so the rail can ask for 48px and
+  the channel list for 20px without a second class per size.
+*/
+.avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  overflow: hidden;
+  border-radius: var(--avatar-radius, 50%);
+  background: var(--surface-overlay);
+  transition: border-radius var(--duration-normal) var(--ease-out-expo);
+}
+
+.avatar__initial {
+  font-size: calc(var(--avatar-size, 32px) * 0.4);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+/*
+  `object-fit: cover` because the thumbnail is cropped square by the
+  homeserver, but a homeserver that ignored the crop would otherwise stretch.
+*/
+.avatar__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}

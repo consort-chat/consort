@@ -8,6 +8,8 @@ const onConnection = vi.hoisted(() => vi.fn());
 const onVerification = vi.hoisted(() => vi.fn());
 const onVerificationFlow = vi.hoisted(() => vi.fn());
 const onKeyBackup = vi.hoisted(() => vi.fn());
+const onRooms = vi.hoisted(() => vi.fn());
+const roomAvatar = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
@@ -21,6 +23,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onVerification,
   onVerificationFlow,
   onKeyBackup,
+  onRooms,
+  roomAvatar,
   resendState,
   verificationVerifyThisSession,
   verificationOtherSessionsExist,
@@ -30,13 +34,17 @@ vi.mock("../lib/api", async (importOriginal) => ({
 
 import { SignedIn } from "./SignedIn";
 import type {
+  Channel,
   Connection,
   KeyBackup,
   Profile,
+  Rooms,
+  Space,
   TokenStorage,
   Verification,
   VerificationFlow,
 } from "../lib/api";
+import { resetRoomAvatarCache } from "./RoomAvatar";
 
 /** The handler the component registered, once it has registered one. */
 function connectionHandler(): (state: Connection) => void {
@@ -44,6 +52,13 @@ function connectionHandler(): (state: Connection) => void {
     | [(state: Connection) => void]
     | undefined;
   if (!call) throw new Error("the component never subscribed to connection");
+  return call[0];
+}
+
+/** The same, for the room list. */
+function roomsHandler(): (rooms: Rooms) => void {
+  const call = onRooms.mock.calls.at(-1) as [(rooms: Rooms) => void] | undefined;
+  if (!call) throw new Error("the component never subscribed to rooms");
   return call[0];
 }
 
@@ -113,6 +128,8 @@ function resetApiMocks() {
   onVerification.mockReset().mockResolvedValue(() => {});
   onVerificationFlow.mockReset().mockResolvedValue(() => {});
   onKeyBackup.mockReset().mockResolvedValue(() => {});
+  onRooms.mockReset().mockResolvedValue(() => {});
+  roomAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
   // The common case: another session is signed in, so the button is offered.
@@ -121,6 +138,7 @@ function resetApiMocks() {
   // route is the only one on offer. Tests about recovery say otherwise.
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
+  resetRoomAvatarCache();
 }
 
 const profile: Profile = {
@@ -1047,5 +1065,170 @@ describe("SignedIn verification requests", () => {
       within(await accountPanel()).getByText("Bob"),
     ).toBeVisible();
     await waitFor(() => expect(logged).toHaveBeenCalled());
+  });
+});
+
+describe("SignedIn the room list", () => {
+  beforeEach(() => {
+    resetApiMocks();
+  });
+
+  const general: Channel = {
+    id: "!general:example.org",
+    name: "general",
+    kind: "text",
+    avatar: null,
+    joined: true,
+  };
+  const lounge: Channel = {
+    id: "!lounge:example.org",
+    name: "Lounge",
+    kind: "voice",
+    avatar: null,
+    joined: true,
+  };
+  const homeSpace: Space = {
+    id: "home",
+    name: "Home",
+    avatar: null,
+    channels: [
+      {
+        id: "!dm:example.org",
+        name: "aayejayy",
+        kind: "text",
+        avatar: null,
+        joined: true,
+      },
+    ],
+  };
+  const kahuHq: Space = {
+    id: "!s:example.org",
+    name: "Kahu HQ",
+    avatar: null,
+    channels: [general, lounge],
+  };
+  const rooms: Rooms = { spaces: [homeSpace, kahuHq] };
+
+  async function showing(tree: Rooms = rooms) {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onRooms).toHaveBeenCalled());
+    act(() => roomsHandler()(tree));
+  }
+
+  it("draws an empty shell before the first room list arrives", async () => {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+
+    await accountPanel();
+    expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+  });
+
+  it("opens on Home, with the rooms that belong to no space", async () => {
+    await showing();
+
+    expect(
+      await screen.findByRole("button", { name: "Home" }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "#aayejayy" })).toBeVisible();
+  });
+
+  it("shows a space's channels when its rail icon is clicked", async () => {
+    await showing();
+    await screen.findByRole("button", { name: "Kahu HQ" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
+
+    expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "#aayejayy" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("names the selected text channel in the main pane, with its hash", async () => {
+    await showing();
+    await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "#general",
+    );
+  });
+
+  it("says something different about a voice channel", async () => {
+    // The one distinction the next milestone depends on being visible.
+    await showing();
+    await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent("Lounge");
+    expect(heading).not.toHaveTextContent("#");
+    expect(screen.getByText(/joining a voice channel/i)).toBeVisible();
+  });
+
+  it("forgets the selected channel when the space changes", async () => {
+    // A channel belongs to the space it was picked in. Carrying the selection
+    // across would highlight a channel in a list it is not in.
+    await showing();
+    await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
+    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+  });
+
+  it("falls back to Home when the selected space is left", async () => {
+    // A room list that says the space is gone arrives as a whole new tree, so
+    // the selection has to survive being wrong rather than pointing at a room
+    // nobody is in any more.
+    await showing();
+    await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
+
+    act(() => roomsHandler()({ spaces: [homeSpace] }));
+
+    expect(
+      await screen.findByRole("button", { name: "Home" }),
+    ).toHaveAttribute("aria-current", "true");
+    expect(screen.getByRole("button", { name: "#aayejayy" })).toBeVisible();
+  });
+
+  it("drops the selection when the selected channel is removed", async () => {
+    await showing();
+    await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
+    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+
+    act(() =>
+      roomsHandler()({
+        spaces: [homeSpace, { ...kahuHq, channels: [lounge] }],
+      }),
+    );
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+    expect(
+      screen.queryByRole("button", { name: "#general" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("replaces the tree rather than merging into it", async () => {
+    // The Rust side sends the whole thing every time precisely so that this
+    // side never has to work out what changed.
+    await showing();
+    await screen.findByRole("button", { name: "Kahu HQ" });
+
+    act(() => roomsHandler()({ spaces: [homeSpace] }));
+
+    expect(
+      screen.queryByRole("button", { name: "Kahu HQ" }),
+    ).not.toBeInTheDocument();
   });
 });
