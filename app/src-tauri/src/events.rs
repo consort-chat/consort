@@ -435,6 +435,7 @@ mod tests {
             flow_id: "the-only-flow".to_owned(),
             other_user_id: "@bob:example.org".to_owned(),
             is_self_verification: true,
+            we_started: false,
             state,
         }
     }
@@ -455,6 +456,10 @@ mod tests {
 
         assert_eq!(payload.get("flowId").unwrap(), "the-only-flow");
         assert_eq!(payload["state"]["kind"], "requested");
+        // The direction reaches the webview too. It decides both the sentence
+        // and which buttons are drawn, so a payload without it renders a flow
+        // the wrong way round.
+        assert_eq!(payload["weStarted"], false);
     }
 
     /// Which channels are worth catching a late subscriber up on.

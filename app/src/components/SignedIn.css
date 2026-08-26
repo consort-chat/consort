@@ -192,6 +192,26 @@
 }
 
 /*
+  The banner is a grid with its own gap, so the row needs no margin of its own.
+  It is a flex row rather than a bare button so that a second affordance, the
+  recovery key one, drops in beside this without moving anything.
+*/
+.verification__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Same amber as a failed flow action, for the same reason: it is a setback
+   rather than an alarm. */
+.verification__failure {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--amber);
+}
+
+/*
   The fallback notice. Deliberately quiet: it is information, not a failure,
   and styling it as a warning would make a working install look broken.
 */

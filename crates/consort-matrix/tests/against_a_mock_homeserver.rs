@@ -1013,7 +1013,7 @@ mod verification_flows {
         let (dir, client) = signed_in(server).await;
 
         let (flows, flow_sink) = recorder::<Flow>();
-        let flow_task = verification::supervise(client.clone(), flow_sink);
+        let (flow_task, _) = verification::supervise(client.clone(), flow_sink);
 
         let (connections, sink) = recorder();
         let sync_task = sync::start(client, sink);
@@ -1118,9 +1118,120 @@ mod verification_flows {
         let (_dir, client) = signed_in(&server).await;
         let (_flows, flow_sink) = recorder::<Flow>();
 
-        let task = verification::supervise(client, flow_sink);
+        let (task, _) = verification::supervise(client, flow_sink);
         task.abort();
 
         assert!(task.await.unwrap_err().is_cancelled());
+    }
+}
+
+/// Starting a verification rather than answering one.
+///
+/// The same two walls as the module above. `has_devices_to_verify_against` is
+/// an ordinary `GET /devices` and is fully testable here, but asking this
+/// account to verify us needs a cross-signing identity in the crypto store,
+/// and a mocked `/keys/query` has none. So the negative is the one that lives
+/// here, and the round trip is in `against_a_real_homeserver.rs`.
+mod verifying_this_session {
+    use super::*;
+    use consort_matrix::{Flow, verification};
+    use wiremock::ResponseTemplate;
+
+    /// A `GET /devices` body listing exactly these sessions.
+    ///
+    /// `device_id` is the only required field, and the only one read.
+    fn sessions(ids: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "devices": ids
+                .iter()
+                .map(|id| serde_json::json!({ "device_id": id }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// Answer `GET /devices` with `response`.
+    ///
+    /// `expect_any_access_token` because the prebuilt mock wants the mock
+    /// crate's own default token and this harness logs in with its own.
+    async fn listing_sessions(server: &MatrixMockServer, response: ResponseTemplate) {
+        server
+            .mock_devices()
+            .expect_any_access_token()
+            .respond_with(response)
+            .mount()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_lone_session_has_nothing_to_compare_emoji_with() {
+        // The point of asking. With nothing else signed in there is nobody to
+        // show the emoji, and offering the button anyway leads to a request
+        // that can only time out.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        listing_sessions(
+            &server,
+            ResponseTemplate::new(200).set_body_json(sessions(&[DEVICE])),
+        )
+        .await;
+
+        assert!(
+            !verification::has_devices_to_verify_against(&client)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn another_signed_in_session_is_something_to_compare_emoji_with() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        listing_sessions(
+            &server,
+            ResponseTemplate::new(200).set_body_json(sessions(&[DEVICE, "OTHERDEVICE"])),
+        )
+        .await;
+
+        assert!(
+            verification::has_devices_to_verify_against(&client)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_that_will_not_list_sessions_says_so_rather_than_guessing() {
+        // Neither answer is safe to invent. Guessing "none" sends somebody who
+        // has another session to a recovery key they may not have kept, and
+        // guessing "some" offers a button that cannot work. The caller decides
+        // what to do about not knowing.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        listing_sessions(&server, ResponseTemplate::new(500)).await;
+
+        assert!(
+            verification::has_devices_to_verify_against(&client)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_without_a_cross_signing_identity_says_so_instead_of_panicking() {
+        // A `/keys/query` with nothing in it leaves the crypto store with no
+        // identity for this account, which is also what a real account that
+        // has never set cross-signing up looks like.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (_flows, flow_sink) = recorder::<Flow>();
+        let (_task, initiator) = verification::supervise(client, flow_sink);
+
+        let error = initiator.verify_this_session().await.unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::NoCrossSigningIdentity),
+            "{error}"
+        );
+        assert!(!error.invalidates_session(), "{error}");
     }
 }

@@ -108,6 +108,14 @@ export interface VerificationFlow {
   flowId: string;
   otherUserId: string;
   isSelfVerification: boolean;
+  /**
+   * Whether this session asked, rather than being asked.
+   *
+   * Decides both the sentence and the buttons. Once a request turns into an
+   * emoji comparison the two directions look identical, so this is the only
+   * thing left to tell them apart.
+   */
+  weStarted: boolean;
   state: VerificationFlowState;
 }
 
@@ -266,6 +274,29 @@ export function verificationCancel(
   flowId: string,
 ): Promise<void> {
   return invoke<void>("verification_cancel", { userId, flowId });
+}
+
+/**
+ * Ask this account's other sessions to verify this one.
+ *
+ * No arguments, deliberately. It is always this session asking and always the
+ * account's own identity being asked, so there is nothing here to get wrong.
+ * The flow it starts arrives on the `verification-flow` channel like any
+ * other.
+ */
+export function verificationVerifyThisSession(): Promise<void> {
+  return invoke<void>("verification_verify_this_session");
+}
+
+/**
+ * Whether another of this account's sessions is signed in.
+ *
+ * Asked before the button is drawn. With nothing else signed in the request
+ * can only time out, and offering it anyway spends ten minutes arriving at an
+ * answer that was available up front.
+ */
+export function verificationOtherSessionsExist(): Promise<boolean> {
+  return invoke<boolean>("verification_other_sessions_exist");
 }
 
 /**

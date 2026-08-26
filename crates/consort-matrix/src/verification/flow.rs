@@ -20,6 +20,7 @@ use std::future::Future;
 
 use futures_util::StreamExt;
 use matrix_sdk::Client;
+use matrix_sdk::encryption::identities::RequestVerificationError;
 use matrix_sdk::encryption::verification::{
     SasVerification, VerificationRequest, VerificationRequestState,
 };
@@ -81,25 +82,111 @@ impl Flows {
 
 /// Watch for verification requests, reporting each flow as it progresses.
 ///
-/// Registers the event handlers on `client` and returns the task that owns
-/// every flow they start. Aborting it ends the flows with it.
+/// Registers the event handlers on `client` and returns two things: the task
+/// that owns every flow, and an [`Initiator`] for starting one rather than
+/// answering one. Aborting the task ends every flow with it, whichever
+/// direction it came from.
 ///
 /// # Lifetime
 ///
 /// The handlers live on the `Client` and hold the only sender, so the task
 /// does not end while the client exists. Same ownership story as
 /// [`crate::sync::start`]: the caller aborts it when the session ends.
-pub fn supervise<F>(client: Client, on_change: F) -> JoinHandle<()>
+pub fn supervise<F>(client: Client, on_change: F) -> (JoinHandle<()>, Initiator)
 where
     F: Fn(Flow) + Send + Sync + 'static,
 {
     let (arrivals, inbox) = tokio::sync::mpsc::unbounded_channel();
-    watch_for_requests(&client, arrivals);
+    watch_for_requests(&client, arrivals.clone());
 
     let on_change = std::sync::Arc::new(on_change);
-    tokio::spawn(run(inbox, move |arrival| {
-        drive(client.clone(), arrival, on_change.clone())
-    }))
+    let task = tokio::spawn(run(inbox, {
+        let client = client.clone();
+        move |arrival| drive(client.clone(), arrival, on_change.clone())
+    }));
+
+    (task, Initiator { client, arrivals })
+}
+
+/// The way to start a flow rather than answer one.
+///
+/// Carries the channel the event handlers publish arrivals on, because a
+/// request this session sends is never delivered back to it: to-device
+/// messages are not echoed, so nothing would ever announce our own. Handing
+/// the new request to the same channel the handlers use is what puts both
+/// directions on one code path, with one owned task per flow and one dedup.
+///
+/// Separate from the task handle rather than wrapped around it, so that the
+/// task is still an ordinary [`JoinHandle`] owned and aborted like the other
+/// three the application runs.
+#[derive(Clone)]
+pub struct Initiator {
+    client: Client,
+    arrivals: UnboundedSender<Arrival>,
+}
+
+impl Initiator {
+    /// Ask this account's other sessions to verify this one.
+    ///
+    /// Addressed to the account's identity rather than to one device, so every
+    /// other session sees it and any of them can answer. The one that does
+    /// cancels it for the rest with `m.accepted`, which is why that code is
+    /// not treated as a refusal.
+    pub async fn verify_this_session(&self) -> Result<()> {
+        let user_id = self.client.user_id().ok_or(Error::NotLoggedIn)?.to_owned();
+
+        let identity = self
+            .client
+            .encryption()
+            .get_user_identity(&user_id)
+            .await
+            .map_err(matrix_sdk::Error::from)?
+            .ok_or(Error::NoCrossSigningIdentity)?;
+
+        let request = identity
+            .request_verification()
+            .await
+            .map_err(|error| match error {
+                RequestVerificationError::Sdk(error) => Error::Sdk(error),
+                // The other arm is a DM that could not be created, which only
+                // happens when verifying somebody else. This request is
+                // addressed to our own identity and goes to-device, so there
+                // is no room in it at all.
+                other => Error::Sdk(matrix_sdk::Error::UnknownError(Box::new(other))),
+            })?;
+
+        // Announced rather than driven here, so that a flow we started is
+        // owned by the same set as one that arrived, and ends the same way
+        // when the session does.
+        announce(
+            &self.arrivals,
+            Arrival {
+                user_id,
+                flow_id: request.flow_id().to_owned(),
+            },
+        );
+
+        Ok(())
+    }
+}
+
+/// Whether another of this account's sessions could show the emoji.
+///
+/// Asks the homeserver for the account's sessions rather than the crypto
+/// store for its devices. The store's answer depends on a `/keys/query` having
+/// happened and on every device having published keys, and being wrong in the
+/// "no" direction here sends somebody who does have a phone signed in to a
+/// recovery key they may never have written down. The session list is the
+/// question actually being asked: is there anything else signed in.
+pub async fn has_devices_to_verify_against(client: &Client) -> Result<bool> {
+    let own_device_id = client.device_id().ok_or(Error::NotLoggedIn)?;
+
+    let sessions = client.devices().await.map_err(matrix_sdk::Error::from)?;
+
+    Ok(sessions
+        .devices
+        .iter()
+        .any(|session| session.device_id != own_device_id))
 }
 
 /// Register the two handlers a request can arrive through.
@@ -205,7 +292,17 @@ where
     };
 
     let mut report = Report::about(&request, on_change);
-    report.state(state_of(&request.state()));
+
+    // Before the stream, because `changes()` reports what happens next rather
+    // than where the request already is. A flow this session started is
+    // normally `Created` here, but resolving it took two awaits and the other
+    // side can answer inside them, in which case this first look is the only
+    // `Ready` there will ever be.
+    let initial = request.state();
+    if matches!(initial, VerificationRequestState::Ready { .. }) {
+        start_the_comparison(&request).await;
+    }
+    report.state(state_of(&initial));
 
     let mut changes = request.changes();
     while let Some(state) = changes.next().await {
@@ -222,12 +319,43 @@ where
             }
         }
 
+        if matches!(state, VerificationRequestState::Ready { .. }) {
+            start_the_comparison(&request).await;
+        }
+
         let mapped = state_of(&state);
         let is_final = mapped.is_final();
         report.state(mapped);
         if is_final {
             return;
         }
+    }
+}
+
+/// Send `m.key.verification.start`, but only as the side that asked.
+///
+/// Both sides may legally start, and the protocol resolves a double start by
+/// throwing one of them away, so this is not about avoiding a race. It is
+/// about who is left waiting when neither side moves: the convention is that
+/// whoever asked starts the comparison, and a client that asks and then waits
+/// for its counterparty to start leaves both sides sitting on `Ready` until
+/// the flow times out.
+///
+/// Not a button, for the same reason accepting the algorithms is not one. The
+/// person has already said they want to verify; asking them to press a second
+/// thing to get on with it is a question with one answer.
+///
+/// As the responder this does nothing, deliberately. `start_sas` is exported
+/// for the case where the far end never starts, and that is a button, because
+/// by then something has gone wrong and the person is the one deciding to
+/// nudge it.
+async fn start_the_comparison(request: &VerificationRequest) {
+    if !request.we_started() {
+        return;
+    }
+
+    if let Err(error) = request.start_sas().await {
+        tracing::error!(%error, "could not start the emoji comparison");
     }
 }
 
@@ -244,7 +372,8 @@ where
     // asking somebody a question they cannot have an opinion about.
     //
     // Only as the responder. When we started the exchange there is nothing to
-    // accept, and Phase 3 arrives here with `we_started()` true.
+    // accept: the other side sends `m.key.verification.accept` in answer to
+    // the `start` this session sent.
     if !sas.we_started()
         && let Err(error) = sas.accept().await
     {
@@ -274,10 +403,10 @@ where
 /// one that changes which stream is being watched.
 fn state_of(state: &VerificationRequestState) -> FlowState {
     match state {
-        // We are the responder in this phase, so `Created` is not reached from
-        // here. Mapped rather than left to a catch-all so that the initiator
-        // path does not have to come back and find out why its first state was
-        // wrong.
+        // What a flow this session started looks like until the other side
+        // answers. `Waiting` rather than `Requested`: nobody here is being
+        // asked anything, and drawing the accept and decline buttons for our
+        // own request would be asking the wrong person.
         VerificationRequestState::Created { .. } => FlowState::Waiting,
         VerificationRequestState::Requested { .. } => FlowState::Requested,
         VerificationRequestState::Ready { .. } => FlowState::Ready,
@@ -297,6 +426,7 @@ struct Report<F> {
     flow_id: String,
     other_user_id: String,
     is_self_verification: bool,
+    we_started: bool,
     changes: Changes<FlowState>,
     on_change: std::sync::Arc<F>,
 }
@@ -313,12 +443,14 @@ impl<F: Fn(Flow)> Report<F> {
         flow_id: String,
         other_user_id: String,
         is_self_verification: bool,
+        we_started: bool,
         on_change: std::sync::Arc<F>,
     ) -> Self {
         Self {
             flow_id,
             other_user_id,
             is_self_verification,
+            we_started,
             changes: Changes::new(),
             on_change,
         }
@@ -329,6 +461,7 @@ impl<F: Fn(Flow)> Report<F> {
             request.flow_id().to_owned(),
             request.other_user_id().to_string(),
             request.is_self_verification(),
+            request.we_started(),
             on_change,
         )
     }
@@ -346,6 +479,7 @@ impl<F: Fn(Flow)> Report<F> {
             flow_id: self.flow_id.clone(),
             other_user_id: self.other_user_id.clone(),
             is_self_verification: self.is_self_verification,
+            we_started: self.we_started,
             state,
         });
     }
@@ -594,7 +728,12 @@ mod tests {
         /// Everything the report was handed, and the report itself.
         type Recorded<F> = (Arc<Mutex<Vec<Flow>>>, Report<F>);
 
+        /// A report for a flow somebody else asked for.
         fn reporter() -> Recorded<impl Fn(Flow)> {
+            reporter_for(false)
+        }
+
+        fn reporter_for(we_started: bool) -> Recorded<impl Fn(Flow)> {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let sink = {
                 let seen = seen.clone();
@@ -606,6 +745,7 @@ mod tests {
                     "the-only-flow".to_owned(),
                     "@bob:example.org".to_owned(),
                     true,
+                    we_started,
                     std::sync::Arc::new(sink),
                 ),
             )
@@ -624,6 +764,29 @@ mod tests {
             assert_eq!(flow.flow_id, "the-only-flow");
             assert_eq!(flow.other_user_id, "@bob:example.org");
             assert!(flow.is_self_verification);
+            assert!(!flow.we_started);
+        }
+
+        /// The direction is fixed for the life of a flow, so every state
+        /// carries the same answer.
+        ///
+        /// It is read once when the report is built rather than at each state,
+        /// and a flow that started as ours and stopped being ours halfway
+        /// through would rewrite the sentence under the reader.
+        #[test]
+        fn a_flow_we_started_says_so_at_every_state() {
+            let (seen, mut report) = reporter_for(true);
+
+            report.state(FlowState::Waiting);
+            report.state(FlowState::Ready);
+
+            let directions: Vec<bool> = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|flow| flow.we_started)
+                .collect();
+            assert_eq!(directions, vec![true, true]);
         }
 
         #[test]

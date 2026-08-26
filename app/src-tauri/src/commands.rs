@@ -220,6 +220,17 @@ pub async fn verification_mismatch_for(
     Ok(verification::mismatch(&client, &user_id, &flow_id).await?)
 }
 
+/// Ask this account's other sessions to verify this one.
+pub async fn verification_verify_this_session_for(state: &AppState) -> Result<(), CommandError> {
+    Ok(state.verify_this_session().await?)
+}
+
+/// Whether there is another signed-in session to compare emoji with.
+pub async fn verification_other_sessions_exist_for(state: &AppState) -> Result<bool, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::has_devices_to_verify_against(&client).await?)
+}
+
 /// Call the verification off.
 pub async fn verification_cancel_for(
     state: &AppState,
@@ -294,6 +305,9 @@ pub fn resend_state(state: State<'_, AppState>) {
 // always our own. Taking it anyway costs one string and means verifying
 // another person, when it arrives, is not a change to five signatures and the
 // TypeScript that calls them.
+//
+// The two commands after them take nothing, for the opposite reason: neither
+// acts on a flow, and the one that starts one always starts the same one.
 
 /// Agree to a verification somebody else asked for.
 #[tauri::command]
@@ -343,6 +357,30 @@ pub async fn verification_cancel(
     flow_id: String,
 ) -> Result<(), CommandError> {
     verification_cancel_for(&state, user_id, flow_id).await
+}
+
+/// Ask this account's other sessions to verify this one.
+///
+/// No arguments: it is always this session asking, and always the account's
+/// own identity being asked, so there is nothing for the webview to name and
+/// nothing it could name wrongly.
+#[tauri::command]
+pub async fn verification_verify_this_session(
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    verification_verify_this_session_for(&state).await
+}
+
+/// Whether there is another signed-in session to compare emoji with.
+///
+/// Asked before the button is drawn rather than after it is pressed. With
+/// nothing else signed in the request can only time out, and offering it
+/// anyway wastes ten minutes to arrive at an answer that was known up front.
+#[tauri::command]
+pub async fn verification_other_sessions_exist(
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    verification_other_sessions_exist_for(&state).await
 }
 
 #[cfg(test)]
@@ -401,6 +439,38 @@ mod tests {
                 Box::pin(verification_cancel_for(state, user, flow))
             }),
         ]
+    }
+
+    #[tokio::test]
+    async fn asking_to_verify_this_session_needs_a_signed_in_one() {
+        // Same reachability as the five actions below: the webview can invoke
+        // this directly, and the sign-in screen is a page too.
+        let (_dir, state, _) = state();
+
+        let error = verification_verify_this_session_for(&state)
+            .await
+            .expect_err("asked to verify nobody");
+
+        assert!(
+            error.message().contains("No user is signed in"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_what_there_is_to_verify_against_needs_a_signed_in_session() {
+        let (_dir, state, _) = state();
+
+        let error = verification_other_sessions_exist_for(&state)
+            .await
+            .expect_err("counted the sessions of nobody");
+
+        assert!(
+            error.message().contains("No user is signed in"),
+            "{}",
+            error.message()
+        );
     }
 
     #[tokio::test]
@@ -882,6 +952,70 @@ mod against_a_mock_homeserver {
         logout_for(&state).await.unwrap();
 
         assert!(!state.has_verification_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_out_forgets_how_to_start_a_verification() {
+        // The supervising task and the channel into it are two fields, and a
+        // sign-out that cleared one and left the other would leave this
+        // command publishing into a supervisor that has already been aborted:
+        // no error, no flow, nothing on screen.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        server.mock_logout().ok().mount().await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        // While signed in it fails for the honest reason: a mocked
+        // `/keys/query` leaves the account with no cross-signing identity.
+        // Whatever it says, it does not say nobody is signed in.
+        let signed_in = verification_verify_this_session_for(&state)
+            .await
+            .expect_err("a mocked account has no identity to verify against");
+        assert!(
+            !signed_in.message().contains("No user is signed in"),
+            "{}",
+            signed_in.message()
+        );
+
+        logout_for(&state).await.unwrap();
+
+        let signed_out = verification_verify_this_session_for(&state)
+            .await
+            .expect_err("asked to verify after signing out");
+        assert!(
+            signed_out.message().contains("No user is signed in"),
+            "{}",
+            signed_out.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_session_can_ask_what_there_is_to_verify_against() {
+        // The mock lists this session and nothing else, which is the answer
+        // that sends somebody to a recovery key rather than to a button that
+        // can only time out.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        server
+            .mock_devices()
+            .expect_any_access_token()
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "devices": [{ "device_id": DEVICE }] })),
+            )
+            .mount()
+            .await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert!(!verification_other_sessions_exist_for(&state).await.unwrap());
     }
 
     #[tokio::test]

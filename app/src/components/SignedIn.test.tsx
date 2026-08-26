@@ -8,6 +8,8 @@ const onConnection = vi.hoisted(() => vi.fn());
 const onVerification = vi.hoisted(() => vi.fn());
 const onVerificationFlow = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
+const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
+const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   logout,
@@ -16,6 +18,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onVerification,
   onVerificationFlow,
   resendState,
+  verificationVerifyThisSession,
+  verificationOtherSessionsExist,
 }));
 
 import { SignedIn } from "./SignedIn";
@@ -60,6 +64,7 @@ function aRequest(flowId: string): VerificationFlow {
     flowId,
     otherUserId: "@bob:example.org",
     isSelfVerification: true,
+    weStarted: false,
     state: { kind: "requested" },
   };
 }
@@ -92,6 +97,9 @@ function resetApiMocks() {
   onVerification.mockReset().mockResolvedValue(() => {});
   onVerificationFlow.mockReset().mockResolvedValue(() => {});
   resendState.mockReset().mockResolvedValue(undefined);
+  verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
+  // The common case: another session is signed in, so the button is offered.
+  verificationOtherSessionsExist.mockReset().mockResolvedValue(true);
 }
 
 const profile: Profile = {
@@ -524,6 +532,132 @@ describe("SignedIn verification state", () => {
       expect(stopVerification).toHaveBeenCalled();
       expect(stopFlows).toHaveBeenCalled();
     });
+  });
+});
+
+describe("SignedIn starting a verification", () => {
+  beforeEach(() => {
+    resetApiMocks();
+  });
+
+  /**
+   * Report the session unverified and let the banner settle.
+   *
+   * An async `act`, because reporting it starts the lookup for other sessions
+   * and that resolves a microtask later. A synchronous one returns before then
+   * and the state update lands outside it.
+   */
+  async function unverified() {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onVerification).toHaveBeenCalled());
+    await act(async () => {
+      verificationHandler()({ state: "unverified" });
+    });
+  }
+
+  it("offers to verify this session when there is another one to ask", async () => {
+    await unverified();
+
+    expect(
+      await screen.findByRole("button", { name: /verify this session/i }),
+    ).toBeVisible();
+  });
+
+  it("asks the account's other sessions when the button is pressed", async () => {
+    await unverified();
+    const button = await screen.findByRole("button", {
+      name: /verify this session/i,
+    });
+
+    await userEvent.click(button);
+
+    expect(verificationVerifyThisSession).toHaveBeenCalled();
+  });
+
+  it("offers nothing to press while the session is already verified", async () => {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onVerification).toHaveBeenCalled());
+
+    act(() => verificationHandler()({ state: "verified" }));
+
+    await screen.findByText("This session is verified.");
+    expect(
+      screen.queryByRole("button", { name: /verify this session/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says what to do instead when nothing else is signed in", async () => {
+    // The honest answer. One session on an account has nobody to compare
+    // emoji with, and a button that can only time out is worse than a
+    // sentence saying so.
+    verificationOtherSessionsExist.mockResolvedValue(false);
+
+    await unverified();
+
+    expect(await screen.findByText(/no other session/i)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /verify this session/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still offers the button when it could not find out", async () => {
+    // Fail open. Being wrong the other way strands somebody who does have a
+    // phone signed in, and the cost of being wrong this way is one request
+    // that nobody answers.
+    verificationOtherSessionsExist.mockRejectedValue(
+      new Error("the homeserver said no"),
+    );
+
+    await unverified();
+
+    expect(
+      await screen.findByRole("button", { name: /verify this session/i }),
+    ).toBeVisible();
+  });
+
+  it("says so when the request cannot be sent", async () => {
+    verificationVerifyThisSession.mockRejectedValue({
+      message: "This account has no verification keys set up yet.",
+      detail: "no cross-signing identity",
+    });
+    await unverified();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /verify this session/i }),
+    );
+
+    expect(
+      await screen.findByText(
+        "This account has no verification keys set up yet.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("does not offer to start a second one while a flow is running", async () => {
+    await unverified();
+    await screen.findByRole("button", { name: /verify this session/i });
+
+    act(() => flowHandler()(aRequest("the-only-flow")));
+
+    expect(
+      screen.queryByRole("button", { name: /verify this session/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers it again once the flow is over", async () => {
+    await unverified();
+    act(() => flowHandler()(aRequest("the-only-flow")));
+
+    act(() =>
+      flowHandler()({
+        ...aRequest("the-only-flow"),
+        state: { kind: "cancelled", reason: "timedOut", byUs: false, detail: "" },
+      }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /verify this session/i }),
+    ).toBeVisible();
   });
 });
 

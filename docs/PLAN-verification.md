@@ -1,6 +1,6 @@
 # Plan: end-to-end encryption verification
 
-Status: **Phases 0 to 2 done, Phase 3 next.** Every API named here was checked
+Status: **Phases 0 to 3 done, Phase 4 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create.
 
@@ -253,28 +253,51 @@ Synapse's default `rc_login` is three attempts per burst, which turns a suite
 that signs in twice per test into a wall of 429s that matrix-sdk waits out; the
 symptom is a test that hangs for minutes with nothing in the log.
 
-### Phase 3: initiator path (next)
+### Phase 3: initiator path (done)
 
 Consort starts the request.
 
-Build:
+Built:
 
-- `verification_request_own_device`, via `get_user_identity(own_user_id)` then
+- `Initiator::verify_this_session`, via `get_user_identity(own_user_id)` then
   `UserIdentity::request_verification()`.
 - A "Verify this session" affordance on the banner from Phase 1.
 - `has_devices_to_verify_against()` decides whether to offer this at all. With
-  no other device signed in, the honest answer is to send the user to Phase 4.
+  no other session signed in, the banner says so instead, which is the honest
+  answer until Phase 4 lands.
 
-Reuses Phase 2's state machine almost entirely: the same `changes()` stream,
-the same DTO, the same task. What differs is who called first, which
-`we_started()` already reports. Two small things Phase 2 left for it: `Flow`
-gains a `we_started` field, since the responder never needed one, and
-`follow_sas` already skips its automatic accept when we started the exchange.
+It did reuse Phase 2 almost entirely: the same `changes()` stream, the same
+task, the same DTO plus one field, and the same emoji screen. Three things the
+plan did not have.
 
-Done when: the flow works in the opposite direction and the emoji screen is the
-same code.
+**A request we send is never announced to us.** To-device messages are not
+echoed, so the supervising task hears about every arriving flow and none of the
+ones this session starts. The fix is that the channel the event handlers
+publish on is handed back from `supervise` as well, in an `Initiator`, and
+starting a flow announces it on that same channel. One code path, one owned
+task per flow, one dedup, both directions. It is deliberately a separate value
+from the task handle rather than a wrapper around it, so the task stays an
+ordinary `JoinHandle` owned like the other three the application runs.
 
-### Phase 4: recovery key
+**The initiator has to send the start.** `follow_sas` already skipped its
+automatic accept when we started, but nothing sent `m.key.verification.start`,
+and the convention is that whoever asked starts the comparison. Both sides
+waiting for the other is a flow that only ends by timing out. It is automatic
+rather than a button for the same reason accepting the algorithms is: the
+person has already said they want to verify.
+
+**`has_devices_to_verify_against` asks the homeserver, not the crypto store.**
+`get_user_devices` depends on a `/keys/query` having happened and on every
+device having published keys. Being wrong in the "none" direction sends
+somebody who does have a phone signed in to a recovery key they may never have
+kept, so `GET /devices` is the better question: is anything else signed in.
+It is also the only one of the two a mock can answer, which is why three of the
+four new mock tests exist at all.
+
+Done: the flow works in the opposite direction and the emoji screen is the same
+code.
+
+### Phase 4: recovery key (next)
 
 The path that works when the phone is in another room.
 

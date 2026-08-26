@@ -548,6 +548,37 @@ async fn follow_without_starting(request: VerificationRequest) -> Vec<String> {
     .expect("the other device never finished its half of the flow")
 }
 
+/// Answer, from another device, a request this session started.
+///
+/// Polls for the request rather than registering an event handler: the flow id
+/// is already known from our own side, so there is nothing a handler would
+/// tell us that a lookup does not.
+async fn answer_from_another_device(client: Client, flow_id: String) -> Vec<String> {
+    let user_id = client.user_id().unwrap().to_owned();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let request = loop {
+        if let Some(request) = client
+            .encryption()
+            .get_verification_request(&user_id, &flow_id)
+            .await
+        {
+            break request;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the request never reached the other device"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+
+    request.accept().await.unwrap();
+
+    // This side does not start the comparison. Consort asked, so Consort
+    // starts it, and this is the test that says so.
+    follow_without_starting(request).await
+}
+
 /// The emoji handshake, both sides of it.
 mod emoji {
     use super::*;
@@ -558,7 +589,7 @@ mod emoji {
         let (ours, theirs) = two_devices("emoji").await;
 
         let (flows, sink) = flow_recorder();
-        let supervisor = verification::supervise(ours.client.clone(), sink);
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
 
         let their_request = theirs.ask_to_verify_us().await;
 
@@ -617,7 +648,7 @@ mod emoji {
         });
 
         let (flows, sink) = flow_recorder();
-        let supervisor = verification::supervise(ours.client.clone(), sink);
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
 
         let their_request = theirs.ask_to_verify_us().await;
         let asked = wait_for_flow(&flows, "the request", |state| {
@@ -670,7 +701,7 @@ mod emoji {
         let (ours, theirs) = two_devices("mismatch").await;
 
         let (flows, sink) = flow_recorder();
-        let supervisor = verification::supervise(ours.client.clone(), sink);
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
 
         let their_request = theirs.ask_to_verify_us().await;
         let asked = wait_for_flow(&flows, "the request", |state| {
@@ -724,7 +755,7 @@ mod refusal {
         let (ours, theirs) = two_devices("declined").await;
 
         let (flows, sink) = flow_recorder();
-        let supervisor = verification::supervise(ours.client.clone(), sink);
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
 
         let their_request = theirs.ask_to_verify_us().await;
 
@@ -770,7 +801,7 @@ mod refusal {
         let (ours, theirs) = two_devices("started-here").await;
 
         let (flows, sink) = flow_recorder();
-        let supervisor = verification::supervise(ours.client.clone(), sink);
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
 
         let their_request = theirs.ask_to_verify_us().await;
         let asked = wait_for_flow(&flows, "the request", |state| {
@@ -808,5 +839,87 @@ mod refusal {
         .await;
 
         supervisor.abort();
+    }
+}
+
+/// The direction this session starts.
+mod initiating {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn this_session_can_ask_another_one_to_verify_it() {
+        let (ours, theirs) = two_devices("asking").await;
+
+        let (flows, sink) = flow_recorder();
+        let (supervisor, initiator) = verification::supervise(ours.client.clone(), sink);
+
+        // The question the banner asks before offering the button at all.
+        assert!(
+            verification::has_devices_to_verify_against(&ours.client)
+                .await
+                .unwrap()
+        );
+
+        initiator.verify_this_session().await.unwrap();
+
+        // Waiting, not requested. Nobody here is being asked anything, and a
+        // flow this session started that drew accept and decline buttons would
+        // be putting the question to the wrong person.
+        let asked = wait_for_flow(&flows, "our own request", |state| {
+            matches!(state, FlowState::Waiting)
+        })
+        .await;
+        assert!(asked.we_started);
+        assert!(asked.is_self_verification);
+
+        let their_side = tokio::spawn(answer_from_another_device(
+            theirs.client.clone(),
+            asked.flow_id.clone(),
+        ));
+
+        // Nothing on this side presses anything to get here. The far end
+        // accepts and then waits, so reaching a comparison at all is the
+        // automatic start working.
+        let comparing = wait_for_flow(&flows, "the emoji", |state| {
+            matches!(state, FlowState::Comparing { .. })
+        })
+        .await;
+        assert!(comparing.we_started);
+        let ours_saw = symbols(&comparing.state);
+        assert_eq!(ours_saw.len(), 7, "{:?}", comparing.state);
+
+        verification::confirm(&ours.client, &comparing.other_user_id, &comparing.flow_id)
+            .await
+            .unwrap();
+
+        let theirs_saw = their_side.await.unwrap();
+        assert_eq!(
+            ours_saw, theirs_saw,
+            "the two devices were shown different emoji"
+        );
+
+        wait_for_flow(&flows, "both sides to agree", |state| {
+            matches!(state, FlowState::Done)
+        })
+        .await;
+
+        supervisor.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn the_only_session_on_an_account_has_nothing_to_verify_against() {
+        // Against a real homeserver because the answer turns on whether
+        // `GET /devices` counts the asking session, which a mock can be made
+        // to say either way and Synapse decides for itself.
+        let account = a_brand_new_account("alone").await;
+        let only = Device::new(&account).await;
+
+        assert!(
+            !verification::has_devices_to_verify_against(&only.client)
+                .await
+                .unwrap()
+        );
     }
 }

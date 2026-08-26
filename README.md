@@ -8,10 +8,11 @@ alternative that actually works. The protocol underneath is Matrix, all the way
 down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
-> **Status: early.** Consort signs you in, remembers you, and can now be
-> verified by emoji from a client you are already signed in to. No rooms, no
-> messages, no voice yet. Recovery-key verification and key backup are next,
-> then voice, and the README will stop saying this when they land.
+> **Status: early.** Consort signs you in, remembers you, and can verify itself
+> by emoji in either direction: ask from here, or answer a request from another
+> client. No rooms, no messages, no voice yet. Recovery-key verification and key
+> backup are next, then voice, and the README will stop saying this when they
+> land.
 
 ---
 
@@ -26,18 +27,21 @@ at whatever homeserver you already run.
 - The signed-in screen says whether the sync loop is connected and whether this
   session is verified, and says "checking" rather than guessing while it does
   not know.
-- Emoji verification, answering a request. Start one from Element or another
-  Consort on the same account, compare the seven pictures, and this session
-  becomes verified: encrypted history opens and MSC4153 calls will accept it.
-  Declining, a mismatch and an expiry are each reported as themselves rather
-  than as one generic failure.
+- Emoji verification, in both directions. Press "Verify this session" here, or
+  start one from Element or another Consort on the same account. Either way you
+  compare the seven pictures and this session becomes verified: encrypted
+  history opens and MSC4153 calls will accept it. Declining, a mismatch and an
+  expiry are each reported as themselves rather than as one generic failure.
+  With no other session signed in, the banner says so rather than offering a
+  button that could only time out.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Starting a verification from Consort rather than answering one, verifying with
-a recovery key, and restoring key backup, so history that predates this session
-still will not decrypt. No room list, no messages, no voice. See
+Verifying with a recovery key, and restoring key backup, so history that
+predates this session still will not decrypt. Verifying needs another session
+signed in to compare with; on an account with only this one there is nothing to
+do until the recovery key lands. No room list, no messages, no voice. See
 [the roadmap](#roadmap).
 
 ---
@@ -176,11 +180,11 @@ container does not have. Four want a live platform keyring:
 cargo test -p consort-matrix -- --ignored keyring
 ```
 
-The other eight want a homeserver, because a SAS verification handshake is real
+The other ten want a homeserver, because a SAS verification handshake is real
 cryptography between two real devices and no mock produces one. They drive both
-sides of the emoji exchange unattended, so accepting, confirming, declining and
-reporting a mismatch are all exercised end to end. There is a throwaway Synapse
-for that:
+sides of the emoji exchange unattended, in both directions, so asking,
+accepting, confirming, declining and reporting a mismatch are all exercised end
+to end. There is a throwaway Synapse for that:
 
 ```sh
 testing/synapse/up.sh
@@ -296,8 +300,8 @@ whether a model wrote them or you did.
 | Milestone | State |
 |---|---|
 | Password login and session persistence | working |
-| Session verification by emoji, answering a request | working |
-| Starting a verification from Consort, recovery key, key backup | in progress, [planned here](docs/PLAN-verification.md) |
+| Session verification by emoji, in either direction | working |
+| Recovery key and key backup | in progress, [planned here](docs/PLAN-verification.md) |
 | Room list and voice channel discovery | planned |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
@@ -335,8 +339,10 @@ session you cannot verify is an account rather than a usable client.
   state and is not done yet, because the removal has to happen after the client
   is dropped and that is shutdown-ordering work.
 - **Password login only.** No SSO or OIDC yet.
-- **Sessions are not verified yet**, so encrypted history will not decrypt and
-  encrypted calls will refuse this device. That is the [next
+- **A session can only be verified against another session.** Emoji
+  verification works in both directions, but it needs a second client signed in
+  to the same account. On an account with only this one, the route is a
+  recovery key, which is the [next step of that
   milestone](docs/PLAN-verification.md).
 
 ## Licence

@@ -77,6 +77,16 @@ pub enum Error {
     /// happen between the interface drawing a button and somebody pressing it.
     #[error("verification flow {flow_id} is no longer active")]
     NoSuchFlow { flow_id: String },
+
+    /// This session was asked to start a verification, and the account has no
+    /// cross-signing identity to address it to.
+    ///
+    /// Either the account has never had cross-signing set up, or this session
+    /// has not learned about it yet, which is a `/keys/query` away. Both look
+    /// the same from here and both mean the same thing to the person waiting:
+    /// there is nothing to ask right now.
+    #[error("this account has no cross-signing identity to verify against")]
+    NoCrossSigningIdentity,
 }
 
 impl Error {
@@ -120,6 +130,10 @@ impl Error {
             }
             Self::NoSuchFlow { .. } => {
                 "That verification is no longer waiting for an answer. Start a new one.".to_owned()
+            }
+            Self::NoCrossSigningIdentity => {
+                "This account has no verification keys set up yet, so there is nothing to compare against."
+                    .to_owned()
             }
         }
     }

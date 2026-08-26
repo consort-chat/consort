@@ -209,6 +209,12 @@ pub struct Flow {
     /// guessing from a string comparison at the far end would be a second
     /// place for that logic to be wrong.
     pub is_self_verification: bool,
+    /// Whether this session asked for the verification rather than being asked.
+    ///
+    /// Not derivable from the state once the request has turned into a key
+    /// exchange: from `Comparing` onwards the two sides look identical, and
+    /// they still need different sentences and different buttons.
+    pub we_started: bool,
     pub state: FlowState,
 }
 
@@ -489,6 +495,7 @@ mod tests {
                 flow_id: "the-only-flow".to_owned(),
                 other_user_id: "@bob:example.org".to_owned(),
                 is_self_verification: true,
+                we_started: false,
                 state: FlowState::Requested,
             };
 
@@ -497,7 +504,29 @@ mod tests {
             assert_eq!(json["flowId"], "the-only-flow");
             assert_eq!(json["otherUserId"], "@bob:example.org");
             assert_eq!(json["isSelfVerification"], true);
+            assert_eq!(json["weStarted"], false);
             assert_eq!(json["state"]["kind"], "requested");
+        }
+
+        /// The two directions have to be distinguishable on the wire.
+        ///
+        /// The interface says different things about a flow it asked for and
+        /// one it was asked about, and after the request turns into a key
+        /// exchange the states are identical, so the direction is the only
+        /// thing left to tell them apart.
+        #[test]
+        fn a_flow_we_started_says_so() {
+            let flow = Flow {
+                flow_id: "the-only-flow".to_owned(),
+                other_user_id: "@alice:example.org".to_owned(),
+                is_self_verification: true,
+                we_started: true,
+                state: FlowState::Waiting,
+            };
+
+            let json = serde_json::to_value(&flow).unwrap();
+
+            assert_eq!(json["weStarted"], true);
         }
 
         #[test]

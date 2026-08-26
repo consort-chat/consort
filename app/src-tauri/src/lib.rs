@@ -87,6 +87,8 @@ pub fn run() {
             commands::verification_confirm,
             commands::verification_mismatch,
             commands::verification_cancel,
+            commands::verification_verify_this_session,
+            commands::verification_other_sessions_exist,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Consort");

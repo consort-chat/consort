@@ -24,13 +24,16 @@ import {
   verificationCancel,
   verificationConfirm,
   verificationMismatch,
+  verificationOtherSessionsExist,
   verificationStartSas,
+  verificationVerifyThisSession,
 } from "./api";
 
 const flow: VerificationFlow = {
   flowId: "the-only-flow",
   otherUserId: "@bob:example.org",
   isSelfVerification: true,
+  weStarted: false,
   state: { kind: "requested" },
 };
 
@@ -274,6 +277,23 @@ describe("event subscriptions", () => {
         flowId: "the-only-flow",
       });
     }
+  });
+
+  it("asks to verify this session with no arguments", async () => {
+    // Nothing for the webview to name: it is always this session asking, and
+    // always the account's own identity being asked.
+    invoke.mockReset().mockResolvedValue(undefined);
+
+    await verificationVerifyThisSession();
+
+    expect(invoke).toHaveBeenCalledWith("verification_verify_this_session");
+  });
+
+  it("returns whether there is another session to verify against", async () => {
+    invoke.mockReset().mockResolvedValue(true);
+
+    await expect(verificationOtherSessionsExist()).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith("verification_other_sessions_exist");
   });
 
   it("asks to be caught up with no arguments", async () => {

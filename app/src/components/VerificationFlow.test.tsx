@@ -29,17 +29,28 @@ const emoji = [
   { symbol: "🐘", description: "Elephant" },
 ];
 
-function flow(state: VerificationFlowState): VerificationFlow {
+function flow(
+  state: VerificationFlowState,
+  weStarted = false,
+): VerificationFlow {
   return {
     flowId: "the-only-flow",
     otherUserId: "@bob:example.org",
     isSelfVerification: true,
+    weStarted,
     state,
   };
 }
 
 function show(state: VerificationFlowState, onDismiss = vi.fn()) {
   render(<VerificationFlowPanel flow={flow(state)} onDismiss={onDismiss} />);
+}
+
+/** The same panel, for a flow this session asked for. */
+function showOurs(state: VerificationFlowState, onDismiss = vi.fn()) {
+  render(
+    <VerificationFlowPanel flow={flow(state, true)} onDismiss={onDismiss} />,
+  );
 }
 
 beforeEach(() => {
@@ -133,6 +144,51 @@ describe("waiting for the comparison to start", () => {
     show({ kind: "waiting" });
 
     expect(screen.getByRole("status")).toHaveTextContent(/wait/i);
+  });
+});
+
+describe("a verification this session asked for", () => {
+  it("says it is waiting for the other session to answer", () => {
+    // The responder's `waiting` means the two are agreeing on algorithms. Ours
+    // means nobody has picked the request up yet, and telling somebody to sit
+    // tight when what they need to do is go and tap accept on their phone is
+    // the difference between a flow that finishes and one that times out.
+    showOurs({ kind: "waiting" });
+
+    expect(screen.getByRole("status")).toHaveTextContent(/other session/i);
+  });
+
+  it("does not ask this side to accept its own request", () => {
+    showOurs({ kind: "waiting" });
+
+    expect(screen.queryByRole("button", { name: /^verify$/i })).toBeNull();
+  });
+
+  it("does not offer to start a comparison it already started", () => {
+    // The Rust side sends `m.key.verification.start` by itself when it was the
+    // one that asked, so this button would be a second start.
+    showOurs({ kind: "ready" });
+
+    expect(screen.queryByRole("button", { name: /show the emoji/i })).toBeNull();
+  });
+
+  it("can still be called off", () => {
+    showOurs({ kind: "waiting" });
+
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(verificationCancel).toHaveBeenCalledWith(
+      "@bob:example.org",
+      "the-only-flow",
+    );
+  });
+
+  it("shows the same emoji screen as the other direction", () => {
+    // The point of the phase. Two directions, one comparison screen.
+    showOurs({ kind: "comparing", emoji, decimals: [1234, 5678, 9012] });
+
+    expect(screen.getAllByRole("img")).toHaveLength(7);
+    expect(screen.getByRole("button", { name: /they match/i })).toBeTruthy();
   });
 });
 

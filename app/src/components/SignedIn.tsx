@@ -8,6 +8,8 @@ import {
   onVerificationFlow,
   resendState,
   tokenStorage,
+  verificationOtherSessionsExist,
+  verificationVerifyThisSession,
   type Connection,
   type Profile,
   type TokenStorage,
@@ -47,7 +49,60 @@ function connectionLabel(connection: Connection): string {
  * as "verified" would tell somebody their messages are safe before anything
  * had checked.
  */
-function VerificationBanner({ state }: { state: Verification["state"] }) {
+function VerificationBanner({
+  state,
+  canStart,
+}: {
+  state: Verification["state"];
+  canStart: boolean;
+}) {
+  /**
+   * Whether the account has another session to compare emoji with.
+   *
+   * `null` while nobody has asked or the answer has not come back. Rendering
+   * either concrete answer during that gap would flicker between two different
+   * pieces of advice.
+   */
+  const [others, setOthers] = useState<boolean | null>(null);
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (state !== "unverified") return;
+
+    let cancelled = false;
+    verificationOtherSessionsExist()
+      .then((exists) => {
+        if (!cancelled) setOthers(exists);
+      })
+      .catch((raw: unknown) => {
+        console.error(
+          "could not count the account's other sessions",
+          asCommandError(raw).detail,
+        );
+        // Fail open. Being wrong this way costs one request nobody answers.
+        // Being wrong the other way tells somebody with a phone signed in that
+        // their only route is a recovery key, which they may never have kept.
+        if (!cancelled) setOthers(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state]);
+
+  function start() {
+    setPending(true);
+    setFailure(null);
+    verificationVerifyThisSession()
+      .catch((raw: unknown) => {
+        const error = asCommandError(raw);
+        console.error("could not start a verification", error.detail);
+        setFailure(error.message);
+      })
+      .finally(() => setPending(false));
+  }
+
   const headline =
     state === "verified"
       ? "This session is verified."
@@ -65,15 +120,62 @@ function VerificationBanner({ state }: { state: Verification["state"] }) {
     >
       <p className="verification__headline">{headline}</p>
       {state === "unverified" && (
-        <p className="verification__detail">
-          Messages encrypted before you signed in will not open here, and
-          encrypted calls will not accept this device. Start a verification
-          from a client you are already signed in to, and the request will
-          appear above.
-        </p>
+        <>
+          <p className="verification__detail">
+            Messages encrypted before you signed in will not open here, and
+            encrypted calls will not accept this device.
+          </p>
+          {others === false ? (
+            /*
+              The honest dead end. One session on an account has nobody to
+              compare pictures with, and the route out of it is a recovery key,
+              which Consort cannot use yet. Saying so beats a button that can
+              only spend ten minutes arriving at the same answer.
+            */
+            <p className="verification__detail">
+              No other session is signed in, so there is nothing to compare
+              against. Sign in on another device and the option will appear
+              here.
+            </p>
+          ) : (
+            others !== null && (
+              <>
+                {canStart && (
+                  <div className="verification__actions">
+                    <button
+                      className="button button--primary button--small"
+                      onClick={start}
+                      disabled={pending}
+                    >
+                      Verify this session
+                    </button>
+                  </div>
+                )}
+                {/*
+                  Kept even while a flow is running. Asking from the other end
+                  works just as well, and somebody whose request is sitting
+                  unanswered on a device they cannot reach should know the
+                  other direction exists.
+                */}
+                <p className="verification__detail">
+                  You can also start one from a client you are already signed
+                  in to, and the request will appear above.
+                </p>
+              </>
+            )
+          )}
+          {failure !== null && (
+            <p className="verification__failure">{failure}</p>
+          )}
+        </>
       )}
     </section>
   );
+}
+
+/** Whether a flow is still going, and so worth not starting a second one beside. */
+function isRunning(flow: VerificationFlow): boolean {
+  return flow.state.kind !== "done" && flow.state.kind !== "cancelled";
 }
 
 interface Props {
@@ -263,7 +365,10 @@ export function SignedIn({ profile, onSignedOut }: Props) {
           />
         ))}
 
-        <VerificationBanner state={verification.state} />
+        <VerificationBanner
+          state={verification.state}
+          canStart={!Object.values(flows).some(isRunning)}
+        />
       </main>
     </div>
   );

@@ -25,6 +25,18 @@ async fn replace_task(slot: &TaskSlot, task: JoinHandle<()>) {
     }
 }
 
+/// Whether the slot holds a task that has not stopped.
+///
+/// Test-only. The application starts and stops these through `set_client` and
+/// `clear_client`; this is how a test checks that it did.
+#[cfg(test)]
+async fn task_running(slot: &TaskSlot) -> bool {
+    slot.lock()
+        .await
+        .as_ref()
+        .is_some_and(|task| !task.is_finished())
+}
+
 /// Stop the task in the slot, reporting whether there was one.
 async fn stop_task(slot: &TaskSlot) -> bool {
     match slot.lock().await.take() {
@@ -96,6 +108,12 @@ pub struct AppState {
     /// the previous account's flow running for the life of the process, still
     /// holding the client it was started with.
     flow_task: TaskSlot,
+    /// The way to start a verification rather than answer one.
+    ///
+    /// Beside `flow_task` rather than inside it because the two are different
+    /// things: one is a task to abort, the other is a channel into it. Set and
+    /// cleared in the same two places as the task, and only there.
+    initiator: Mutex<Option<verification::Initiator>>,
     /// Where events destined for the webview go.
     ///
     /// A trait object rather than an `AppHandle` so this struct can be built
@@ -115,6 +133,7 @@ impl AppState {
             sync_task: Mutex::new(None),
             verification_task: Mutex::new(None),
             flow_task: Mutex::new(None),
+            initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
         }
     }
@@ -189,13 +208,25 @@ impl AppState {
         .await;
 
         let events = self.events.clone();
-        replace_task(
-            &self.flow_task,
-            verification::supervise(client, move |flow| {
-                events.emit(AppEvent::VerificationFlow(flow));
-            }),
-        )
-        .await;
+        let (flow_task, initiator) = verification::supervise(client, move |flow| {
+            events.emit(AppEvent::VerificationFlow(flow));
+        });
+        replace_task(&self.flow_task, flow_task).await;
+        *self.initiator.lock().await = Some(initiator);
+    }
+
+    /// Ask this account's other sessions to verify this one.
+    ///
+    /// Goes through the initiator rather than the client, because a flow this
+    /// session starts has to be owned by the same set as one that arrives.
+    /// Nothing echoes our own request back to us, so the supervising task
+    /// would otherwise never hear about it and the interface would show
+    /// nothing at all.
+    pub async fn verify_this_session(&self) -> Result<(), consort_matrix::Error> {
+        match self.initiator.lock().await.as_ref() {
+            Some(initiator) => initiator.verify_this_session().await,
+            None => Err(consort_matrix::Error::NotLoggedIn),
+        }
     }
 
     /// Forget the client and stop its background tasks.
@@ -210,6 +241,7 @@ impl AppState {
         // whose decision it was.
         stop_task(&self.verification_task).await;
         stop_task(&self.flow_task).await;
+        *self.initiator.lock().await = None;
 
         // Aborting the sync task means it never runs its own final report, so
         // the last thing the frontend heard was whatever the loop was doing
@@ -235,11 +267,7 @@ impl AppState {
     /// it did.
     #[cfg(test)]
     pub async fn has_refresh_task(&self) -> bool {
-        self.refresh_task
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
+        task_running(&self.refresh_task).await
     }
 
     /// Whether a sync loop is currently running.
@@ -247,11 +275,7 @@ impl AppState {
     /// Test-only, for the same reason as `has_refresh_task`.
     #[cfg(test)]
     pub async fn has_sync_task(&self) -> bool {
-        self.sync_task
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
+        task_running(&self.sync_task).await
     }
 
     /// Whether a verification watcher is currently running.
@@ -259,11 +283,7 @@ impl AppState {
     /// Test-only, for the same reason as `has_refresh_task`.
     #[cfg(test)]
     pub async fn has_verification_task(&self) -> bool {
-        self.verification_task
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
+        task_running(&self.verification_task).await
     }
 
     /// Whether the watcher for incoming verification requests is running.
@@ -271,11 +291,7 @@ impl AppState {
     /// Test-only, for the same reason as `has_refresh_task`.
     #[cfg(test)]
     pub async fn has_flow_task(&self) -> bool {
-        self.flow_task
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
+        task_running(&self.flow_task).await
     }
 
     /// Which task is currently the sync loop.

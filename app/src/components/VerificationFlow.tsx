@@ -172,17 +172,25 @@ export function VerificationFlowPanel({ flow, onDismiss }: Props) {
         <>
           <p className="flow__headline">Waiting for the pictures.</p>
           <p className="flow__detail">
-            The other session normally shows them straight away. If nothing
-            happens, start it from here.
+            {flow.weStarted
+              ? "Both sessions are ready. The pictures are on their way."
+              : "The other session normally shows them straight away. If nothing happens, start it from here."}
           </p>
           <div className="flow__actions">
-            <button
-              className="button button--primary button--small"
-              onClick={act(verificationStartSas)}
-              disabled={pending}
-            >
-              Show the emoji
-            </button>
+            {/*
+              Only as the responder. When this session asked, the Rust side
+              sends the start itself as soon as both sides are ready, so this
+              button would be a second one.
+            */}
+            {!flow.weStarted && (
+              <button
+                className="button button--primary button--small"
+                onClick={act(verificationStartSas)}
+                disabled={pending}
+              >
+                Show the emoji
+              </button>
+            )}
             <button
               className="button button--ghost button--small"
               onClick={act(verificationCancel)}
@@ -196,10 +204,20 @@ export function VerificationFlowPanel({ flow, onDismiss }: Props) {
 
       {state.kind === "waiting" && (
         <>
-          <p className="flow__headline">Waiting for the pictures.</p>
+          <p className="flow__headline">
+            {flow.weStarted
+              ? "Waiting for your other session."
+              : "Waiting for the pictures."}
+          </p>
           <p className="flow__detail">
-            The two sessions are agreeing on how to compare. This takes a
-            moment.
+            {flow.weStarted
+              ? /*
+                  Where the person has to go, not just that they are waiting.
+                  The request is sitting on their other device and nothing here
+                  can move it along.
+                */
+                "Open the app on your other session and accept the request there."
+              : "The two sessions are agreeing on how to compare. This takes a moment."}
           </p>
           <div className="flow__actions">
             <button
