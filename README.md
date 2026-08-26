@@ -308,7 +308,7 @@ whether a model wrote them or you did.
 | Session verification by emoji, in either direction | working |
 | Verifying with a recovery key | working |
 | Key backup, so history older than this session decrypts | working |
-| Room list and voice channel discovery | planned |
+| Room list and voice channel discovery | working |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
 | Text messaging | planned |
@@ -319,6 +319,12 @@ done. Signing in gets you an authenticated session, and that session is
 unverified: it cannot decrypt encrypted history, and no encrypted call will
 accept it. Authentication is not finished until the row under it is, because a
 session you cannot verify is an account rather than a usable client.
+
+It is doing some work in the room list row too. Consort draws every space the
+account has joined, the channels under each of them, and a Home entry for
+rooms belonging to no space. Voice channels are marked as voice channels, which
+is what the row after it needs. What you cannot do yet is click one and be in
+it, or read a word in any of the text channels.
 
 ## Known limitations
 
