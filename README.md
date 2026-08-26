@@ -300,7 +300,7 @@ whether a model wrote them or you did.
 
 ## Roadmap
 
-<img width="1095" height="716" alt="image" src="https://github.com/user-attachments/assets/25fa2323-34d6-479b-9a6a-7f10abe747e1" />
+<img width="1365" height="832" alt="image" src="https://github.com/user-attachments/assets/e809d5d2-6dc6-43bf-9b93-f054351215fa" />
 
 | Milestone | State |
 |---|---|
