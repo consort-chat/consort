@@ -1,0 +1,166 @@
+/*
+  The signed-in layout.
+
+  Three columns and two fixed widths. 72px is the rail, which holds a 48px
+  avatar plus breathing room, and 240px is the channel list, which is wide
+  enough for a channel name and a voice icon without eating the pane. The
+  third column takes what is left.
+
+  `minmax(0, 1fr)` rather than `1fr` on that third column. A grid track sized
+  `1fr` refuses to shrink below the intrinsic width of its contents, so one
+  long unbroken string, a room ID for instance, would push the whole layout
+  wider than the window and put a horizontal scrollbar on the app.
+*/
+.shell {
+  display: grid;
+  grid-template-columns: 72px 240px minmax(0, 1fr);
+  height: 100%;
+  background: var(--surface-base);
+}
+
+.shell__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  overflow-y: auto;
+  background: var(--surface-void);
+  border-right: 1px solid var(--line-subtle);
+  scrollbar-width: none;
+}
+
+.shell__rail::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+  The channel column is itself a two-row grid: the list scrolls, the user panel
+  does not. `minmax(0, 1fr)` on the first row for the same reason as above, and
+  because without it a long list makes the row taller than the column instead
+  of scrolling inside it.
+*/
+.shell__sidebar {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  background: var(--surface-base);
+  border-right: 1px solid var(--line-subtle);
+}
+
+.shell__channels {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-2) var(--space-4);
+}
+
+.shell__main {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--space-6);
+  min-width: 0;
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+/*
+  Everything the session needs to say about itself. Empty most of the time, and
+  a grid rather than a stack of margins so that an empty one collapses to
+  nothing instead of leaving a gap where a banner used to be.
+*/
+.shell__alerts {
+  display: grid;
+  gap: var(--space-4);
+  justify-items: start;
+}
+
+/*
+  The honest empty state. Quiet, centred, and one sentence: a pane dressed up
+  with placeholder chrome would imply that messages are nearly here.
+*/
+.shell__empty {
+  display: grid;
+  place-content: center;
+  gap: var(--space-1);
+  text-align: center;
+}
+
+/*
+  An `h1` that is deliberately not sized like one. It is the heading of an
+  empty pane, and shouting it would give the emptiest part of the screen the
+  loudest voice on it.
+*/
+.shell__empty-headline {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.shell__empty-detail {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.shell__facts {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--line-subtle);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+}
+
+.shell__facts > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+}
+
+.shell__facts dt {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.shell__facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/*
+  The fallback notice. Deliberately quiet: it is information, not a failure,
+  and styling it as a warning would make a working install look broken.
+*/
+.shell__notice {
+  max-width: 46ch;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: left;
+  text-wrap: pretty;
+}
+
+/*
+  Lives here rather than beside the other button rules because every screen
+  that uses it renders inside this shell. Moving it is a job for whenever the
+  button styles get a file of their own.
+*/
+.button--small {
+  padding: 0.3rem 0.7rem;
+  font-size: var(--text-sm);
+}

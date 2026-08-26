@@ -1,0 +1,97 @@
+/*
+  The strip along the bottom of the channel list.
+
+  Fixed height rather than content-sized, so that a long display name cannot
+  push the channel list up. The name truncates instead, and carries the user ID
+  as a title for the case where the truncation loses something.
+*/
+.user-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-void);
+  border-top: 1px solid var(--line-subtle);
+}
+
+.user-panel__avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: oklch(99% 0 0);
+  background: linear-gradient(150deg, var(--violet-hover), var(--violet-press));
+  border-radius: 50%;
+}
+
+.user-panel__who {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.user-panel__name {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-panel__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Mint is the presence colour and only the presence colour. */
+.user-panel__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0 3px oklch(84% 0.13 168 / 0.16);
+}
+
+/*
+  Colour reinforces the label; it never carries the state on its own. The word
+  next to the dot says the same thing, which is what makes this readable to
+  somebody who cannot tell mint from amber.
+*/
+.user-panel__status[data-connection="connecting"] .user-panel__dot,
+.user-panel__status[data-connection="offline"] .user-panel__dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px oklch(80% 0.15 75 / 0.16);
+  animation: user-panel-pulse 1.6s ease-in-out infinite;
+}
+
+.user-panel__status[data-connection="stopped"] .user-panel__dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px oklch(64% 0.19 22 / 0.16);
+}
+
+/* Opacity only, so the pulse stays on the compositor. */
+@keyframes user-panel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-panel__status .user-panel__dot {
+    animation: none;
+  }
+}

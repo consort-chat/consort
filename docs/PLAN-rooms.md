@@ -1,6 +1,6 @@
 # Plan: the room list and the app shell
 
-Status: **Phases 1 and 2 done, Phase 3 next.** Every API named here was checked
+Status: **Phases 1 to 3 done, Phase 4 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create. The numbers under "What the account actually
 looks like" were read out of the local state store of a signed-in Consort, not
@@ -235,17 +235,33 @@ session on this machine to restore. The same code path is covered against a
 real Synapse in `against_a_real_homeserver.rs`, and the account check is worth
 doing once there is a shell drawing it.
 
-### Phase 3: the shell (next)
+### Phase 3: the shell (done)
 
-`AppShell.tsx` replaces what `SignedIn.tsx` renders: a three-column grid, the
-selected space and channel as `useState`, and the existing verification banner
-and connection state moved rather than rewritten. `SignedIn.tsx` keeps the
-subscriptions it already owns and hands their values down.
+`AppShell.tsx` replaces what `SignedIn.tsx` renders: a three-column grid, and
+the existing verification banner and connection state moved rather than
+rewritten. `SignedIn.tsx` keeps every subscription it owned and hands their
+values down, which is the split worth having: the listeners are the part with a
+lifetime to get wrong, and the layout is the part that changes every time the
+design does.
 
-Done when the app looks like the mockup with placeholder content in all three
-columns, and every piece of the old signed-in view is still reachable.
+Three files came out of the old 445-line component. `VerificationBanner.tsx`
+moved wholesale. `UserPanel.tsx` is new and holds the avatar, the name, the
+connection dot and sign out. `AppShell.tsx` is the layout and the main pane.
 
-### Phase 4: the rail and the channel list
+One thing genuinely changed rather than moving. The account name was this
+screen's `h1`, which was true when the screen was a centred card and is not
+true of a thirty-two pixel strip in a corner. The heading moved to the main
+pane, where it currently says there is nothing there, and will say the name of
+the selected channel once there is one. The account strip became a labelled
+group instead, which announces itself to somebody arriving by keyboard and
+gives the tests a stable anchor that is not a heading it is not.
+
+Done: all 162 frontend tests pass at 100% statements, branches, functions and
+lines, and every piece of the old signed-in view is still reachable. What is
+not yet done is looking at it: there is no session on this machine to restore,
+so the shell has not been on screen.
+
+### Phase 4: the rail and the channel list (next)
 
 - `SpaceRail.tsx`: Home first, then spaces. Selected state, hover state, the
   Discord pill on the active entry.

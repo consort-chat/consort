@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -144,6 +144,19 @@ const fileFallback: TokenStorage = {
   isPreferred: false,
 };
 
+/**
+ * The account strip, which is where the display name lives now.
+ *
+ * It used to be this screen's `h1`, and several tests below used that heading
+ * as their "the signed-in screen has rendered" anchor. A thirty-two pixel
+ * strip in a corner is not a page heading, so the anchor is the labelled group
+ * instead. `within` matters: the user ID is also printed among the session
+ * facts, so a bare text query would find two of it.
+ */
+function accountPanel(): Promise<HTMLElement> {
+  return screen.findByRole("group", { name: "Account" });
+}
+
 describe("SignedIn", () => {
   beforeEach(() => {
     resetApiMocks();
@@ -152,9 +165,7 @@ describe("SignedIn", () => {
   it("shows the display name when the account has one", async () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "Bob" }),
-    ).toBeVisible();
+    expect(within(await accountPanel()).getByText("Bob")).toBeVisible();
   });
 
   it("falls back to the user ID when there is no display name", async () => {
@@ -166,7 +177,7 @@ describe("SignedIn", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "@bob:example.org" }),
+      within(await accountPanel()).getByText("@bob:example.org"),
     ).toBeVisible();
   });
 
@@ -195,9 +206,23 @@ describe("SignedIn", () => {
     expect(await screen.findByText("B")).toBeVisible();
   });
 
+  it("falls back to a question mark when there is no letter to use", async () => {
+    // A homeserver can hand back an empty display name, which is not null and
+    // so does not fall through to the user ID. An avatar with nothing in it
+    // reads as a rendering fault rather than as a missing name.
+    render(
+      <SignedIn
+        profile={{ ...profile, display_name: "" }}
+        onSignedOut={vi.fn()}
+      />,
+    );
+
+    expect(within(await accountPanel()).getByText("?")).toBeVisible();
+  });
+
   it("says nothing about storage when the keyring was used", async () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
-    await screen.findByRole("heading", { level: 1 });
+    await accountPanel();
 
     await waitFor(() => expect(tokenStorage).toHaveBeenCalled());
     expect(storageNotice()).not.toBeInTheDocument();
@@ -220,7 +245,7 @@ describe("SignedIn", () => {
 
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
-    expect(await screen.findByRole("heading", { level: 1 })).toBeVisible();
+    expect(await accountPanel()).toBeVisible();
     expect(storageNotice()).not.toBeInTheDocument();
   });
 
@@ -364,7 +389,7 @@ describe("SignedIn connection state", () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Bob" }),
+      within(await accountPanel()).getByText("Bob"),
     ).toBeVisible();
     await waitFor(() => expect(logged).toHaveBeenCalled());
     expect(screen.getByText("Connecting")).toBeVisible();
@@ -514,7 +539,7 @@ describe("SignedIn verification state", () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Bob" }),
+      within(await accountPanel()).getByText("Bob"),
     ).toBeVisible();
     await waitFor(() => expect(logged).toHaveBeenCalled());
     expect(
@@ -529,7 +554,7 @@ describe("SignedIn verification state", () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Bob" }),
+      within(await accountPanel()).getByText("Bob"),
     ).toBeVisible();
     await waitFor(() => expect(logged).toHaveBeenCalled());
   });
@@ -1019,7 +1044,7 @@ describe("SignedIn verification requests", () => {
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Bob" }),
+      within(await accountPanel()).getByText("Bob"),
     ).toBeVisible();
     await waitFor(() => expect(logged).toHaveBeenCalled());
   });

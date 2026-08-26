@@ -73,7 +73,7 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Bob" })).toBeVisible();
+    expect(await screen.findByRole("group", { name: "Account" })).toBeVisible();
   });
 
   it("falls back to the login form when the status check itself fails", async () => {
@@ -99,14 +99,14 @@ describe("App", () => {
     await user.type(screen.getByLabelText(/password/i), "hunter2");
     await user.click(screen.getByRole("button", { name: /sign(ing)? in/i }));
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Bob" })).toBeVisible();
+    expect(await screen.findByRole("group", { name: "Account" })).toBeVisible();
   });
 
   it("returns to the login form after signing out", async () => {
     const user = userEvent.setup();
     sessionStatus.mockResolvedValue({ status: "signedIn", profile });
     render(<App />);
-    await screen.findByRole("heading", { level: 1, name: "Bob" });
+    await screen.findByRole("group", { name: "Account" });
 
     await user.click(screen.getByRole("button", { name: /sign(ing)? out/i }));
 

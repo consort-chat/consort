@@ -1,0 +1,75 @@
+/*
+  The verification banner.
+
+  Amber only for `unverified`, and deliberately not red: a session nobody has
+  verified yet is the state every new login starts in, not a fault. The other
+  two states stay on the plain surface, because "verified" is the unremarkable
+  case and dressing it up would leave nothing spare for the case that needs
+  attention.
+
+  Mint is not used here on purpose. It is reserved for voice and presence, and
+  spending it on a second meaning is how a semantic colour stops being one.
+*/
+.verification {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 46ch;
+  /* Spacing belongs to whatever stacks these, not to the banner. */
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line-subtle);
+  border-left: 3px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  text-align: left;
+  text-wrap: pretty;
+}
+
+.verification[data-verification="unverified"] {
+  border-left-color: var(--amber);
+  background: oklch(80% 0.15 75 / 0.07);
+}
+
+.verification__headline {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.verification[data-verification="unverified"] .verification__headline {
+  color: var(--text-primary);
+}
+
+/* Still checking is not news. Say it, quietly. */
+.verification[data-verification="unknown"] .verification__headline {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.verification__detail {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/*
+  The banner is a grid with its own gap, so the row needs no margin of its own.
+  It is a flex row rather than a bare button so that a second affordance, the
+  recovery key one, drops in beside this without moving anything.
+*/
+.verification__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Same amber as a failed flow action, for the same reason: it is a setback
+   rather than an alarm. */
+.verification__failure {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--amber);
+}
