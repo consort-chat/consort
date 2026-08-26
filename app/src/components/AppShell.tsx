@@ -11,7 +11,8 @@ import {
   type Verification,
   type VerificationFlow,
 } from "../lib/api";
-import { ChannelList, channelLabel } from "./ChannelList";
+import { channelLabel } from "../lib/labels";
+import { ChannelList } from "./ChannelList";
 import { SpaceRail } from "./SpaceRail";
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";

@@ -9,7 +9,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 import { SpaceRail } from "./SpaceRail";
-import { resetRoomAvatarCache } from "./RoomAvatar";
+import { resetAvatarCache } from "../lib/avatars";
 import type { Space } from "../lib/api";
 
 const home: Space = { id: "home", name: "Home", avatar: null, channels: [] };
@@ -20,7 +20,7 @@ function space(id: string, name: string, avatar: string | null = null): Space {
 
 describe("SpaceRail", () => {
   beforeEach(() => {
-    resetRoomAvatarCache();
+    resetAvatarCache();
     roomAvatar.mockReset().mockResolvedValue(null);
   });
 

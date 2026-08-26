@@ -288,9 +288,23 @@ Done: 202 frontend tests at 100% statements, branches, functions and lines. The
 account's shape is exercised end to end in a seeded local Synapse rather than
 only in fixtures.
 
-Not done: nobody has looked at it. There is no session on this machine and no
-way to drive the login form from here, so the shell has still not been on a
-screen.
+Looked at, on a virtual display, against a local Synapse seeded with a space,
+three text channels, two `org.matrix.msc3417.call` rooms, a child nobody
+joined, and two rooms in no space. Two things came out of that which no test
+had:
+
+The connection label wrapped onto a second line and pushed the user panel out
+of shape. "SESSION ENDED", upper case and tracked out, does not fit a 240px
+column beside a name and a button. The dot moved onto the avatar as a badge,
+which is where every client that has this strip puts it and which buys back
+exactly the sixteen pixels the label needed, and the label lost the upper case
+it inherited from a full-width header bar.
+
+Three components were exporting plain functions beside their component, which
+turns every edit into a full page reload instead of a hot one. They moved to
+`lib/labels.ts` and `lib/avatars.ts`, which is where they belonged anyway: two
+copies of "what is this channel called" is two chances to let a room ID
+through.
 
 ### Phase 5: the hierarchy fetch (done)
 

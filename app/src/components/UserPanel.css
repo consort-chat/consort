@@ -11,11 +11,14 @@
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
+  /* Nothing gets to spill out of a strip this size. */
+  overflow: hidden;
   background: var(--surface-void);
   border-top: 1px solid var(--line-subtle);
 }
 
 .user-panel__avatar {
+  position: relative;
   display: grid;
   place-items: center;
   width: 32px;
@@ -42,41 +45,47 @@
   white-space: nowrap;
 }
 
+/*
+  Not upper case and not tracked out, unlike the same label in the header this
+  replaced. A full-width bar could afford the width that costs; a 240px strip
+  cannot, and "SESSION ENDED" wrapped onto a second line and pushed the whole
+  panel out of shape.
+*/
 .user-panel__status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
+  overflow: hidden;
   font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--text-muted);
-}
-
-/* Mint is the presence colour and only the presence colour. */
-.user-panel__dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--mint);
-  box-shadow: 0 0 0 3px oklch(84% 0.13 168 / 0.16);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /*
-  Colour reinforces the label; it never carries the state on its own. The word
-  next to the dot says the same thing, which is what makes this readable to
-  somebody who cannot tell mint from amber.
+  A badge on the avatar, ringed in the panel's own background so it reads as
+  sitting on top rather than punched through.
+
+  Mint is the presence colour and only the presence colour. Colour reinforces
+  the label beside it and never carries the state alone, which is what makes
+  this readable to somebody who cannot tell mint from amber.
 */
-.user-panel__status[data-connection="connecting"] .user-panel__dot,
-.user-panel__status[data-connection="offline"] .user-panel__dot {
+.user-panel__dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  background: var(--mint);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface-void);
+}
+
+.user-panel[data-connection="connecting"] .user-panel__dot,
+.user-panel[data-connection="offline"] .user-panel__dot {
   background: var(--amber);
-  box-shadow: 0 0 0 3px oklch(80% 0.15 75 / 0.16);
   animation: user-panel-pulse 1.6s ease-in-out infinite;
 }
 
-.user-panel__status[data-connection="stopped"] .user-panel__dot {
+.user-panel[data-connection="stopped"] .user-panel__dot {
   background: var(--danger);
-  box-shadow: 0 0 0 3px oklch(64% 0.19 22 / 0.16);
 }
 
 /* Opacity only, so the pulse stays on the compositor. */
@@ -91,7 +100,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .user-panel__status .user-panel__dot {
+  .user-panel__dot {
     animation: none;
   }
 }

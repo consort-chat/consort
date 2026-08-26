@@ -7,7 +7,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   roomAvatar,
 }));
 
-import { RoomAvatar, initialsOf, resetRoomAvatarCache } from "./RoomAvatar";
+import { RoomAvatar } from "./RoomAvatar";
+import { resetAvatarCache } from "../lib/avatars";
+import { initialsOf } from "../lib/labels";
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
@@ -40,7 +42,7 @@ describe("initialsOf", () => {
 
 describe("RoomAvatar", () => {
   beforeEach(() => {
-    resetRoomAvatarCache();
+    resetAvatarCache();
     roomAvatar.mockReset().mockResolvedValue(PNG);
   });
 

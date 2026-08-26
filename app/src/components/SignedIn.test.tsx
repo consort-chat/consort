@@ -44,7 +44,7 @@ import type {
   Verification,
   VerificationFlow,
 } from "../lib/api";
-import { resetRoomAvatarCache } from "./RoomAvatar";
+import { resetAvatarCache } from "../lib/avatars";
 
 /** The handler the component registered, once it has registered one. */
 function connectionHandler(): (state: Connection) => void {
@@ -138,7 +138,7 @@ function resetApiMocks() {
   // route is the only one on offer. Tests about recovery say otherwise.
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
-  resetRoomAvatarCache();
+  resetAvatarCache();
 }
 
 const profile: Profile = {

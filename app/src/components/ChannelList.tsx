@@ -1,20 +1,6 @@
 import type { Channel, Space } from "../lib/api";
+import { channelLabel } from "../lib/labels";
 import "./ChannelList.css";
-
-/** What an unjoined child is called until the hierarchy request names it. */
-const UNKNOWN = "Unknown channel";
-
-/**
- * What to call a channel.
- *
- * One definition, used by the list and by the main pane's heading, because two
- * would be two chances to let a room ID through. `name` is null only for a
- * room a space lists and this account has never joined, so nothing local knows
- * what it is called.
- */
-export function channelLabel(channel: Channel): string {
-  return channel.name ?? UNKNOWN;
-}
 
 /**
  * A speaker, for voice channels.
