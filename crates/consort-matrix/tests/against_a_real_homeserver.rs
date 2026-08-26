@@ -1255,3 +1255,137 @@ mod key_backup {
         );
     }
 }
+
+/// The room list, against rooms this test made itself.
+///
+/// The grouping and the ordering are unit-tested against hand-built facts, and
+/// the wiring is covered by a mock. What neither of those can do is make a
+/// space: building one needs `JoinedRoomBuilder`, which matrix-sdk does not
+/// re-export, and a hand-written `m.space.child` proves only that the test can
+/// write JSON. This creates a real space with a real text room and a real
+/// MatrixRTC call room in it, and checks that what comes back out is a rail
+/// entry with two channels of the right kinds.
+mod room_list {
+    use super::*;
+    use consort_matrix::{ChannelKind, Rooms, rooms};
+    use matrix_sdk::Client;
+    use matrix_sdk::ruma::api::client::room::create_room::v3::{CreationContent, Request};
+    use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
+    use matrix_sdk::ruma::room::RoomType;
+    use matrix_sdk::ruma::serde::Raw;
+
+    /// The room type Element Call and MatrixRTC use today.
+    ///
+    /// Spelled out rather than taken from `RoomType::Call`, which ruma hides
+    /// behind an `unstable-msc3417` feature this workspace does not turn on.
+    /// That is exactly why `rooms` matches on the string, and this test is
+    /// what proves the string is the right one against a real homeserver.
+    const CALL: &str = "org.matrix.msc3417.call";
+
+    async fn create(client: &Client, name: &str, room_type: Option<&str>) -> matrix_sdk::Room {
+        let mut request = Request::new();
+        request.name = Some(name.to_owned());
+
+        if let Some(room_type) = room_type {
+            let mut content = CreationContent::new();
+            content.room_type = Some(RoomType::from(room_type));
+            request.creation_content = Some(Raw::new(&content).unwrap());
+        }
+
+        client.create_room(request).await.unwrap()
+    }
+
+    /// Poll the reports until one satisfies `done`, or give up loudly.
+    async fn wait_until(seen: &Arc<Mutex<Vec<Rooms>>>, done: impl Fn(&Rooms) -> bool) -> Rooms {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Some(rooms) = seen.lock().unwrap().last().filter(|rooms| done(rooms)) {
+                return rooms.clone();
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out; last saw {:?}",
+                seen.lock().unwrap().last()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_space_becomes_a_rail_entry_with_its_channels_under_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let account = a_brand_new_account("room-list").await;
+        let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+            .await
+            .unwrap();
+
+        let space = create(&client, "Kahu HQ", Some("m.space")).await;
+        let text = create(&client, "general", None).await;
+        let voice = create(&client, "Lounge", Some(CALL)).await;
+
+        let via = vec![client.user_id().unwrap().server_name().to_owned()];
+        for child in [&text, &voice] {
+            space
+                .send_state_event_for_key(child.room_id(), SpaceChildEventContent::new(via.clone()))
+                .await
+                .unwrap();
+        }
+
+        let (connections, connection_sink) = recorder();
+        let sync_task = sync::start(client.clone(), connection_sink);
+        wait_for(&connections, Connection::Live).await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let seen = seen.clone();
+            move |rooms: Rooms| seen.lock().unwrap().push(rooms)
+        };
+        let watch_task = rooms::watch(client, sink);
+
+        // Both children have to reach the local store before the space knows
+        // it has any, so this waits on the finished shape rather than on a
+        // sync count.
+        let rooms = wait_until(&seen, |rooms| {
+            rooms.spaces.len() == 2 && rooms.spaces[1].channels.len() == 2
+        })
+        .await;
+
+        watch_task.abort();
+        sync_task.abort();
+
+        assert_eq!(rooms.spaces[0].id, "home");
+        assert!(
+            rooms.spaces[0].channels.is_empty(),
+            "both rooms belong to the space, so nothing should be left over in Home: {:?}",
+            rooms.spaces[0].channels
+        );
+
+        let listed = &rooms.spaces[1];
+        assert_eq!(listed.id, space.room_id().as_str());
+        assert_eq!(listed.name, "Kahu HQ");
+
+        let kind_of = |id: &str| {
+            listed
+                .channels
+                .iter()
+                .find(|channel| channel.id == id)
+                .unwrap_or_else(|| panic!("{id} was not listed under the space"))
+        };
+
+        let text = kind_of(text.room_id().as_str());
+        assert_eq!(text.name.as_deref(), Some("general"));
+        assert_eq!(text.kind, ChannelKind::Text);
+        assert!(text.joined);
+
+        let voice = kind_of(voice.room_id().as_str());
+        assert_eq!(voice.name.as_deref(), Some("Lounge"));
+        assert_eq!(
+            voice.kind,
+            ChannelKind::Voice,
+            "a real MSC3417 room from a real homeserver has to come back as a voice channel, \
+             because that is what issue #6 connects to"
+        );
+        assert!(voice.joined);
+    }
+}

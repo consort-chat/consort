@@ -1622,3 +1622,108 @@ mod key_backup {
             .unwrap();
     }
 }
+
+/// The room list watcher, wired to a sync loop.
+///
+/// The grouping, the ordering and the orphan detection are unit-tested against
+/// hand-built facts, because that is pure and every branch of it is reachable
+/// without a homeserver. What is left, and what needs a server, is the wiring:
+/// that a room arriving in a sync response comes out the other end, and that a
+/// sync carrying nothing does not.
+///
+/// A space with children is not here. Building one needs `JoinedRoomBuilder`,
+/// which lives in `matrix-sdk-test` and is not re-exported, and a space is the
+/// one part of this that a mock would not make convincing anyway. That test
+/// lives against a real homeserver.
+mod room_list {
+    use super::*;
+    use consort_matrix::{ChannelKind, Connection, Rooms, Space, rooms, sync};
+    use std::time::Duration;
+
+    const ROOM: &str = "!general:example.org";
+
+    fn home(rooms: &Rooms) -> &Space {
+        &rooms.spaces[0]
+    }
+
+    #[tokio::test]
+    async fn the_first_report_arrives_without_waiting_for_a_sync() {
+        // By the time this is spawned the first sync may already have
+        // happened. A shell that stays empty until the next one looks broken
+        // for thirty seconds after every restart.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (seen, sink) = recorder::<Rooms>();
+
+        let task = rooms::watch(client, sink);
+        let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
+        task.abort();
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(home(&reports[0]).id, "home");
+        assert!(
+            home(&reports[0]).channels.is_empty(),
+            "an account in no rooms should have an empty Home, not a missing one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_room_arriving_in_a_sync_reaches_the_room_list() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        let (seen, sink) = recorder::<Rooms>();
+
+        let task = rooms::watch(client.clone(), sink);
+        wait_until(&seen, |reports| !reports.is_empty()).await;
+
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let reports = wait_until(&seen, |reports| {
+            reports
+                .last()
+                .is_some_and(|rooms| !home(rooms).channels.is_empty())
+        })
+        .await;
+        task.abort();
+
+        let channels = &home(reports.last().unwrap()).channels;
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0].id, ROOM);
+        assert!(channels[0].joined);
+        assert_eq!(
+            channels[0].kind,
+            ChannelKind::Text,
+            "a room that does not announce itself as a call is not a voice channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sync_that_changes_nothing_is_not_reported_again() {
+        // The regression this guards is a watcher that recomputes and reports
+        // on every sync response. Sync fires every thirty seconds forever, so
+        // that is a webview wake-up and a full re-render of the shell, twice a
+        // minute, carrying exactly what it carried last time.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+
+        let (seen, sink) = recorder::<Rooms>();
+        let task = rooms::watch(client.clone(), sink);
+        wait_until(&seen, |reports| !reports.is_empty()).await;
+
+        let (connections, connection_sink) = recorder();
+        let sync_task = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        // Long enough for several more syncs against a mock that answers at
+        // once.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        sync_task.abort();
+        task.abort();
+
+        let reports = seen.lock().unwrap().clone();
+        assert_eq!(reports.len(), 1, "{reports:?}");
+    }
+}
