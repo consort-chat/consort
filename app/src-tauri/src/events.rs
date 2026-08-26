@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use consort_matrix::{Connection, Flow, KeyBackup, SessionVerification};
+use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +29,8 @@ pub enum AppEvent {
     VerificationFlow(Flow),
     /// What is happening to this session's room keys changed.
     KeyBackup(KeyBackup),
+    /// The rooms the account is in changed.
+    Rooms(Rooms),
 }
 
 impl AppEvent {
@@ -40,6 +42,8 @@ impl AppEvent {
     pub const VERIFICATION_FLOW: &'static str = "verification-flow";
     /// The channel carrying whether room keys are being backed up.
     pub const KEY_BACKUP: &'static str = "key-backup";
+    /// The channel carrying the whole room list.
+    pub const ROOMS: &'static str = "rooms";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -48,15 +52,19 @@ impl AppEvent {
             Self::Verification(_) => Self::VERIFICATION,
             Self::VerificationFlow(_) => Self::VERIFICATION_FLOW,
             Self::KeyBackup(_) => Self::KEY_BACKUP,
+            Self::Rooms(_) => Self::ROOMS,
         }
     }
 
     /// Whether a late subscriber should be caught up on this.
     ///
-    /// Three of the four channels carry state: there is always a current
-    /// connection, a current verification state and a current answer about
-    /// room keys, and a webview that missed the last one is a webview showing
-    /// the wrong thing until something else happens to change.
+    /// Four of the five channels carry state: there is always a current
+    /// connection, a current verification state, a current answer about room
+    /// keys and a current set of rooms, and a webview that missed the last one
+    /// is a webview showing the wrong thing until something else happens to
+    /// change. The room list is the starkest case, because the thing that
+    /// changes it next may be days away: an account that joins no rooms and
+    /// leaves none would show an empty shell until it did.
     ///
     /// A flow is state only while it is running. Once it is done or cancelled
     /// it is history, and replaying it on the next mount would put "the emoji
@@ -65,7 +73,9 @@ impl AppEvent {
     /// is waiting, and there is no way to ask for the emoji again.
     pub fn is_worth_keeping(&self) -> bool {
         match self {
-            Self::Connection(_) | Self::Verification(_) | Self::KeyBackup(_) => true,
+            Self::Connection(_) | Self::Verification(_) | Self::KeyBackup(_) | Self::Rooms(_) => {
+                true
+            }
             Self::VerificationFlow(flow) => !flow.state.is_final(),
         }
     }
@@ -81,6 +91,7 @@ impl AppEvent {
             Self::Verification(state) => serde_json::to_value(state),
             Self::VerificationFlow(flow) => serde_json::to_value(flow),
             Self::KeyBackup(state) => serde_json::to_value(state),
+            Self::Rooms(rooms) => serde_json::to_value(rooms),
         }
     }
 }
@@ -245,6 +256,19 @@ impl RecordingSink {
             })
     }
 
+    /// The most recent room list, if any.
+    pub fn last_rooms(&self) -> Option<Rooms> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                AppEvent::Rooms(rooms) => Some(rooms.clone()),
+                _ => None,
+            })
+    }
+
     /// The most recent verification state, if any.
     pub fn last_verification(&self) -> Option<SessionVerification> {
         self.events
@@ -269,7 +293,7 @@ impl EventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use consort_matrix::{FlowState, StopReason};
+    use consort_matrix::{Channel, ChannelKind, FlowState, Space, StopReason};
 
     #[test]
     fn a_connection_event_goes_out_on_the_connection_channel() {
@@ -310,6 +334,8 @@ mod tests {
                 reason: StopReason::SignedOut,
             }),
             AppEvent::Verification(SessionVerification::Unknown),
+            AppEvent::KeyBackup(KeyBackup::Enabled),
+            AppEvent::Rooms(a_room_list()),
         ];
 
         for event in events {
@@ -338,6 +364,9 @@ mod tests {
             AppEvent::Verification(SessionVerification::Unknown),
             AppEvent::Verification(SessionVerification::Verified),
             AppEvent::Verification(SessionVerification::Unverified),
+            AppEvent::KeyBackup(KeyBackup::Missing),
+            AppEvent::Rooms(Rooms::default()),
+            AppEvent::Rooms(a_room_list()),
         ];
 
         for event in events {
@@ -425,6 +454,73 @@ mod tests {
     #[test]
     fn a_recording_sink_that_saw_nothing_reports_nothing() {
         assert_eq!(RecordingSink::new().last_connection(), None);
+    }
+
+    /// A room list with one space holding one voice channel.
+    fn a_room_list() -> Rooms {
+        Rooms {
+            spaces: vec![
+                Space {
+                    id: "home".to_owned(),
+                    name: "Home".to_owned(),
+                    avatar: None,
+                    channels: Vec::new(),
+                },
+                Space {
+                    id: "!space:example.org".to_owned(),
+                    name: "Kahu HQ".to_owned(),
+                    avatar: Some("mxc://example.org/abc".to_owned()),
+                    channels: vec![Channel {
+                        id: "!lounge:example.org".to_owned(),
+                        name: Some("Lounge".to_owned()),
+                        kind: ChannelKind::Voice,
+                        avatar: None,
+                        joined: true,
+                    }],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_room_list_goes_out_on_its_own_channel() {
+        let event = AppEvent::Rooms(a_room_list());
+
+        assert_eq!(event.channel(), AppEvent::ROOMS);
+        assert_ne!(AppEvent::ROOMS, AppEvent::CONNECTION);
+        assert_ne!(AppEvent::ROOMS, AppEvent::KEY_BACKUP);
+    }
+
+    #[test]
+    fn the_room_list_payload_is_the_tree_itself() {
+        let event = AppEvent::Rooms(a_room_list());
+
+        let payload = event.payload().unwrap();
+
+        assert_eq!(payload["spaces"][0]["id"], "home");
+        assert_eq!(payload["spaces"][1]["channels"][0]["kind"], "voice");
+        assert!(
+            payload.get("Rooms").is_none(),
+            "the variant name leaked into the wire format: {payload}"
+        );
+    }
+
+    #[test]
+    fn a_room_list_is_worth_replaying_to_a_late_subscriber() {
+        // The one channel where the next change may be days away. An account
+        // that joins no rooms and leaves none would sit on an empty shell
+        // until it did.
+        assert!(AppEvent::Rooms(a_room_list()).is_worth_keeping());
+    }
+
+    #[test]
+    fn a_recording_sink_reports_the_last_room_list() {
+        let sink = RecordingSink::new();
+
+        sink.emit(AppEvent::Rooms(Rooms::default()));
+        sink.emit(AppEvent::Rooms(a_room_list()));
+
+        assert_eq!(sink.last_rooms(), Some(a_room_list()));
     }
 
     #[test]

@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use consort_matrix::{Client, Connection, SessionStore, StopReason, backup, sync, verification};
+use consort_matrix::{
+    Client, Connection, Rooms, SessionStore, StopReason, backup, rooms, sync, verification,
+};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
@@ -13,8 +15,8 @@ use crate::events::{AppEvent, EventSink, LatestSink};
 
 /// One background task's handle.
 ///
-/// Five of these now, all owned the same way and all aborted at the same two
-/// moments, so the abort-and-replace is written once rather than five times
+/// Six of these now, all owned the same way and all aborted at the same two
+/// moments, so the abort-and-replace is written once rather than six times
 /// with one of them subtly different.
 type TaskSlot = Mutex<Option<JoinHandle<()>>>;
 
@@ -115,6 +117,14 @@ pub struct AppState {
     /// is not. A verified session with no backup still cannot read a word of
     /// history, and reporting that as part of "verified" would bury it.
     backup_task: TaskSlot,
+    /// The watcher reporting what rooms the account is in.
+    ///
+    /// Driven by the same sync responses as `sync_task` and still its own
+    /// task, because the two report different things and the room list has to
+    /// say something before the first sync arrives. It reads only the local
+    /// store, so an account that has synced before is drawn immediately and
+    /// correctly while offline.
+    rooms_task: TaskSlot,
     /// The way to start a verification rather than answer one.
     ///
     /// Beside `flow_task` rather than inside it because the two are different
@@ -141,6 +151,7 @@ impl AppState {
             verification_task: Mutex::new(None),
             flow_task: Mutex::new(None),
             backup_task: Mutex::new(None),
+            rooms_task: Mutex::new(None),
             initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
         }
@@ -225,6 +236,15 @@ impl AppState {
         .await;
 
         let events = self.events.clone();
+        replace_task(
+            &self.rooms_task,
+            rooms::watch(client.clone(), move |list| {
+                events.emit(AppEvent::Rooms(list));
+            }),
+        )
+        .await;
+
+        let events = self.events.clone();
         let (flow_task, initiator) = verification::supervise(client, move |flow| {
             events.emit(AppEvent::VerificationFlow(flow));
         });
@@ -261,6 +281,15 @@ impl AppState {
         stop_task(&self.backup_task).await;
         *self.initiator.lock().await = None;
 
+        // The room list does get a parting word, unlike the two verification
+        // channels, because the last one is retained for a late subscriber and
+        // it names somebody's rooms. Signing in as a second account would
+        // otherwise show the first account's spaces for the moment between the
+        // webview asking to be caught up and the new watcher's first report.
+        if stop_task(&self.rooms_task).await {
+            self.events.emit(AppEvent::Rooms(Rooms::default()));
+        }
+
         // Aborting the sync task means it never runs its own final report, so
         // the last thing the frontend heard was whatever the loop was doing
         // when the user pressed sign out. Say what happened instead of leaving
@@ -294,6 +323,14 @@ impl AppState {
     #[cfg(test)]
     pub async fn has_sync_task(&self) -> bool {
         task_running(&self.sync_task).await
+    }
+
+    /// Whether a room list watcher is currently running.
+    ///
+    /// Test-only, for the same reason as `has_refresh_task`.
+    #[cfg(test)]
+    pub async fn has_rooms_task(&self) -> bool {
+        task_running(&self.rooms_task).await
     }
 
     /// Whether a verification watcher is currently running.
@@ -341,6 +378,7 @@ impl AppState {
         *self.verification_task.lock().await = Some(tokio::spawn(std::future::pending()));
         *self.flow_task.lock().await = Some(tokio::spawn(std::future::pending()));
         *self.backup_task.lock().await = Some(tokio::spawn(std::future::pending()));
+        *self.rooms_task.lock().await = Some(tokio::spawn(std::future::pending()));
     }
 }
 
@@ -567,6 +605,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_fresh_state_has_no_room_list_watcher() {
+        let (_dir, state, _sink) = state();
+        assert!(!state.has_rooms_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_out_stops_the_room_list_watcher() {
+        let (_dir, state, _sink) = state();
+        state.pretend_to_be_signed_in().await;
+
+        state.clear_client().await;
+
+        assert!(!state.has_rooms_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_out_empties_the_room_list() {
+        // The one channel that does get a parting word, and the reason is the
+        // catch-up. The last room list is retained for a webview that
+        // subscribes late, and it names somebody's rooms. Left in place,
+        // signing in as a second account shows the first account's spaces
+        // until the new watcher gets its first report out.
+        let (_dir, state, sink) = state();
+        state.pretend_to_be_signed_in().await;
+
+        state.clear_client().await;
+
+        assert_eq!(sink.last_rooms(), Some(Rooms::default()));
+    }
+
+    #[tokio::test]
     async fn signing_out_says_nothing_about_a_flow() {
         // Same reasoning as the verification state: there is nothing to say
         // about a session that has gone, and a flow it was halfway through is
@@ -601,9 +670,12 @@ mod tests {
         assert_eq!(
             sink.events(),
             vec![
+                AppEvent::Rooms(Rooms::default()),
                 AppEvent::Connection(stopped.clone()),
+                AppEvent::Rooms(Rooms::default()),
                 AppEvent::Connection(stopped),
-            ]
+            ],
+            "both channels should be caught up, in the order they first spoke"
         );
     }
 

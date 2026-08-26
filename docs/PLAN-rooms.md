@@ -1,6 +1,6 @@
 # Plan: the room list and the app shell
 
-Status: **Phase 1 done, Phase 2 next.** Every API named here was checked
+Status: **Phases 1 and 2 done, Phase 3 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create. The numbers under "What the account actually
 looks like" were read out of the local state store of a signed-in Consort, not
@@ -200,21 +200,42 @@ and an idle sync not being reported twice. A real Synapse covers a real space
 holding a real `org.matrix.msc3417.call` room, which is the one assertion no
 mock makes convincing.
 
-### Phase 2: over the wire (next)
+### Phase 2: over the wire (done)
 
 - `AppEvent::Rooms` on the existing enum in `events.rs`, channel name `rooms`,
-  and `is_worth_keeping` returning true so `resend_state` replays it.
+  and `is_worth_keeping` returning true so `resend_state` replays it. It is the
+  starkest case for that: the thing that changes a room list next may be days
+  away, so a webview that missed the last one would sit on an empty shell until
+  somebody joined or left something.
 - `rooms::watch` spawned in `state.rs` next to `sync::start`,
-  `verification::watch` and `backup::watch`, with its `JoinHandle` in the same
-  kind of `TaskSlot` and torn down the same way on sign-out.
-- `room_avatar(room_id)` command returning `Option<String>`, a data URL.
-- The mirrored types and the `onRooms` subscription in `app/src/lib/api.ts`.
+  `verification::watch` and `backup::watch`, in the same kind of `TaskSlot` and
+  torn down the same way on sign-out. Unlike the verification channels it gets
+  a parting word, an empty `Rooms`, because the retained value names somebody's
+  rooms and signing in as a second account would otherwise show the first
+  account's spaces until the new watcher reported.
+- `room_avatar(room_id)` returning `Option<String>`, a data URL. It asks for a
+  96 pixel cropped thumbnail, which is one of Synapse's default sizes, and
+  sniffs the image type from the magic number because the SDK's media API hands
+  back bytes and no content type. Every failure is `None` and a log line,
+  because the fallback is initials and a dialog about an avatar would be worse
+  than the initials.
+- The mirrored types, `onRooms` and `roomAvatar` in `app/src/lib/api.ts`. A
+  channel's `name` is `string | null` there too, so a caller has to decide what
+  an unjoined child looks like rather than accidentally rendering a room ID.
 
-Done when the dev build logs a room snapshot with the right counts for the
-account it is signed into, and `resend_state` after a reload produces it again
-without waiting for the next sync.
+Done: a mock homeserver covers a whole space arriving in a sync response, with
+a call room, an ordinary room, a child that was never joined and a child with
+no `via`, plus the avatar path end to end including the bytes that are not an
+image. Vitest covers the channel name, the payload shape and the argument
+names. The signed-out half is confirmed in the dev build: it starts, reports no
+rooms, and says so.
 
-### Phase 3: the shell
+Not yet confirmed: the counts against the real account, because there is no
+session on this machine to restore. The same code path is covered against a
+real Synapse in `against_a_real_homeserver.rs`, and the account check is worth
+doing once there is a shell drawing it.
+
+### Phase 3: the shell (next)
 
 `AppShell.tsx` replaces what `SignedIn.tsx` renders: a three-column grid, the
 selected space and channel as `useState`, and the existing verification banner

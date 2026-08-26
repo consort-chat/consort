@@ -13,13 +13,16 @@ import {
   onConnection,
   onVerification,
   onKeyBackup,
+  onRooms,
   onVerificationFlow,
   resendState,
+  roomAvatar,
   sessionStatus,
   tokenStorage,
   type Connection,
   type KeyBackup,
   type Profile,
+  type Rooms,
   type Verification,
   type VerificationFlow,
   verificationAccept,
@@ -41,6 +44,33 @@ const flow: VerificationFlow = {
   state: { kind: "requested" },
 };
 
+const rooms: Rooms = {
+  spaces: [
+    { id: "home", name: "Home", avatar: null, channels: [] },
+    {
+      id: "!space:example.org",
+      name: "Kahu HQ",
+      avatar: "mxc://example.org/abc",
+      channels: [
+        {
+          id: "!lounge:example.org",
+          name: "Lounge",
+          kind: "voice",
+          avatar: null,
+          joined: true,
+        },
+        {
+          id: "!unknown:example.org",
+          name: null,
+          kind: "text",
+          avatar: null,
+          joined: false,
+        },
+      ],
+    },
+  ],
+};
+
 const profile: Profile = {
   user_id: "@bob:example.org",
   device_id: "HZTIUXZKUU",
@@ -59,6 +89,32 @@ describe("command wrappers", () => {
 
     await expect(sessionStatus()).resolves.toEqual({ status: "signedOut" });
     expect(invoke).toHaveBeenCalledWith("session_status");
+  });
+
+  it("passes the room id under the name the Rust command expects", async () => {
+    // camelCase here, snake_case there. Tauri converts, and getting it wrong
+    // is a deserialisation error at runtime rather than a compile failure.
+    invoke.mockResolvedValue(null);
+
+    await roomAvatar("!general:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("room_avatar", {
+      roomId: "!general:example.org",
+    });
+  });
+
+  it("returns null for a room with no avatar rather than throwing", async () => {
+    invoke.mockResolvedValue(null);
+
+    await expect(roomAvatar("home")).resolves.toBeNull();
+  });
+
+  it("returns the data url for a room that has one", async () => {
+    invoke.mockResolvedValue("data:image/png;base64,AAAA");
+
+    await expect(roomAvatar("!general:example.org")).resolves.toBe(
+      "data:image/png;base64,AAAA",
+    );
   });
 
   it("passes the login fields under the names the Rust command expects", async () => {
@@ -284,6 +340,35 @@ describe("event subscriptions", () => {
     listen.mockResolvedValue(unlisten);
 
     const returned = await onKeyBackup(vi.fn());
+    returned();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+
+  it("subscribes to the rooms channel by the name Rust emits on", async () => {
+    await onRooms(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("rooms", expect.any(Function));
+  });
+
+  it("hands the rooms handler the whole tree rather than the envelope", async () => {
+    const handler = vi.fn();
+    await onRooms(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: Rooms }) => void,
+    ];
+
+    forward({ payload: rooms });
+
+    expect(handler).toHaveBeenCalledWith(rooms);
+  });
+
+  it("returns the rooms unlisten function too", async () => {
+    const unlisten = vi.fn();
+    listen.mockResolvedValue(unlisten);
+
+    const returned = await onRooms(vi.fn());
     returned();
 
     expect(unlisten).toHaveBeenCalled();

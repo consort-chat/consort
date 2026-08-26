@@ -1631,19 +1631,25 @@ mod key_backup {
 /// that a room arriving in a sync response comes out the other end, and that a
 /// sync carrying nothing does not.
 ///
-/// A space with children is not here. Building one needs `JoinedRoomBuilder`,
-/// which lives in `matrix-sdk-test` and is not re-exported, and a space is the
-/// one part of this that a mock would not make convincing anyway. That test
-/// lives against a real homeserver.
+/// The sync responses below are written out rather than built, for the same
+/// reason the verification tests write out a to-device event: the builders
+/// live in `matrix-sdk-test`, which matrix-sdk does not re-export, and one
+/// JSON literal is cheaper than a second git dependency pinned to the same
+/// rev. It also puts the shape of a space on the page, which is the thing
+/// being read.
 mod room_list {
     use super::*;
-    use consort_matrix::{ChannelKind, Connection, Rooms, Space, rooms, sync};
+    use consort_matrix::{Channel, ChannelKind, Client, Connection, Rooms, Space, rooms, sync};
     use std::time::Duration;
 
     const ROOM: &str = "!general:example.org";
 
     fn home(rooms: &Rooms) -> &Space {
         &rooms.spaces[0]
+    }
+
+    fn ids(channels: &[Channel]) -> Vec<&str> {
+        channels.iter().map(|channel| channel.id.as_str()).collect()
     }
 
     #[tokio::test]
@@ -1725,5 +1731,310 @@ mod room_list {
 
         let reports = seen.lock().unwrap().clone();
         assert_eq!(reports.len(), 1, "{reports:?}");
+    }
+
+    /// One state event, with the fields the SDK insists on.
+    fn state_event(
+        event_type: &str,
+        state_key: &str,
+        timestamp: u64,
+        content: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": event_type,
+            "state_key": state_key,
+            "content": content,
+            "event_id": format!("$e{event_type}{state_key}{timestamp}"),
+            "sender": USER,
+            "origin_server_ts": timestamp,
+        })
+    }
+
+    /// The `m.room.create` every room needs before the SDK will believe in it.
+    fn created(room_type: Option<&str>) -> serde_json::Value {
+        let mut content = serde_json::json!({
+            "creator": USER,
+            "room_version": "10",
+        });
+        if let Some(room_type) = room_type {
+            content["type"] = room_type.into();
+        }
+        state_event("m.room.create", "", 1, content)
+    }
+
+    fn named(name: &str) -> serde_json::Value {
+        state_event("m.room.name", "", 2, serde_json::json!({ "name": name }))
+    }
+
+    /// A space claiming a child, at the timestamp the ordering falls back to.
+    fn child(room_id: &str, timestamp: u64, via: &[&str]) -> serde_json::Value {
+        state_event(
+            "m.space.child",
+            room_id,
+            timestamp,
+            serde_json::json!({ "via": via }),
+        )
+    }
+
+    /// Answer every sync with the same set of joined rooms.
+    async fn sync_with(server: &MatrixMockServer, joined: serde_json::Value) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "next_batch": "s1", "rooms": { "join": joined } }),
+            ))
+            .mount(server.server())
+            .await;
+    }
+
+    /// The account this milestone was designed against, in miniature.
+    ///
+    /// One space with four claimed children, of which one is a call room, one
+    /// is an ordinary room, one was never joined, and one carries no `via` and
+    /// is therefore not a child at all. Plus a room in no space.
+    fn an_account_with_a_space() -> serde_json::Value {
+        serde_json::json!({
+            "!space:example.org": { "state": { "events": [
+                created(Some("m.space")),
+                named("Kahu HQ"),
+                child("!general:example.org", 2_000, &["example.org"]),
+                child("!lounge:example.org", 1_000, &["example.org"]),
+                child("!never:example.org", 3_000, &["example.org"]),
+                child("!dropped:example.org", 500, &[]),
+            ] } },
+            "!general:example.org": { "state": { "events": [created(None), named("general")] } },
+            "!lounge:example.org": { "state": { "events": [
+                created(Some("org.matrix.msc3417.call")),
+                named("Lounge"),
+            ] } },
+            "!dm:example.org": { "state": { "events": [created(None)] } },
+        })
+    }
+
+    async fn synced(
+        server: &MatrixMockServer,
+        joined: serde_json::Value,
+    ) -> (tempfile::TempDir, Client) {
+        let (dir, client) = signed_in(server).await;
+        sync_with(server, joined).await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .unwrap();
+        (dir, client)
+    }
+
+    #[tokio::test]
+    async fn a_space_becomes_a_rail_entry_holding_its_channels_in_order() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(&server, an_account_with_a_space()).await;
+
+        let rooms = rooms::snapshot(&client).await;
+
+        assert_eq!(rooms.spaces.len(), 2, "{rooms:?}");
+        let space = &rooms.spaces[1];
+        assert_eq!(space.id, "!space:example.org");
+        assert_eq!(space.name, "Kahu HQ");
+        assert_eq!(
+            space
+                .channels
+                .iter()
+                .map(|channel| channel.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "!lounge:example.org",
+                "!general:example.org",
+                "!never:example.org"
+            ],
+            "children with no order sort by when the space claimed them"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_room_in_a_space_is_a_voice_channel() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(&server, an_account_with_a_space()).await;
+
+        let rooms = rooms::snapshot(&client).await;
+
+        let lounge = &rooms.spaces[1].channels[0];
+        assert_eq!(lounge.name.as_deref(), Some("Lounge"));
+        assert_eq!(lounge.kind, ChannelKind::Voice);
+        assert!(lounge.joined);
+    }
+
+    #[tokio::test]
+    async fn a_child_the_account_never_joined_is_listed_without_a_name() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(&server, an_account_with_a_space()).await;
+
+        let rooms = rooms::snapshot(&client).await;
+
+        let never = &rooms.spaces[1].channels[2];
+        assert_eq!(never.id, "!never:example.org");
+        assert_eq!(never.name, None, "nothing local knows what it is called");
+        assert!(!never.joined);
+    }
+
+    #[tokio::test]
+    async fn a_child_with_no_via_is_not_a_child() {
+        // The spec is explicit: without a server to join through the entry is
+        // unusable and should be ignored. It is also what removing a child
+        // from a space looks like on the wire.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(&server, an_account_with_a_space()).await;
+
+        let rooms = rooms::snapshot(&client).await;
+
+        assert!(
+            !rooms.spaces[1]
+                .channels
+                .iter()
+                .any(|channel| channel.id == "!dropped:example.org"),
+            "{:?}",
+            rooms.spaces[1].channels
+        );
+    }
+
+    #[tokio::test]
+    async fn a_room_no_space_claims_lands_in_home_with_a_name_that_is_not_its_id() {
+        // A direct message has no `m.room.name`, so the name has to come from
+        // the SDK's own calculation. Whatever that produces, showing somebody
+        // a room ID is not it.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(&server, an_account_with_a_space()).await;
+
+        let rooms = rooms::snapshot(&client).await;
+
+        let channels = &home(&rooms).channels;
+        assert_eq!(ids(channels), ["!dm:example.org"]);
+        assert!(channels[0].name.is_some());
+        assert_ne!(channels[0].name.as_deref(), Some("!dm:example.org"));
+    }
+
+    mod avatars {
+        use super::*;
+        use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
+
+        /// The eight bytes every PNG starts with, and nothing after them.
+        ///
+        /// Enough for the sniffing, which is all this is testing. A real image
+        /// would prove nothing extra and would put a blob in the file.
+        const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+        fn with_an_avatar() -> serde_json::Value {
+            serde_json::json!({
+                "!general:example.org": { "state": { "events": [
+                    created(None),
+                    named("general"),
+                    state_event(
+                        "m.room.avatar",
+                        "",
+                        3,
+                        serde_json::json!({ "url": "mxc://example.org/abc" }),
+                    ),
+                ] } },
+                "!plain:example.org": { "state": { "events": [created(None), named("plain")] } },
+            })
+        }
+
+        /// Answer a thumbnail request with `bytes`, on either endpoint.
+        ///
+        /// Both, because which one the SDK reaches for depends on the
+        /// versions the homeserver advertises, and this test is not about
+        /// that choice.
+        async fn mount_thumbnail(server: &MatrixMockServer, bytes: &'static [u8]) {
+            let png = || wiremock::ResponseTemplate::new(200).set_body_raw(bytes, "image/png");
+
+            server
+                .mock_media_thumbnail(Method::Crop, 96, 96, false)
+                .expect_any_access_token()
+                .respond_with(png())
+                .mount()
+                .await;
+            server
+                .mock_authed_media_thumbnail(Method::Crop, 96, 96, false)
+                .expect_any_access_token()
+                .respond_with(png())
+                .mount()
+                .await;
+        }
+
+        #[tokio::test]
+        async fn an_avatar_comes_back_as_a_data_url() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+            mount_thumbnail(&server, PNG).await;
+
+            let url = rooms::avatar(&client, "!general:example.org").await;
+
+            assert_eq!(
+                url.as_deref(),
+                Some("data:image/png;base64,iVBORw0KGgo="),
+                "an img src has to carry the type, and base64 is what a data url is"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_room_with_no_avatar_is_not_asked_about() {
+            // Four rooms in ten on the account this was built against have no
+            // avatar. Asking anyway is a request per room per launch for an
+            // answer already on disk. With no thumbnail endpoint mounted at
+            // all, a request here would come back as a 404 rather than a None.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(rooms::avatar(&client, "!plain:example.org").await, None);
+        }
+
+        #[tokio::test]
+        async fn something_that_is_not_a_room_id_is_refused_rather_than_fetched() {
+            // Home is a rail entry, not a room, and the interface asks about
+            // rail entries.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(rooms::avatar(&client, "home").await, None);
+        }
+
+        #[tokio::test]
+        async fn a_room_the_account_is_not_in_has_no_avatar() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(rooms::avatar(&client, "!gone:example.org").await, None);
+        }
+
+        #[tokio::test]
+        async fn bytes_that_are_not_an_image_are_refused_rather_than_shown_broken() {
+            // A homeserver that answers a thumbnail request with an error page
+            // would otherwise put a broken image icon in the rail. Initials
+            // are better.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+            mount_thumbnail(&server, b"<html>not an image</html>").await;
+
+            assert_eq!(rooms::avatar(&client, "!general:example.org").await, None);
+        }
+
+        #[tokio::test]
+        async fn a_thumbnail_the_homeserver_will_not_produce_is_not_an_error() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+            server
+                .mock_media_thumbnail(Method::Crop, 96, 96, false)
+                .expect_any_access_token()
+                .respond_with(wiremock::ResponseTemplate::new(502))
+                .mount()
+                .await;
+            server
+                .mock_authed_media_thumbnail(Method::Crop, 96, 96, false)
+                .expect_any_access_token()
+                .respond_with(wiremock::ResponseTemplate::new(502))
+                .mount()
+                .await;
+
+            assert_eq!(rooms::avatar(&client, "!general:example.org").await, None);
+        }
     }
 }

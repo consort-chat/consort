@@ -9,7 +9,7 @@
 //! inside a command is logic no test can reach. The delegates below are the
 //! only untested lines in this file, and there is nothing in them to break.
 
-use consort_matrix::{BackendKind, Credentials, Profile, auth, verification};
+use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
 use serde::Serialize;
 use tauri::State;
 
@@ -237,6 +237,24 @@ pub async fn verification_recovery_exists_for(state: &AppState) -> Result<bool, 
     Ok(verification::has_recovery_set_up(&client).await?)
 }
 
+/// One room's avatar, as a data URL.
+///
+/// A command rather than a field on the room list, because the list is re-sent
+/// in full whenever anything about it changes and image bytes would make that
+/// expensive enough to notice. The interface asks for the ones it is drawing.
+///
+/// `Ok(None)` covers a room with no avatar, a room that has gone, and an
+/// avatar the homeserver would not hand over. All three end in the same place:
+/// the interface draws initials. Only "not signed in" is an error, because it
+/// means the caller is asking at a moment when nothing can be answered.
+pub async fn room_avatar_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<Option<String>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::avatar(&client, &room_id).await)
+}
+
 /// Verify this session with the account's recovery key.
 pub async fn verification_recover_for(
     state: &AppState,
@@ -409,6 +427,19 @@ pub async fn verification_recovery_exists(
     state: State<'_, AppState>,
 ) -> Result<bool, CommandError> {
     verification_recovery_exists_for(&state).await
+}
+
+/// One room's avatar, as a data URL.
+///
+/// One room at a time, and cached by the SDK on disk, so the second ask does
+/// not reach the homeserver. See `room_avatar_for` for why the room list does
+/// not simply carry them.
+#[tauri::command]
+pub async fn room_avatar(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<Option<String>, CommandError> {
+    room_avatar_for(&state, room_id).await
 }
 
 /// Verify this session with the account's recovery key.
@@ -964,6 +995,22 @@ mod against_a_mock_homeserver {
         }
     }
 
+    /// Poll until the sink has seen a room list.
+    async fn wait_for_rooms(sink: &RecordingSink) {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if sink.last_rooms().is_some() {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out; saw {:?}",
+                sink.events()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     /// Poll until the sink has seen a verification state matching `want`.
     async fn wait_for_verification(
         sink: &RecordingSink,
@@ -1150,6 +1197,7 @@ mod against_a_mock_homeserver {
             .unwrap();
         wait_for_connection(&sink, |c| *c == Connection::Live).await;
         wait_for_verification(&sink, |v| *v == SessionVerification::Unverified).await;
+        wait_for_rooms(&sink).await;
         let before = sink.events().len();
 
         state.resend_state();
@@ -1157,7 +1205,7 @@ mod against_a_mock_homeserver {
         let resent = &sink.events()[before..];
         assert_eq!(
             resent.len(),
-            3,
+            4,
             "expected one state per channel, got {resent:?}"
         );
         assert_eq!(sink.last_connection(), Some(Connection::Live));
@@ -1166,6 +1214,10 @@ mod against_a_mock_homeserver {
             Some(SessionVerification::Unverified)
         );
         assert!(sink.last_key_backup().is_some());
+        assert!(
+            sink.last_rooms().is_some(),
+            "an account in no rooms still has a Home, and the shell needs to be told so"
+        );
     }
 
     #[tokio::test]
@@ -1183,6 +1235,77 @@ mod against_a_mock_homeserver {
             .unwrap();
 
         assert!(state.has_sync_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_in_starts_the_room_list_watcher() {
+        // Its own task rather than a hook on the sync loop, so that the shell
+        // has something to draw before the first sync response arrives.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, _sink) = state();
+
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert!(state.has_rooms_task().await);
+    }
+
+    #[tokio::test]
+    async fn signing_in_tells_the_frontend_what_rooms_there_are() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        let (_dir, state, sink) = state();
+
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        wait_for_rooms(&sink).await;
+        let rooms = sink.last_rooms().unwrap();
+        assert_eq!(
+            rooms.spaces.len(),
+            1,
+            "an account in no rooms still has a Home: {rooms:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_for_an_avatar_while_signed_out_says_so() {
+        let (_dir, state, _sink) = state();
+
+        let error = room_avatar_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_avatar_of_a_room_we_are_not_in_is_not_an_error() {
+        // Home is a rail entry rather than a room, and a room the account left
+        // between the snapshot and the request is gone. Both end in initials,
+        // which is the same place a room with no avatar ends.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            room_avatar_for(&state, "home".to_owned()).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            room_avatar_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]

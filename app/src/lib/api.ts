@@ -71,6 +71,61 @@ export type KeyBackup =
   | { state: "missing" }
   | { state: "unknown" };
 
+/**
+ * Which column a channel belongs in, mirrored from `consort_matrix::rooms`.
+ *
+ * Two values and no "unknown". A room that does not announce itself as a call
+ * is a text room, which is what the spec implies by having no room type at all
+ * for the ordinary case.
+ */
+export type ChannelKind = "text" | "voice";
+
+/** One room under a rail entry. */
+export interface Channel {
+  id: string;
+  /**
+   * Null only for a room a space lists that this account has never joined, so
+   * nothing local knows what it is called. Render a placeholder, never the id:
+   * `!AbCdEf...` is not a channel name.
+   */
+  name: string | null;
+  kind: ChannelKind;
+  /** An `mxc://` URI. Pass it nowhere; call `roomAvatar(id)` for the image. */
+  avatar: string | null;
+  /** False for a listed room this account is not in. Show it, unavailable. */
+  joined: boolean;
+}
+
+/** One entry in the left rail, and the channels underneath it. */
+export interface Space {
+  /** A room id, or the literal `"home"`. Every real room id starts with `!`. */
+  id: string;
+  name: string;
+  avatar: string | null;
+  /**
+   * Already sorted, following MSC1772: by `order` where a space set one, then
+   * by when the room was added, then by id. Do not re-sort. Filtering by
+   * `kind` to draw the two groups preserves it; sorting each group separately
+   * does not.
+   */
+  channels: Channel[];
+}
+
+/**
+ * Everything the shell draws, mirrored from `consort_matrix::rooms`.
+ *
+ * The whole tree arrives every time any part of it changes, so replace the
+ * previous value rather than merging into it. `spaces[0]` is always Home, the
+ * entry holding rooms that belong to no joined space, and it is present even
+ * when it is empty.
+ */
+export interface Rooms {
+  spaces: Space[];
+}
+
+/** The id of the Home rail entry. Cannot collide: room ids begin with `!`. */
+export const HOME_ID = "home";
+
 /** One of the seven pictures both devices compare. */
 export interface EmojiPair {
   symbol: string;
@@ -259,6 +314,38 @@ export function onKeyBackup(
   handler: (state: KeyBackup) => void,
 ): Promise<UnlistenFn> {
   return listen<KeyBackup>("key-backup", (event) => handler(event.payload));
+}
+
+/**
+ * Listen for changes to the rooms this account is in.
+ *
+ * Same contract as `onConnection`: the channel name matches `AppEvent::ROOMS`,
+ * and the returned function stops listening.
+ *
+ * The payload is the whole tree, not a change to it, so assign it rather than
+ * patching. That is deliberate on the Rust side: a room list that maintains
+ * its own copy from a stream of edits is a room list that drifts out of step
+ * with the account.
+ */
+export function onRooms(handler: (rooms: Rooms) => void): Promise<UnlistenFn> {
+  return listen<Rooms>("rooms", (event) => handler(event.payload));
+}
+
+/**
+ * One room's avatar, as a `data:` URL ready for an `img` src.
+ *
+ * Resolves to null for a room with no avatar, for Home, and for an image the
+ * homeserver would not hand over. All three mean the same thing to a caller:
+ * draw initials.
+ *
+ * Asked for one room at a time rather than carried in `Rooms`, because that
+ * value is re-sent in full whenever anything about it changes and image bytes
+ * would make that expensive. The Rust side caches on disk, so asking again
+ * after a restart does not reach the homeserver, but caching in memory here is
+ * still worth it to avoid an IPC round trip per render.
+ */
+export function roomAvatar(roomId: string): Promise<string | null> {
+  return invoke<string | null>("room_avatar", { roomId });
 }
 
 /**

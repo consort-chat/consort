@@ -10,11 +10,13 @@
 //! each of them, with voice channels marked as voice channels so that the next
 //! milestone has something to connect to.
 //!
-//! Three parts, and the split is about testability. [`dto`] is the wire
-//! format. [`facts`] pulls what is needed out of a `matrix_sdk::Room`, which
-//! is the only part that needs a live client. [`snapshot`] does the grouping,
-//! the ordering and the orphan detection over plain data, which is where the
-//! rules live and where all of them are tested.
+//! Three parts, and the split is about testability. `dto` is the wire format.
+//! `facts` pulls what is needed out of a `matrix_sdk::Room`, which is the only
+//! part that needs a live client. `snapshot` does the grouping, the ordering
+//! and the orphan detection over plain data, which is where the rules live and
+//! where all of them are tested. [`avatar`] stands apart from all three: it is
+//! the one thing here that fetches, and it is asked for a room at a time
+//! rather than carried in the snapshot.
 //!
 //! ## What this deliberately does not do
 //!
@@ -25,10 +27,12 @@
 //! coming separately, precisely so that it cannot end up on this path by
 //! accident.
 
+mod avatar;
 pub mod dto;
 mod facts;
 mod snapshot;
 
+pub use avatar::avatar;
 pub use dto::{Channel, ChannelKind, HOME_ID, Rooms, Space};
 
 use matrix_sdk::Client;

@@ -21,6 +21,9 @@ tracing = { workspace = true }
 # out a `tokio::sync::broadcast::Receiver`, so naming its error type means
 # depending on the same tokio the SDK resolves.
 tokio = { workspace = true }
+# Room avatars cross the IPC boundary as data URLs, which is base64 by
+# definition. Already in the tree by way of the SDK.
+base64 = "0.22"
 sha2 = "0.10"
 # The platform credential store: Secret Service on Linux and the BSDs, the
 # Credential Manager on Windows, Keychain on macOS. The `v1` feature (the

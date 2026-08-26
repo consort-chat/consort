@@ -82,6 +82,7 @@ pub fn run() {
             commands::logout,
             commands::token_storage,
             commands::resend_state,
+            commands::room_avatar,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,
