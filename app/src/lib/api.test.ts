@@ -25,6 +25,8 @@ import {
   verificationConfirm,
   verificationMismatch,
   verificationOtherSessionsExist,
+  verificationRecover,
+  verificationRecoveryExists,
   verificationStartSas,
   verificationVerifyThisSession,
 } from "./api";
@@ -294,6 +296,23 @@ describe("event subscriptions", () => {
 
     await expect(verificationOtherSessionsExist()).resolves.toBe(true);
     expect(invoke).toHaveBeenCalledWith("verification_other_sessions_exist");
+  });
+
+  it("returns whether the account has a recovery key to ask for", async () => {
+    invoke.mockReset().mockResolvedValue(false);
+
+    await expect(verificationRecoveryExists()).resolves.toBe(false);
+    expect(invoke).toHaveBeenCalledWith("verification_recovery_exists");
+  });
+
+  it("passes the recovery key under the name the Rust command expects", async () => {
+    invoke.mockReset().mockResolvedValue(undefined);
+
+    await verificationRecover("EsTj 3yST y93F SLpB");
+
+    expect(invoke).toHaveBeenCalledWith("verification_recover", {
+      recoveryKey: "EsTj 3yST y93F SLpB",
+    });
   });
 
   it("asks to be caught up with no arguments", async () => {

@@ -9,6 +9,9 @@ rust-version.workspace = true
 
 [dependencies]
 matrix-sdk = { workspace = true }
+# Only for one error type matrix-sdk does not re-export. See the workspace
+# manifest for why naming it directly is safe.
+matrix-sdk-base = { workspace = true }
 futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

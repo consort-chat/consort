@@ -231,6 +231,21 @@ pub async fn verification_other_sessions_exist_for(state: &AppState) -> Result<b
     Ok(verification::has_devices_to_verify_against(&client).await?)
 }
 
+/// Whether this account has a recovery key worth asking for.
+pub async fn verification_recovery_exists_for(state: &AppState) -> Result<bool, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::has_recovery_set_up(&client).await?)
+}
+
+/// Verify this session with the account's recovery key.
+pub async fn verification_recover_for(
+    state: &AppState,
+    recovery_key: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(verification::recover(&client, &recovery_key).await?)
+}
+
 /// Call the verification off.
 pub async fn verification_cancel_for(
     state: &AppState,
@@ -383,6 +398,34 @@ pub async fn verification_other_sessions_exist(
     verification_other_sessions_exist_for(&state).await
 }
 
+/// Whether this account has a recovery key worth asking for.
+///
+/// Asked for the same reason as the one above, and it decides a bigger part of
+/// the screen: an account with no secret storage has no key anybody could have
+/// kept, and an input box for one sends somebody hunting through a password
+/// manager for something that was never created.
+#[tauri::command]
+pub async fn verification_recovery_exists(
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    verification_recovery_exists_for(&state).await
+}
+
+/// Verify this session with the account's recovery key.
+///
+/// The one command in this file that takes a secret. It is not logged, not
+/// stored, and not echoed back: it goes to the SDK, which uses it to open
+/// secret storage and then drops it. Rejections are the interesting part, and
+/// there are four different ones, because "that did not work" is a bad answer
+/// to the likeliest mistake in the whole feature.
+#[tauri::command]
+pub async fn verification_recover(
+    state: State<'_, AppState>,
+    recovery_key: String,
+) -> Result<(), CommandError> {
+    verification_recover_for(&state, recovery_key).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +514,52 @@ mod tests {
             "{}",
             error.message()
         );
+    }
+
+    #[tokio::test]
+    async fn asking_whether_there_is_a_recovery_key_needs_a_signed_in_session() {
+        let (_dir, state, _) = state();
+
+        let error = verification_recovery_exists_for(&state)
+            .await
+            .expect_err("asked about the recovery of nobody");
+
+        assert!(
+            error.message().contains("No user is signed in"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn offering_a_recovery_key_to_nobody_is_an_error_rather_than_a_panic() {
+        let (_dir, state, _) = state();
+
+        let error = verification_recover_for(&state, "a key".to_owned())
+            .await
+            .expect_err("recovered nobody");
+
+        assert!(
+            error.message().contains("No user is signed in"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_recovery_key_never_reaches_the_interface_as_itself() {
+        // The one command that takes a secret. Whatever it says back, the key
+        // must not be in it: the message is rendered on screen and the detail
+        // goes to a console somebody may be screen-sharing.
+        let (_dir, state, _) = state();
+        let key = "EsTj 3yST y93F SLpB jJsz eAXc 2XzA ygD3 w69H fGaN TKBj jXEd";
+
+        let error = verification_recover_for(&state, key.to_owned())
+            .await
+            .expect_err("recovered nobody");
+
+        assert!(!error.message().contains("EsTj"), "{}", error.message());
+        assert!(!error.detail().contains("EsTj"), "{}", error.detail());
     }
 
     #[tokio::test]
@@ -1016,6 +1105,35 @@ mod against_a_mock_homeserver {
             .unwrap();
 
         assert!(!verification_other_sessions_exist_for(&state).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_signed_in_session_can_ask_whether_there_is_a_recovery_key() {
+        // The mocked account has no `m.secret_storage.default_key`, which is
+        // what an account nobody has set recovery up on looks like. Paired
+        // with the test above it is the dead end the banner has to name: no
+        // other session, and no key either.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        server.mock_sync().ok(|_| {}).mount().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(
+                "/_matrix/client/v3/user/@bob:example.org/account_data/m.secret_storage.default_key",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "errcode": "M_NOT_FOUND",
+                    "error": "Account data not found",
+                })),
+            )
+            .mount(server.server())
+            .await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert!(!verification_recovery_exists_for(&state).await.unwrap());
     }
 
     #[tokio::test]

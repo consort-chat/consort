@@ -87,6 +87,49 @@ pub enum Error {
     /// there is nothing to ask right now.
     #[error("this account has no cross-signing identity to verify against")]
     NoCrossSigningIdentity,
+
+    /// What was typed into the recovery key box is not a recovery key at all.
+    ///
+    /// Not base58, or the wrong length, or the parity byte does not match. The
+    /// distinction from `WrongRecoveryKey` is the whole point: this one means
+    /// look at what you pasted, that one means look at which account you are
+    /// on.
+    #[error("that is not a recovery key")]
+    MalformedRecoveryKey,
+
+    /// A well-formed recovery key, or a passphrase, that this account's secret
+    /// storage does not open.
+    #[error("that recovery key does not open this account's secret storage")]
+    WrongRecoveryKey,
+
+    /// A recovery key was offered and the account has no secret storage to
+    /// open with it.
+    ///
+    /// The interface asks before drawing the box, so reaching this means the
+    /// account changed underneath somebody: recovery was reset or turned off
+    /// between the question and the answer.
+    #[error("this account has no recovery set up")]
+    NoRecoverySetUp,
+
+    /// The key opened secret storage, and what came out did not include this
+    /// account's cross-signing keys.
+    ///
+    /// Secret storage is a bag of secrets rather than a fixed set, and an
+    /// account can have one holding only the megolm backup key. Importing that
+    /// leaves the session exactly as unverified as it was, which without this
+    /// looks to the person who just typed 48 correct characters like nothing
+    /// happened at all.
+    #[error("this account's recovery does not hold its cross-signing keys")]
+    RecoveryWithoutIdentity,
+
+    /// The account's secret storage is described in a way this client cannot
+    /// use: an algorithm it does not implement, or a key description whose own
+    /// fields are the wrong size.
+    ///
+    /// Nothing about the input. Carried as text because the only useful thing
+    /// left to do with it is put it in a log.
+    #[error("this account's recovery cannot be used: {0}")]
+    UnsupportedRecovery(String),
 }
 
 impl Error {
@@ -133,6 +176,29 @@ impl Error {
             }
             Self::NoCrossSigningIdentity => {
                 "This account has no verification keys set up yet, so there is nothing to compare against."
+                    .to_owned()
+            }
+            Self::MalformedRecoveryKey => {
+                "That does not look like a recovery key. It is 48 characters, usually shown in \
+                 groups of four."
+                    .to_owned()
+            }
+            Self::WrongRecoveryKey => {
+                "That is not this account's recovery key. Check you are signing in to the right \
+                 account."
+                    .to_owned()
+            }
+            Self::NoRecoverySetUp => {
+                "This account has no recovery key set up, so there is nothing to enter.".to_owned()
+            }
+            Self::RecoveryWithoutIdentity => {
+                "That key worked, but this account's verification keys are not stored with it, so \
+                 this session cannot verify itself that way."
+                    .to_owned()
+            }
+            Self::UnsupportedRecovery(_) => {
+                "This account's recovery was set up in a way Consort cannot use. Verify from \
+                 another session instead."
                     .to_owned()
             }
         }
@@ -259,6 +325,12 @@ mod tests {
             Error::NoSuchFlow {
                 flow_id: "the-only-flow".to_owned(),
             },
+            Error::NoCrossSigningIdentity,
+            Error::MalformedRecoveryKey,
+            Error::WrongRecoveryKey,
+            Error::NoRecoverySetUp,
+            Error::RecoveryWithoutIdentity,
+            Error::UnsupportedRecovery("unsupported algorithm m.made.up".to_owned()),
         ]
     }
 

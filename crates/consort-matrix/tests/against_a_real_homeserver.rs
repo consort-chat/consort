@@ -923,3 +923,139 @@ mod initiating {
         );
     }
 }
+
+/// The recovery-key route, which needs a homeserver for a different reason
+/// from the emoji one.
+///
+/// Not olm this time. A recovery key is only worth anything once real
+/// cross-signing keys have been encrypted to it and uploaded as account data,
+/// and the only thing that produces that is a real client talking to a real
+/// server. A mock can answer everything up to the moment the key is used and
+/// nothing after it, which is exactly the half these cover.
+mod recovering {
+    use super::*;
+    use matrix_sdk_base::crypto::secret_storage::SecretStorageKey;
+
+    /// One account with recovery turned on, and a second session that has
+    /// never been verified.
+    ///
+    /// The order is forced. The first login to an account is the one that
+    /// bootstraps cross-signing and keeps the private keys, and those keys are
+    /// what `enable` puts into secret storage. Enable it from the second
+    /// device and there would be nothing to put there.
+    async fn an_account_with_recovery(prefix: &str) -> (Device, Device, String) {
+        let account = a_brand_new_account(prefix).await;
+        let first = Device::new(&account).await;
+
+        let key = first
+            .client
+            .encryption()
+            .recovery()
+            .enable()
+            .await
+            .expect("could not set recovery up on the test account");
+
+        let fresh = Device::new(&account).await;
+        (first, fresh, key)
+    }
+
+    /// Wait for the watcher to report that this session is verified.
+    async fn wait_for_verified(states: &Arc<Mutex<Vec<SessionVerification>>>) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if states
+                .lock()
+                .unwrap()
+                .contains(&SessionVerification::Verified)
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the session never reported itself verified; saw {:?}",
+                states.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    fn watch(
+        device: &Device,
+    ) -> (
+        Arc<Mutex<Vec<SessionVerification>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let states = Arc::new(Mutex::new(Vec::new()));
+        let watcher = verification::watch(device.client.clone(), {
+            let states = states.clone();
+            move |state: SessionVerification| states.lock().unwrap().push(state)
+        });
+        (states, watcher)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_recovery_key_verifies_a_session_with_nobody_to_ask() {
+        // The milestone this phase exists for. Every other route needs a
+        // second session online and a person looking at both screens; this one
+        // needs a string, which is what somebody installing Consort on their
+        // only machine actually has.
+        let (_first, fresh, key) = an_account_with_recovery("recovering").await;
+        let (states, watcher) = watch(&fresh);
+
+        // The question the banner asks before drawing the box.
+        assert!(
+            verification::has_recovery_set_up(&fresh.client)
+                .await
+                .unwrap()
+        );
+
+        verification::recover(&fresh.client, &key).await.unwrap();
+
+        wait_for_verified(&states).await;
+        watcher.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_key_typed_wrongly_costs_nothing_but_the_attempt() {
+        // The likeliest failure in the whole milestone, and the one where
+        // getting the recovery wrong would be worst: a session left broken by
+        // a typo is a session somebody signs out of and back into.
+        let (_first, fresh, key) = an_account_with_recovery("mistyped").await;
+        let (states, watcher) = watch(&fresh);
+
+        let wrong = SecretStorageKey::new().to_base58();
+        let error = verification::recover(&fresh.client, &wrong)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, consort_matrix::Error::WrongRecoveryKey),
+            "{error}"
+        );
+        assert!(!error.invalidates_session(), "{error}");
+
+        // And the right one still works afterwards, which is the half that
+        // says the failed attempt left nothing behind.
+        verification::recover(&fresh.client, &key).await.unwrap();
+
+        wait_for_verified(&states).await;
+        watcher.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn an_account_with_no_recovery_has_no_key_to_ask_for() {
+        // Against a real homeserver because the answer comes from account data
+        // that nothing wrote, and "nothing wrote it" is a state only a real
+        // account arrives at on its own.
+        let account = a_brand_new_account("no-recovery").await;
+        let only = Device::new(&account).await;
+
+        assert!(
+            !verification::has_recovery_set_up(&only.client)
+                .await
+                .unwrap()
+        );
+    }
+}

@@ -10,6 +10,8 @@ const onVerificationFlow = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
+const verificationRecoveryExists = vi.hoisted(() => vi.fn());
+const verificationRecover = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   logout,
@@ -20,6 +22,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   resendState,
   verificationVerifyThisSession,
   verificationOtherSessionsExist,
+  verificationRecoveryExists,
+  verificationRecover,
 }));
 
 import { SignedIn } from "./SignedIn";
@@ -100,6 +104,10 @@ function resetApiMocks() {
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
   // The common case: another session is signed in, so the button is offered.
   verificationOtherSessionsExist.mockReset().mockResolvedValue(true);
+  // And the other common case: nobody has set a recovery key up, so the emoji
+  // route is the only one on offer. Tests about recovery say otherwise.
+  verificationRecoveryExists.mockReset().mockResolvedValue(false);
+  verificationRecover.mockReset().mockResolvedValue(undefined);
 }
 
 const profile: Profile = {
@@ -586,18 +594,23 @@ describe("SignedIn starting a verification", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("says what to do instead when nothing else is signed in", async () => {
-    // The honest answer. One session on an account has nobody to compare
-    // emoji with, and a button that can only time out is worse than a
-    // sentence saying so.
+  it("says what to do instead when there is no route at all", async () => {
+    // The honest answer, and it takes both halves to be true. One session on
+    // an account has nobody to compare emoji with, and an account with no
+    // secret storage has no key to type instead. A button that can only time
+    // out is worse than a sentence saying so.
     verificationOtherSessionsExist.mockResolvedValue(false);
+    verificationRecoveryExists.mockResolvedValue(false);
 
     await unverified();
 
-    expect(await screen.findByText(/no other session/i)).toBeVisible();
+    expect(
+      await screen.findByText(/no other session is signed in and this account/i),
+    ).toBeVisible();
     expect(
       screen.queryByRole("button", { name: /verify this session/i }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/recovery key/i)).not.toBeInTheDocument();
   });
 
   it("still offers the button when it could not find out", async () => {
@@ -658,6 +671,188 @@ describe("SignedIn starting a verification", () => {
     expect(
       await screen.findByRole("button", { name: /verify this session/i }),
     ).toBeVisible();
+  });
+});
+
+describe("SignedIn verifying with a recovery key", () => {
+  beforeEach(() => {
+    resetApiMocks();
+    verificationRecoveryExists.mockResolvedValue(true);
+  });
+
+  /** Report the session unverified and let both lookups settle. */
+  async function unverified() {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onVerification).toHaveBeenCalled());
+    await act(async () => {
+      verificationHandler()({ state: "unverified" });
+    });
+  }
+
+  /** The key box, once the banner has decided to offer one. */
+  function keyBox(): HTMLElement {
+    return screen.getByLabelText(/recovery key/i);
+  }
+
+  it("offers the box when the account has a key, even with nobody to ask", async () => {
+    // The whole point of the phase. Before it, this was the dead end.
+    verificationOtherSessionsExist.mockResolvedValue(false);
+
+    await unverified();
+
+    expect(await screen.findByLabelText("Recovery key")).toBeVisible();
+    expect(
+      screen.queryByText(/no other session is signed in and this account/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers both routes when both are open", async () => {
+    await unverified();
+
+    expect(
+      await screen.findByRole("button", { name: /verify this session/i }),
+    ).toBeVisible();
+    expect(screen.getByLabelText(/or use your recovery key/i)).toBeVisible();
+  });
+
+  it("offers no box when the account has no recovery set up", async () => {
+    // An input for a key that was never created sends somebody hunting
+    // through a password manager for something that does not exist.
+    verificationRecoveryExists.mockResolvedValue(false);
+
+    await unverified();
+
+    await screen.findByRole("button", { name: /verify this session/i });
+    expect(screen.queryByLabelText(/recovery key/i)).not.toBeInTheDocument();
+  });
+
+  it("offers the box when it could not find out", async () => {
+    // Fail open, same as counting the other sessions. Being wrong this way
+    // costs one attempt and a clear answer; being wrong the other way leaves
+    // a lone session with no route at all.
+    verificationRecoveryExists.mockRejectedValue(
+      new Error("the homeserver said no"),
+    );
+
+    await unverified();
+
+    expect(await screen.findByLabelText(/recovery key/i)).toBeVisible();
+  });
+
+  it("will not submit an empty box", async () => {
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    expect(screen.getByRole("button", { name: "Verify" })).toBeDisabled();
+  });
+
+  it("sends the key when the form is submitted", async () => {
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "EsTj 3yST y93F SLpB");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    expect(verificationRecover).toHaveBeenCalledWith("EsTj 3yST y93F SLpB");
+  });
+
+  it("clears the key once it has been used", async () => {
+    // It is a secret, and a verified session has no further use for the thing
+    // that verified it. Leaving it in the box leaves it on screen.
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "EsTj 3yST y93F SLpB");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await waitFor(() => expect(keyBox()).toHaveValue(""));
+  });
+
+  it("says which of the four things went wrong", async () => {
+    // The reason the Rust side distinguishes them at all. "That did not work"
+    // is a bad answer to the likeliest mistake in the milestone.
+    verificationRecover.mockRejectedValue({
+      message: "That is not this account's recovery key.",
+      detail: "that recovery key does not open this account's secret storage",
+    });
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "a well formed wrong key");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    expect(
+      await screen.findByText("That is not this account's recovery key."),
+    ).toBeVisible();
+  });
+
+  it("keeps a rejected key in the box to be corrected", async () => {
+    // Clearing it on failure means retyping 48 characters to fix one of them.
+    verificationRecover.mockRejectedValue({
+      message: "That is not this account's recovery key.",
+      detail: "wrong key",
+    });
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "nearly right");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    await screen.findByText("That is not this account's recovery key.");
+    expect(keyBox()).toHaveValue("nearly right");
+  });
+
+  it("never logs the key itself", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    verificationRecover.mockRejectedValue({
+      message: "That is not this account's recovery key.",
+      detail: "wrong key",
+    });
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "EsTj3ySTy93FSLpB");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+    await screen.findByText("That is not this account's recovery key.");
+
+    for (const call of logged.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("EsTj3ySTy93FSLpB");
+    }
+    logged.mockRestore();
+  });
+
+  it("disables the box while the key is being checked", async () => {
+    let finish = () => {};
+    verificationRecover.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    await userEvent.type(keyBox(), "EsTj 3yST y93F SLpB");
+    await userEvent.click(screen.getByRole("button", { name: "Verify" }));
+
+    expect(keyBox()).toBeDisabled();
+    expect(screen.getByRole("button", { name: /checking/i })).toBeDisabled();
+
+    await act(async () => {
+      finish();
+    });
+  });
+
+  it("stops offering anything once the session is verified", async () => {
+    // The form reports nothing upwards on success. What removes it is the
+    // verification watcher noticing the session changed, which is the same
+    // event the emoji route ends on.
+    await unverified();
+    await screen.findByLabelText(/recovery key/i);
+
+    act(() => verificationHandler()({ state: "verified" }));
+
+    await screen.findByText("This session is verified.");
+    expect(screen.queryByLabelText(/recovery key/i)).not.toBeInTheDocument();
   });
 });
 

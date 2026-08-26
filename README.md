@@ -29,20 +29,21 @@ at whatever homeserver you already run.
   not know.
 - Emoji verification, in both directions. Press "Verify this session" here, or
   start one from Element or another Consort on the same account. Either way you
-  compare the seven pictures and this session becomes verified: encrypted
-  history opens and MSC4153 calls will accept it. Declining, a mismatch and an
-  expiry are each reported as themselves rather than as one generic failure.
-  With no other session signed in, the banner says so rather than offering a
-  button that could only time out.
+  compare the seven pictures and this session becomes verified, which is what
+  MSC4153 calls will require of it. Declining, a mismatch and an expiry are
+  each reported as themselves rather than as one generic failure. With no other
+  session signed in the button is not offered, because it could only time out.
+- Verifying with a recovery key, for when the other device is in the next room
+  or does not exist. A passphrase works too if the account has one. The four
+  ways it can fail get four different answers, because "that did not work" is a
+  bad reply to a key that is fine and simply belongs to another account.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Verifying with a recovery key, and restoring key backup, so history that
-predates this session still will not decrypt. Verifying needs another session
-signed in to compare with; on an account with only this one there is nothing to
-do until the recovery key lands. No room list, no messages, no voice. See
-[the roadmap](#roadmap).
+Restoring key backup, so history that predates this session still will not
+decrypt even once the session is verified. No room list, no messages, no voice.
+See [the roadmap](#roadmap).
 
 ---
 
@@ -301,7 +302,8 @@ whether a model wrote them or you did.
 |---|---|
 | Password login and session persistence | working |
 | Session verification by emoji, in either direction | working |
-| Recovery key and key backup | in progress, [planned here](docs/PLAN-verification.md) |
+| Verifying with a recovery key | working |
+| Key backup, so history older than this session decrypts | in progress, [planned here](docs/PLAN-verification.md) |
 | Room list and voice channel discovery | planned |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
@@ -339,11 +341,10 @@ session you cannot verify is an account rather than a usable client.
   state and is not done yet, because the removal has to happen after the client
   is dropped and that is shutdown-ordering work.
 - **Password login only.** No SSO or OIDC yet.
-- **A session can only be verified against another session.** Emoji
-  verification works in both directions, but it needs a second client signed in
-  to the same account. On an account with only this one, the route is a
-  recovery key, which is the [next step of that
-  milestone](docs/PLAN-verification.md).
+- **A verified session still cannot read history that predates it.** Both
+  routes to verification work, and neither restores the server-side key backup
+  yet, so messages sent before you signed in here stay unreadable. That is the
+  [next step of that milestone](docs/PLAN-verification.md).
 
 ## Licence
 

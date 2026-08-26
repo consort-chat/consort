@@ -27,6 +27,16 @@ matrix-sdk = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "3
     "automatic-room-key-forwarding",
 ] }
 
+# The same rev, resolved from the same git source, so this is the crate
+# matrix-sdk itself already links rather than a second copy. Directly named for
+# one reason: `matrix_sdk_base::crypto::secret_storage::DecodeError` is the type
+# that says whether a recovery key was mistyped or simply not this account's,
+# and matrix-sdk exposes the error carrying it without re-exporting the type.
+# If the rev above moves, this one moves with it.
+matrix-sdk-base = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", default-features = false, features = [
+    "e2e-encryption",
+] }
+
 # Only for `StreamExt::next` on the `impl Stream` that matrix-sdk hands back
 # from `changes()`. Already in the graph by way of matrix-sdk, and no features
 # are requested here so cargo unifies the two into one compiled crate rather

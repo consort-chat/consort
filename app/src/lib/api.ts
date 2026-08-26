@@ -300,6 +300,34 @@ export function verificationOtherSessionsExist(): Promise<boolean> {
 }
 
 /**
+ * Whether this account has a recovery key worth asking for.
+ *
+ * The other half of the same question, and it decides more of the screen. An
+ * account with no secret storage has no key anybody could have written down,
+ * and an input box for one sends somebody through a password manager looking
+ * for something that was never created.
+ */
+export function verificationRecoveryExists(): Promise<boolean> {
+  return invoke<boolean>("verification_recovery_exists");
+}
+
+/**
+ * Verify this session with the account's recovery key.
+ *
+ * The one call here that carries a secret. Do not log it, do not put it in a
+ * URL, and do not keep it after this resolves: the Rust side hands it to the
+ * SDK, which opens secret storage with it and drops it.
+ *
+ * Rejecting is the ordinary case and the rejection is worth rendering. Four
+ * different things go wrong here and they want four different answers, from
+ * "that is not a recovery key" to "that key is fine and it is not this
+ * account's". `asCommandError(...).message` already carries the right one.
+ */
+export function verificationRecover(recoveryKey: string): Promise<void> {
+  return invoke<void>("verification_recover", { recoveryKey });
+}
+
+/**
  * Ask the Rust side to publish the current state of every channel again.
  *
  * Call it once, after the listeners are attached. Both channels above carry

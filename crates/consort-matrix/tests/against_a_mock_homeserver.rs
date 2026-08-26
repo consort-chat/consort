@@ -1235,3 +1235,257 @@ mod verifying_this_session {
         assert!(!error.invalidates_session(), "{error}");
     }
 }
+
+/// The recovery-key route, as far as a mock can take it.
+///
+/// Further than expected. Everything up to the moment the key opens the store
+/// is account data over HTTP, so a mock can answer all of it, and the two
+/// failures worth telling apart are both decided before any secret is
+/// decrypted. What it cannot do is the success: a real recovery holds real
+/// cross-signing keys encrypted to a real key, and that lives in the live
+/// suite.
+mod recovery {
+    use super::*;
+    use consort_matrix::verification;
+
+    /// The key description from the SDK's own example, and the key it opens.
+    ///
+    /// Borrowed rather than invented because it has a valid MAC, which is what
+    /// makes "the right key" and "a well-formed wrong key" two different
+    /// answers rather than both failing at the same check.
+    const KEY_ID: &str = "bmur2d9ypPUH1msSwCxQOJkuKRmJI55e";
+
+    fn key_description() -> serde_json::Value {
+        serde_json::json!({
+            "algorithm": "m.secret_storage.v1.aes-hmac-sha2",
+            "iv": "xv5b6/p3ExEw++wTyfSHEg==",
+            "mac": "ujBBbXahnTAMkmPUX2/0+VTfUh63pGyVRuBcDMgmJC8=",
+        })
+    }
+
+    /// Answer one global account data type with `response`.
+    ///
+    /// Hand-rolled rather than through `mock_get_default_secret_storage_key`,
+    /// which only offers the 200 and insists on the mock crate's own access
+    /// token. Half of these tests are about what happens when the answer is
+    /// not a 200.
+    async fn account_data(
+        server: &MatrixMockServer,
+        event_type: &str,
+        response: wiremock::ResponseTemplate,
+    ) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/_matrix/client/v3/user/{USER}/account_data/{event_type}"
+            )))
+            .respond_with(response)
+            .mount(server.server())
+            .await;
+    }
+
+    /// The 404 a homeserver gives for account data that was never set.
+    ///
+    /// The body matters. matrix-sdk reads `M_NOT_FOUND` and turns it into "no
+    /// such event"; a bare 404 with no Matrix error in it is a transport
+    /// failure and comes back as an error instead.
+    fn never_set() -> wiremock::ResponseTemplate {
+        wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "errcode": "M_NOT_FOUND",
+            "error": "Account data not found",
+        }))
+    }
+
+    fn found(body: serde_json::Value) -> wiremock::ResponseTemplate {
+        wiremock::ResponseTemplate::new(200).set_body_json(body)
+    }
+
+    /// An account with secret storage set up, ready for a key to be typed.
+    async fn with_recovery(server: &MatrixMockServer) {
+        account_data(
+            server,
+            "m.secret_storage.default_key",
+            found(serde_json::json!({ "key": KEY_ID })),
+        )
+        .await;
+        account_data(
+            server,
+            &format!("m.secret_storage.key.{KEY_ID}"),
+            found(key_description()),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_account_with_secret_storage_has_a_key_worth_asking_for() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        with_recovery(&server).await;
+
+        assert!(verification::has_recovery_set_up(&client).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_answer_the_sdk_already_has_is_not_asked_for_again() {
+        // Mounted before the login rather than after it, so the SDK's own
+        // startup task resolves the state and the cached answer is the one
+        // read. The other tests here go down the path where it is still
+        // `Unknown`, which is what a restored session looks like, and both
+        // have to give the same answer.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server, "syt_first").await;
+        with_recovery(&server).await;
+        let dir = tempfile::tempdir().unwrap();
+        let (session_store, _) = store(&dir);
+        let (client, _) = auth::login(&session_store, &credentials(&server))
+            .await
+            .unwrap();
+
+        assert!(verification::has_recovery_set_up(&client).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_store_with_no_verification_keys_in_it_says_so() {
+        // The silent failure this exists to stop. Secret storage is a bag of
+        // secrets rather than a fixed set, so a key can open one holding
+        // nothing but a backup key. Without the check the import succeeds,
+        // the session stays unverified, and somebody who typed 48 correct
+        // characters is shown nothing at all.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        with_recovery(&server).await;
+        for secret in [
+            "m.cross_signing.master",
+            "m.cross_signing.self_signing",
+            "m.cross_signing.user_signing",
+            "m.megolm_backup.v1",
+        ] {
+            account_data(&server, secret, never_set()).await;
+        }
+        // Mounted again here, and this is not redundant. The prebuilt one in
+        // `mount_login` insists on the mock crate's own access token, which
+        // this harness does not use, so it never matches. Nothing noticed
+        // until now because the only caller was a background task that
+        // swallows the failure; importing secrets is the first code path that
+        // reports it.
+        server
+            .mock_query_keys()
+            .expect_any_access_token()
+            .ok()
+            .mount()
+            .await;
+
+        let error = verification::recover(
+            &client,
+            "EsTj 3yST y93F SLpB jJsz eAXc 2XzA ygD3 w69H fGaN TKBj jXEd",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::RecoveryWithoutIdentity),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_account_without_secret_storage_has_nothing_to_type() {
+        // The screen this decides is a different one. Showing a box for a key
+        // that was never created sends somebody through a password manager
+        // looking for something that does not exist.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        account_data(&server, "m.secret_storage.default_key", never_set()).await;
+
+        assert!(!verification::has_recovery_set_up(&client).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_that_will_not_answer_says_so_rather_than_guessing() {
+        // Same reasoning as counting the account's sessions. Guessing "none"
+        // hides the only route a lone session has.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        account_data(
+            &server,
+            "m.secret_storage.default_key",
+            wiremock::ResponseTemplate::new(500),
+        )
+        .await;
+
+        assert!(verification::has_recovery_set_up(&client).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_empty_box_is_answered_without_asking_the_homeserver() {
+        // Nothing is mounted, so any request at all would fail the test with a
+        // transport error rather than the answer being asserted.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = verification::recover(&client, "   ").await.unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::MalformedRecoveryKey),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_key_is_named_as_such() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        with_recovery(&server).await;
+
+        let error = verification::recover(&client, "hunter2").await.unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::MalformedRecoveryKey),
+            "{error}"
+        );
+        assert!(!error.invalidates_session(), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_real_key_for_another_account_is_a_different_answer() {
+        // The distinction the whole error mapping exists for. This person has
+        // a recovery key; it is just not this one's. Telling them it is
+        // malformed sends them to check their typing, which is fine, and then
+        // to check it again, which is not.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        with_recovery(&server).await;
+        let another_account =
+            matrix_sdk_base::crypto::secret_storage::SecretStorageKey::new().to_base58();
+
+        let error = verification::recover(&client, &another_account)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::WrongRecoveryKey),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_offered_to_an_account_with_no_recovery_is_not_called_wrong() {
+        // The race the interface cannot close: recovery was there when the box
+        // was drawn and reset before the key was typed. "That key is wrong" is
+        // the one answer that is definitely untrue.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        account_data(&server, "m.secret_storage.default_key", never_set()).await;
+
+        let error = verification::recover(
+            &client,
+            "EsTj 3yST y93F SLpB jJsz eAXc 2XzA ygD3 w69H fGaN TKBj jXEd",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::NoRecoverySetUp),
+            "{error}"
+        );
+    }
+}

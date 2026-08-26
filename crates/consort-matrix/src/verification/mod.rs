@@ -9,20 +9,23 @@
 //! visible from anything the login returned, so it has to be watched for and
 //! said out loud.
 //!
-//! Two halves. [`watch`] reports whether the session is verified, which is a
+//! Three parts. [`watch`] reports whether the session is verified, which is a
 //! property of the account and is answered from the crypto store without
-//! asking anybody. [`flow`] is the doing: one emoji comparison from the moment
-//! a request appears to the moment both sides agree, or do not, whether this
-//! session asked or was asked.
+//! asking anybody. [`flow`] is one emoji comparison, from the moment a request
+//! appears to the moment both sides agree, or do not, whether this session
+//! asked or was asked. [`recovery`] is the other road to the same place, for
+//! when there is no second device to show the pictures on.
 
 pub mod dto;
 pub mod flow;
+pub mod recovery;
 
 pub use dto::{CancelReason, EmojiPair, Flow, FlowState};
 pub use flow::{
     Initiator, accept, cancel, confirm, has_devices_to_verify_against, mismatch, start_sas,
     supervise,
 };
+pub use recovery::{has_recovery_set_up, recover};
 
 use matrix_sdk::Client;
 use matrix_sdk::encryption::VerificationState;

@@ -1,6 +1,6 @@
 # Plan: end-to-end encryption verification
 
-Status: **Phases 0 to 3 done, Phase 4 next.** Every API named here was checked
+Status: **Phases 0 to 4 done, Phase 5 next.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create.
 
@@ -297,25 +297,65 @@ four new mock tests exist at all.
 Done: the flow works in the opposite direction and the emoji screen is the same
 code.
 
-### Phase 4: recovery key (next)
+### Phase 4: recovery key (done)
 
-The path that works when the phone is in another room.
+The path that works when the phone is in another room, or when there is no
+phone.
 
-Build:
+Built:
 
-- `encryption().recovery().recover(&key)`.
-- Real handling for a mistyped key. This is the most likely failure in the whole
-  milestone and a generic "verification failed" would be a bad answer to it.
-  Distinguish a malformed key from a well-formed key that does not decrypt.
-- Check `recovery().state()` first. `RecoveryState::Disabled` means the account
-  has no recovery set up and there is nothing to type, which is a different
-  screen from a wrong key.
+- `verification::recover`, over `encryption().recovery().recover(&key)`, with
+  four separate answers rather than one "that did not work".
+- `verification::has_recovery_set_up`, asked before the box is drawn, so an
+  account with no secret storage gets a sentence instead of an input that
+  cannot succeed.
+- `RecoveryKeyForm`, beside the emoji button when both routes are open and on
+  its own when it is the only one.
 
-Done when: a correct key verifies the session, a mistyped one says so and
-leaves the session usable, and an account with recovery disabled is told that
-rather than being shown an input that cannot work.
+Five things the plan did not have.
 
-### Phase 5: key backup
+**The type that tells the two failures apart is not re-exported.** Malformed
+against wrong is decided by `DecodeError`, which lives in matrix-sdk-crypto.
+`SecretStorageError::SecretStorageKey` carries it publicly and matrix-sdk does
+not re-export the type, so matching on the variants means naming the crate.
+`matrix-sdk-base` is now a direct dependency at the same git rev, which
+resolves to the crate matrix-sdk already links rather than a second copy. If
+the rev in the workspace manifest moves, that one moves with it.
+
+**A passphrase account has no malformed input.** `from_account_data` tries the
+passphrase first when the account has one, falls back to base58, and returns
+the *passphrase* error when both fail. So everything typed at such an account
+comes back as `Mac`, which is the "wrong key" answer, and that is correct:
+against a passphrase, any string is a candidate and none of them is
+misformatted.
+
+**`recover` succeeding does not mean the session is verified.** Secret storage
+is a bag of secrets rather than a fixed set. One holding only a megolm backup
+key imports cleanly, signs nothing, and returns `Ok`. Somebody who typed 48
+correct characters would see no error and no change. `recover` therefore checks
+`cross_signing_status().has_self_signing` afterwards and reports
+`RecoveryWithoutIdentity` when the keys were not there.
+
+**`recovery().state()` is `Unknown` on a restored session.** The SDK fills it
+in from the background task that login waits for and restore does not, so a
+cached "we have not looked yet" is what somebody gets a second after launch.
+`has_recovery_set_up` falls through to `secret_storage().is_enabled()` in that
+case, which is the same question the SDK is about to ask.
+
+**The mock server reached further than expected.** Everything up to the moment
+the key is used is account data over HTTP, and both interesting failures are
+decided before any secret is decrypted, so nine of the twelve new tests need no
+homeserver. Only the success path does. That also turned up a wart in the
+harness: `mount_login`'s prebuilt `mock_query_keys` insists on the mock crate's
+own access token, which this suite never uses, so it had never matched.
+Invisible until `import_secrets` became the first caller that reports the
+failure instead of swallowing it.
+
+Done: a correct key verifies the session against a real Synapse, a wrong one
+says which kind of wrong and leaves the session usable, and an account with no
+recovery is told so rather than shown a box.
+
+### Phase 5: key backup (next)
 
 Build:
 

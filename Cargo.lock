@@ -838,6 +838,7 @@ dependencies = [
  "futures-util",
  "keyring",
  "matrix-sdk",
+ "matrix-sdk-base",
  "rustls",
  "serde",
  "serde_json",
