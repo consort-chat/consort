@@ -1,6 +1,6 @@
 # Plan: the room list and the app shell
 
-Status: **Phases 1 to 4 done, Phase 5 next.** Every API named here was checked
+Status: **all five phases done.** Every API named here was checked
 against the pinned SDK rev rather than recalled, and the file and function
 names are the ones to create. The numbers under "What the account actually
 looks like" were read out of the local state store of a signed-in Consort, not
@@ -292,15 +292,37 @@ Not done: nobody has looked at it. There is no session on this machine and no
 way to drive the login form from here, so the shell has still not been on a
 screen.
 
-### Phase 5: the hierarchy fetch (next)
+### Phase 5: the hierarchy fetch (done)
 
-The one network call. Per space, on the child set changing, cached. Fills in
-the names of children that are listed but not joined.
+The one network call, in `rooms/hierarchy.rs`. Per space, on the set of
+unjoined children changing, cached in memory for the life of the session.
 
-Kept last on purpose: everything before it works without it, and it is the only
-part that can fail in a way the user sees. If it slips, Phase 4 ships with two
-channels missing on this account rather than with two channels named after
-their room IDs.
+Three things came out differently from the sketch above, all for the better.
+
+It fills in the avatar and the room type as well as the name, because all
+three are in the same response and asking for one and throwing away the others
+would be perverse. That means a voice channel nobody has joined is drawn as a
+voice channel.
+
+The request runs *after* the snapshot has already gone out, not before, so a
+slow homeserver delays two channel names rather than the whole room list. The
+answer is folded into the next report.
+
+On failure the entries are not omitted, they stay as "Unknown channel". The
+sketch said omit, which was wrong: hiding two of twenty channels is the exact
+disagreement with Element this exists to avoid, and a placeholder says
+truthfully that something is there and we do not know what.
+
+A failure still counts as having asked. Retrying on every sync of a busy
+account is the poll the whole arrangement exists to avoid, so the names wait
+for the child list to change or for a restart.
+
+Done: a mock homeserver covers the name arriving, the unnamed report going out
+first, an unjoined call room still being a voice channel, one request rather
+than one per sync, a space with nothing unjoined never being asked about at
+all, and a homeserver that answers 502 being asked once and not again. A real
+Synapse covers the whole thing with two real accounts, because a room this
+account has not joined is exactly what somebody else has to have made.
 
 ## Testing
 

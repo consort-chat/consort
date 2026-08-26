@@ -18,18 +18,23 @@
 //! the one thing here that fetches, and it is asked for a room at a time
 //! rather than carried in the snapshot.
 //!
-//! ## What this deliberately does not do
+//! ## The one request
 //!
-//! It never touches the network. Everything it reads is already in the local
-//! state store, which matters because [`watch`] runs on every sync that
-//! changed anything, forever. The one thing that genuinely needs a request,
-//! working out what an unjoined child room is called, is left out and is
-//! coming separately, precisely so that it cannot end up on this path by
-//! accident.
+//! Almost none of this touches the network. Everything the snapshot reads is
+//! already in the local state store, which matters because [`watch`] runs on
+//! every sync that changed anything, forever, and a request in there would
+//! turn an idle client into a client that polls.
+//!
+//! [`hierarchy`] is the exception, and it is kept at arm's length for exactly
+//! that reason. A room a space lists and this account has never joined has no
+//! name anywhere locally, so the space has to be asked. That happens once per
+//! space per distinct set of unjoined children, after the snapshot has already
+//! gone out, and the answer is folded into the next one.
 
 mod avatar;
 pub mod dto;
 mod facts;
+mod hierarchy;
 mod snapshot;
 
 pub use avatar::avatar;
@@ -42,12 +47,17 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
 use crate::verification::Changes;
+use hierarchy::Directory;
 
-/// The room list as it stands right now.
+/// The room list as it stands right now, from the local store alone.
 ///
-/// Reads the local store only, so it is cheap enough to call on every sync and
-/// safe to call while offline: it describes what the account was last known to
-/// be in, which is the right answer when there is nothing newer.
+/// Cheap enough to call on every sync, and safe to call while offline: it
+/// describes what the account was last known to be in, which is the right
+/// answer when there is nothing newer.
+///
+/// Children the account has never joined come back unnamed, because nothing
+/// local knows what they are called. [`watch`] fills those in; a caller using
+/// this directly gets the honest absence.
 pub async fn snapshot(client: &Client) -> Rooms {
     let mut facts = Vec::new();
 
@@ -85,10 +95,20 @@ where
         // landing in between is still reported rather than missed.
         let mut updates = client.subscribe_to_all_room_updates();
         let mut changes = Changes::new();
+        let mut directory = Directory::default();
 
         loop {
-            if let Some(rooms) = changed(&client, &mut changes).await {
-                on_change(rooms);
+            let mut rooms = snapshot(&client).await;
+            directory.apply(&mut rooms);
+            report(rooms.clone(), &mut changes, &on_change);
+
+            // The one request in this module, and only when a space has an
+            // unjoined child nobody has asked about yet. It runs after the
+            // snapshot has gone out rather than before, so a slow homeserver
+            // delays two channel names instead of the whole room list.
+            if directory.refresh(&client, &rooms).await {
+                directory.apply(&mut rooms);
+                report(rooms, &mut changes, &on_change);
             }
 
             if !touched_a_room(&mut updates).await {
@@ -103,9 +123,14 @@ where
     })
 }
 
-/// Take a snapshot, and hand it back only if it says anything new.
-async fn changed(client: &Client, changes: &mut Changes<Rooms>) -> Option<Rooms> {
-    let rooms = changes.accept(snapshot(client).await)?;
+/// Hand a tree over, if it says anything new.
+fn report<F>(rooms: Rooms, changes: &mut Changes<Rooms>, on_change: &F)
+where
+    F: Fn(Rooms),
+{
+    let Some(rooms) = changes.accept(rooms) else {
+        return;
+    };
 
     tracing::info!(
         spaces = rooms.spaces.len().saturating_sub(1),
@@ -117,7 +142,7 @@ async fn changed(client: &Client, changes: &mut Changes<Rooms>) -> Option<Rooms>
         "the room list changed"
     );
 
-    Some(rooms)
+    on_change(rooms);
 }
 
 /// Wait until a sync arrives that touched at least one room.

@@ -1313,6 +1313,82 @@ mod room_list {
 
     #[tokio::test]
     #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_child_this_account_never_joined_is_named_by_the_homeserver() {
+        // The one request the room list makes, against a real one. It needs
+        // two accounts, because a room this account has not joined is exactly
+        // what somebody else has to have made, and it needs that room public,
+        // because `/hierarchy` only returns children the asker could see.
+        let stranger_dir = tempfile::tempdir().unwrap();
+        let stranger_account = a_brand_new_account("room-list-stranger").await;
+        let (stranger, _) = consort_matrix::auth::login(&store(&stranger_dir), &stranger_account)
+            .await
+            .unwrap();
+
+        let mut public = Request::new();
+        public.name = Some("announcements".to_owned());
+        public.visibility = matrix_sdk::ruma::api::client::room::Visibility::Public;
+        public.preset =
+            Some(matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::PublicChat);
+        let theirs = stranger.create_room(public).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let account = a_brand_new_account("room-list-hierarchy").await;
+        let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+            .await
+            .unwrap();
+
+        let space = create(&client, "Kahu HQ", Some("m.space")).await;
+        space
+            .send_state_event_for_key(
+                theirs.room_id(),
+                SpaceChildEventContent::new(vec![
+                    client.user_id().unwrap().server_name().to_owned(),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let (connections, connection_sink) = recorder();
+        let sync_task = sync::start(client.clone(), connection_sink);
+        wait_for(&connections, Connection::Live).await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let seen = seen.clone();
+            move |rooms: Rooms| seen.lock().unwrap().push(rooms)
+        };
+        let watch_task = rooms::watch(client, sink);
+
+        // Waits on the name rather than on the channel existing. The channel
+        // appears in the first report, unnamed, and the name arrives in the
+        // one after the hierarchy request comes back.
+        let rooms = wait_until(&seen, |rooms| {
+            rooms
+                .spaces
+                .iter()
+                .flat_map(|space| &space.channels)
+                .any(|channel| channel.name.is_some() && !channel.joined)
+        })
+        .await;
+
+        watch_task.abort();
+        sync_task.abort();
+
+        let listed = &rooms.spaces[1].channels[0];
+        assert_eq!(listed.id, theirs.room_id().as_str());
+        assert!(
+            !listed.joined,
+            "the whole point is a room this account is not in"
+        );
+        assert_eq!(
+            listed.name.as_deref(),
+            Some("announcements"),
+            "a room nobody here joined still has a name, and it is not a room ID"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
     async fn a_space_becomes_a_rail_entry_with_its_channels_under_it() {
         let dir = tempfile::tempdir().unwrap();
         let account = a_brand_new_account("room-list").await;

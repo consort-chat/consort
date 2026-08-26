@@ -1912,6 +1912,252 @@ mod room_list {
         assert_ne!(channels[0].name.as_deref(), Some("!dm:example.org"));
     }
 
+    /// Naming the children a space lists and this account has never joined.
+    ///
+    /// The one request the room list makes. These are about when it happens
+    /// rather than what it returns: once per space per distinct set of
+    /// unjoined children, after the snapshot has already gone out, and never
+    /// again on a client where nothing changed.
+    mod hierarchy {
+        use super::*;
+
+        /// A `/hierarchy` response naming the child nobody joined.
+        fn names_the_unjoined_child(room_type: Option<&str>) -> serde_json::Value {
+            let mut child = serde_json::json!({
+                "room_id": "!never:example.org",
+                "name": "announcements",
+                "num_joined_members": 3,
+                "world_readable": false,
+                "guest_can_join": false,
+                "children_state": [],
+            });
+            if let Some(room_type) = room_type {
+                child["room_type"] = room_type.into();
+            }
+
+            serde_json::json!({ "rooms": [
+                {
+                    "room_id": "!space:example.org",
+                    "name": "Kahu HQ",
+                    "num_joined_members": 1,
+                    "world_readable": false,
+                    "guest_can_join": false,
+                    "children_state": [],
+                },
+                child,
+            ] })
+        }
+
+        async fn mount_hierarchy(server: &MatrixMockServer, body: serde_json::Value) {
+            server
+                .mock_get_hierarchy()
+                .expect_any_access_token()
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+                .mount()
+                .await;
+        }
+
+        /// A watcher running against a client that has synced once.
+        async fn watching(
+            server: &MatrixMockServer,
+            joined: serde_json::Value,
+        ) -> (
+            tempfile::TempDir,
+            Client,
+            Arc<std::sync::Mutex<Vec<Rooms>>>,
+            tokio::task::JoinHandle<()>,
+        ) {
+            let (dir, client) = signed_in(server).await;
+            sync_with(server, joined).await;
+
+            let (seen, sink) = recorder::<Rooms>();
+            let task = rooms::watch(client.clone(), sink);
+            wait_until(&seen, |reports| !reports.is_empty()).await;
+
+            client
+                .sync_once(matrix_sdk::config::SyncSettings::default())
+                .await
+                .unwrap();
+
+            (dir, client, seen, task)
+        }
+
+        /// The name of the child nobody joined, in the most recent report.
+        fn unjoined_name(reports: &[Rooms]) -> Option<String> {
+            reports
+                .last()?
+                .spaces
+                .iter()
+                .flat_map(|space| &space.channels)
+                .find(|channel| channel.id == "!never:example.org")?
+                .name
+                .clone()
+        }
+
+        #[tokio::test]
+        async fn a_child_nobody_joined_is_named_by_the_space() {
+            let server = MatrixMockServer::new().await;
+            mount_hierarchy(&server, names_the_unjoined_child(None)).await;
+            let (_dir, _client, seen, task) = watching(&server, an_account_with_a_space()).await;
+
+            let reports = wait_until(&seen, |reports| unjoined_name(reports).is_some()).await;
+            task.abort();
+
+            assert_eq!(unjoined_name(&reports).as_deref(), Some("announcements"));
+        }
+
+        #[tokio::test]
+        async fn the_snapshot_goes_out_before_the_request_does() {
+            // A slow homeserver should delay two channel names, not the whole
+            // room list. The report carrying the unnamed child has to arrive
+            // before the one carrying its name.
+            let server = MatrixMockServer::new().await;
+            mount_hierarchy(&server, names_the_unjoined_child(None)).await;
+            let (_dir, _client, seen, task) = watching(&server, an_account_with_a_space()).await;
+
+            let reports = wait_until(&seen, |reports| unjoined_name(reports).is_some()).await;
+            task.abort();
+
+            let unnamed = reports
+                .iter()
+                .position(|tree| {
+                    tree.spaces
+                        .iter()
+                        .flat_map(|space| &space.channels)
+                        .any(|channel| channel.id == "!never:example.org" && channel.name.is_none())
+                })
+                .expect("no report ever carried the unnamed child");
+            let named = reports.len() - 1;
+
+            assert!(unnamed < named, "{reports:?}");
+        }
+
+        #[tokio::test]
+        async fn an_unjoined_call_room_is_still_a_voice_channel() {
+            // The room type comes back in the same response as the name, so
+            // there is no reason to draw it as a text channel.
+            let server = MatrixMockServer::new().await;
+            mount_hierarchy(
+                &server,
+                names_the_unjoined_child(Some("org.matrix.msc3417.call")),
+            )
+            .await;
+            let (_dir, _client, seen, task) = watching(&server, an_account_with_a_space()).await;
+
+            let reports = wait_until(&seen, |reports| unjoined_name(reports).is_some()).await;
+            task.abort();
+
+            let channel = reports
+                .last()
+                .unwrap()
+                .spaces
+                .iter()
+                .flat_map(|space| &space.channels)
+                .find(|channel| channel.id == "!never:example.org")
+                .unwrap();
+
+            assert_eq!(channel.kind, ChannelKind::Voice);
+            assert!(!channel.joined);
+        }
+
+        #[tokio::test]
+        async fn the_space_is_asked_once_rather_than_once_per_sync() {
+            // The regression this guards is a room list that reaches the
+            // homeserver every thirty seconds for the life of the session.
+            let server = MatrixMockServer::new().await;
+            server
+                .mock_get_hierarchy()
+                .expect_any_access_token()
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(names_the_unjoined_child(None)),
+                )
+                .expect(1)
+                .named("one hierarchy request for one unchanged child set")
+                .mount()
+                .await;
+
+            let (_dir, client, seen, task) = watching(&server, an_account_with_a_space()).await;
+            wait_until(&seen, |reports| unjoined_name(reports).is_some()).await;
+
+            for _ in 0..4 {
+                client
+                    .sync_once(matrix_sdk::config::SyncSettings::default())
+                    .await
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            task.abort();
+
+            // Fails here if more than the one request arrived.
+            server.verify_and_reset().await;
+        }
+
+        #[tokio::test]
+        async fn a_space_with_nothing_unjoined_is_never_asked_about() {
+            // No mock is mounted, so a request would 404 rather than pass
+            // quietly. Most accounts look like this.
+            let server = MatrixMockServer::new().await;
+            let joined = serde_json::json!({
+                "!space:example.org": { "state": { "events": [
+                    created(Some("m.space")),
+                    named("Kahu HQ"),
+                    child("!general:example.org", 1_000, &["example.org"]),
+                ] } },
+                "!general:example.org": { "state": { "events": [
+                    created(None),
+                    named("general"),
+                ] } },
+            });
+            let (_dir, _client, seen, task) = watching(&server, joined).await;
+
+            let reports = wait_until(&seen, |reports| {
+                reports.last().is_some_and(|tree| tree.spaces.len() == 2)
+            })
+            .await;
+            task.abort();
+
+            let channels = &reports.last().unwrap().spaces[1].channels;
+            assert_eq!(channels.len(), 1);
+            assert!(channels[0].joined);
+        }
+
+        #[tokio::test]
+        async fn a_homeserver_that_will_not_answer_is_asked_once_and_not_again() {
+            // A failure still counts as having asked. Retrying on every sync
+            // of a busy account is the poll this whole arrangement exists to
+            // avoid, and two channels reading "Unknown channel" until the
+            // child list changes is the better of the two bad outcomes.
+            let server = MatrixMockServer::new().await;
+            server
+                .mock_get_hierarchy()
+                .expect_any_access_token()
+                .respond_with(wiremock::ResponseTemplate::new(502))
+                .expect(1)
+                .named("one failed hierarchy request, and no retry storm")
+                .mount()
+                .await;
+
+            let (_dir, client, seen, task) = watching(&server, an_account_with_a_space()).await;
+            wait_until(&seen, |reports| {
+                reports.last().is_some_and(|tree| tree.spaces.len() == 2)
+            })
+            .await;
+
+            for _ in 0..4 {
+                client
+                    .sync_once(matrix_sdk::config::SyncSettings::default())
+                    .await
+                    .unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            task.abort();
+
+            server.verify_and_reset().await;
+            assert_eq!(unjoined_name(&seen.lock().unwrap()), None);
+        }
+    }
+
     mod avatars {
         use super::*;
         use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
