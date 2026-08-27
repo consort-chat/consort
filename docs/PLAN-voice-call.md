@@ -1,6 +1,6 @@
 # Plan: joining the voice channel
 
-Status: **not started.** This is the second half of issue #6. The first half,
+Status: **phase 0 done**, the rest not started. This is the second half of issue #6. The first half,
 drawing who is already in a channel, is done and described in
 [PLAN-voice-presence.md](PLAN-voice-presence.md). This half is the one that
 carries audio.
@@ -94,10 +94,13 @@ and the derivation is logged.
 
 ## Phases
 
-### Phase 0: the spike
+### Phase 0: the spike (done)
 
 The only phase that can invalidate the rest, so it comes first and it produces
-a throwaway binary rather than a design.
+a throwaway binary rather than a design. What it found is recorded at the end,
+under [What phase 0 found](#what-phase-0-found). The binary itself is on the
+`spike/voice-call` branch and not on main, because it takes matrix-rtc-livekit
+by path from the sibling checkout.
 
 Add `matrix-rtc-livekit` with `features = ["matrix-sdk"]`, join one of the
 three real call rooms from a scratch example, and hear a tone. Nothing about
@@ -263,3 +266,166 @@ place they touch, deliberately.
 - The spec-current dialect, until this deployment speaks it.
 - Replace the room-state presence path. It stays, and it is what draws every
   channel not currently sat in.
+
+## What phase 0 found
+
+Everything below was run, not reasoned about, unless it says otherwise. The
+spike registered throwaway users against the sibling repo's `demo/backend`
+stack, on a remapped Synapse port so the local `consort-test-synapse` kept
+8008, and the stack was torn down afterwards.
+
+### 1. The matrix-sdk rev unifies
+
+Exactly one `matrix-sdk` in the lock, one `ruma`, one of each `matrix-sdk-*`,
+all at `377330059c3a335ab36d190fc10b87de3427c6b3`. Proven twice over: by the
+lock, and by an identity function that only compiles if `consort_matrix`'s
+`Client` and this crate's `Client` are the same type. Then `Call::join` accepted
+a `Room` obtained through it. The warning at the top of `Cargo.toml` was right
+to demand this, and the demand is met.
+
+### 2. The patch block does not have to be copied
+
+Consort has no `[patch.crates-io]` and everything built. `async-compat` and
+`tracing-appender` are not in the graph at all at this feature set, and
+`const_panic`, `tracing`, `tracing-core` and `tracing-subscriber` resolved from
+crates.io with matrix-sdk, matrix-sdk-crypto, matrix-sdk-ui and ruma all
+compiling against them. The sibling's warning is about its own feature set.
+
+### 3. Something worse than the patch block does have to be copied
+
+The livekit and webrtc crates publish semver-compatible releases that do not
+compile with each other. A fresh resolve of `livekit = "^0.7"` produced three
+build failures in a row:
+
+- `livekit-api` 0.5.6 **and** 0.5.3 against `livekit-protocol` 0.7.12:
+  `ConnectWhatsAppCallRequest` gained a field.
+- `livekit` 0.7.48 against `libwebrtc` 0.3.46: `RtcConfiguration` became
+  `#[non_exhaustive]`.
+
+Eight crates are now pinned to the versions the sibling's own lock carries:
+livekit 0.7.48, livekit-api 0.5.3, livekit-datatrack 0.1.9, livekit-protocol
+0.7.9, libwebrtc 0.3.38, webrtc-sys 0.3.35, webrtc-sys-build 0.3.18, and
+livekit-runtime 0.4.0 which already matched.
+
+This is a standing cost rather than a one-off. A bare `cargo update` breaks the
+build the moment any of those publishes, and `Cargo.lock` is the only thing
+holding it. So the lock stays committed, the pins get a comment saying why, and
+a future bump means rebuilding against the sibling's lock rather than resolving
+freshly. Upstream could fix this by pinning `livekit` exactly in
+matrix-rtc-livekit; until it does, this is ours to carry.
+
+### 4. `Call::join` does not need `SyncService` in the state dialect
+
+Run with an ordinary `Client::sync` and nothing else. The bridge ticked on
+schedule (`tick: 0 sticky + 1 pre-sticky state membership(s)`), then again
+exactly thirty seconds later, which is `STATE_MEMBERSHIP_POLL`.
+`run_sticky_bridge` subscribes to `room.subscribe_to_updates()` in state mode
+precisely because a call in that dialect "produces no sticky traffic
+whatsoever", and those updates are what Consort's own sync already delivers.
+
+The answer is dialect-specific and flips with the dialect: `Off` mode does
+depend on sticky events, which need the MSC4354 sync extension that
+`SyncService` turns on. So this is one more thing that changes when the
+deployment moves, and it belongs on that list.
+
+### 5. The state dialect needs no open slot
+
+No `open_slot`, and the join succeeded with the core saying "no slot state
+supplied yet; the open-slot condition stays unenforced". `feed_room_state`
+skips the slot fetch deliberately in state mode, because a pre-sticky Element
+Call room has no `m.rtc.slot` at all and reporting "no slots" would resolve
+every session closed and drop every member, us included. Their own interop test
+skips `open_slot` in the same mode for the same stated reason.
+
+So: no `m.rtc.slot`, no power level for it, no room-creator privilege. The risk
+is struck.
+
+### 6. The token endpoint is `/sfu/get`, and it still works
+
+`requesting an SFU token from .../sfu/get`, then `SFU token granted for
+ws://localhost:7880`. Against lk-jwt-service **0.4.4**, which is worth stating
+plainly: the legacy endpoint survives in current builds, so the deployed 0.3.0
+is not a problem for this dialect and the bump stays a non-prerequisite.
+
+### 7. consort-audio's frames are accepted verbatim
+
+480 samples, mono, 48 kHz, `i16`, straight into `AudioFrame` with no
+conversion. `StreamStarted { kind: Microphone }`, then `ActiveSpeakers`
+carrying the SFU's own measurement of the tone rising from 0.125 to 0.25.
+
+One correction to phase 2 falls out of this. `capture_audio`'s backpressure
+paced a tight publish loop for ninety seconds with no drift and no drops, so
+the queue in that phase is not there to pace the publish. It is there to keep
+the capture thread from ever awaiting, which is a narrower job than the plan
+described.
+
+### 8. Cross-signing is a hard prerequisite, and the failure is louder than feared
+
+Two freshly registered devices, neither cross-signed. Neither could send its
+media key at all:
+
+> could not send key index 0 to any of 1 recipient(s): failed to send event:
+> encryption failed due to an error collecting the recipient devices:
+> Encryption failed because cross-signing is not set up on your account
+
+That refusal is the SDK's own, and it lands before MSC4153 gets a say: an
+account with no cross-signing identity cannot encrypt the to-device message in
+the first place. Each side then reported the other as
+`FrameEncryptionState { state: MissingKey, diagnostic: NoKeyInstalled }`.
+
+Three things follow, and they pull in different directions.
+
+**The call otherwise worked perfectly.** Both memberships, both rosters,
+`is_local` correct on each side, `StreamStarted` for both microphones, RTP
+flowing. Only the audio was undecryptable. That is exactly the shape the plan
+was afraid of.
+
+**But it is not silent.** `MissingKey` with `NoKeyInstalled` arrives as a
+`CallEvent`, and the sending side names the members it could not reach. Consort
+can therefore say why somebody cannot be heard rather than drawing a call that
+looks like it is working. Phase 3 gains that job.
+
+**And the fix is already in Consort.** `verification/recovery.rs` says of a
+successful recovery that "the cross-signing private keys are in this device's
+store, the device has signed itself". So recovering with the account's recovery
+key satisfies this, which means **the stalled emoji verification is not on the
+critical path for calls**. Whether any work is needed at all depends on whether
+the real Consort device is already cross-signed, which is worth checking before
+assuming.
+
+Two failures worth keeping apart, only the first of which was demonstrated:
+
+| Account state | What happens |
+| --- | --- |
+| No cross-signing identity at all | We cannot send keys. Proven above. |
+| Identity exists, this device unsigned | We can send; peers discard under MSC4153 as `KeyDiscarded { reason: NotCrossSigned }`. |
+
+A real account that has ever set up recovery is the second shape if it is
+broken at all.
+
+### 9. Weight
+
+`target` grew by 8.0 GB. The debug spike binary is 1065 MB against the current
+app's 986 MB. Compiling the added graph took roughly four minutes on this
+machine, most of it libwebrtc. Release with `strip` is the number that matters
+for shipping and has not been measured yet.
+
+### 10. Noise to expect
+
+`ERROR livekit::rtc_engine::rtc_session: publisher data channel '_data_track'
+closed unexpectedly` fires on every single connect and nothing is wrong.
+libwebrtc also writes `VAAPI is supported.` to stdout as a bare print rather
+than a log line, so no log filter will suppress it.
+
+### What this changes about the phases
+
+- **Phase 1** is unchanged.
+- **Phase 2** is smaller. The queue protects the capture thread; it does not
+  pace the publish, because the transport already does.
+- **Phase 3** gains a job: surface `FrameEncryptionState` and `KeyDiscarded`,
+  because "you cannot hear this person, and here is why" is available and
+  silence is not an acceptable substitute.
+- **Phase 4** is nearly free. `CallEvent::ActiveSpeakers` carries each speaker
+  and their level, so remote speaking indication needs no metering of our own.
+- **New phase 0.5**, small and first: confirm the real Consort device is
+  cross-signed, and if it is not, that recovery fixes it.
