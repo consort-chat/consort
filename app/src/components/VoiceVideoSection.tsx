@@ -29,6 +29,14 @@ interface PickerProps {
   id: string;
   label: string;
   list: AudioDeviceList;
+  /**
+   * The device to show as chosen, which is not always the one in `list`.
+   *
+   * Between picking a device and the backend confirming it there is a gap, and
+   * during it the list still names the old device. Drawing that would tell
+   * somebody their click did nothing.
+   */
+  selected: string | null;
   /** What to say when the machine has none of this kind. */
   absent: string;
   onChange: (name: string) => void;
@@ -41,7 +49,7 @@ interface PickerProps {
  * that has to work the first time somebody opens it, is the wrong place to
  * reimplement keyboard handling and typeahead that the platform already has.
  */
-function DevicePicker({ id, label, list, absent, onChange }: PickerProps) {
+function DevicePicker({ id, label, list, selected, absent, onChange }: PickerProps) {
   if (list.devices.length === 0) {
     return (
       <div className="voice-field">
@@ -59,7 +67,7 @@ function DevicePicker({ id, label, list, absent, onChange }: PickerProps) {
       <select
         id={id}
         className="voice-field__select"
-        value={list.selected ?? ""}
+        value={selected ?? ""}
         onChange={(event) => onChange(event.target.value)}
       >
         {list.devices.map((device) => (
@@ -103,6 +111,19 @@ export function VoiceVideoSection() {
   const [settings, setSettings] = useState<AudioSettings | null>(null);
   const [meter, setMeter] = useState<Meter>(SILENT);
   const [problem, setProblem] = useState<string | null>(null);
+
+  /*
+    What was picked here, until the backend has been asked again and answered.
+
+    Re-reading the device list means asking every device on the machine what it
+    supports, which is the only way to find out and is not fast. Null once the
+    answer is in, so the backend stays the authority on what is actually open
+    and this never becomes a second, quietly diverging copy of it.
+  */
+  const [picked, setPicked] = useState<{
+    input: string | null;
+    output: string | null;
+  }>({ input: null, output: null });
 
   // Held in a ref as well as in state because `change` needs the current value
   // and is not re-created per render. Reading it from state there would close
@@ -201,11 +222,16 @@ export function VoiceVideoSection() {
     const next: AudioSettings = { ...current, [direction]: name };
     setSettings(next);
     saved.current = next;
+    setPicked((current) => ({ ...current, [direction]: name }));
 
     try {
       await setAudioSettings(next);
-      await reload();
+      // Before the re-read, not after. This is the part with something to
+      // show for it: the meter starts moving on the new microphone while the
+      // list is still being walked.
       if (direction === "input") await audioTestStart();
+      await reload();
+      setPicked((current) => ({ ...current, [direction]: null }));
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     }
@@ -230,6 +256,7 @@ export function VoiceVideoSection() {
             id="voice-input"
             label="Input device"
             list={devices.input}
+            selected={picked.input ?? devices.input.selected}
             absent="This machine has no microphone Consort can open."
             onChange={(name) => void change("input", name)}
           />
@@ -238,6 +265,7 @@ export function VoiceVideoSection() {
             id="voice-output"
             label="Output device"
             list={devices.output}
+            selected={picked.output ?? devices.output.selected}
             absent="This machine has nothing Consort can play sound through."
             onChange={(name) => void change("output", name)}
           />

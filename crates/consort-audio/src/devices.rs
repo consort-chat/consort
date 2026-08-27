@@ -36,9 +36,55 @@ pub enum Direction {
     Output,
 }
 
+/// What a host said when asked whether a device can do what we need.
+///
+/// Hosts answer that question badly. A direction may be a declaration rather
+/// than a measurement, and the only way to find out is to ask the device, at
+/// which point the reply can be a fact about the device, a fact about this
+/// moment, or something unhelpful. Those are not the same and cannot be
+/// collapsed into a boolean without getting one of them wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// It can.
+    Yes,
+    /// It answered, and it cannot. A microphone asked to play sound.
+    No,
+    /// Somebody has it open. That it is in use is proof it works.
+    Busy,
+    /// Not there, or not there in this direction.
+    Absent,
+    /// There, and this process is not allowed to open it.
+    Forbidden,
+    /// The host said something not recognised here.
+    Unclear,
+}
+
+impl Answer {
+    /// Whether a device that answered this way belongs in the picker.
+    ///
+    /// The two mistakes available are not the same size. Listing a device that
+    /// turns out not to work costs somebody one confusing attempt. Hiding one
+    /// that does work costs them the conclusion that Consort cannot hear them,
+    /// and there is nothing on the screen to argue with. So this drops a
+    /// device only on a definite no, and shows it on anything else.
+    pub fn worth_listing(self) -> bool {
+        match self {
+            Self::Yes | Self::Busy | Self::Unclear => true,
+            Self::No | Self::Absent | Self::Forbidden => false,
+        }
+    }
+}
+
 /// Somewhere to ask what is plugged in.
 pub trait AudioDevices: Send + Sync + 'static {
-    /// Every device in this direction, in host order.
+    /// Every device that can actually be opened in this direction, in host
+    /// order.
+    ///
+    /// Usable, not merely present. A host may only be declaring a direction
+    /// rather than knowing one, and an implementation that passes those
+    /// declarations straight through offers people a webcam to play sound out
+    /// of. Confirming costs a query per device and is what makes the list
+    /// mean something.
     ///
     /// May repeat itself and may be empty. [`catalogue`] is what tidies it.
     fn enumerate(&self, direction: Direction) -> Vec<Device>;

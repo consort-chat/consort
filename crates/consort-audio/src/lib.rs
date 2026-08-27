@@ -21,7 +21,8 @@ pub mod thread;
 pub use capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
 pub use cpal_host::CpalHost;
 pub use devices::{
-    AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection, catalogue, choose,
+    Answer, AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection, catalogue,
+    choose,
 };
 pub use frames::Frames;
 pub use gate::{

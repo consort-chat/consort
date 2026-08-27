@@ -13,10 +13,10 @@
 //! ignored test for asking this machine what it has.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, SampleFormat, StreamConfig};
+use cpal::{BufferSize, ErrorKind, SampleFormat, StreamConfig};
 
 use crate::capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
-use crate::devices::{AudioDevices, Device, Direction, catalogue};
+use crate::devices::{Answer, AudioDevices, Device, Direction, catalogue};
 use crate::frames::Frames;
 use crate::gate::SAMPLE_RATE;
 
@@ -36,8 +36,12 @@ impl AudioDevices for CpalHost {
         .map(|device| device.to_string());
 
         let listed = match direction {
-            Direction::Input => host.input_devices().map(collect),
-            Direction::Output => host.output_devices().map(collect),
+            Direction::Input => host
+                .input_devices()
+                .map(|listed| collect(listed, direction)),
+            Direction::Output => host
+                .output_devices()
+                .map(|listed| collect(listed, direction)),
         };
 
         let listed = match listed {
@@ -169,8 +173,69 @@ impl AudioCapture for CpalHost {
     }
 }
 
-fn collect<D: Iterator<Item = cpal::Device>>(devices: D) -> Vec<String> {
-    devices.map(|device| device.to_string()).collect()
+/// The names of the devices in `devices` that can actually be opened the way
+/// this crate opens them.
+///
+/// The filter is not belt and braces. Whether a device works in a direction is
+/// something a host may only be guessing at: cpal's ALSA backend derives it
+/// from each PCM hint's `IOID` field, and its own source notes that a hint
+/// leaves that NULL to mean "either", so the answer is a declaration rather
+/// than a fact. On a PipeWire desktop the declarations are wrong often enough
+/// to be embarrassing, and the observed result was a webcam offered as a place
+/// to play sound and a pair of speakers offered as a microphone.
+///
+/// So each candidate is asked what it supports, and only those that offer
+/// something at [`SAMPLE_RATE`] survive. That is the same requirement
+/// [`AudioCapture::open`] enforces a moment later, which is the point: a
+/// picker should not offer a device that selecting it would fail on. Costs
+/// about 300 ms for a whole ALSA namespace and nothing measurable on WASAPI or
+/// CoreAudio, where endpoints are enumerated rather than guessed at.
+///
+/// A device busy elsewhere can report nothing and be dropped. That is the
+/// right trade: while it is busy, choosing it would not have worked either.
+fn collect<D: Iterator<Item = cpal::Device>>(devices: D, direction: Direction) -> Vec<String> {
+    devices
+        .filter(|device| offers_our_rate(device, direction))
+        .map(|device| device.to_string())
+        .collect()
+}
+
+/// Ask `device` whether it supports [`SAMPLE_RATE`] in `direction`.
+///
+/// A failed query is not automatically a no. cpal separates the reasons, and
+/// the separation is the whole value of asking: `DeviceBusy` means somebody
+/// has the device open, which is proof that it works and is the state the
+/// microphone Consort itself is holding will be in every time this runs.
+/// Treating that as a no deletes the device from the picker that is at that
+/// moment reporting its level. [`Answer`] is where the consequences of each
+/// reason are decided, and tested.
+fn offers_our_rate(device: &cpal::Device, direction: Direction) -> bool {
+    let covers_our_rate = |range: &cpal::SupportedStreamConfigRange| {
+        range.min_sample_rate() <= SAMPLE_RATE && range.max_sample_rate() >= SAMPLE_RATE
+    };
+
+    let asked = match direction {
+        Direction::Input => device
+            .supported_input_configs()
+            .map(|mut ranges| ranges.any(|range| covers_our_rate(&range))),
+        Direction::Output => device
+            .supported_output_configs()
+            .map(|mut ranges| ranges.any(|range| covers_our_rate(&range))),
+    };
+
+    let answer = match asked {
+        Ok(true) => Answer::Yes,
+        Ok(false) => Answer::No,
+        Err(error) => match error.kind() {
+            ErrorKind::DeviceBusy => Answer::Busy,
+            ErrorKind::DeviceNotAvailable | ErrorKind::HostUnavailable => Answer::Absent,
+            ErrorKind::PermissionDenied => Answer::Forbidden,
+            ErrorKind::InvalidInput | ErrorKind::UnsupportedConfig => Answer::No,
+            _ => Answer::Unclear,
+        },
+    };
+
+    answer.worth_listing()
 }
 
 #[cfg(test)]

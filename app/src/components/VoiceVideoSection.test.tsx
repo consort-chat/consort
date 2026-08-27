@@ -144,6 +144,39 @@ describe("VoiceVideoSection", () => {
     await waitFor(() => expect(audioTestStart).toHaveBeenCalled());
   });
 
+  it("shows the device you picked while the list is still being re-read", async () => {
+    /*
+      Re-reading the list means asking every device on the machine what it
+      supports, which on a real sound stack takes long enough to watch. The
+      picker is drawn from that list, so without an answer of its own it spends
+      that time showing the device you just changed away from, and the click
+      reads as having failed. People click again.
+    */
+    render(<VoiceVideoSection />);
+    const input = await screen.findByLabelText<HTMLSelectElement>(/input device/i);
+
+    let release: () => void = () => {};
+    const settled: AudioDeviceReport = {
+      ...report,
+      input: { ...report.input, selected: "Yeti" },
+    };
+    audioDevices.mockImplementationOnce(
+      () =>
+        new Promise<AudioDeviceReport>((resolve) => {
+          release = () => resolve(settled);
+        }),
+    );
+
+    await userEvent.selectOptions(input, "Yeti");
+
+    expect(input.value).toBe("Yeti");
+
+    await act(async () => {
+      release();
+    });
+    expect(input.value).toBe("Yeti");
+  });
+
   it("saves a different output device without touching the microphone", async () => {
     render(<VoiceVideoSection />);
     const output = await screen.findByLabelText<HTMLSelectElement>(/output device/i);

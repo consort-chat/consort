@@ -349,6 +349,33 @@ often on a real desktop and that is a state to draw rather than an exception: a
 failed open carries the backend's own words, and `Substituted` names the device
 that went away. Both have tests.
 
+**Decided: list only devices we have confirmed we can open.**
+
+The first real machine to open this screen offered twenty audio outputs,
+including a webcam and two microphones, and fourteen inputs including four
+HDMI monitors. None of that was invented here. cpal's ALSA backend takes each
+device's direction from the `IOID` field of its PCM hint, and cpal's own source
+notes beside that code that a hint leaves the field NULL to mean either, so
+"this is an output" is a declaration and not a fact. On a PipeWire desktop the
+declarations are wrong often enough to be embarrassing.
+
+So `enumerate` now asks each candidate what it supports and keeps only those
+offering something at 48 kHz in the direction being listed. That is the same
+requirement `AudioCapture::open` enforces a moment later, which is the point: a
+picker should never offer a device that choosing it would fail on. Measured on
+that machine it took inputs from fourteen to eight and outputs from twenty to
+fourteen, and every entry that went was one that could not have been opened.
+
+Stated as a rule rather than as a platform branch, and deliberately. WASAPI and
+CoreAudio enumerate real endpoints and lose nothing to this; the check costs
+them a cheap query. ALSA pays about 300 ms for a whole namespace because
+answering means opening each device, which is also why the picker now shows
+what was chosen straight away instead of waiting for the list to come back.
+
+The one thing it gives up: a device held exclusively by another application can
+report nothing and be dropped from the list. That is the right trade, because
+while it is held, choosing it would not have worked either.
+
 The list questions above stay open, and they are cosmetic. Nothing selects a
 JACK entry on a machine without JACK unless a person picks it themselves.
 

@@ -359,3 +359,52 @@ mod what_to_open {
         assert_eq!(choose(&[], None).name_to_open(), None);
     }
 }
+
+/// Whether a device that gave a particular answer belongs in the picker.
+///
+/// The distinction that matters here is between "no" and "not now". A device
+/// somebody else is using is the device most likely to be wanted, and dropping
+/// it removes it from the list at exactly the moment it is in use.
+mod what_to_list {
+    use consort_audio::Answer;
+
+    #[test]
+    fn a_device_that_can_do_what_we_need_is_listed() {
+        assert!(Answer::Yes.worth_listing());
+    }
+
+    #[test]
+    fn a_device_that_answered_and_cannot_is_dropped() {
+        // The whole point of asking. A host that declares a webcam an output
+        // is corrected here rather than believed.
+        assert!(!Answer::No.worth_listing());
+    }
+
+    #[test]
+    fn a_device_somebody_else_is_using_is_still_listed() {
+        // Busy is not an answer about the device, it is an answer about right
+        // now. Consort holding the microphone itself is the ordinary case, and
+        // hiding it from the picker that reports it would be absurd.
+        assert!(Answer::Busy.worth_listing());
+    }
+
+    #[test]
+    fn a_device_that_is_not_there_is_dropped() {
+        assert!(!Answer::Absent.worth_listing());
+    }
+
+    #[test]
+    fn a_device_we_are_not_allowed_to_open_is_dropped() {
+        // It exists, and offering it would mean offering something that fails
+        // on selection with a permissions error nothing on screen explains.
+        assert!(!Answer::Forbidden.worth_listing());
+    }
+
+    #[test]
+    fn an_answer_we_do_not_understand_leaves_the_device_listed() {
+        // The two mistakes are not equal. A dud in the list is a bad moment;
+        // a missing microphone is somebody concluding the application cannot
+        // hear them. Anything unrecognised errs towards showing.
+        assert!(Answer::Unclear.worth_listing());
+    }
+}
