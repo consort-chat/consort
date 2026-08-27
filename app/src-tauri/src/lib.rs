@@ -9,10 +9,14 @@
 //! without driving a webview.
 
 mod audio;
+mod call;
 mod commands;
 mod events;
 mod settings;
+mod sound;
 mod state;
+#[cfg(test)]
+mod testing;
 
 use std::path::PathBuf;
 
@@ -94,6 +98,8 @@ pub fn run() {
             commands::audio_test_stop,
             commands::audio_tone_play,
             commands::audio_tone_stop,
+            commands::call_connect,
+            commands::call_disconnect,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,

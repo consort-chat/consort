@@ -9,6 +9,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import {
   asCommandError,
   audioDevices,
+  callConnect,
+  callDisconnect,
+  callRoomId,
+  onCall,
   audioSettings,
   audioTestStart,
   audioTestStop,
@@ -29,6 +33,7 @@ import {
   tokenStorage,
   type AudioActivity,
   type AudioDeviceReport,
+  type Call,
   type AudioSettings,
   type Connection,
   type KeyBackup,
@@ -547,5 +552,69 @@ describe("the audio commands", () => {
     expect(seen).toEqual([
       { state: "level", level: 0.5, probability: 0.9, open: true },
     ]);
+  });
+});
+
+describe("the call commands", () => {
+  const LOUNGE = "!lounge:example.org";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    listen.mockReset();
+  });
+
+  it("passes the room under the name the Rust command expects", async () => {
+    // The Rust parameter is `room_id`, which Tauri matches against camel case.
+    // A mismatch here is a command that always fails at the boundary.
+    invoke.mockResolvedValue(undefined);
+
+    await callConnect(LOUNGE);
+
+    expect(invoke).toHaveBeenCalledWith("call_connect", { roomId: LOUNGE });
+  });
+
+  it("leaves with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await callDisconnect();
+
+    expect(invoke).toHaveBeenCalledWith("call_disconnect");
+  });
+
+  it("hands the call payload to the handler unwrapped", async () => {
+    const seen: Call[] = [];
+    listen.mockImplementation(
+      (_name: string, handler: (event: { payload: Call }) => void) => {
+        handler({ payload: { state: "connected", roomId: LOUNGE } });
+        return Promise.resolve(() => {});
+      },
+    );
+
+    await onCall((call) => seen.push(call));
+
+    expect(listen).toHaveBeenCalledWith("call", expect.any(Function));
+    expect(seen).toEqual([{ state: "connected", roomId: LOUNGE }]);
+  });
+
+  it("does not share a channel with the sync loop", async () => {
+    // Both have a state that means "connected" and they answer entirely
+    // different questions. One channel for the two would make either
+    // unreadable.
+    listen.mockResolvedValue(() => {});
+
+    await onCall(() => {});
+    await onConnection(() => {});
+
+    expect(listen).toHaveBeenNthCalledWith(1, "call", expect.any(Function));
+    expect(listen).toHaveBeenNthCalledWith(2, "connection", expect.any(Function));
+  });
+
+  it("reads the room out of every state that has one", () => {
+    expect(callRoomId({ state: "connecting", roomId: LOUNGE })).toBe(LOUNGE);
+    expect(callRoomId({ state: "connected", roomId: LOUNGE })).toBe(LOUNGE);
+    expect(callRoomId({ state: "failed", roomId: LOUNGE, error: "no" })).toBe(
+      LOUNGE,
+    );
+    expect(callRoomId({ state: "disconnected" })).toBeNull();
   });
 });

@@ -39,6 +39,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 consort-audio = { path = "../../crates/consort-audio" }
+# Brings libwebrtc, and so several minutes of build the first time. It is the
+# reason `consort-call` is a crate of its own rather than part of
+# `consort-matrix`: only this binary pays for it.
+consort-call = { path = "../../crates/consort-call" }
 consort-matrix = { path = "../../crates/consort-matrix" }
 tauri = { version = "2", features = [] }
 # One Consort per machine. Two would share one SQLite crypto store and one

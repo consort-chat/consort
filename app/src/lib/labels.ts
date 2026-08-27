@@ -8,7 +8,7 @@
  * reloaded by React Fast Refresh, which silently turns every edit into a full
  * page reload.
  */
-import type { Channel, Connection } from "./api";
+import type { Call, Channel, Connection } from "./api";
 
 /**
  * One short phrase per connection state.
@@ -58,4 +58,30 @@ const UNKNOWN_CHANNEL = "Unknown channel";
  */
 export function channelLabel(channel: Channel): string {
   return channel.name ?? UNKNOWN_CHANNEL;
+}
+
+/**
+ * One short phrase per call state.
+ *
+ * Deliberately not the same words as `connectionLabel`. Both channels have a
+ * state that means "it worked", and putting "Connected" on both would be two
+ * different claims wearing one label, one about Matrix and one about a voice
+ * channel. "Voice connected" is what Discord says and it is what a person
+ * reads as the answer to a different question.
+ *
+ * A failure gets a fixed phrase rather than the error text. The error is a
+ * sentence of its own and gets its own line; this is the label above it, and a
+ * label that changes length with the failure would reflow the panel.
+ */
+export function callLabel(call: Call): string {
+  switch (call.state) {
+    case "connecting":
+      return "Connecting";
+    case "connected":
+      return "Voice connected";
+    case "disconnected":
+      return "Not in a voice channel";
+    case "failed":
+      return "Could not connect";
+  }
 }

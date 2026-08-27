@@ -10,15 +10,16 @@
 //! only untested lines in this file, and there is nothing in them to break.
 
 use consort_audio::{
-    AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, catalogue,
+    AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, GateConfig, catalogue,
     choose,
 };
+use consort_call::LiveKitTransport;
 use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
 use serde::Serialize;
 use tauri::State;
 
 use crate::audio::Backends;
-use crate::state::AppState;
+use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
 ///
@@ -327,25 +328,40 @@ fn set_audio_settings_for(
     Ok(())
 }
 
-/// Start the microphone test behind the settings screen's level meter.
+/// Which microphone to open, and how to gate it.
 ///
-/// Resolves the saved input choice against what is actually plugged in, so a
-/// device that has gone falls back to the host's default rather than refusing
-/// to open. The result arrives on the `audio` event channel, including the
-/// failure case: opening a microphone fails often enough on a real desktop
-/// that it is a state the screen draws, not an exception.
-fn audio_test_start_for(
-    state: &AppState,
-    host: &dyn AudioDevices,
-    backends: impl FnOnce() -> Backends,
-) {
+/// Shared by the settings screen's meter and by a call, deliberately. They are
+/// the same device tuned the same way, and resolving it twice in two places is
+/// how they would end up disagreeing: two answers means two `start`s, and a
+/// second `start` for a device already open is an audible hole in what a peer
+/// hears.
+///
+/// A saved choice that is not plugged in falls back to the host's default
+/// rather than refusing to open, which is what `Selection::name_to_open` is
+/// for.
+fn microphone_to_open(state: &AppState, host: &dyn AudioDevices) -> (Option<String>, GateConfig) {
     let audio = state.settings().load().audio;
     let available = catalogue(host, Direction::Input);
     let device = choose(&available, audio.input.as_deref())
         .name_to_open()
         .map(str::to_owned);
 
-    state.start_microphone(backends, device, audio.gate);
+    (device, audio.gate)
+}
+
+/// Start the microphone test behind the settings screen's level meter.
+///
+/// The result arrives on the `audio` event channel, including the failure
+/// case: opening a microphone fails often enough on a real desktop that it is a
+/// state the screen draws, not an exception.
+fn audio_test_start_for(
+    state: &AppState,
+    host: &dyn AudioDevices,
+    backends: impl FnOnce() -> Backends,
+) {
+    let (device, gate) = microphone_to_open(state, host);
+
+    state.start_microphone(backends, device, gate);
 }
 
 /// Stop the microphone test.
@@ -390,6 +406,52 @@ fn cpal_backends() -> Backends {
     }
 }
 
+/// Join the voice channel in `room_id`, leaving whatever call is current.
+///
+/// Everything that can go wrong arrives on the `call` event channel rather
+/// than as an error here. Joining is a sequence of remote steps that each take
+/// their own time, so the command that starts it cannot be the thing that
+/// reports how it went: the interface needs "working on it" before it needs
+/// an answer.
+///
+/// The only failure worth returning is this one. Asking to join a call while
+/// signed out is not a call that failed, it is a caller asking at a moment
+/// when nothing can be answered.
+async fn call_connect_for(
+    state: &AppState,
+    host: &dyn AudioDevices,
+    backends: impl Fn() -> Backends + Send + 'static,
+    room_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    let calls = state.settings().load().calls;
+    let (device, gate) = microphone_to_open(state, host);
+
+    state.connect_call(
+        room_id,
+        // Only called if this session has never joined a call before. The
+        // dialect here is the fallback for a channel nobody is in;
+        // `consort_call::detect` looks at the channel first.
+        move || LiveKitTransport::new(client, calls.fallback_dialect, calls.service_url_fallback),
+        CallAudio {
+            device,
+            gate,
+            backends: Box::new(backends),
+        },
+    );
+    Ok(())
+}
+
+/// Leave the voice channel.
+///
+/// Infallible and idempotent, including when there is no call and when there
+/// is no session. Both are the same thing from the interface's side: a
+/// disconnect control that outlived the call it belonged to, which should do
+/// nothing rather than complain.
+fn call_disconnect_for(state: &AppState) {
+    state.disconnect_call();
+}
+
 #[tauri::command]
 pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
     audio_devices_for(&state, &CpalHost)
@@ -426,6 +488,16 @@ pub fn audio_tone_play(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn audio_tone_stop(state: State<'_, AppState>) {
     audio_tone_stop_for(&state);
+}
+
+#[tauri::command]
+pub async fn call_connect(state: State<'_, AppState>, room_id: String) -> Result<(), CommandError> {
+    call_connect_for(&state, &CpalHost, cpal_backends, room_id).await
+}
+
+#[tauri::command]
+pub fn call_disconnect(state: State<'_, AppState>) {
+    call_disconnect_for(&state);
 }
 
 /// Verify this session with the account's recovery key.
@@ -661,6 +733,61 @@ mod tests {
         (dir, state, backend)
     }
 
+    /// Joining and leaving a voice channel.
+    ///
+    /// What the call thread then does with the request is `crate::state` and
+    /// `consort_call`; this is about the command's own contract.
+    mod calls {
+        use super::*;
+        use crate::events::RecordingSink;
+        use crate::testing::{FakeDevices, fake_backends};
+
+        fn state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
+            let sink = Arc::new(RecordingSink::new());
+            let settings = crate::settings::SettingsStore::at(dir.path());
+            (dir, AppState::new(store, settings, sink.clone()), sink)
+        }
+
+        #[tokio::test]
+        async fn joining_a_call_while_signed_out_is_refused_rather_than_attempted() {
+            // Not a call that failed. There is no account to publish a
+            // membership under, so there is nothing to attempt and nothing to
+            // report on the call channel.
+            let (_dir, state, sink) = state();
+
+            let error = call_connect_for(
+                &state,
+                &FakeDevices,
+                fake_backends,
+                "!a:example.org".to_owned(),
+            )
+            .await
+            .expect_err("a signed-out join was accepted");
+
+            assert!(
+                error.message().to_lowercase().contains("signed in"),
+                "{error:?}"
+            );
+            assert!(!state.has_call_thread());
+            assert!(sink.events().is_empty());
+        }
+
+        #[test]
+        fn leaving_a_call_while_signed_out_does_nothing() {
+            // A disconnect control that outlived its session. Complaining
+            // about it would put an error on screen for a click that asked
+            // for the state the application is already in.
+            let (_dir, state, sink) = state();
+
+            call_disconnect_for(&state);
+
+            assert!(!state.has_call_thread());
+            assert!(sink.events().is_empty());
+        }
+    }
+
     mod audio {
         use super::*;
         use consort_audio::{Device, Direction, GateConfig};
@@ -758,11 +885,17 @@ mod tests {
 
         #[test]
         fn saving_audio_settings_leaves_the_rest_of_the_file_alone() {
-            // One section of one file. When appearance and keybinds arrive,
-            // changing a microphone must not wipe them.
+            // One section of one file. The call settings are hand-written, so
+            // a microphone change that wiped them would take somebody's
+            // deployment answer with it and leave a client that connects to
+            // calls nobody can hear.
             let (_dir, state, _) = state();
             let stored = crate::settings::Settings {
                 audio: AudioSettings::default(),
+                calls: crate::settings::CallSettings {
+                    fallback_dialect: consort_call::Dialect::State,
+                    service_url_fallback: Some("https://example.org/sfu".to_owned()),
+                },
             };
             state.settings().save(&stored).expect("save");
 
@@ -775,7 +908,9 @@ mod tests {
             )
             .expect("save");
 
-            assert_eq!(state.settings().load().audio.input.as_deref(), Some("Yeti"));
+            let loaded = state.settings().load();
+            assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+            assert_eq!(loaded.calls, stored.calls);
         }
 
         /// Backends that open whatever they are handed and report what that
@@ -1071,11 +1206,9 @@ mod tests {
 
             audio_tone_play_for(&state, &TwoOutputs, fake_backends);
 
-            let consort_audio::AudioEvent::ToneStarted { device } =
-                audio_event(&sink, |event| {
-                    matches!(event, consort_audio::AudioEvent::ToneStarted { .. })
-                })
-            else {
+            let consort_audio::AudioEvent::ToneStarted { device } = audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::ToneStarted { .. })
+            }) else {
                 unreachable!()
             };
             assert_ne!(device, "A Microphone", "the chime went to the microphone");
@@ -1524,7 +1657,9 @@ mod tests {
 mod against_a_mock_homeserver {
     use super::tests::status_name;
     use super::*;
+    use crate::events::AppEvent;
     use crate::events::RecordingSink;
+    use consort_call::CallEvent;
     use consort_matrix::secrets::MemoryBackend;
     use consort_matrix::{Connection, SessionStore, SessionVerification, StopReason};
     use matrix_sdk::ruma;
@@ -1555,6 +1690,50 @@ mod against_a_mock_homeserver {
             .await;
         server.mock_upload_keys().ok().mount().await;
         server.mock_query_keys().ok().mount().await;
+    }
+
+    #[tokio::test]
+    async fn joining_a_channel_this_account_is_not_in_says_so_on_the_call_channel() {
+        // The command succeeds and the call fails, which is the split the whole
+        // channel exists for: joining is a sequence of remote steps, so the
+        // thing that starts it cannot be the thing that reports how it went.
+        //
+        // Also the one end-to-end check that the real transport is reached. A
+        // room sync has never delivered is the failure that needs no SFU.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .expect("login");
+
+        call_connect_for(
+            &state,
+            &crate::testing::FakeDevices,
+            crate::testing::fake_backends,
+            "!nowhere:example.org".to_owned(),
+        )
+        .await
+        .expect("the command itself should succeed");
+
+        let failure = crate::testing::wait_for_value("the call to fail", || {
+            sink.events()
+                .into_iter()
+                .rev()
+                .find_map(|event| match event {
+                    AppEvent::Call(CallEvent::Failed { error, .. }) => Some(error),
+                    _ => None,
+                })
+        });
+        assert!(failure.contains("!nowhere:example.org"), "{failure}");
+        assert!(failure.contains("sync"), "{failure}");
+
+        // And the microphone did not stay open behind it.
+        crate::testing::wait_for(
+            "the microphone to be given back",
+            || !state.microphone_open(),
+            || "still open".to_owned(),
+        );
     }
 
     #[tokio::test]

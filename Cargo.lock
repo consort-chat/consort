@@ -924,6 +924,7 @@ name = "consort-app"
 version = "0.1.0"
 dependencies = [
  "consort-audio",
+ "consort-call",
  "consort-matrix",
  "matrix-sdk",
  "serde",

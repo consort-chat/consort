@@ -248,19 +248,25 @@ async fn connect<T: CallTransport>(
         return current;
     }
 
-    // Leave first, and say so. Two channels' worth of membership at once is a
-    // person appearing to sit in two calls, which is worse than a moment of
-    // showing neither.
-    if leave(current).await {
-        emit(events, CallEvent::Disconnected);
-    }
-
+    // Said before the leave rather than after it, and the leave is not
+    // announced at all.
+    //
+    // The leave still happens first, for the reason it always did: two
+    // channels' worth of membership at once is one person sitting in two voice
+    // channels to everybody else in the space. What changed is that nobody is
+    // told about it. `Disconnected` means the call is over, and everything
+    // downstream acts on that: the panel closes, and the microphone the call
+    // opened is given back. Emitting one here, immediately superseded by this
+    // `Connecting`, would close and reopen both between two calls that are
+    // meant to be continuous.
     emit(
         events,
         CallEvent::Connecting {
             room_id: room_id.clone(),
         },
     );
+
+    leave(current).await;
 
     let session = match tokio::time::timeout(JOIN_TIMEOUT, transport.join(&room_id)).await {
         Ok(Ok(session)) => session,
@@ -679,7 +685,6 @@ mod tests {
             vec![
                 connecting(GENERAL),
                 connected(GENERAL),
-                CallEvent::Disconnected,
                 connecting(MUSIC),
                 connected(MUSIC),
             ]
@@ -687,6 +692,51 @@ mod tests {
         assert_eq!(log.joined(), vec![GENERAL, MUSIC]);
         // Twice: the move out of general, then the shutdown out of music.
         assert_eq!(log.left(), vec![GENERAL, MUSIC]);
+    }
+
+    #[tokio::test]
+    async fn moving_between_channels_never_says_the_call_is_over() {
+        // The one thing a reader of this channel is entitled to assume:
+        // `Disconnected` means there is no call. Anything acting on it tears
+        // something down, and what gets torn down here is the microphone, which
+        // is shared with the settings screen and expensive to reopen. A
+        // `Disconnected` between two connects would close the sound card
+        // between two calls that are meant to be continuous.
+        let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+        let said = transcript(
+            transport,
+            vec![connect_to(GENERAL), connect_to(MUSIC), connect_to(GENERAL)],
+        )
+        .await;
+
+        assert!(
+            !said.contains(&CallEvent::Disconnected),
+            "a channel change reported the call as over: {said:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_channel_change_is_announced_before_the_old_call_is_left() {
+        // Leaving waits on a homeserver and is bounded at `LEAVE_TIMEOUT`.
+        // Saying `Connecting` only afterwards would leave the interface showing
+        // the previous channel for up to five seconds after somebody clicked
+        // away from it.
+        let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+        let said = transcript(transport, vec![connect_to(GENERAL), connect_to(MUSIC)]).await;
+
+        let announced = said
+            .iter()
+            .position(|event| event == &connecting(MUSIC))
+            .expect("the second connect was never announced");
+        let joined = said
+            .iter()
+            .position(|event| event == &connected(MUSIC))
+            .expect("the second call never connected");
+
+        assert!(announced < joined, "{said:?}");
+        assert_eq!(log.left().first().map(String::as_str), Some(GENERAL));
     }
 
     #[tokio::test]

@@ -693,3 +693,70 @@ export function onAudio(
 ): Promise<UnlistenFn> {
   return listen<AudioActivity>("audio", (event) => handler(event.payload));
 }
+
+/**
+ * Whether this session is in a voice channel, mirrored from
+ * `consort_call::CallEvent`.
+ *
+ * Not to be confused with `Connection`, which is the sync loop. Both have a
+ * state called something like "connected" and they are about entirely
+ * different things: one is whether Matrix is working at all, the other is
+ * whether you are sitting in a voice channel.
+ *
+ * `connecting` and `failed` carry the room they are about because a second
+ * channel can be clicked while the first is still connecting. Without the
+ * room, the interface cannot tell whether the message it just received is
+ * about the channel it is currently showing.
+ *
+ * `disconnected` is the state the app opens in and the one every ending
+ * arrives at. A channel change never passes through it: the Rust side reports
+ * `connecting` for the new channel and leaves the old one behind it, so the
+ * panel does not blink out and back between two calls.
+ */
+export type Call =
+  | { state: "connecting"; roomId: string }
+  | { state: "connected"; roomId: string }
+  | { state: "disconnected" }
+  | { state: "failed"; roomId: string; error: string };
+
+/** The room a call state is about, or null for the idle one. */
+export function callRoomId(call: Call): string | null {
+  return call.state === "disconnected" ? null : call.roomId;
+}
+
+/**
+ * Join the voice channel in `roomId`, leaving whatever call is current.
+ *
+ * Resolves as soon as the request has been handed to the call thread, which is
+ * long before the call exists. Everything about how it went, the failure
+ * included, arrives through `onCall`: joining is a sequence of remote steps and
+ * the interface needs "working on it" before it needs an answer.
+ *
+ * The one thing that rejects is asking while signed out, which is not a call
+ * that failed but a caller asking at a moment when nothing can be answered.
+ */
+export function callConnect(roomId: string): Promise<void> {
+  return invoke<void>("call_connect", { roomId });
+}
+
+/**
+ * Leave the voice channel.
+ *
+ * Safe to call when there is no call and when there is no session. Both are
+ * the same thing from here: a disconnect control that outlived what it
+ * belonged to.
+ */
+export function callDisconnect(): Promise<void> {
+  return invoke<void>("call_disconnect");
+}
+
+/**
+ * Listen to this session's voice call.
+ *
+ * Same contract as `onConnection`: the channel name matches `AppEvent::CALL`,
+ * and the returned function stops listening. `resendState` repeats the current
+ * one, so a webview that reloaded mid-call finds out it is in a channel.
+ */
+export function onCall(handler: (call: Call) => void): Promise<UnlistenFn> {
+  return listen<Call>("call", (event) => handler(event.payload));
+}

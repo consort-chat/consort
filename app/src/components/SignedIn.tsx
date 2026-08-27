@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 
 import {
   asCommandError,
+  callConnect,
+  callDisconnect,
+  onCall,
   onConnection,
   onKeyBackup,
   onRooms,
@@ -9,6 +12,7 @@ import {
   onVerificationFlow,
   resendState,
   tokenStorage,
+  type Call,
   type Connection,
   type KeyBackup,
   type Profile,
@@ -63,6 +67,10 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // on the account and two can arrive, and one slot would silently drop the
   // second, leaving somebody waiting on a device that will never answer.
   const [flows, setFlows] = useState<Record<string, VerificationFlow>>({});
+  // Not in a channel, which is what a fresh process is. A webview that
+  // reloaded mid-call is corrected by `resendState` below, which is why this
+  // channel is one of the ones the Rust side keeps.
+  const [call, setCall] = useState<Call>({ state: "disconnected" });
 
   function dismiss(flowId: string) {
     setFlows((current) => {
@@ -106,6 +114,9 @@ export function SignedIn({ profile, onSignedOut }: Props) {
         // account it is meant to describe.
         if (!cancelled) setRooms(tree);
       }).then(keep),
+      onCall((state) => {
+        if (!cancelled) setCall(state);
+      }).then(keep),
     ]);
 
     listening
@@ -148,6 +159,27 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     };
   }, []);
 
+  /**
+   * Join a voice channel.
+   *
+   * Nothing is set here. Every state this screen shows comes back through
+   * `onCall`, including the failure, so that what is on screen is what the
+   * call thread actually did rather than what was asked of it. The one thing
+   * that rejects is asking while signed out, which cannot happen from this
+   * screen and is logged rather than drawn.
+   */
+  function joinVoice(roomId: string) {
+    callConnect(roomId).catch((raw: unknown) => {
+      console.error("could not ask to join the call", asCommandError(raw).detail);
+    });
+  }
+
+  function leaveVoice() {
+    callDisconnect().catch((raw: unknown) => {
+      console.error("could not ask to leave the call", asCommandError(raw).detail);
+    });
+  }
+
   const running = Object.values(flows);
 
   return (
@@ -155,12 +187,15 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       profile={profile}
       rooms={rooms}
       connection={connection}
+      call={call}
       verification={verification}
       keyBackup={keyBackup}
       storage={storage}
       flows={running}
       canStartVerification={!running.some(isRunning)}
       onDismissFlow={dismiss}
+      onJoinVoice={joinVoice}
+      onLeaveVoice={leaveVoice}
       onSignedOut={onSignedOut}
     />
   );

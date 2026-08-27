@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
     Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync, verification,
 };
@@ -13,9 +14,11 @@ use tokio::task::JoinHandle;
 
 use consort_audio::GateConfig;
 
-use crate::audio::{AudioBridge, Backends};
+use crate::audio::Backends;
+use crate::call::CallBridge;
 use crate::events::{AppEvent, EventSink, LatestSink};
 use crate::settings::SettingsStore;
+use crate::sound::Sound;
 
 /// One background task's handle.
 ///
@@ -54,21 +57,31 @@ async fn stop_task(slot: &TaskSlot) -> bool {
     }
 }
 
+/// How to open the microphone for a call.
+///
+/// Built by the command layer, which is the half that knows what devices exist
+/// and how to open one, and read on the call thread's pump, which is the half
+/// that knows when. Rebuilt on every connect rather than remembered, so a
+/// device chosen between two calls is the one the second call opens.
+pub struct CallAudio {
+    /// The device to open, or `None` for whatever the host calls its default.
+    pub device: Option<String>,
+    pub gate: GateConfig,
+    /// The sound card. A closure because the audio thread is built at most
+    /// once per process and almost every call finds it already there.
+    pub backends: Box<dyn Fn() -> Backends + Send>,
+}
+
 /// The one piece of long-lived state the app has.
 ///
 /// The `Client` is `Send + Sync + Clone`, so it lives in ordinary shared state
 /// and commands can hold it across `.await`.
 ///
-/// That stops being true when the voice layer arrives. `Call::join` drives
-/// `!Send` futures through `spawn_local` and panics outside a
-/// `tokio::task::LocalSet`, while Tauri commands run on a multi-thread runtime
-/// and require `Send`. The call cannot live in this struct. It belongs behind a
-/// dedicated thread owning a current-thread runtime plus a `LocalSet`, reached
-/// through a command channel, with only the channel handle stored here.
-///
-/// Recorded now because the shape of that constraint is easy to discover the
-/// expensive way, halfway through wiring the call into a command that will
-/// never compile.
+/// The call is the exception, and it is why [`CallBridge`] exists rather than
+/// a field holding a call. `Call::join` drives `!Send` futures through
+/// `spawn_local` and panics outside a `tokio::task::LocalSet`, while Tauri
+/// commands run on a multi-thread runtime and require `Send`. So the call
+/// lives on a thread of its own and only the handle is here.
 pub struct AppState {
     client: RwLock<Option<Client>>,
     store: SessionStore,
@@ -149,21 +162,37 @@ pub struct AppState {
     /// file is not a secret, it survives a sign-out, and losing it costs
     /// somebody their thresholds rather than their login.
     settings: SettingsStore,
-    /// The audio thread, once anything has asked for it.
+    /// The microphone, and the record of who currently wants it open.
     ///
-    /// Lazy because opening it costs a thread and, on some backends, a
-    /// connection to a sound server, and most sessions never open the settings
-    /// screen at all. Kept once created, because a person adjusting a device
-    /// picker starts and stops the test repeatedly and the slow part is the
-    /// sound card rather than the thread.
+    /// An `Arc` because the call thread's pump holds one too: opening and
+    /// closing the device is driven by call events, in the order the call
+    /// thread produced them, which is the only ordering that cannot race a
+    /// click against a join. See [`crate::sound`].
+    sound: Arc<Sound>,
+    /// The queue carrying captured audio from the audio thread to the call.
+    ///
+    /// Built once and cloned, because both ends outlive any one call: the
+    /// audio thread fills it whenever a call is up, and the call thread drains
+    /// it. Empty and harmless the rest of the time.
+    microphone: Microphone,
+    /// How the microphone should be opened for the call currently being
+    /// joined. See [`CallAudio`].
+    call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
+    /// The call thread, once something has asked to join a channel.
+    ///
+    /// Lazy for the same reason the audio thread is, and more so: it holds a
+    /// `Client` and a transport, and most sessions never join a call at all.
+    /// Dropped on sign-out, which unwinds the membership.
     ///
     /// A `std::sync::Mutex` rather than tokio's. Nothing here awaits while
     /// holding it, and the commands that reach it are synchronous.
-    audio: std::sync::Mutex<Option<AudioBridge>>,
+    call: std::sync::Mutex<Option<CallBridge>>,
 }
 
 impl AppState {
     pub fn new(store: SessionStore, settings: SettingsStore, events: Arc<dyn EventSink>) -> Self {
+        let events = Arc::new(LatestSink::new(events));
+
         Self {
             client: RwLock::new(None),
             store,
@@ -175,42 +204,12 @@ impl AppState {
             backup_task: Mutex::new(None),
             rooms_task: Mutex::new(None),
             initiator: Mutex::new(None),
-            events: Arc::new(LatestSink::new(events)),
+            sound: Arc::new(Sound::new(events.clone())),
+            events,
             settings,
-            audio: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Do something with the audio thread, building it if this is the first
-    /// thing to want it.
-    ///
-    /// `backends` is a closure rather than a value so that nothing constructs
-    /// a sound backend on the calls that do not need one, which is every call
-    /// after the first.
-    fn with_audio(&self, backends: impl FnOnce() -> Backends, act: impl FnOnce(&AudioBridge)) {
-        let mut slot = self
-            .audio
-            .lock()
-            .expect("the audio mutex is never poisoned");
-        let bridge =
-            slot.get_or_insert_with(|| AudioBridge::spawn(backends(), self.events.clone()));
-        act(bridge);
-    }
-
-    /// Do something with the audio thread only if it already exists.
-    ///
-    /// Every "stop" is this. Building a thread and a connection to a sound
-    /// server in order to tell it to stop doing something it was never doing
-    /// is the wrong shape, and closing the settings screen does exactly that
-    /// whether or not anybody touched anything.
-    fn if_audio_running(&self, act: impl FnOnce(&AudioBridge)) {
-        if let Some(bridge) = self
-            .audio
-            .lock()
-            .expect("the audio mutex is never poisoned")
-            .as_ref()
-        {
-            act(bridge);
+            microphone: Microphone::new(),
+            call_audio: Arc::new(std::sync::Mutex::new(None)),
+            call: std::sync::Mutex::new(None),
         }
     }
 
@@ -226,16 +225,17 @@ impl AppState {
         device: Option<String>,
         gate: GateConfig,
     ) {
-        self.with_audio(backends, |bridge| bridge.start(device, gate));
+        self.sound.start_test(backends, device, gate);
     }
 
     /// End the microphone test, releasing the device.
     ///
     /// A no-op when nothing was ever started, which is what closing the
     /// settings screen does whether or not anybody pressed the button. The
-    /// thread stays alive for next time; only the device is given back.
+    /// thread stays alive for next time, and so does the device when a call
+    /// still wants it.
     pub fn stop_microphone(&self) {
-        self.if_audio_running(AudioBridge::stop);
+        self.sound.stop_test();
     }
 
     /// Retune the running gate, leaving the device open.
@@ -244,7 +244,7 @@ impl AppState {
     /// [`start_microphone`](Self::start_microphone) anyway and there is
     /// nothing here to remember it with.
     pub fn retune_gate(&self, gate: GateConfig) {
-        self.if_audio_running(|bridge| bridge.retune(gate));
+        self.sound.retune(gate);
     }
 
     /// Play the test chime, opening the audio thread on first use.
@@ -252,12 +252,100 @@ impl AppState {
     /// The output half of what `start_microphone` does for the input half, and
     /// through the same thread: a cpal stream is `!Send` in either direction.
     pub fn play_test_tone(&self, backends: impl FnOnce() -> Backends, device: Option<String>) {
-        self.with_audio(backends, |bridge| bridge.play_tone(device));
+        self.sound.play_tone(backends, device);
     }
 
     /// Cut the chime short, releasing the output.
     pub fn stop_test_tone(&self) {
-        self.if_audio_running(AudioBridge::stop_tone);
+        self.sound.stop_tone();
+    }
+
+    /// Join the voice channel in `room_id`, starting the call thread on first
+    /// use.
+    ///
+    /// `transport` is a closure because it is only wanted once: the thread
+    /// outlives any one call, and building a second transport for a session
+    /// that already has one would be building a second call.
+    pub fn connect_call<T: CallTransport>(
+        &self,
+        room_id: String,
+        transport: impl FnOnce() -> T,
+        audio: CallAudio,
+    ) {
+        *self.locked_call_audio() = Some(audio);
+
+        let mut slot = self.locked_call();
+        let bridge = slot.get_or_insert_with(|| {
+            CallBridge::spawn(transport(), self.microphone.clone(), self.call_reporter())
+        });
+        bridge.connect(room_id);
+    }
+
+    /// Leave the voice channel, if this session is in one.
+    ///
+    /// A no-op when no call was ever started, which is what a stray click on a
+    /// disconnect control that outlived its call is.
+    ///
+    /// The microphone is not given back here. That happens when the call
+    /// thread reports the call over, which is the only ordering that cannot
+    /// close the device out from under a channel somebody clicked immediately
+    /// afterwards. See [`Self::call_reporter`].
+    pub fn disconnect_call(&self) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.disconnect();
+        }
+    }
+
+    /// What to do with everything the call thread says.
+    ///
+    /// Two jobs in one closure, and the order inside it is the point. The
+    /// microphone follows the call rather than the click: a `Connecting`
+    /// opens it and an ending gives it back, both on the pump thread, in the
+    /// order the call thread produced them.
+    ///
+    /// Driving it from the commands instead would race. Leaving a channel and
+    /// immediately clicking another one issues both commands before the first
+    /// one's `Disconnected` has been handled, and a release running after the
+    /// second acquire closes the device on a call that is starting.
+    fn call_reporter(&self) -> impl FnMut(CallEvent) + Send + 'static {
+        let sound = self.sound.clone();
+        let events = self.events.clone();
+        let microphone = self.microphone.clone();
+        let call_audio = self.call_audio.clone();
+
+        move |event| {
+            match &event {
+                CallEvent::Connecting { .. } => {
+                    if let Some(audio) = call_audio
+                        .lock()
+                        .expect("the call audio mutex is never poisoned")
+                        .as_ref()
+                    {
+                        let queue = microphone.clone();
+                        sound.start_call(
+                            || (audio.backends)(),
+                            audio.device.clone(),
+                            audio.gate,
+                            Box::new(move |samples, open| queue.offer(samples, open)),
+                        );
+                    }
+                }
+                CallEvent::Connected { .. } => {}
+                CallEvent::Disconnected | CallEvent::Failed { .. } => sound.stop_call(),
+            }
+
+            events.emit(AppEvent::Call(event));
+        }
+    }
+
+    fn locked_call(&self) -> std::sync::MutexGuard<'_, Option<CallBridge>> {
+        self.call.lock().expect("the call mutex is never poisoned")
+    }
+
+    fn locked_call_audio(&self) -> std::sync::MutexGuard<'_, Option<CallAudio>> {
+        self.call_audio
+            .lock()
+            .expect("the call audio mutex is never poisoned")
     }
 
     /// Send the current state of every push channel again.
@@ -395,6 +483,30 @@ impl AppState {
 
     /// Forget the client and stop its background tasks.
     pub async fn clear_client(&self) {
+        // First, and before the client it was built on goes. Dropping the
+        // bridge unwinds the membership and waits for it, so a sign-out does
+        // not leave this account's name sitting in a voice channel for
+        // whoever signs in next to find.
+        //
+        // Dropped by name rather than at the end of an expression, because
+        // when it happens is load bearing: the drop joins the pump, so
+        // everything after it runs with no more call events on their way. A
+        // queued `Connecting` handled afterwards would reopen the microphone
+        // in the middle of a sign-out.
+        let bridge = self.locked_call().take();
+        let was_in_a_call = bridge.is_some();
+        drop(bridge);
+
+        // The call thread deliberately says nothing on its shutdown path, so
+        // the two things a `Disconnected` would have done are done here: the
+        // microphone goes back, and the webview is told, so a stale
+        // "connected" is not what the next sign-in is caught up with.
+        if was_in_a_call {
+            self.sound.stop_call();
+            self.events.emit(AppEvent::Call(CallEvent::Disconnected));
+        }
+        *self.locked_call_audio() = None;
+
         stop_task(&self.refresh_task).await;
 
         // No parting word for either verification channel. There is nothing
@@ -493,6 +605,24 @@ impl AppState {
         self.sync_task.lock().await.as_ref().map(|task| task.id())
     }
 
+    /// Whether the microphone is open for anything.
+    ///
+    /// Test-only, and the one thing about the call wiring that is otherwise
+    /// only observable by listening to a sound card.
+    #[cfg(test)]
+    pub fn microphone_open(&self) -> bool {
+        self.sound.capturing()
+    }
+
+    /// Whether a call thread has been started.
+    ///
+    /// Test-only. Distinguishes "never joined a call" from "joined one and
+    /// left", which `microphone_open` cannot.
+    #[cfg(test)]
+    pub fn has_call_thread(&self) -> bool {
+        self.locked_call().is_some()
+    }
+
     /// Install a stand-in for the sync loop.
     ///
     /// Test-only. `clear_client` behaves differently depending on whether a
@@ -513,9 +643,99 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::events::RecordingSink;
+    use crate::testing::{fake_backends, wait_for};
+    use consort_call::{CallFailure, CallSession, PublishedAudio};
     use consort_matrix::StopReason;
     use consort_matrix::secrets::MemoryBackend;
     use std::sync::Arc;
+
+    const GENERAL: &str = "!general:example.org";
+
+    /// A transport that joins anything, or refuses everything.
+    struct FakeTransport {
+        joins: bool,
+    }
+
+    struct FakeSession;
+
+    struct FakeTrack;
+
+    impl PublishedAudio for FakeTrack {
+        fn set_muted(&self, _muted: bool) -> Result<(), CallFailure> {
+            Ok(())
+        }
+
+        async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
+            Ok(())
+        }
+    }
+
+    impl CallSession for FakeSession {
+        type Track = FakeTrack;
+
+        async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
+            Ok(FakeTrack)
+        }
+
+        async fn leave(self) -> Result<(), CallFailure> {
+            Ok(())
+        }
+    }
+
+    impl CallTransport for FakeTransport {
+        type Session = FakeSession;
+
+        async fn join(&self, room_id: &str) -> Result<Self::Session, CallFailure> {
+            if self.joins {
+                Ok(FakeSession)
+            } else {
+                Err(CallFailure::UnknownRoom {
+                    room_id: room_id.to_owned(),
+                })
+            }
+        }
+    }
+
+    fn call_audio() -> CallAudio {
+        CallAudio {
+            device: Some("Yeti".to_owned()),
+            gate: GateConfig::default(),
+            backends: Box::new(fake_backends),
+        }
+    }
+
+    /// Join `room_id`, with a transport that works or one that does not.
+    fn join(state: &AppState, room_id: &str, joins: bool) {
+        state.connect_call(
+            room_id.to_owned(),
+            move || FakeTransport { joins },
+            call_audio(),
+        );
+    }
+
+    /// Block until the call channel has said `state`, or give up.
+    ///
+    /// The call thread and its pump are both threads, so everything the call
+    /// wiring does arrives after the call that asked for it has returned.
+    fn until_call(sink: &Arc<RecordingSink>, tag: &str) {
+        wait_for(
+            &format!("the call to say {tag}"),
+            || last_call_state(sink).as_deref() == Some(tag),
+            || format!("{:?}", last_call_state(sink)),
+        );
+    }
+
+    /// The most recent thing said on the call channel, by its wire tag.
+    fn last_call_state(sink: &Arc<RecordingSink>) -> Option<String> {
+        sink.events().iter().rev().find_map(|event| match event {
+            AppEvent::Call(call) => Some(
+                serde_json::to_value(call).ok()?["state"]
+                    .as_str()?
+                    .to_owned(),
+            ),
+            _ => None,
+        })
+    }
 
     fn state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
         let dir = tempfile::tempdir().unwrap();
@@ -823,5 +1043,144 @@ mod tests {
             state.store().session_file(),
             dir.path().join("session.json")
         );
+    }
+
+    /// Joining and leaving a voice channel, and what the microphone does.
+    mod calls {
+        use super::*;
+
+        #[test]
+        fn a_fresh_state_is_in_no_call_and_holds_no_microphone() {
+            let (_dir, state, sink) = state();
+
+            assert!(!state.has_call_thread());
+            assert!(!state.microphone_open());
+            assert!(sink.events().is_empty());
+        }
+
+        #[test]
+        fn joining_a_channel_opens_the_microphone_and_tells_the_webview() {
+            let (_dir, state, sink) = state();
+
+            join(&state, GENERAL, true);
+
+            until_call(&sink, "connected");
+            assert!(
+                state.microphone_open(),
+                "the call connected with nothing capturing"
+            );
+        }
+
+        #[test]
+        fn leaving_gives_the_microphone_back() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            state.disconnect_call();
+
+            until_call(&sink, "disconnected");
+            wait_for(
+                "the microphone to be given back",
+                || !state.microphone_open(),
+                || "still open".to_owned(),
+            );
+        }
+
+        #[test]
+        fn a_join_that_fails_gives_the_microphone_back_too() {
+            // Otherwise a channel that cannot be joined holds the sound card
+            // open for the rest of the session, and the only sign of it is a
+            // microphone light nobody can turn off.
+            let (_dir, state, sink) = state();
+
+            join(&state, GENERAL, false);
+
+            until_call(&sink, "failed");
+            wait_for(
+                "the microphone to be given back",
+                || !state.microphone_open(),
+                || "still open".to_owned(),
+            );
+        }
+
+        #[test]
+        fn moving_between_channels_keeps_the_microphone_open_throughout() {
+            // The reason the microphone follows the call events rather than
+            // the clicks. Both orderings connect in the end; only this one
+            // does it without closing the sound card in between.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            join(&state, "!music:example.org", true);
+
+            until_call(&sink, "connected");
+            assert!(state.microphone_open());
+            assert_eq!(
+                sink.events()
+                    .iter()
+                    .filter(|event| matches!(event, AppEvent::Call(CallEvent::Disconnected)))
+                    .count(),
+                0,
+                "a channel change reported the call as over"
+            );
+        }
+
+        #[test]
+        fn a_second_call_reuses_the_first_one_s_thread() {
+            // A transport per call would be a `Call::join` per call from a
+            // client that already has one, and a second thread nobody ends.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            // Refuses everything. If this were the transport that got used,
+            // the join below would fail.
+            join(&state, "!music:example.org", false);
+
+            until_call(&sink, "connected");
+        }
+
+        #[tokio::test]
+        async fn signing_out_leaves_the_call_and_says_so() {
+            // The call thread deliberately says nothing on its shutdown path,
+            // so this is where the two things a `Disconnected` would have done
+            // get done: the device goes back, and the webview is told, so the
+            // next sign-in is not caught up with a call that ended with
+            // somebody else's session.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            state.clear_client().await;
+
+            assert!(!state.has_call_thread());
+            assert!(!state.microphone_open());
+            assert_eq!(last_call_state(&sink).as_deref(), Some("disconnected"));
+        }
+
+        #[tokio::test]
+        async fn signing_out_of_a_session_that_never_joined_a_call_says_nothing_about_one() {
+            // The ordinary sign-out. Announcing a disconnection to somebody
+            // who was never in a channel is a notification about nothing.
+            let (_dir, state, sink) = state();
+
+            state.clear_client().await;
+
+            assert_eq!(last_call_state(&sink), None);
+        }
+
+        #[test]
+        fn leaving_a_call_that_was_never_joined_does_nothing() {
+            // A disconnect control that outlived its call, which is what a
+            // stale webview clicking through a resent state looks like.
+            let (_dir, state, sink) = state();
+
+            state.disconnect_call();
+
+            assert!(!state.has_call_thread());
+            assert_eq!(last_call_state(&sink), None);
+        }
     }
 }

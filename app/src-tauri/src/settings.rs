@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use consort_audio::AudioSettings;
+use consort_call::Dialect;
 use consort_matrix::atomic;
 use serde::{Deserialize, Serialize};
 
@@ -28,13 +29,43 @@ const UNIQUE: &str = "settings";
 
 /// Everything the application remembers between runs that is not a session.
 ///
-/// One field so far. It is a struct rather than `AudioSettings` directly so
-/// that appearance, notifications and keybinds can arrive later without
-/// changing the shape of a file that already exists on disk.
+/// A struct rather than `AudioSettings` directly, so that appearance,
+/// notifications and keybinds can arrive later without changing the shape of a
+/// file that already exists on disk.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub audio: AudioSettings,
+    pub calls: CallSettings,
+}
+
+/// The two things about voice calls that a deployment can get wrong.
+///
+/// No interface, deliberately. Both of these are properties of a homeserver
+/// and its voice deployment rather than preferences, the right value is the
+/// same for everybody on that server, and a picker offering somebody a choice
+/// between three MatrixRTC generations would be a picker nobody can answer.
+/// They are here so that a deployment this build cannot work out for itself
+/// can be told, by hand, in one file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CallSettings {
+    /// Which MatrixRTC generation to speak in a channel that offers no
+    /// evidence either way.
+    ///
+    /// Only ever a fallback. `consort_call::detect` looks at the channel first
+    /// and overrides this when somebody is already sitting in it through
+    /// pre-MSC4354 room state; see that function for what it can and cannot
+    /// tell apart.
+    pub fallback_dialect: Dialect,
+    /// Where to ask for an SFU token when the homeserver advertises no voice
+    /// transport of its own.
+    ///
+    /// MSC4143 discovery is tried first, so a homeserver that does advertise
+    /// one wins and this is never read. A deployment whose homeserver does
+    /// not, and which leaves this empty, cannot join a call at all: there is
+    /// nowhere to ask.
+    pub service_url_fallback: Option<String>,
 }
 
 /// The settings file.
@@ -157,7 +188,57 @@ mod tests {
                     ..GateConfig::default()
                 },
             },
+            calls: CallSettings::default(),
         }
+    }
+
+    #[test]
+    fn a_settings_file_written_before_calls_existed_still_loads() {
+        // The `default` container attribute is what makes this true, and it is
+        // load bearing rather than tidiness: every settings file already on
+        // disk was written before this section existed, and a hard failure
+        // here would replace somebody's thresholds with the defaults.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"audio":{"input":"Yeti","output":null,"gate":{}}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert_eq!(loaded.calls, CallSettings::default());
+    }
+
+    #[test]
+    fn the_dialect_nothing_says_otherwise_about_is_the_specification() {
+        // A default that quietly picked a compatibility mode would outlive the
+        // deployment needing it, and the failure it produces is a call that
+        // connects and is heard by nobody.
+        assert_eq!(CallSettings::default().fallback_dialect, Dialect::Current);
+        assert_eq!(CallSettings::default().service_url_fallback, None);
+    }
+
+    #[test]
+    fn a_hand_written_dialect_survives_a_round_trip() {
+        // The only way either of these is ever set. If the names on the wire
+        // drift, the symptom is a file somebody edited on purpose being
+        // silently ignored.
+        let (_dir, store) = store();
+        let chosen = Settings {
+            calls: CallSettings {
+                fallback_dialect: Dialect::State,
+                service_url_fallback: Some("https://example.org/sfu".to_owned()),
+            },
+            ..Settings::default()
+        };
+
+        store.save(&chosen).expect("save");
+
+        assert_eq!(store.load(), chosen);
+        let raw = std::fs::read_to_string(store.path()).expect("read");
+        assert!(raw.contains("\"fallbackDialect\": \"state\""), "{raw}");
     }
 
     #[test]

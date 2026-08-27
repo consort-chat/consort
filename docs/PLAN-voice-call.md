@@ -1,6 +1,7 @@
 # Plan: joining the voice channel
 
-Status: **phases 0, 0.5, 1 and 2 done**, phase 3 next. This is the second half of issue #6. The first half,
+Status: **phases 0, 0.5, 1 and 2 done, phase 3 half done**: joining and
+leaving from the interface works, the roster split does not. This is the second half of issue #6. The first half,
 drawing who is already in a channel, is done and described in
 [PLAN-voice-presence.md](PLAN-voice-presence.md). This half is the one that
 carries audio.
@@ -318,10 +319,87 @@ knows a call has connected is the bridge in `AppState`, and that is phase 3.
 Until then the mechanism is complete and unattached, which is also why an idle
 Consort still does exactly what it did before.
 
-### Phase 3: join and leave from the interface
+### Phase 3: join and leave from the interface (partly done)
 
-Clicking a voice channel connects. A connection panel above the user area, the
-way Discord does it, showing the channel, the state, and a disconnect control.
+Clicking a voice channel connects, and there is a connection panel above the
+account strip showing the channel, the state and a way out. That half is done
+and is described below. The roster split is not, and is the next thing.
+
+`consort-call` is now linked into `consort-app`, which is what makes libwebrtc
+part of every `cargo build` of the binary. `CallBridge` mirrors `AudioBridge`
+exactly: a thread that owns something unmovable, a plain pump thread doing a
+blocking receive, and a `Drop` that ends the owner first so the pump's channel
+can close. Unlike the audio thread it is part of the signed-in session, because
+a call needs a `Client` and publishes membership under this account's device,
+and a sign-out that left one running would leave a name sitting in a voice
+channel for whoever signs in next.
+
+Three things came out differently from what is written above.
+
+**The microphone is shared, and that needed a module of its own.** Until now
+the settings screen was the only thing that ever opened the sound card, so
+opening and closing it could be the same pair of commands that screen already
+had. It is not any more, and adjusting your microphone while you are in a voice
+channel is the ordinary reason to open that screen. Without something in the
+middle, closing it stops the capture, the call keeps publishing, and the first
+anybody knows is a person nobody can hear. `crate::sound::Sound` is that
+something: the device is opened for a named reason and closed only when no
+reason is left. It also skips the reopen when what is being asked for is already
+running, because that reopen is audible as a hole in what a peer hears.
+
+**The microphone follows the call events, not the clicks.** Every ordering
+where a command opens or closes the device races. Leaving a channel and
+immediately clicking another one issues both commands before the first one's
+`Disconnected` has been handled, and a release running after the second acquire
+closes the device on a call that is starting. So both happen on the pump
+thread, in the order the call thread produced them.
+
+**`Disconnected` is no longer emitted when changing channel.** It used to be,
+in phase 1, on the reasoning that two memberships at once is worse than a
+moment of showing neither. The leave still happens first and for that reason,
+but nobody is told: `Connecting` for the new channel already says the old one
+is over, and `Disconnected` is what everything downstream reads as "the call is
+over" and acts on. It is now emitted before the leave rather than after it,
+which also stops the interface showing the previous channel for up to
+`LEAVE_TIMEOUT` after somebody clicked away from it.
+
+**Dialect detection landed here rather than being deferred.** It is one signal,
+and it is the only one available without a matrix-sdk feature this workspace
+does not enable: if anybody is sitting in the channel through pre-MSC4354 room
+state, speak that dialect, because joining any other way makes this session
+invisible to them. `consort_call::detect` is that, as a pure function, and
+`livekit.rs` gained the four lines that feed it. What it cannot do is tell
+`Current` from `Sticky`: a sticky-dialect join is deliberately additive and
+reads the same from outside, and the difference is in field names and in which
+to-device type carries the media keys. Nor can it see sticky membership at all
+without `unstable-msc4354`. So detection only ever pushes towards `State`, and
+the answer for a channel nobody is in comes from `settings.json`.
+
+That settings section, `calls`, has no interface and should not get one. Both
+fields are properties of a deployment rather than preferences, the right value
+is the same for everybody on a server, and a picker offering somebody a choice
+between three MatrixRTC generations is a picker nobody can answer.
+
+The interface itself: clicking a voice channel selects it and joins it, the
+same click doing both, which is what every client anybody already uses does.
+Being in a channel is drawn separately from having it selected, because a voice
+channel stays joined while somebody clicks around the list and collapsing the
+two would make clicking elsewhere read as leaving. The connection panel is
+absent when there is no call rather than saying "not in a voice channel", which
+is a row that would be wrong-looking most of the time. A failed join goes
+beside the channel that refused it rather than in the panel, because there is
+no connection to put in a connection panel and what is worth saying is which
+channel would not take the call and why.
+
+**One gap, deliberately left.** A microphone that will not open does not fail
+the call. The call connects, the publication exists, and no frames arrive,
+which is the stalled sender that `gate.rs` warns about. The failure does reach
+the webview on the `audio` channel, so it is visible, but the two halves are
+not wired together. Doing it properly means the call bridge listening to audio
+events and muting the publication, and it belongs with phase 5's evidence about
+what a peer actually sees.
+
+#### Still to do in this phase
 
 The roster splits. The channel being sat in takes its participants from
 `Call::subscribe_participants()`, which is a live `watch::Receiver` enriched
@@ -330,9 +408,14 @@ Every other channel keeps the existing path. Both feed the same `Participant`
 shape the channel list already draws, so this is a source change and not a
 rendering change.
 
-Failures get sentences. `CallError` distinguishes a Matrix client error, a
-transport error, a media error and a signalling error, and those are four
-genuinely different things to tell somebody.
+Two things about it are known now that were not when this was written.
+`matrix_rtc_media::Participant` carries `member_id`, `user_id`, `device_id`,
+`is_local`, `reachable` and a `Vec<StreamState>`, and no display name: names
+are per room and resolving one is `consort-matrix`'s job, so the roster has to
+travel from the call thread to somewhere that has a `Room`. And the room-state
+path is not currently broken for this deployment, because `Dialect::State`
+writes our own membership as room state and the existing reader sees it. The
+split matters for every other dialect, where room state shows nothing at all.
 
 ### Phase 4: who is speaking
 

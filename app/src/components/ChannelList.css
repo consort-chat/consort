@@ -118,6 +118,45 @@
   color: currentColor;
 }
 
+/*
+  The channel this session is in, or trying to get into.
+
+  Deliberately not the selected treatment. A voice channel keeps being joined
+  while somebody clicks around the list, and if being in it looked like being
+  selected then clicking elsewhere would read as having left.
+
+  A rule down the left edge rather than a fill: it survives sitting next to a
+  selected row without either state hiding the other, and it lines the whole
+  thing up with the connection panel at the bottom of the same column, which is
+  the other place this state is written.
+*/
+.channels__entry[data-call="connected"],
+.channels__entry[data-call="connecting"] {
+  color: var(--text-primary);
+  box-shadow: inset 2px 0 0 var(--mint);
+}
+
+.channels__entry[data-call="connecting"] {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
+
+/*
+  A join that did not happen, beside the channel that would not take it.
+
+  An alert rather than a status: nothing about it resolves on its own, and the
+  next thing that changes it is somebody clicking something.
+*/
+.channels__problem {
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: var(--danger-surface);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+
 .channels__name {
   overflow: hidden;
   font-size: var(--text-sm);

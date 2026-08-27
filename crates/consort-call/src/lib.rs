@@ -49,9 +49,10 @@ pub mod publish;
 pub mod thread;
 pub mod transport;
 
-pub use dialect::Dialect;
+pub use dialect::{Dialect, detect};
 pub use event::CallEvent;
 pub use failure::CallFailure;
+pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use publish::PublishedAudio;
 pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT};

@@ -17,6 +17,7 @@
 use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
+use consort_call::CallEvent;
 use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
@@ -37,6 +38,8 @@ pub enum AppEvent {
     /// The one channel here that is not state. See
     /// [`is_worth_keeping`](Self::is_worth_keeping).
     Audio(AudioEvent),
+    /// This session's voice call started, ended, or would not start.
+    Call(CallEvent),
 }
 
 impl AppEvent {
@@ -52,6 +55,8 @@ impl AppEvent {
     pub const ROOMS: &'static str = "rooms";
     /// The channel carrying the microphone test.
     pub const AUDIO: &'static str = "audio";
+    /// The channel carrying this session's voice call.
+    pub const CALL: &'static str = "call";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -62,6 +67,7 @@ impl AppEvent {
             Self::KeyBackup(_) => Self::KEY_BACKUP,
             Self::Rooms(_) => Self::ROOMS,
             Self::Audio(_) => Self::AUDIO,
+            Self::Call(_) => Self::CALL,
         }
     }
 
@@ -87,11 +93,21 @@ impl AppEvent {
     /// channel only speaks while the settings screen is open, and a screen
     /// that reopens starts the test again rather than needing to be told what
     /// happened last time.
+    ///
+    /// A call is state, all four of it. There is always a current answer to
+    /// "am I in a voice channel", and a webview that reloaded mid-call and was
+    /// not told would draw a client sitting in no channel while this process
+    /// is very much publishing one. `Failed` is kept for the same reason
+    /// rather than despite being an incident: it is how the interface says
+    /// "not in a call, and here is why", and it is superseded by the next
+    /// attempt like every other value on this channel.
     pub fn is_worth_keeping(&self) -> bool {
         match self {
-            Self::Connection(_) | Self::Verification(_) | Self::KeyBackup(_) | Self::Rooms(_) => {
-                true
-            }
+            Self::Connection(_)
+            | Self::Verification(_)
+            | Self::KeyBackup(_)
+            | Self::Rooms(_)
+            | Self::Call(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             Self::Audio(_) => false,
         }
@@ -110,6 +126,7 @@ impl AppEvent {
             Self::KeyBackup(state) => serde_json::to_value(state),
             Self::Rooms(rooms) => serde_json::to_value(rooms),
             Self::Audio(event) => serde_json::to_value(event),
+            Self::Call(event) => serde_json::to_value(event),
         }
     }
 }
@@ -707,6 +724,101 @@ mod tests {
                 .map(|event| event.channel())
                 .collect();
             assert_eq!(resent, vec![AppEvent::CONNECTION, AppEvent::ROOMS]);
+        }
+    }
+
+    /// The voice call, on its own channel.
+    mod calls {
+        use super::*;
+
+        fn in_general() -> CallEvent {
+            CallEvent::Connected {
+                room_id: "!general:example.org".to_owned(),
+            }
+        }
+
+        #[test]
+        fn a_call_event_goes_out_on_its_own_channel() {
+            let event = AppEvent::Call(in_general());
+
+            assert_eq!(event.channel(), AppEvent::CALL);
+            assert_ne!(AppEvent::CALL, AppEvent::AUDIO);
+            assert_ne!(AppEvent::CALL, AppEvent::CONNECTION);
+        }
+
+        #[test]
+        fn the_payload_is_the_call_event_itself() {
+            // `connection` is the sync loop and `call` is a voice channel.
+            // They are two different things that both mean "connected", and
+            // the wire format is where that stops being a naming opinion and
+            // starts being something the frontend switches on.
+            let event = AppEvent::Call(in_general());
+
+            let payload = event.payload().unwrap();
+
+            assert_eq!(payload["state"], "connected");
+            assert_eq!(payload["roomId"], "!general:example.org");
+            assert!(
+                payload.get("Call").is_none(),
+                "the variant name leaked into the wire format: {payload}"
+            );
+        }
+
+        #[test]
+        fn every_call_state_can_be_turned_into_a_payload() {
+            for event in every_call_state() {
+                let event = AppEvent::Call(event);
+                event
+                    .payload()
+                    .unwrap_or_else(|error| panic!("{event:?} would not serialise: {error}"));
+            }
+        }
+
+        #[test]
+        fn every_call_state_is_replayed_to_a_late_subscriber() {
+            // Including the failure. A webview that reloads is entitled to
+            // find out that it is in a voice channel, and equally entitled to
+            // find out that the last attempt did not work: without the second,
+            // a reload after a failed join draws a client idling in no channel
+            // with nothing to say about why.
+            for event in every_call_state() {
+                assert!(
+                    AppEvent::Call(event.clone()).is_worth_keeping(),
+                    "{event:?} would be lost by a webview that reloaded"
+                );
+            }
+        }
+
+        #[test]
+        fn the_call_a_late_subscriber_is_told_about_is_the_current_one() {
+            // One slot per channel, so the join that failed before the one
+            // that worked is not replayed alongside it.
+            let inner = Arc::new(RecordingSink::new());
+            let latest = LatestSink::new(inner.clone());
+            latest.emit(AppEvent::Call(CallEvent::Failed {
+                room_id: "!music:example.org".to_owned(),
+                error: "no voice server".to_owned(),
+            }));
+            latest.emit(AppEvent::Call(in_general()));
+
+            let before = inner.events().len();
+            latest.resend();
+
+            assert_eq!(inner.events()[before..], [AppEvent::Call(in_general())]);
+        }
+
+        fn every_call_state() -> Vec<CallEvent> {
+            vec![
+                CallEvent::Connecting {
+                    room_id: "!general:example.org".to_owned(),
+                },
+                in_general(),
+                CallEvent::Disconnected,
+                CallEvent::Failed {
+                    room_id: "!general:example.org".to_owned(),
+                    error: "sync has not caught up".to_owned(),
+                },
+            ]
         }
     }
 

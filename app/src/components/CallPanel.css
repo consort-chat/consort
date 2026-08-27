@@ -1,0 +1,135 @@
+/*
+  The voice connection strip, directly above the account strip.
+
+  Two rows of text and one control, on the same grid as the account strip below
+  it so the two read as one block of furniture rather than two panels that
+  happen to be adjacent. No fixed height, unlike that strip: there is nothing
+  here a long name can push out of shape, because the channel name truncates
+  and the state above it is one of four fixed phrases.
+*/
+.call-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-void);
+  border-top: 1px solid var(--line-subtle);
+}
+
+.call-panel__where {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+/*
+  The state, and the loudest thing in the strip.
+
+  Mint rather than the violet used for selection, because this is not a
+  selection: it is a live connection, and mint is what the account strip
+  already uses for exactly that.
+*/
+.call-panel__state {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-panel__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: currentcolor;
+  border-radius: 50%;
+}
+
+/*
+  Connecting is amber and pulses, in both the word and the colour. A join waits
+  on a homeserver, an authorisation service and an SFU in turn, so this state
+  can last several seconds and a strip that looked identical to a live call
+  during it would be claiming something that is not true yet.
+*/
+.call-panel[data-state="connecting"] .call-panel__state {
+  color: var(--amber);
+}
+
+.call-panel[data-state="connecting"] .call-panel__dot {
+  /* Opacity only, so the pulse stays on the compositor. */
+  animation: call-panel-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes call-panel-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-panel__dot {
+    animation: none;
+  }
+}
+
+.call-panel__channel {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  The way out.
+
+  Sized to the strip rather than to the glyph, the same way the gear below it
+  is, so the hit target is the full 28px square. Red on hover and not before:
+  this is the only control in the sidebar that ends something, and a strip that
+  is permanently red reads as an error rather than as an exit.
+*/
+.call-panel__leave {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo);
+}
+
+.call-panel__leave:hover {
+  color: var(--danger);
+  background: var(--surface-raised);
+}
+
+.call-panel__leave:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+.call-panel__glyph {
+  width: 16px;
+  height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-panel__leave {
+    transition: none;
+  }
+}

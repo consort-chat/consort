@@ -21,7 +21,7 @@ use matrix_rtc_media::{AudioFrame, AudioSourceConfig, LocalTrackHandle, PublishO
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{OwnedRoomId, RoomId};
 
-use crate::dialect::Dialect;
+use crate::dialect::{self, Dialect};
 use crate::failure::{CallFailure, classify};
 use crate::publish::PublishedAudio;
 use crate::transport::{CallSession, CallTransport};
@@ -29,7 +29,11 @@ use crate::transport::{CallSession, CallTransport};
 /// A MatrixRTC call over LiveKit.
 pub struct LiveKitTransport {
     client: Client,
-    dialect: Dialect,
+    /// Which generation to speak in a room that offers no evidence.
+    ///
+    /// Only ever a fallback: [`dialect::detect`] runs per join and can override
+    /// it. See that function for what is and is not detectable.
+    fallback_dialect: Dialect,
     /// Where to get an SFU token when the homeserver advertises no transport.
     ///
     /// MSC4143 discovery is tried first and this is the fallback, so a
@@ -41,15 +45,19 @@ pub struct LiveKitTransport {
 
 impl LiveKitTransport {
     /// Build the transport for a signed-in session.
-    pub fn new(client: Client, dialect: Dialect, service_url_fallback: Option<String>) -> Self {
+    pub fn new(
+        client: Client,
+        fallback_dialect: Dialect,
+        service_url_fallback: Option<String>,
+    ) -> Self {
         tracing::info!(
-            ?dialect,
+            ?fallback_dialect,
             has_fallback = service_url_fallback.is_some(),
             "call transport ready"
         );
         Self {
             client,
-            dialect,
+            fallback_dialect,
             service_url_fallback,
         }
     }
@@ -71,10 +79,26 @@ impl CallTransport for LiveKitTransport {
     async fn join(&self, room_id: &str) -> Result<Self::Session, CallFailure> {
         let room = self.room(room_id)?;
 
+        // In memory, against the clock, with no request behind it. The same
+        // read `consort_matrix` already does once per voice channel per sync.
+        let occupied = room.active_room_call_participants().len();
+        let dialect = dialect::detect(occupied, self.fallback_dialect);
+
+        // At `info`, permanently. A call in the wrong generation succeeds at
+        // every step and is heard by nobody, so which one was chosen and what
+        // chose it is the first question worth being able to answer.
+        tracing::info!(
+            %room_id,
+            ?dialect,
+            ?self.fallback_dialect,
+            occupied,
+            "joining the call"
+        );
+
         Call::join(
             &room,
             CallOptions {
-                element_call_compat: self.dialect.into(),
+                element_call_compat: dialect.into(),
                 livekit_service_url_fallback: self.service_url_fallback.clone(),
                 ..CallOptions::default()
             },

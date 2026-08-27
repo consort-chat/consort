@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 
-use consort_audio::{AudioCapture, AudioEvent, AudioPlayback, AudioThread, GateConfig};
+use consort_audio::{AudioCapture, AudioEvent, AudioPlayback, AudioThread, GateConfig, GatedSink};
 
 use crate::events::{AppEvent, EventSink};
 
@@ -84,6 +84,23 @@ impl AudioBridge {
         }
     }
 
+    /// Send what the gate produces to `sink`, replacing any previous one.
+    ///
+    /// Held across a device change, so somebody switching microphone in the
+    /// middle of a call does not silently stop being heard.
+    pub fn publish_to(&self, sink: GatedSink) {
+        if let Some(thread) = &self.thread {
+            thread.publish_to(sink);
+        }
+    }
+
+    /// Stop sending gated audio anywhere.
+    pub fn stop_publishing(&self) {
+        if let Some(thread) = &self.thread {
+            thread.stop_publishing();
+        }
+    }
+
     /// Change the running gate's tuning without reopening the microphone.
     pub fn retune(&self, gate: GateConfig) {
         if let Some(thread) = &self.thread {
@@ -126,8 +143,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use consort_audio::{
-        CaptureError, CaptureStream, FRAME_SAMPLES, FrameSink, PlaybackError, PlaybackStream,
-        Tone, ToneEnded,
+        CaptureError, CaptureStream, FRAME_SAMPLES, FrameSink, PlaybackError, PlaybackStream, Tone,
+        ToneEnded,
     };
 
     use crate::events::RecordingSink;

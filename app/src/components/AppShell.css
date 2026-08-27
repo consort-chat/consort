@@ -24,9 +24,17 @@
   because without it a long list makes the row taller than the column instead
   of scrolling inside it.
 */
+/*
+  The channel list, then the connection panel, then the account strip.
+
+  `auto` twice rather than a fixed height for either, and the connection panel
+  is absent whenever there is no call, so this collapses back to two rows on
+  its own. The list takes what is left in both cases, which is why it is the
+  only row that can be zero.
+*/
 .shell__sidebar {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
   min-height: 0;
   background: var(--surface-base);
   border-right: 1px solid var(--line-subtle);

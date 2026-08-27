@@ -23,7 +23,14 @@ vi.mock("../lib/api", async (importOriginal) => ({
 
 import { AppShell } from "./AppShell";
 import { resetAvatarCache } from "../lib/avatars";
-import type { AudioDeviceReport, AudioSettings, Profile } from "../lib/api";
+import type {
+  AudioDeviceReport,
+  AudioSettings,
+  Call,
+  Channel,
+  Profile,
+  Rooms,
+} from "../lib/api";
 
 const profile: Profile = {
   user_id: "@ada:example.org",
@@ -59,22 +66,49 @@ const settings: AudioSettings = {
   },
 };
 
-function shell(onSignedOut = vi.fn()) {
+const EMPTY_HOME: Rooms = {
+  spaces: [{ id: "home", name: "Home", avatar: null, channels: [] }],
+};
+
+function voice(id: string, name: string): Channel {
+  return { id, name, kind: "voice", avatar: null, joined: true, participants: [] };
+}
+
+function textChannel(id: string, name: string): Channel {
+  return { id, name, kind: "text", avatar: null, joined: true, participants: [] };
+}
+
+function shell({
+  rooms = EMPTY_HOME,
+  call = { state: "disconnected" } as Call,
+  onSignedOut = vi.fn(),
+  onJoinVoice = vi.fn(),
+  onLeaveVoice = vi.fn(),
+}: {
+  rooms?: Rooms;
+  call?: Call;
+  onSignedOut?: ReturnType<typeof vi.fn>;
+  onJoinVoice?: ReturnType<typeof vi.fn>;
+  onLeaveVoice?: ReturnType<typeof vi.fn>;
+} = {}) {
   const { container } = render(
     <AppShell
       profile={profile}
-      rooms={{ spaces: [{ id: "home", name: "Home", avatar: null, channels: [] }] }}
+      rooms={rooms}
       connection={{ state: "live" }}
+      call={call}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}
       flows={[]}
       canStartVerification
       onDismissFlow={vi.fn()}
+      onJoinVoice={onJoinVoice}
+      onLeaveVoice={onLeaveVoice}
       onSignedOut={onSignedOut}
     />,
   );
-  return { container, onSignedOut };
+  return { container, onSignedOut, onJoinVoice, onLeaveVoice };
 }
 
 describe("AppShell", () => {
@@ -143,5 +177,147 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
 
     await waitFor(() => expect(document.activeElement).toBe(gear));
+  });
+
+  describe("voice channels", () => {
+    const LOUNGE = "!lounge:example.org";
+
+    const withVoice: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!g:example.org", "general"), voice(LOUNGE, "Lounge")],
+        },
+      ],
+    };
+
+    it("joins a voice channel when it is clicked", async () => {
+      const { onJoinVoice } = shell({ rooms: withVoice });
+
+      await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+      expect(onJoinVoice).toHaveBeenCalledWith(LOUNGE);
+    });
+
+    it("does not try to join a text channel", async () => {
+      // The one thing a click on the wrong row must not do. Joining a call in
+      // a text room is legal MatrixRTC and is nothing anybody asked for.
+      const { onJoinVoice } = shell({ rooms: withVoice });
+
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+
+      expect(onJoinVoice).not.toHaveBeenCalled();
+    });
+
+    it("still selects the voice channel it joined", async () => {
+      // The main pane names what was clicked, so joining without selecting
+      // would leave the heading pointing at whatever was open before.
+      shell({ rooms: withVoice });
+
+      await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Lounge",
+      );
+    });
+
+    it("names the channel it is connected to in the panel", () => {
+      shell({
+        rooms: withVoice,
+        call: { state: "connected", roomId: LOUNGE },
+      });
+
+      const panel = screen.getByRole("group", { name: /voice connection/i });
+      expect(panel).toHaveTextContent(/voice connected/i);
+      expect(panel).toHaveTextContent("Lounge");
+    });
+
+    it("says it is still working while a join is in flight", () => {
+      // A join waits on a homeserver, an authorisation service and an SFU in
+      // turn. A panel that looked connected during it would be claiming
+      // something that is not true yet.
+      shell({
+        rooms: withVoice,
+        call: { state: "connecting", roomId: LOUNGE },
+      });
+
+      expect(
+        screen.getByRole("group", { name: /voice connection/i }),
+      ).toHaveTextContent(/connecting/i);
+    });
+
+    it("shows no connection panel when there is no call", () => {
+      // A permanent row saying "not in a voice channel" is a row that is
+      // wrong-looking most of the time and teaches people to stop reading it.
+      shell({ rooms: withVoice });
+
+      expect(
+        screen.queryByRole("group", { name: /voice connection/i }),
+      ).toBeNull();
+    });
+
+    it("leaves the call from the panel", async () => {
+      const { onLeaveVoice } = shell({
+        rooms: withVoice,
+        call: { state: "connected", roomId: LOUNGE },
+      });
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /disconnect from voice/i }),
+      );
+
+      expect(onLeaveVoice).toHaveBeenCalledTimes(1);
+    });
+
+    it("names a channel it is connected to in another space", () => {
+      // The reason the lookup walks every space. A voice channel stays joined
+      // while somebody browses elsewhere, which is the point of a panel that
+      // is always on screen.
+      shell({
+        rooms: {
+          spaces: [
+            { id: "home", name: "Home", avatar: null, channels: [] },
+            {
+              id: "!hq:example.org",
+              name: "Kahu HQ",
+              avatar: null,
+              channels: [voice(LOUNGE, "Lounge")],
+            },
+          ],
+        },
+        call: { state: "connected", roomId: LOUNGE },
+      });
+
+      expect(
+        screen.getByRole("group", { name: /voice connection/i }),
+      ).toHaveTextContent("Lounge");
+    });
+
+    it("draws a placeholder rather than a room id for a channel it cannot name", () => {
+      shell({
+        rooms: EMPTY_HOME,
+        call: { state: "connected", roomId: LOUNGE },
+      });
+
+      const panel = screen.getByRole("group", { name: /voice connection/i });
+      expect(panel).toHaveTextContent(/voice channel/i);
+      expect(panel).not.toHaveTextContent(LOUNGE);
+    });
+
+    it("shows no connection panel for a join that failed", () => {
+      // There is no connection to put in it. What is worth saying is which
+      // channel would not take the call, and that belongs beside the channel.
+      shell({
+        rooms: withVoice,
+        call: { state: "failed", roomId: LOUNGE, error: "no voice server" },
+      });
+
+      expect(
+        screen.queryByRole("group", { name: /voice connection/i }),
+      ).toBeNull();
+      expect(screen.getByRole("alert")).toHaveTextContent("no voice server");
+    });
   });
 });

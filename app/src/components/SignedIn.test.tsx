@@ -9,6 +9,9 @@ const onVerification = vi.hoisted(() => vi.fn());
 const onVerificationFlow = vi.hoisted(() => vi.fn());
 const onKeyBackup = vi.hoisted(() => vi.fn());
 const onRooms = vi.hoisted(() => vi.fn());
+const onCall = vi.hoisted(() => vi.fn());
+const callConnect = vi.hoisted(() => vi.fn());
+const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
@@ -24,6 +27,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onVerificationFlow,
   onKeyBackup,
   onRooms,
+  onCall,
+  callConnect,
+  callDisconnect,
   roomAvatar,
   resendState,
   verificationVerifyThisSession,
@@ -34,6 +40,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 
 import { SignedIn } from "./SignedIn";
 import type {
+  Call,
   Channel,
   Connection,
   KeyBackup,
@@ -129,6 +136,9 @@ function resetApiMocks() {
   onVerificationFlow.mockReset().mockResolvedValue(() => {});
   onKeyBackup.mockReset().mockResolvedValue(() => {});
   onRooms.mockReset().mockResolvedValue(() => {});
+  onCall.mockReset().mockResolvedValue(() => {});
+  callConnect.mockReset().mockResolvedValue(undefined);
+  callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
@@ -1125,7 +1135,7 @@ describe("SignedIn the room list", () => {
   });
 
   it("says something different about a voice channel", async () => {
-    // The one distinction the next milestone depends on being visible.
+    // The hash is the text channel's, and only the text channel's.
     await showing();
     await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
 
@@ -1134,7 +1144,6 @@ describe("SignedIn the room list", () => {
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent("Lounge");
     expect(heading).not.toHaveTextContent("#");
-    expect(screen.getByText(/joining a voice channel/i)).toBeVisible();
   });
 
   it("forgets the selected channel when the space changes", async () => {
@@ -1196,5 +1205,157 @@ describe("SignedIn the room list", () => {
     expect(
       screen.queryByRole("button", { name: "Kahu HQ" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("SignedIn voice calls", () => {
+  beforeEach(() => {
+    resetApiMocks();
+  });
+
+  const LOUNGE = "!lounge:example.org";
+
+  const rooms: Rooms = {
+    spaces: [
+      {
+        id: "home",
+        name: "Home",
+        avatar: null,
+        channels: [
+          {
+            id: "!general:example.org",
+            name: "general",
+            kind: "text",
+            avatar: null,
+            joined: true,
+            participants: [],
+          },
+          {
+            id: LOUNGE,
+            name: "Lounge",
+            kind: "voice",
+            avatar: null,
+            joined: true,
+            participants: [],
+          },
+        ],
+      },
+    ],
+  };
+
+  /** The handler the component registered for the call channel. */
+  function callHandler(): (call: Call) => void {
+    const registered = onCall.mock.calls.at(-1) as
+      | [(call: Call) => void]
+      | undefined;
+    if (!registered) throw new Error("the component never subscribed to calls");
+    return registered[0];
+  }
+
+  async function showing() {
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onRooms).toHaveBeenCalled());
+    act(() => roomsHandler()(rooms));
+  }
+
+  it("asks to join when a voice channel is clicked", async () => {
+    await showing();
+
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    expect(callConnect).toHaveBeenCalledWith(LOUNGE);
+  });
+
+  it("shows nothing about a call until the call channel says so", async () => {
+    // Nothing is assumed from the click. What is on screen is what the call
+    // thread actually did, which is the whole reason the state comes back on
+    // a channel rather than being set here.
+    await showing();
+
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    expect(
+      screen.queryByRole("group", { name: /voice connection/i }),
+    ).toBeNull();
+  });
+
+  it("draws the connection once the call channel reports it", async () => {
+    await showing();
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+
+    const panel = screen.getByRole("group", { name: /voice connection/i });
+    expect(panel).toHaveTextContent(/voice connected/i);
+    expect(panel).toHaveTextContent("Lounge");
+  });
+
+  it("asks to leave from the connection panel", async () => {
+    await showing();
+    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /disconnect from voice/i }),
+    );
+
+    expect(callDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the panel when the call channel says the call is over", async () => {
+    await showing();
+    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+
+    act(() => callHandler()({ state: "disconnected" }));
+
+    expect(
+      screen.queryByRole("group", { name: /voice connection/i }),
+    ).toBeNull();
+  });
+
+  it("puts a failed join beside the channel that refused it", async () => {
+    await showing();
+
+    act(() =>
+      callHandler()({
+        state: "failed",
+        roomId: LOUNGE,
+        error: "no voice server would take this call",
+      }),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "no voice server would take this call",
+    );
+  });
+
+  it("survives a request to join that the backend refuses outright", async () => {
+    // Only one thing rejects: asking while signed out. It cannot happen from
+    // this screen, and if it does the screen should stay usable rather than
+    // fall over on an unhandled rejection.
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
+    callConnect.mockRejectedValue(new Error("not signed in"));
+    await showing();
+
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    await waitFor(() => expect(complaints).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    complaints.mockRestore();
+  });
+
+  it("stops listening to the call channel when it unmounts", async () => {
+    // A listener that outlives the screen keeps handling events into
+    // unmounted state, and after a sign out and a sign in every event arrives
+    // once per leaked listener.
+    const stop = vi.fn();
+    onCall.mockResolvedValue(stop);
+    const { unmount } = render(
+      <SignedIn profile={profile} onSignedOut={vi.fn()} />,
+    );
+    await waitFor(() => expect(onCall).toHaveBeenCalled());
+
+    unmount();
+
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
   });
 });

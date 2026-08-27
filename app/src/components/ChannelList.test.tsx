@@ -13,7 +13,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 import { ChannelList } from "./ChannelList";
-import type { Channel, Participant, Space } from "../lib/api";
+import type { Call, Channel, Participant, Space } from "../lib/api";
 import { resetAvatarCache } from "../lib/avatars";
 
 function text(id: string, name: string | null, joined = true): Channel {
@@ -52,6 +52,9 @@ function namesIn(label: string): string[] {
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
+/** No call, which is what almost every test here is about. */
+const IDLE: Call = { state: "disconnected" };
+
 describe("ChannelList", () => {
   beforeEach(() => {
     resetAvatarCache();
@@ -63,6 +66,7 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -78,6 +82,7 @@ describe("ChannelList", () => {
           voice("!b:example.org", "Lounge"),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -98,6 +103,7 @@ describe("ChannelList", () => {
           voice("!b:example.org", "Alpha Voice"),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -112,6 +118,7 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -123,7 +130,12 @@ describe("ChannelList", () => {
 
   it("says so when a space has no channels at all", () => {
     render(
-      <ChannelList space={space([])} selectedId={null} onSelect={vi.fn()} />,
+      <ChannelList
+        space={space([])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+      />,
     );
 
     expect(screen.getByText(/nothing in here yet/i)).toBeVisible();
@@ -137,6 +149,7 @@ describe("ChannelList", () => {
           text("!b:example.org", "random"),
         ])}
         selectedId="!b:example.org"
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -156,6 +169,7 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
+        call={IDLE}
         onSelect={onSelect}
       />,
     );
@@ -173,6 +187,7 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
+        call={IDLE}
         onSelect={onSelect}
       />,
     );
@@ -197,6 +212,7 @@ describe("ChannelList", () => {
           ]),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -219,6 +235,7 @@ describe("ChannelList", () => {
           ]),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -236,6 +253,7 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -255,6 +273,7 @@ describe("ChannelList", () => {
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={onSelect}
       />,
     );
@@ -275,6 +294,7 @@ describe("ChannelList", () => {
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -300,6 +320,7 @@ describe("ChannelList", () => {
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
@@ -315,10 +336,122 @@ describe("ChannelList", () => {
       <ChannelList
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
+        call={IDLE}
         onSelect={vi.fn()}
       />,
     );
 
     expect(screen.queryByText(/!never:example\.org/)).not.toBeInTheDocument();
+  });
+
+  describe("the call this session is in", () => {
+    const LOUNGE = "!lounge:example.org";
+
+    function withLounge() {
+      return space([
+        text("!a:example.org", "general"),
+        voice(LOUNGE, "Lounge"),
+        voice("!b:example.org", "Music"),
+      ]);
+    }
+
+    function entryFor(name: string | RegExp): HTMLElement {
+      return screen.getByRole("button", { name });
+    }
+
+    it("marks the channel it is connected to", () => {
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId={null}
+          call={{ state: "connected", roomId: LOUNGE }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(entryFor("Lounge")).toHaveAttribute("data-call", "connected");
+      expect(entryFor("Music")).not.toHaveAttribute("data-call");
+    });
+
+    it("marks the channel it is still joining", () => {
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId={null}
+          call={{ state: "connecting", roomId: LOUNGE }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(entryFor("Lounge")).toHaveAttribute("data-call", "connecting");
+    });
+
+    it("keeps being in a channel separate from having it selected", () => {
+      // A voice channel stays joined while somebody clicks around the list.
+      // If the two looked the same, clicking elsewhere would read as leaving.
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId="!a:example.org"
+          call={{ state: "connected", roomId: LOUNGE }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(entryFor("Lounge")).toHaveAttribute("data-selected", "false");
+      expect(entryFor("Lounge")).toHaveAttribute("data-call", "connected");
+      expect(entryFor(/general/)).toHaveAttribute("data-selected", "true");
+      expect(entryFor(/general/)).not.toHaveAttribute("data-call");
+    });
+
+    it("puts the reason a join failed beside the channel that refused it", () => {
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId={null}
+          call={{
+            state: "failed",
+            roomId: LOUNGE,
+            error: "no voice server would take this call",
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      const problem = screen.getByRole("alert");
+      expect(problem).toHaveTextContent("no voice server would take this call");
+      expect(entryFor("Lounge").parentElement).toContainElement(problem);
+    });
+
+    it("says nothing about a failure in the channel that did not fail", () => {
+      // The room id on the failure is what makes this possible. A second
+      // channel can be clicked while the first is still connecting.
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId={null}
+          call={{ state: "failed", roomId: LOUNGE, error: "no voice server" }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(entryFor("Music").parentElement).not.toHaveTextContent(
+        "no voice server",
+      );
+    });
+
+    it("marks nothing when there is no call", () => {
+      render(
+        <ChannelList
+          space={withLounge()}
+          selectedId={null}
+          call={IDLE}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(entryFor("Lounge")).not.toHaveAttribute("data-call");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
   });
 });

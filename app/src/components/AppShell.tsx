@@ -2,6 +2,8 @@ import { useState } from "react";
 
 import {
   HOME_ID,
+  callRoomId,
+  type Call,
   type Channel,
   type Connection,
   type KeyBackup,
@@ -12,6 +14,7 @@ import {
   type VerificationFlow,
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
+import { CallPanel } from "./CallPanel";
 import { ChannelList } from "./ChannelList";
 import { SettingsModal } from "./SettingsModal";
 import { SpaceRail } from "./SpaceRail";
@@ -54,8 +57,30 @@ function KeyBackupNotice({ state }: { state: KeyBackup["state"] }) {
 function paneDetail(channel: Channel | null): string {
   if (channel === null) return "Messages come after voice.";
   return channel.kind === "voice"
-    ? "Joining a voice channel comes next."
+    ? "Clicking a voice channel joins it."
     : "Messages come after voice.";
+}
+
+/**
+ * What the channel a call is about is named.
+ *
+ * Searched across every space rather than the selected one. A voice channel
+ * stays joined while somebody browses elsewhere, which is the whole point of a
+ * panel that is always on screen, so the channel it names is regularly not in
+ * the list beside it.
+ *
+ * Null when nothing local knows, which is a room the account has not joined.
+ * The panel draws a placeholder; it never draws a room ID.
+ */
+function nameOfCalledChannel(rooms: Rooms, call: Call): string | null {
+  const roomId = callRoomId(call);
+  if (roomId === null) return null;
+
+  for (const space of rooms.spaces) {
+    const found = space.channels.find((channel) => channel.id === roomId);
+    if (found) return channelLabel(found);
+  }
+  return null;
 }
 
 /** The heading of the main pane: the channel, or the honest absence of one. */
@@ -72,12 +97,15 @@ interface Props {
   profile: Profile;
   rooms: Rooms;
   connection: Connection;
+  call: Call;
   verification: Verification;
   keyBackup: KeyBackup;
   storage: TokenStorage | null;
   flows: VerificationFlow[];
   canStartVerification: boolean;
   onDismissFlow: (flowId: string) => void;
+  onJoinVoice: (roomId: string) => void;
+  onLeaveVoice: () => void;
   onSignedOut: () => void;
 }
 
@@ -100,12 +128,15 @@ export function AppShell({
   profile,
   rooms,
   connection,
+  call,
   verification,
   keyBackup,
   storage,
   flows,
   canStartVerification,
   onDismissFlow,
+  onJoinVoice,
+  onLeaveVoice,
   onSignedOut,
 }: Props) {
   const [spaceId, setSpaceId] = useState(HOME_ID);
@@ -137,6 +168,25 @@ export function AppShell({
     setChannelId(null);
   }
 
+  /**
+   * Open a channel, and join it if it is a voice one.
+   *
+   * Both, rather than either. Clicking a voice channel in every client anybody
+   * already uses connects to it, and the selection still moves because the
+   * main pane is the only thing that names what was clicked.
+   *
+   * Joining the channel already joined is not filtered out here. The call
+   * thread answers it by re-announcing the call it is in, which is the right
+   * answer to a click from an interface that may be asking precisely because
+   * it has lost track of where it is.
+   */
+  function selectChannel(id: string) {
+    setChannelId(id);
+
+    const chosen = space?.channels.find((candidate) => candidate.id === id);
+    if (chosen?.kind === "voice") onJoinVoice(id);
+  }
+
   return (
     <>
       {/*
@@ -158,10 +208,21 @@ export function AppShell({
             <ChannelList
               space={space}
               selectedId={channel?.id ?? null}
-              onSelect={setChannelId}
+              call={call}
+              onSelect={selectChannel}
             />
           )}
         </div>
+        {/*
+          Between the channel list and the account strip, which is where every
+          client that has one puts it: the list scrolls and these two do not,
+          so the bottom of the column is the part that is always on screen.
+        */}
+        <CallPanel
+          call={call}
+          channelName={nameOfCalledChannel(rooms, call)}
+          onDisconnect={onLeaveVoice}
+        />
         <UserPanel
           profile={profile}
           connection={connection}

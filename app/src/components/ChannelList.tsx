@@ -1,4 +1,4 @@
-import type { Channel, Space } from "../lib/api";
+import { callRoomId, type Call, type Channel, type Space } from "../lib/api";
 import { channelLabel } from "../lib/labels";
 import { RoomAvatar } from "./RoomAvatar";
 import "./ChannelList.css";
@@ -63,16 +63,30 @@ function Participants({ channel }: { channel: Channel }) {
   );
 }
 
+/**
+ * What this session's call has to do with this row.
+ *
+ * Null for every channel except the one being joined, sat in, or last failed
+ * on. The call carries its own room id precisely so that a second channel
+ * clicked during a slow join does not take the first one's state with it.
+ */
+function callStateOf(channel: Channel, call: Call): Call["state"] | null {
+  return callRoomId(call) === channel.id ? call.state : null;
+}
+
 function ChannelRow({
   channel,
   selected,
+  call,
   onSelect,
 }: {
   channel: Channel;
   selected: boolean;
+  call: Call;
   onSelect: () => void;
 }) {
   const voice = channel.kind === "voice";
+  const callState = voice ? callStateOf(channel, call) : null;
 
   return (
     <li>
@@ -81,6 +95,13 @@ function ChannelRow({
         className="channels__entry"
         data-selected={selected}
         data-kind={channel.kind}
+        /*
+          The call's own state, separate from selection. A channel can be
+          selected without being joined and joined without being selected, and
+          collapsing the two would mean clicking away from a voice channel
+          looked like leaving it.
+        */
+        data-call={callState ?? undefined}
         /*
           A room this account is not in cannot be opened, so the control that
           would open it is disabled rather than absent. Hiding it would make
@@ -100,6 +121,17 @@ function ChannelRow({
         <span className="channels__name">{channelLabel(channel)}</span>
       </button>
       {/*
+        Beside the channel that was clicked rather than in the connection
+        panel, because there is no connection to put it in: a failed join
+        leaves this session exactly where it was, and the only thing worth
+        saying is which channel would not take it and why.
+      */}
+      {callState === "failed" && call.state === "failed" && (
+        <p className="channels__problem" role="alert">
+          {call.error}
+        </p>
+      )}
+      {/*
         Outside the button, deliberately. A person in the channel is not part
         of the control that opens it, and nesting them would make every name a
         target that opens the room instead.
@@ -113,11 +145,13 @@ function Group({
   label,
   channels,
   selectedId,
+  call,
   onSelect,
 }: {
   label: string;
   channels: Channel[];
   selectedId: string | null;
+  call: Call;
   onSelect: (id: string) => void;
 }) {
   // An empty group is no group. A "VOICE" header over nothing reads as a
@@ -133,6 +167,7 @@ function Group({
             key={channel.id}
             channel={channel}
             selected={channel.id === selectedId}
+            call={call}
             onSelect={() => onSelect(channel.id)}
           />
         ))}
@@ -144,6 +179,14 @@ function Group({
 interface Props {
   space: Space;
   selectedId: string | null;
+  /**
+   * What this session's voice call is doing, whichever space it is in.
+   *
+   * Passed whole rather than reduced to "is this one joined", because the
+   * three states this list draws differently are not a boolean: connecting,
+   * connected, and a failure that names a channel and a reason.
+   */
+  call: Call;
   onSelect: (id: string) => void;
 }
 
@@ -154,7 +197,7 @@ interface Props {
  * MSC1772, and filtering preserves it: a channel keeps its place relative to
  * its neighbours even when it moves between the two groups.
  */
-export function ChannelList({ space, selectedId, onSelect }: Props) {
+export function ChannelList({ space, selectedId, call, onSelect }: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
 
@@ -174,12 +217,14 @@ export function ChannelList({ space, selectedId, onSelect }: Props) {
             label="Text"
             channels={text}
             selectedId={selectedId}
+            call={call}
             onSelect={onSelect}
           />
           <Group
             label="Voice"
             channels={voice}
             selectedId={selectedId}
+            call={call}
             onSelect={onSelect}
           />
         </>
