@@ -72,6 +72,34 @@ impl Selection {
             Self::Nothing => None,
         }
     }
+
+    /// The name to hand the audio backend, where `None` means "your default".
+    ///
+    /// Not the same question as [`device`](Self::device), which answers what
+    /// to draw as selected. This answers what to open, and the two differ in
+    /// exactly one case: when the resolved device is the one the host already
+    /// calls its default, the backend is asked for the default rather than for
+    /// that name.
+    ///
+    /// The difference is not cosmetic. A name is a photograph of the machine
+    /// at the moment the list was read; the host's default is a live answer.
+    /// Plug in a headset on Windows or macOS and the system default moves,
+    /// which is what somebody who never opened this screen expects to happen.
+    /// A saved name cannot move, and cpal 0.18 offers no identity beyond the
+    /// display name, so re-resolving one can also land on the wrong twin of an
+    /// identical pair.
+    ///
+    /// The exception is a host that lists devices and flags none as default.
+    /// There is nothing to defer to, so the fallback is named: asking for the
+    /// default there fails with "there is no audio input device" on a machine
+    /// that visibly has one.
+    pub fn name_to_open(&self) -> Option<&str> {
+        match self.device() {
+            Some(device) if device.is_default => None,
+            Some(device) => Some(&device.name),
+            None => None,
+        }
+    }
 }
 
 /// The device list worth showing: deduplicated, unnamed entries dropped, host

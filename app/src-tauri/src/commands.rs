@@ -9,7 +9,10 @@
 //! inside a command is logic no test can reach. The delegates below are the
 //! only untested lines in this file, and there is nothing in them to break.
 
-use consort_audio::{AudioDeviceReport, AudioDevices, AudioSettings, CpalHost};
+use consort_audio::{
+    AudioCapture, AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, catalogue,
+    choose,
+};
 use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
 use serde::Serialize;
 use tauri::State;
@@ -316,6 +319,32 @@ fn set_audio_settings_for(
     state.settings().save(&settings)
 }
 
+/// Start the microphone test behind the settings screen's level meter.
+///
+/// Resolves the saved input choice against what is actually plugged in, so a
+/// device that has gone falls back to the host's default rather than refusing
+/// to open. The result arrives on the `audio` event channel, including the
+/// failure case: opening a microphone fails often enough on a real desktop
+/// that it is a state the screen draws, not an exception.
+fn audio_test_start_for(
+    state: &AppState,
+    host: &dyn AudioDevices,
+    capture: impl FnOnce() -> Box<dyn AudioCapture>,
+) {
+    let audio = state.settings().load().audio;
+    let available = catalogue(host, Direction::Input);
+    let device = choose(&available, audio.input.as_deref())
+        .name_to_open()
+        .map(str::to_owned);
+
+    state.start_microphone(capture, device, audio.gate);
+}
+
+/// Stop the microphone test.
+fn audio_test_stop_for(state: &AppState) {
+    state.stop_microphone();
+}
+
 #[tauri::command]
 pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
     audio_devices_for(&state, &CpalHost)
@@ -332,6 +361,16 @@ pub fn set_audio_settings(
     audio: AudioSettings,
 ) -> Result<(), CommandError> {
     set_audio_settings_for(&state, audio).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn audio_test_start(state: State<'_, AppState>) {
+    audio_test_start_for(&state, &CpalHost, || Box::new(CpalHost));
+}
+
+#[tauri::command]
+pub fn audio_test_stop(state: State<'_, AppState>) {
+    audio_test_stop_for(&state);
 }
 
 /// Verify this session with the account's recovery key.
@@ -682,6 +721,183 @@ mod tests {
             .expect("save");
 
             assert_eq!(state.settings().load().audio.input.as_deref(), Some("Yeti"));
+        }
+
+        /// A capture backend that opens whatever it is handed and reports
+        /// what that was.
+        struct FakeCapture;
+
+        struct FakeStream {
+            device: String,
+        }
+
+        impl consort_audio::CaptureStream for FakeStream {
+            fn device_name(&self) -> &str {
+                &self.device
+            }
+        }
+
+        impl consort_audio::AudioCapture for FakeCapture {
+            fn open(
+                &self,
+                device: Option<&str>,
+                _on_frame: consort_audio::FrameSink,
+            ) -> Result<Box<dyn consort_audio::CaptureStream>, consort_audio::CaptureError>
+            {
+                Ok(Box::new(FakeStream {
+                    // The name a `None` turns into, so a test can tell "open
+                    // the default" apart from "open a device called Default".
+                    device: device.unwrap_or("<the host default>").to_owned(),
+                }))
+            }
+        }
+
+        /// A state whose events can be read back.
+        fn observable_state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            let dir = tempfile::tempdir().expect("a temporary directory");
+            let sink = Arc::new(RecordingSink::new());
+            let state = AppState::new(
+                SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new())),
+                crate::settings::SettingsStore::at(dir.path()),
+                sink.clone(),
+            );
+            (dir, state, sink)
+        }
+
+        /// Block until the audio thread has said something, or give up.
+        fn first_audio_event(sink: &RecordingSink) -> consort_audio::AudioEvent {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if let Some(crate::events::AppEvent::Audio(event)) = sink
+                    .events()
+                    .into_iter()
+                    .find(|event| matches!(event, crate::events::AppEvent::Audio(_)))
+                {
+                    return event;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the microphone said nothing within five seconds");
+        }
+
+        #[test]
+        fn a_first_run_opens_whatever_the_host_calls_its_default() {
+            // The requirement this whole module exists for. Nothing has been
+            // configured, so nothing is named, and the backend picks with
+            // everything it knows about the machine rather than being handed a
+            // name read out of a list.
+            let (_dir, state, sink) = observable_state();
+
+            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+
+            assert_eq!(
+                first_audio_event(&sink),
+                consort_audio::AudioEvent::Started {
+                    device: "<the host default>".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn a_saved_device_that_is_not_the_default_is_opened_by_name() {
+            let (_dir, state, sink) = observable_state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Webcam".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            audio_test_start_for(&state, &TwoInputs, || Box::new(FakeCapture));
+
+            assert_eq!(
+                first_audio_event(&sink),
+                consort_audio::AudioEvent::Started {
+                    device: "Webcam".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn a_saved_device_that_has_gone_falls_back_rather_than_failing() {
+            // A headset unplugged between runs. Refusing to open anything
+            // would leave somebody staring at a dead meter with no way to
+            // work out that the list had moved on without them.
+            let (_dir, state, sink) = observable_state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("A Headset Somebody Unplugged".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+
+            assert_eq!(
+                first_audio_event(&sink),
+                consort_audio::AudioEvent::Started {
+                    device: "<the host default>".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn stopping_releases_the_device() {
+            let (_dir, state, sink) = observable_state();
+            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+            first_audio_event(&sink);
+
+            audio_test_stop_for(&state);
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                if sink.events().iter().any(|event| {
+                    matches!(
+                        event,
+                        crate::events::AppEvent::Audio(consort_audio::AudioEvent::Stopped)
+                    )
+                }) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the microphone was never released");
+        }
+
+        #[test]
+        fn stopping_a_microphone_that_was_never_started_is_not_an_error() {
+            // Which the settings screen does every time it closes, whether or
+            // not anybody pressed the test button.
+            let (_dir, state, sink) = observable_state();
+
+            audio_test_stop_for(&state);
+
+            assert!(sink.events().is_empty());
+        }
+
+        /// A machine with a default microphone and a second one.
+        struct TwoInputs;
+
+        impl AudioDevices for TwoInputs {
+            fn enumerate(&self, direction: Direction) -> Vec<Device> {
+                match direction {
+                    Direction::Input => vec![
+                        Device {
+                            name: "Built-in".to_owned(),
+                            is_default: true,
+                        },
+                        Device {
+                            name: "Webcam".to_owned(),
+                            is_default: false,
+                        },
+                    ],
+                    Direction::Output => Vec::new(),
+                }
+            }
         }
 
         #[test]

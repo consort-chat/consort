@@ -11,7 +11,10 @@ use consort_matrix::{
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
+use consort_audio::{AudioCapture, GateConfig};
+
 use crate::events::{AppEvent, EventSink, LatestSink};
+use crate::microphone::Microphone;
 use crate::settings::SettingsStore;
 
 /// One background task's handle.
@@ -146,6 +149,17 @@ pub struct AppState {
     /// file is not a secret, it survives a sign-out, and losing it costs
     /// somebody their thresholds rather than their login.
     settings: SettingsStore,
+    /// The audio thread, once anything has asked for it.
+    ///
+    /// Lazy because opening it costs a thread and, on some backends, a
+    /// connection to a sound server, and most sessions never open the settings
+    /// screen at all. Kept once created, because a person adjusting a device
+    /// picker starts and stops the test repeatedly and the slow part is the
+    /// sound card rather than the thread.
+    ///
+    /// A `std::sync::Mutex` rather than tokio's. Nothing here awaits while
+    /// holding it, and the commands that reach it are synchronous.
+    microphone: std::sync::Mutex<Option<Microphone>>,
 }
 
 impl AppState {
@@ -163,6 +177,48 @@ impl AppState {
             initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
             settings,
+            microphone: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Begin the microphone test, opening the audio thread on first use.
+    ///
+    /// `capture` is a closure rather than a value so that nothing builds a
+    /// backend on the calls that do not need one, which is every call after
+    /// the first.
+    ///
+    /// `device` is a name to open, or `None` for whatever the host calls its
+    /// default. Resolving a saved choice into one or the other is
+    /// `Selection::name_to_open`, and belongs at the call site: this has no
+    /// business reading settings.
+    pub fn start_microphone(
+        &self,
+        capture: impl FnOnce() -> Box<dyn AudioCapture>,
+        device: Option<String>,
+        gate: GateConfig,
+    ) {
+        let mut slot = self
+            .microphone
+            .lock()
+            .expect("the microphone mutex is never poisoned");
+        let microphone =
+            slot.get_or_insert_with(|| Microphone::spawn(capture(), self.events.clone()));
+        microphone.start(device, gate);
+    }
+
+    /// End the microphone test, releasing the device.
+    ///
+    /// A no-op when nothing was ever started, which is what closing the
+    /// settings screen does whether or not anybody pressed the button. The
+    /// thread stays alive for next time; only the device is given back.
+    pub fn stop_microphone(&self) {
+        if let Some(microphone) = self
+            .microphone
+            .lock()
+            .expect("the microphone mutex is never poisoned")
+            .as_ref()
+        {
+            microphone.stop();
         }
     }
 

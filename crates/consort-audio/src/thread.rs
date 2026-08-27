@@ -23,12 +23,19 @@
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
 
+use serde::{Deserialize, Serialize};
+
 use crate::capture::{AudioCapture, CaptureStream};
 use crate::gate::{FRAME_SAMPLES, GateConfig, VoiceGate};
 use crate::meter::{Meter, Reading};
 
 /// Something the audio thread has to say.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Serialised internally tagged, matching every other union that crosses the
+/// IPC boundary. The wire shape is asserted in `tests/wire.rs`, because
+/// nothing in TypeScript would fail to build if it drifted.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
 pub enum AudioEvent {
     /// Capture began on this device, which is not always the one asked for.
     Started { device: String },

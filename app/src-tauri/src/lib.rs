@@ -10,6 +10,7 @@
 
 mod commands;
 mod events;
+mod microphone;
 mod settings;
 mod state;
 
@@ -89,6 +90,8 @@ pub fn run() {
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,
+            commands::audio_test_start,
+            commands::audio_test_stop,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,

@@ -16,6 +16,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use consort_audio::AudioEvent;
 use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
@@ -31,6 +32,11 @@ pub enum AppEvent {
     KeyBackup(KeyBackup),
     /// The rooms the account is in changed.
     Rooms(Rooms),
+    /// The microphone test said something.
+    ///
+    /// The one channel here that is not state. See
+    /// [`is_worth_keeping`](Self::is_worth_keeping).
+    Audio(AudioEvent),
 }
 
 impl AppEvent {
@@ -44,6 +50,8 @@ impl AppEvent {
     pub const KEY_BACKUP: &'static str = "key-backup";
     /// The channel carrying the whole room list.
     pub const ROOMS: &'static str = "rooms";
+    /// The channel carrying the microphone test.
+    pub const AUDIO: &'static str = "audio";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -53,6 +61,7 @@ impl AppEvent {
             Self::VerificationFlow(_) => Self::VERIFICATION_FLOW,
             Self::KeyBackup(_) => Self::KEY_BACKUP,
             Self::Rooms(_) => Self::ROOMS,
+            Self::Audio(_) => Self::AUDIO,
         }
     }
 
@@ -71,12 +80,20 @@ impl AppEvent {
     /// did not match" back on screen for a flow that ended twenty minutes ago.
     /// A flow still in progress is very much worth keeping: the other device
     /// is waiting, and there is no way to ask for the emoji again.
+    ///
+    /// Audio is never kept. A level reading is a measurement of a moment, and
+    /// replaying the last one would draw a moving bar for a microphone that
+    /// stopped minutes ago. The other three go the same way because this
+    /// channel only speaks while the settings screen is open, and a screen
+    /// that reopens starts the test again rather than needing to be told what
+    /// happened last time.
     pub fn is_worth_keeping(&self) -> bool {
         match self {
             Self::Connection(_) | Self::Verification(_) | Self::KeyBackup(_) | Self::Rooms(_) => {
                 true
             }
             Self::VerificationFlow(flow) => !flow.state.is_final(),
+            Self::Audio(_) => false,
         }
     }
 
@@ -92,6 +109,7 @@ impl AppEvent {
             Self::VerificationFlow(flow) => serde_json::to_value(flow),
             Self::KeyBackup(state) => serde_json::to_value(state),
             Self::Rooms(rooms) => serde_json::to_value(rooms),
+            Self::Audio(event) => serde_json::to_value(event),
         }
     }
 }
@@ -583,6 +601,113 @@ mod tests {
         // and which buttons are drawn, so a payload without it renders a flow
         // the wrong way round.
         assert_eq!(payload["weStarted"], false);
+    }
+
+    /// The microphone test's own channel.
+    mod audio {
+        use super::*;
+        use consort_audio::Reading;
+
+        fn a_reading() -> Reading {
+            // Both exactly representable in f32, so the JSON comparison
+            // below is about the shape rather than about widening 0.42 to
+            // 0.41999998688697815.
+            Reading {
+                level: 0.5,
+                probability: 0.75,
+                open: true,
+            }
+        }
+
+        #[test]
+        fn an_audio_event_goes_out_on_its_own_channel() {
+            let event = AppEvent::Audio(AudioEvent::Level(a_reading()));
+
+            assert_eq!(event.channel(), AppEvent::AUDIO);
+            assert_ne!(AppEvent::AUDIO, AppEvent::CONNECTION);
+            assert_ne!(AppEvent::AUDIO, AppEvent::ROOMS);
+        }
+
+        #[test]
+        fn the_payload_is_the_audio_event_itself() {
+            let event = AppEvent::Audio(AudioEvent::Level(a_reading()));
+
+            let payload = event.payload().unwrap();
+
+            assert_eq!(payload["state"], "level");
+            assert_eq!(payload["level"], 0.5);
+            assert!(
+                payload.get("Audio").is_none(),
+                "the variant name leaked into the wire format: {payload}"
+            );
+        }
+
+        #[test]
+        fn every_audio_state_can_be_turned_into_a_payload() {
+            let events = [
+                AudioEvent::Started {
+                    device: "Yeti".to_owned(),
+                },
+                AudioEvent::Stopped,
+                AudioEvent::Failed {
+                    error: "busy".to_owned(),
+                },
+                AudioEvent::Level(a_reading()),
+            ];
+
+            for event in events {
+                let event = AppEvent::Audio(event);
+                event
+                    .payload()
+                    .unwrap_or_else(|error| panic!("{event:?} would not serialise: {error}"));
+            }
+        }
+
+        #[test]
+        fn nothing_about_the_microphone_is_ever_replayed() {
+            // A level is not state. Replaying the last one to a webview that
+            // remounted would draw a moving bar for a stream that stopped
+            // minutes ago, which is the exact opposite of what the replay
+            // exists for. The rest goes the same way for the same reason:
+            // this channel only speaks while a settings screen is open and
+            // listening, and a screen that reopens restarts the test.
+            for event in [
+                AudioEvent::Started {
+                    device: "Yeti".to_owned(),
+                },
+                AudioEvent::Stopped,
+                AudioEvent::Failed {
+                    error: "busy".to_owned(),
+                },
+                AudioEvent::Level(a_reading()),
+            ] {
+                assert!(
+                    !AppEvent::Audio(event.clone()).is_worth_keeping(),
+                    "{event:?} would be replayed to a late subscriber"
+                );
+            }
+        }
+
+        #[test]
+        fn a_level_reading_does_not_disturb_the_channels_that_are_replayed() {
+            // The retention list is walked by channel name. An audio event
+            // that matched a held entry would evict it, and a microphone test
+            // would silently cost the next remount its room list.
+            let inner = Arc::new(RecordingSink::new());
+            let latest = LatestSink::new(inner.clone());
+            latest.emit(AppEvent::Connection(Connection::Live));
+            latest.emit(AppEvent::Rooms(a_room_list()));
+
+            latest.emit(AppEvent::Audio(AudioEvent::Level(a_reading())));
+            let before = inner.events().len();
+            latest.resend();
+
+            let resent: Vec<&'static str> = inner.events()[before..]
+                .iter()
+                .map(|event| event.channel())
+                .collect();
+            assert_eq!(resent, vec![AppEvent::CONNECTION, AppEvent::ROOMS]);
+        }
     }
 
     /// Which channels are worth catching a late subscriber up on.

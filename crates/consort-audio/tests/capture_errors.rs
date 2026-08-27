@@ -94,7 +94,10 @@ fn a_backend_failure_carries_what_the_backend_said() {
 
     let message = error.to_string();
 
-    assert!(message.starts_with("the audio backend failed: "), "got {message}");
+    assert!(
+        message.starts_with("the audio backend failed: "),
+        "got {message}"
+    );
     assert!(message.contains("temporarily busy"), "got {message}");
 }
 

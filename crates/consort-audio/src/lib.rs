@@ -18,8 +18,11 @@ pub mod meter;
 pub mod settings;
 pub mod thread;
 
+pub use capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
 pub use cpal_host::CpalHost;
-pub use devices::{AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection};
+pub use devices::{
+    AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection, catalogue, choose,
+};
 pub use frames::Frames;
 pub use gate::{
     FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, SAMPLE_RATE, VoiceGate,

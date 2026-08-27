@@ -281,3 +281,81 @@ mod cataloguing {
         assert_eq!(catalogue(&host, Direction::Input), vec![device("Yeti")]);
     }
 }
+
+/// What name, if any, gets handed to the audio backend.
+///
+/// The distinction the whole module turns on: asking a backend for "the
+/// default" is not the same as asking it for the device that is currently the
+/// default, by name. The first tracks the machine, the second is a photograph
+/// of it. On a laptop where plugging in a headset moves the system default,
+/// the second keeps recording from the lid.
+mod what_to_open {
+    use super::*;
+
+    #[test]
+    fn nothing_saved_means_the_hosts_own_default() {
+        // The first-run case, and the one that has to be right without anybody
+        // configuring anything. `None` reaches cpal as
+        // `default_input_device()`, so the host decides with whatever it knows
+        // about the machine, which is more than a name lookup here knows.
+        let available = [default_device("Built-in"), device("Yeti")];
+
+        let chosen = choose(&available, None);
+
+        assert_eq!(chosen.name_to_open(), None);
+    }
+
+    #[test]
+    fn a_saved_device_is_asked_for_by_name() {
+        let available = [default_device("Built-in"), device("Yeti")];
+
+        let chosen = choose(&available, Some("Yeti"));
+
+        assert_eq!(chosen.name_to_open(), Some("Yeti"));
+    }
+
+    #[test]
+    fn a_saved_device_that_is_also_the_default_is_left_to_the_host() {
+        // Same hardware either way today. The difference shows up tomorrow: a
+        // person who picked the device that happened to be the system default
+        // meant "the usual one", and following the system is what keeps that
+        // true when the system changes its mind.
+        let available = [default_device("Built-in"), device("Yeti")];
+
+        let chosen = choose(&available, Some("Built-in"));
+
+        assert_eq!(chosen.name_to_open(), None);
+    }
+
+    #[test]
+    fn a_saved_device_that_is_gone_falls_back_to_the_host_default() {
+        // Not to the substituted device's name. `choose` already resolved the
+        // fallback to whatever the host flagged, and asking for that by name
+        // would just be a slower way of asking for the default.
+        let available = [default_device("Built-in")];
+
+        let chosen = choose(&available, Some("Yeti"));
+
+        assert_eq!(chosen.name_to_open(), None);
+    }
+
+    #[test]
+    fn a_fallback_to_something_the_host_did_not_flag_is_asked_for_by_name() {
+        // A host that lists devices but flags none. `choose` falls back to the
+        // first, and there is no host default to defer to: asking for one
+        // would fail with "there is no audio input device" on a machine that
+        // visibly has one.
+        let available = [device("Built-in"), device("Yeti")];
+
+        assert_eq!(choose(&available, None).name_to_open(), Some("Built-in"));
+        assert_eq!(
+            choose(&available, Some("Gone")).name_to_open(),
+            Some("Built-in")
+        );
+    }
+
+    #[test]
+    fn an_empty_machine_asks_for_nothing() {
+        assert_eq!(choose(&[], None).name_to_open(), None);
+    }
+}
