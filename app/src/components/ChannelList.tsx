@@ -1,4 +1,10 @@
-import { callRoomId, type Call, type Channel, type Space } from "../lib/api";
+import {
+  callRoomId,
+  type Call,
+  type Channel,
+  type Participant,
+  type Space,
+} from "../lib/api";
 import { channelLabel } from "../lib/labels";
 import { RoomAvatar } from "./RoomAvatar";
 import "./ChannelList.css";
@@ -40,15 +46,21 @@ function VoiceIcon() {
  * channels is omitted, so a quiet voice channel keeps exactly the shape it had
  * before this existed.
  */
-function Participants({ channel }: { channel: Channel }) {
-  if (channel.participants.length === 0) return null;
+function Participants({
+  channel,
+  people,
+}: {
+  channel: Channel;
+  people: Participant[];
+}) {
+  if (people.length === 0) return null;
 
   return (
     <ul
       className="channels__people"
       aria-label={`In ${channelLabel(channel)}`}
     >
-      {channel.participants.map((participant) => (
+      {people.map((participant) => (
         <li key={participant.id} className="channels__person">
           <RoomAvatar
             roomId={channel.id}
@@ -72,6 +84,27 @@ function Participants({ channel }: { channel: Channel }) {
  */
 function callStateOf(channel: Channel, call: Call): Call["state"] | null {
   return callRoomId(call) === channel.id ? call.state : null;
+}
+
+/**
+ * Who to draw under a voice channel.
+ *
+ * Two sources, and the better one wins for the one channel it covers. Room
+ * state is what every channel this session is not sitting in has to use, and it
+ * is only correct in the oldest MatrixRTC generation: in the current one it
+ * shows nobody at all. The channel being sat in has a live roster from the call
+ * itself, which is right in every generation and knows about this session
+ * before any sync does.
+ *
+ * Only while connected. A join in flight has no roster yet, and a failed one
+ * never will, so both keep whatever room state last said rather than blanking
+ * a list that was correct a second ago.
+ */
+function peopleIn(channel: Channel, call: Call): Participant[] {
+  if (call.state === "connected" && call.roomId === channel.id) {
+    return call.participants;
+  }
+  return channel.participants;
 }
 
 function ChannelRow({
@@ -136,7 +169,9 @@ function ChannelRow({
         of the control that opens it, and nesting them would make every name a
         target that opens the room instead.
       */}
-      {voice && <Participants channel={channel} />}
+      {voice && (
+        <Participants channel={channel} people={peopleIn(channel, call)} />
+      )}
     </li>
   );
 }

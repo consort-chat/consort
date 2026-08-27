@@ -1,10 +1,9 @@
 # Plan: joining the voice channel
 
-Status: **phases 0, 0.5, 1 and 2 done, phase 3 half done**: joining and
-leaving from the interface works, the roster split does not. This is the second half of issue #6. The first half,
-drawing who is already in a channel, is done and described in
-[PLAN-voice-presence.md](PLAN-voice-presence.md). This half is the one that
-carries audio.
+Status: **phases 0 to 3 done**, phase 4 next. This is the second half of
+issue #6. The first half, drawing who is already in a channel, is done and
+described in [PLAN-voice-presence.md](PLAN-voice-presence.md). This half is
+the one that carries audio.
 
 Everything below was written after reading the sibling `matrix-rust-rtc`
 checkout rather than guessing at it, because the single most important fact
@@ -319,11 +318,11 @@ knows a call has connected is the bridge in `AppState`, and that is phase 3.
 Until then the mechanism is complete and unattached, which is also why an idle
 Consort still does exactly what it did before.
 
-### Phase 3: join and leave from the interface (partly done)
+### Phase 3: join and leave from the interface (done)
 
-Clicking a voice channel connects, and there is a connection panel above the
-account strip showing the channel, the state and a way out. That half is done
-and is described below. The roster split is not, and is the next thing.
+Clicking a voice channel connects, there is a connection panel above the
+account strip showing the channel, the state and a way out, and the channel
+being sat in draws its people from the call rather than from room state.
 
 `consort-call` is now linked into `consort-app`, which is what makes libwebrtc
 part of every `cargo build` of the binary. `CallBridge` mirrors `AudioBridge`
@@ -399,23 +398,85 @@ not wired together. Doing it properly means the call bridge listening to audio
 events and muting the publication, and it belongs with phase 5's evidence about
 what a peer actually sees.
 
-#### Still to do in this phase
+#### Saying why a call cannot be heard
 
-The roster splits. The channel being sat in takes its participants from
-`Call::subscribe_participants()`, which is a live `watch::Receiver` enriched
-with actual media stream state, and is strictly better than reading room state.
-Every other channel keeps the existing path. Both feed the same `Participant`
-shape the channel list already draws, so this is a source change and not a
-rendering change.
+The job phase 0 handed to this phase, and the one worth having most. That
+finding was not "cross-signing is a prerequisite", it was "the failure looks
+exactly like success": both memberships published, both rosters correct, RTP
+flowing in both directions, and neither side able to decrypt a word. Every
+signal an interface normally draws said the call was working.
 
-Two things about it are known now that were not when this was written.
-`matrix_rtc_media::Participant` carries `member_id`, `user_id`, `device_id`,
-`is_local`, `reachable` and a `Vec<StreamState>`, and no display name: names
-are per room and resolving one is `consort-matrix`'s job, so the roster has to
-travel from the call thread to somewhere that has a `Room`. And the room-state
-path is not currently broken for this deployment, because `Dialect::State`
-writes our own membership as room state and the existing reader sees it. The
-split matters for every other dialect, where room state shows nothing at all.
+It is not silent underneath. `FrameEncryptionState` carries the frame cryptor's
+verdict per membership plus a diagnostic saying whether any key was ever
+installed, and `KeyDiscarded` carries the reason a key that did arrive was
+refused. `consort_call::trouble` folds those into one sentence for the call,
+`Roster` carries it alongside the participants, and the connection panel draws
+it as an alert.
+
+Three decisions in it.
+
+**One sentence for the call, and nobody's name in it.** Naming the person would
+mean mapping a membership onto the roster, which is per person, and that
+mapping is not total. In a voice channel with three people in it "somebody" is
+enough to act on, and being sure of what is said matters more than being
+specific about who.
+
+**Faults are ranked, because several can be true at once.** A session with no
+cross-signing identity can neither send its key nor be sent one, which is two
+faults and one line of space. Nobody hearing you outranks you not hearing one
+person, and a key that arrived and was refused outranks one that never arrived,
+because the refusal knows why and the absence is guessing.
+
+**Two of the five sentences name cross-signing.** It is the cause phase 0
+reproduced, it is by a wide margin the most likely one, and it is fixed from
+the settings screen rather than by waiting. Leaving it out would send somebody
+to look at their network.
+
+It rides on the same seam as the roster rather than one of its own, for the
+reason the roster rides on `Connected`: they change for the same reasons and
+are drawn in the same place, and two watchers describing one call means
+whichever spoke last wins.
+
+#### The roster split
+
+The channel being sat in takes its participants from
+`Call::subscribe_participants()`, which comes from MatrixRTC signalling rather
+than room state and is right in every dialect. Every other channel keeps the
+existing path. Both feed the same `Participant` the channel list already draws,
+so this is a source change and not a rendering change, and it is done.
+
+Three decisions inside it are worth stating.
+
+**The roster travels on the `Connected` event rather than a channel of its
+own.** Being in a call and who is in it are one state: a reader that keeps the
+latest thing said on this channel then has both, and a reader that missed a
+roster change has not also lost track of whether it is in a call. It also
+sidesteps a real bug, because `LatestSink` keeps one event per channel and a
+roster on the `call` channel would have evicted the call's own state.
+
+**`consort-call` now depends on `consort-matrix`.** The roster arrives as user
+IDs, and naming somebody is a per-room question that only the room's member
+store can answer. `consort-matrix` already knew how, in the room-state path,
+and duplicating it would have been two answers to drift apart. The edge points
+one way and always will: `consort-matrix` must never depend on `consort-call`,
+or libwebrtc lands in the way of every `cargo test -p consort-matrix`.
+
+**Deduplication happens once, in `consort-matrix`.** A roster is per
+membership and so is room state, so both arrive with somebody's laptop and
+phone in twice. `facts::name_all` is the one place that fixes it, and it does
+so without disturbing the order, which is what keeps the list from reshuffling
+under the pointer.
+
+The room-state path was never broken for this deployment, which is worth being
+honest about: `Dialect::State` writes our own membership as room state and the
+existing reader sees it. The split matters for every other dialect, where room
+state shows nothing at all, and it is also simply better here: it is right
+before sync has delivered anything, and the same event that says the call is up
+says who is in it.
+
+Only while connected, deliberately. A join in flight has no roster yet and a
+failed one never will, so both keep whatever room state last said rather than
+blanking a list that was correct a second ago.
 
 ### Phase 4: who is speaking
 
@@ -625,9 +686,9 @@ than a log line, so no log filter will suppress it.
 - **Phase 1** is unchanged.
 - **Phase 2** is smaller. The queue protects the capture thread; it does not
   pace the publish, because the transport already does.
-- **Phase 3** gains a job: surface `FrameEncryptionState` and `KeyDiscarded`,
-  because "you cannot hear this person, and here is why" is available and
-  silence is not an acceptable substitute.
+- **Phase 3** gained a job and has done it: `FrameEncryptionState` and
+  `KeyDiscarded` are folded into one sentence per call and drawn in the
+  connection panel. See "Saying why a call cannot be heard" above.
 - **Phase 4** is nearly free. `CallEvent::ActiveSpeakers` carries each speaker
   and their level, so remote speaking indication needs no metering of our own.
 - **New phase 0.5**, small and first: confirm the real Consort device is

@@ -70,6 +70,14 @@ matrix-rtc-livekit = { git = "https://github.com/BillCarsonFr/matrix-rust-rtc", 
 # with it.
 matrix-rtc-media = { git = "https://github.com/BillCarsonFr/matrix-rust-rtc", rev = "7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8" }
 
+# Dev-only, and for exactly one type: `KeyRejection`, which rides inside
+# `matrix_rtc_media::CallEvent::KeyDiscarded` and is not re-exported by the
+# crate that carries it. Without it a test cannot construct the one event that
+# says why a media key was refused, which is the most useful thing Consort has
+# to tell somebody about a call nobody can hear. Same git source and rev, so it
+# is the crate already in the graph rather than a second copy.
+matrix-rtc-core = { git = "https://github.com/BillCarsonFr/matrix-rust-rtc", rev = "7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8" }
+
 # Eight crates in Cargo.lock are pinned by hand and are load-bearing.
 #
 # `livekit`, `livekit-api`, `livekit-datatrack`, `livekit-protocol`,

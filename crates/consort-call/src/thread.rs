@@ -42,7 +42,7 @@ use crate::event::CallEvent;
 use crate::failure::CallFailure;
 use crate::microphone::Microphone;
 use crate::publish::pump;
-use crate::transport::{CallSession, CallTransport};
+use crate::transport::{CallSession, CallTransport, Roster};
 
 /// How long a join may take before it is abandoned.
 ///
@@ -177,6 +177,8 @@ struct Joined<S> {
     session: S,
     /// Ends when this is dropped. See [`AbortOnDrop`].
     publishing: AbortOnDrop,
+    /// The task reporting who is in the call. Ends the same way.
+    watching: AbortOnDrop,
 }
 
 /// A task that ends when this handle is dropped.
@@ -240,11 +242,14 @@ async fn connect<T: CallTransport>(
     // Already there. Re-announced rather than ignored, because the interface
     // may be asking precisely because it has lost track of where it is, and a
     // second `Connected` costs nothing.
-    if current
-        .as_ref()
-        .is_some_and(|joined| joined.room_id == room_id)
+    if let Some(joined) = current.as_ref()
+        && joined.room_id == room_id
     {
-        emit(events, CallEvent::Connected { room_id });
+        // With the roster read again rather than remembered. The interface
+        // asking where it is deserves the current answer, and the alternative
+        // is holding a copy here that the watcher below is already keeping.
+        let roster = joined.session.roster();
+        emit(events, connected(&room_id, &roster).await);
         return current;
     }
 
@@ -302,17 +307,63 @@ async fn connect<T: CallTransport>(
     // that cannot leave it.
     let publishing = AbortOnDrop(tokio::task::spawn_local(pump(track, microphone.clone())));
 
-    emit(
-        events,
-        CallEvent::Connected {
-            room_id: room_id.clone(),
-        },
-    );
+    // Two views of the same roster: one read now, for the `Connected` that
+    // says the call is up, and one handed to the task that reports every
+    // change after it. Reading it before the task starts is what stops the
+    // interface drawing an empty channel until the next person moves.
+    let roster = session.roster();
+    emit(events, connected(&room_id, &roster).await);
+
+    // Ended by its handle, like the publication and for the same reason: it
+    // waits on something that goes quiet rather than closing when the call is
+    // left.
+    let watching = AbortOnDrop(tokio::task::spawn_local(watch_roster(
+        room_id.clone(),
+        roster,
+        events.clone(),
+    )));
+
     Some(Joined {
         room_id,
         session,
         publishing,
+        watching,
     })
+}
+
+/// Report who is in the call, every time that changes.
+///
+/// One `Connected` per change rather than an event of its own, because being
+/// in a call and who is in it are one state: a reader that keeps only the
+/// latest thing said on this channel then has both, and a reader that missed
+/// one has not also lost track of whether it is in a call.
+///
+/// Ends when the roster says it will never change again, which is a call that
+/// went away underneath this task. Nothing is emitted for that: whatever ended
+/// the call is what says so.
+async fn watch_roster<R: Roster>(
+    room_id: String,
+    mut roster: R,
+    events: UnboundedSender<CallEvent>,
+) {
+    while roster.changed().await {
+        let said = connected(&room_id, &roster).await;
+        emit(&events, said);
+    }
+}
+
+/// What being in this call currently means, all of it.
+///
+/// Built in one place rather than at each of the three call sites, because the
+/// roster and the trouble have to be read together: two readers a moment apart
+/// can report a call whose people and whose fault came from different
+/// instants, and the interface would draw the pair as though they were one.
+async fn connected<R: Roster>(room_id: &str, roster: &R) -> CallEvent {
+    CallEvent::Connected {
+        room_id: room_id.to_owned(),
+        participants: roster.now().await,
+        trouble: roster.trouble(),
+    }
 }
 
 /// Leave `current`, if there is one. Says whether there was.
@@ -326,14 +377,17 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>) -> bool {
         room_id,
         session,
         publishing,
+        watching,
     }) = current
     else {
         return false;
     };
 
     // Stopped before the leave rather than after it, so no frame is still
-    // being pushed into a publication that is being torn down underneath it.
+    // being pushed into a publication that is being torn down underneath it,
+    // and no roster is reported for a call that is on its way out.
     drop(publishing);
+    drop(watching);
 
     leave_session(&room_id, session).await;
     true
@@ -378,6 +432,9 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    use consort_matrix::Participant;
+    use tokio::sync::watch;
 
     use crate::publish::PublishedAudio;
 
@@ -461,6 +518,9 @@ mod tests {
         joining: Joining,
         leaving: Leaving,
         publishing: Publishing,
+        /// Held by the transport rather than made per session, so a test can
+        /// reach the roster of a call the loop is holding.
+        roster: watch::Sender<Standing>,
     }
 
     /// What a leave does.
@@ -482,6 +542,7 @@ mod tests {
                     joining,
                     leaving: Leaving::Succeeds,
                     publishing: Publishing::Succeeds,
+                    roster: watch::channel((Vec::new(), None)).0,
                 },
                 log,
             )
@@ -498,6 +559,13 @@ mod tests {
             transport.publishing = Publishing::Fails;
             (transport, log)
         }
+
+        /// A call somebody is already in.
+        fn whose_roster_holds(people: Vec<Participant>) -> (Self, Log) {
+            let (mut transport, log) = Self::new(Joining::Succeeds);
+            transport.roster = watch::channel((people, None)).0;
+            (transport, log)
+        }
     }
 
     impl CallTransport for FakeTransport {
@@ -512,6 +580,7 @@ mod tests {
                     log: self.log.clone(),
                     leaving: self.leaving,
                     publishing: self.publishing,
+                    roster: self.roster.clone(),
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
                 Joining::Hangs => std::future::pending().await,
@@ -524,10 +593,49 @@ mod tests {
         log: Log,
         leaving: Leaving,
         publishing: Publishing,
+        /// The roster every view of this call reads from. A test pushes to the
+        /// sender to make somebody arrive or leave.
+        roster: watch::Sender<Standing>,
+    }
+
+    /// What a fake call currently is: who is in it, and what is wrong.
+    ///
+    /// One channel for the pair, matching the real one, where a roster change
+    /// and an encryption report both wake the same watcher.
+    type Standing = (Vec<Participant>, Option<String>);
+
+    /// One view of a fake call.
+    struct FakeRoster(watch::Receiver<Standing>);
+
+    impl Roster for FakeRoster {
+        async fn now(&self) -> Vec<Participant> {
+            self.0.borrow().0.clone()
+        }
+
+        fn trouble(&self) -> Option<String> {
+            self.0.borrow().1.clone()
+        }
+
+        async fn changed(&mut self) -> bool {
+            self.0.changed().await.is_ok()
+        }
+    }
+
+    /// Somebody in a call.
+    fn person(name: &str) -> Participant {
+        Participant {
+            id: format!("@{}:example.org", name.to_lowercase()),
+            name: name.to_owned(),
+        }
     }
 
     impl CallSession for FakeSession {
         type Track = FakeTrack;
+        type Roster = FakeRoster;
+
+        fn roster(&self) -> Self::Roster {
+            FakeRoster(self.roster.subscribe())
+        }
 
         async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
             self.log
@@ -572,6 +680,24 @@ mod tests {
     fn connected(room_id: &str) -> CallEvent {
         CallEvent::Connected {
             room_id: room_id.to_owned(),
+            participants: Vec::new(),
+            trouble: None,
+        }
+    }
+
+    fn connected_with(room_id: &str, participants: Vec<Participant>) -> CallEvent {
+        CallEvent::Connected {
+            room_id: room_id.to_owned(),
+            participants,
+            trouble: None,
+        }
+    }
+
+    fn troubled(room_id: &str, trouble: &str) -> CallEvent {
+        CallEvent::Connected {
+            room_id: room_id.to_owned(),
+            participants: Vec::new(),
+            trouble: Some(trouble.to_owned()),
         }
     }
 
@@ -1024,5 +1150,252 @@ mod tests {
                 assert_eq!(log.live(), 0);
             })
             .await;
+    }
+
+    /// Who is in the call, and how that reaches the interface.
+    mod roster {
+        use super::*;
+
+        /// Run the loop with the roster reachable, so a test can change it
+        /// while a call is up.
+        ///
+        /// [`transcript`] cannot do this. It queues every command before the
+        /// loop starts, and a `watch` receiver made after a send never sees
+        /// that send as a change, so a roster pushed before the join is a
+        /// roster nobody reports. Everything here awaits an event rather than
+        /// sleeping, so it is as deterministic as `transcript` is.
+        async fn driving<F, Fut>(transport: FakeTransport, act: F) -> Vec<CallEvent>
+        where
+            F: FnOnce(watch::Sender<Standing>, Driver) -> Fut,
+            Fut: Future<Output = Driver>,
+        {
+            let roster = transport.roster.clone();
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, said) = unbounded_channel();
+
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                    ));
+
+                    let driver = act(roster, Driver { to_loop, said }).await;
+
+                    let Driver { to_loop, mut said } = driver;
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+
+                    let mut rest = Vec::new();
+                    while let Some(event) = said.recv().await {
+                        rest.push(event);
+                    }
+                    rest
+                })
+                .await
+        }
+
+        /// The two ends of the loop, handed to a test to drive by hand.
+        struct Driver {
+            to_loop: UnboundedSender<Message>,
+            said: UnboundedReceiver<CallEvent>,
+        }
+
+        impl Driver {
+            fn send(&self, message: Message) {
+                self.to_loop.send(message).unwrap();
+            }
+
+            /// The next thing the loop says. Never sleeps, never polls.
+            async fn next(&mut self) -> CallEvent {
+                self.said.recv().await.expect("the loop stopped talking")
+            }
+        }
+
+        #[tokio::test]
+        async fn joining_reports_who_is_already_in_the_channel() {
+            // Read before the watcher starts rather than waiting for the first
+            // change, because the first change may be days away: a channel
+            // three people are sitting in quietly would otherwise draw empty
+            // for as long as nobody moved.
+            let (transport, _log) =
+                FakeTransport::whose_roster_holds(vec![person("Ada"), person("Bob")]);
+
+            let said = transcript(transport, vec![connect_to(GENERAL)]).await;
+
+            assert_eq!(
+                said,
+                vec![
+                    connecting(GENERAL),
+                    connected_with(GENERAL, vec![person("Ada"), person("Bob")]),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_for_the_call_it_is_already_in_answers_with_the_current_roster() {
+            // The re-announce exists because the interface may have lost track
+            // of where it is. Answering it with an empty roster would replace
+            // one wrong picture with another.
+            let (transport, _log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), connect_to(GENERAL)]).await;
+
+            assert_eq!(
+                said,
+                vec![
+                    connecting(GENERAL),
+                    connected_with(GENERAL, vec![person("Ada")]),
+                    connected_with(GENERAL, vec![person("Ada")]),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn somebody_arriving_is_reported() {
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+
+                assert_eq!(
+                    driver.next().await,
+                    connected_with(GENERAL, vec![person("Ada")])
+                );
+                driver
+            })
+            .await;
+        }
+
+        #[tokio::test]
+        async fn somebody_leaving_is_reported() {
+            let (transport, _log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(
+                    driver.next().await,
+                    connected_with(GENERAL, vec![person("Ada")])
+                );
+
+                roster.send((Vec::new(), None)).unwrap();
+
+                assert_eq!(driver.next().await, connected(GENERAL));
+                driver
+            })
+            .await;
+        }
+
+        #[tokio::test]
+        async fn audio_that_cannot_be_decrypted_is_said_out_loud() {
+            // The failure phase 0 reproduced: every membership publishes, both
+            // rosters are right, RTP flows, and neither side can decrypt a
+            // word. Everything an interface normally draws says that call is
+            // working, so this is the one thing standing between somebody and
+            // an evening of checking their microphone.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.roster.subscribe();
+
+            let after = driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                roster
+                    .send((Vec::new(), Some("nobody can hear you".to_owned())))
+                    .unwrap();
+                driver
+            })
+            .await;
+
+            assert_eq!(after, vec![troubled(GENERAL, "nobody can hear you")]);
+        }
+
+        #[tokio::test]
+        async fn what_is_wrong_travels_with_who_is_in_the_call() {
+            // Read together rather than separately, because two reads a moment
+            // apart describe two instants and the interface would draw the
+            // pair as one.
+            let (transport, _log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+            transport
+                .roster
+                .send_replace((vec![person("Ada")], Some("no key".to_owned())));
+
+            let said = transcript(transport, vec![connect_to(GENERAL)]).await;
+
+            assert_eq!(
+                said,
+                vec![
+                    connecting(GENERAL),
+                    CallEvent::Connected {
+                        room_id: GENERAL.to_owned(),
+                        participants: vec![person("Ada")],
+                        trouble: Some("no key".to_owned()),
+                    },
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_call_that_has_been_left_reports_nothing_more_about_who_is_in_it() {
+            // The watcher waits on something a leave does not close, so nothing
+            // but its handle would ever end it. A roster arriving after a
+            // disconnect would put a channel back on screen that somebody has
+            // just left.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            // Held so the send below succeeds whatever the loop did with its
+            // own view. Without it a `watch` with no receivers refuses the
+            // send, and the test would pass by not testing anything.
+            let _watching = transport.roster.subscribe();
+
+            let after = driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                driver.send(Message::Disconnect);
+                assert_eq!(driver.next().await, CallEvent::Disconnected);
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+                driver
+            })
+            .await;
+
+            assert_eq!(after, Vec::<CallEvent>::new());
+        }
+
+        #[tokio::test]
+        async fn moving_to_another_channel_stops_reporting_the_old_one_s_roster() {
+            // One watcher at a time. Two would report two channels as
+            // connected, and whichever spoke last would be the one the
+            // interface drew. Both calls here share one roster, so a watcher
+            // left behind shows up as a second event naming the old channel.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.roster.subscribe();
+
+            let after = driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                driver.send(connect_to(MUSIC));
+                assert_eq!(driver.next().await, connecting(MUSIC));
+                assert_eq!(driver.next().await, connected(MUSIC));
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+                driver
+            })
+            .await;
+
+            assert_eq!(after, vec![connected_with(MUSIC, vec![person("Ada")])]);
+        }
     }
 }

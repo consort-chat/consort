@@ -364,7 +364,12 @@ describe("ChannelList", () => {
         <ChannelList
           space={withLounge()}
           selectedId={null}
-          call={{ state: "connected", roomId: LOUNGE }}
+          call={{
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }}
           onSelect={vi.fn()}
         />,
       );
@@ -393,7 +398,12 @@ describe("ChannelList", () => {
         <ChannelList
           space={withLounge()}
           selectedId="!a:example.org"
-          call={{ state: "connected", roomId: LOUNGE }}
+          call={{
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }}
           onSelect={vi.fn()}
         />,
       );
@@ -437,6 +447,75 @@ describe("ChannelList", () => {
 
       expect(entryFor("Music").parentElement).not.toHaveTextContent(
         "no voice server",
+      );
+    });
+
+    it("draws the call's own roster for the channel it is in", () => {
+      // Better than room state for this one channel, and only this one. The
+      // call roster comes from MatrixRTC signalling, so it is right in every
+      // generation; room state is only right in the oldest.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge", [person("@stale:example.org", "Stale")])])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada")],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      const people = screen.getByRole("list", { name: "In Lounge" });
+      expect(people).toHaveTextContent("Ada");
+      expect(people).not.toHaveTextContent("Stale");
+    });
+
+    it("leaves every other channel on room state", () => {
+      render(
+        <ChannelList
+          space={space([
+            voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
+            voice("!b:example.org", "Music", [person("@bob:example.org", "Bob")]),
+          ])}
+          selectedId={null}
+          call={{
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("list", { name: "In Music" })).toHaveTextContent(
+        "Bob",
+      );
+      // And the joined channel really did take the call's answer, which is
+      // that nobody is in it yet.
+      expect(
+        screen.queryByRole("list", { name: "In Lounge" }),
+      ).toBeNull();
+    });
+
+    it("keeps room state while a join is still in flight", () => {
+      // A connecting call has no roster yet and a failed one never will.
+      // Blanking the list for either would wipe something that was correct a
+      // second ago and put it back when the join lands.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
+          selectedId={null}
+          call={{ state: "connecting", roomId: LOUNGE }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("list", { name: "In Lounge" })).toHaveTextContent(
+        "Ada",
       );
     });
 

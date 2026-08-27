@@ -18,6 +18,7 @@ use std::collections::HashSet;
 
 use matrix_sdk::Room;
 use matrix_sdk::room::RoomMember;
+use matrix_sdk::ruma::UserId;
 use matrix_sdk::ruma::events::StateEventType;
 use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
 use matrix_sdk::ruma::room::RoomType;
@@ -155,31 +156,54 @@ async fn participants_of(room: &Room) -> Vec<Participant> {
         return Vec::new();
     }
 
-    let mut seen = HashSet::with_capacity(connected.len());
-    let mut participants = Vec::with_capacity(connected.len());
+    name_all(room, connected.iter().map(|user_id| user_id.as_str())).await
+}
 
-    for user_id in connected {
-        if !seen.insert(user_id.clone()) {
+/// Name the people in `user_ids`, in the order given, once each.
+///
+/// Shared by the room-state path above and by the live roster a joined call
+/// reports, which arrive from entirely different places and have to draw the
+/// same. Both are per device before they get here: somebody on a laptop and a
+/// phone appears twice in either source, and the deduplication has to happen
+/// without disturbing the order, which is why it is a seen set over the
+/// iterator rather than a collect into one.
+pub(crate) async fn name_all<'a>(
+    room: &Room,
+    user_ids: impl Iterator<Item = &'a str>,
+) -> Vec<Participant> {
+    let mut seen = HashSet::new();
+    let mut participants = Vec::new();
+
+    for user_id in user_ids {
+        if !seen.insert(user_id.to_owned()) {
             continue;
         }
+
+        let Ok(parsed) = UserId::parse(user_id) else {
+            // Not a user ID at all. Nothing local can be looked up under it,
+            // and putting it on screen as somebody's name would be worse than
+            // leaving it out.
+            tracing::warn!(%user_id, room_id = %room.room_id(), "a call roster carried something that is not a user id");
+            continue;
+        };
 
         // Local. `get_member_no_sync` reads the store and, unlike its
         // requesting sibling, will not go and fetch the room's whole member
         // list because somebody joined a call.
-        let name = match room.get_member_no_sync(&user_id).await {
+        let name = match room.get_member_no_sync(&parsed).await {
             Ok(Some(member)) => name_of_member(&member),
             // In the call but not in the room, as far as this account has been
             // told. It happens when the membership arrives before the
             // `m.room.member` that explains it, and the next sync fixes it.
-            Ok(None) => user_id.to_string(),
+            Ok(None) => user_id.to_owned(),
             Err(error) => {
                 tracing::warn!(%error, %user_id, room_id = %room.room_id(), "could not read a call participant");
-                user_id.to_string()
+                user_id.to_owned()
             }
         };
 
         participants.push(Participant {
-            id: user_id.to_string(),
+            id: user_id.to_owned(),
             name,
         });
     }

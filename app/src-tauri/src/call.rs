@@ -108,58 +108,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use consort_call::{CallFailure, CallSession, PublishedAudio};
+    use crate::testing::{FakeCallTransport, connected};
 
     /// Long enough that a loaded machine is not the reason a test fails, short
     /// enough that a genuinely stuck thread does not hold the suite up.
     const PATIENCE: Duration = Duration::from_secs(5);
 
     const GENERAL: &str = "!general:example.org";
-
-    /// A transport that joins whatever it is asked for, or refuses everything.
-    struct FakeTransport {
-        joins: bool,
-    }
-
-    struct FakeSession;
-
-    struct FakeTrack;
-
-    impl PublishedAudio for FakeTrack {
-        fn set_muted(&self, _muted: bool) -> Result<(), CallFailure> {
-            Ok(())
-        }
-
-        async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
-            Ok(())
-        }
-    }
-
-    impl CallSession for FakeSession {
-        type Track = FakeTrack;
-
-        async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
-            Ok(FakeTrack)
-        }
-
-        async fn leave(self) -> Result<(), CallFailure> {
-            Ok(())
-        }
-    }
-
-    impl CallTransport for FakeTransport {
-        type Session = FakeSession;
-
-        async fn join(&self, room_id: &str) -> Result<Self::Session, CallFailure> {
-            if self.joins {
-                Ok(FakeSession)
-            } else {
-                Err(CallFailure::UnknownRoom {
-                    room_id: room_id.to_owned(),
-                })
-            }
-        }
-    }
 
     /// Everything the pump has forwarded, in order.
     #[derive(Clone, Default)]
@@ -184,10 +139,10 @@ mod tests {
         }
     }
 
-    fn bridge(joins: bool) -> (CallBridge, Heard) {
+    fn bridge(transport: FakeCallTransport) -> (CallBridge, Heard) {
         let heard = Heard::default();
         let recorder = heard.clone();
-        let bridge = CallBridge::spawn(FakeTransport { joins }, Microphone::new(), move |event| {
+        let bridge = CallBridge::spawn(transport, Microphone::new(), move |event| {
             recorder.0.lock().unwrap().push(event)
         });
         (bridge, heard)
@@ -195,14 +150,12 @@ mod tests {
 
     #[test]
     fn joining_a_call_reaches_the_webview() {
-        let (bridge, heard) = bridge(true);
+        let (bridge, heard) = bridge(FakeCallTransport::joining());
 
         bridge.connect(GENERAL.to_owned());
 
         let seen = heard.wait_for("the call connecting", |seen| {
-            seen.contains(&CallEvent::Connected {
-                room_id: GENERAL.to_owned(),
-            })
+            seen.contains(&connected(GENERAL))
         });
         assert_eq!(
             seen.first(),
@@ -218,7 +171,7 @@ mod tests {
         // The common case on a real deployment, not an edge one: sync has not
         // delivered the room, or there is no voice server. All of it has to
         // arrive as something to put on screen.
-        let (bridge, heard) = bridge(false);
+        let (bridge, heard) = bridge(FakeCallTransport::refusing());
 
         bridge.connect(GENERAL.to_owned());
 
@@ -238,12 +191,10 @@ mod tests {
 
     #[test]
     fn leaving_reaches_the_webview() {
-        let (bridge, heard) = bridge(true);
+        let (bridge, heard) = bridge(FakeCallTransport::joining());
         bridge.connect(GENERAL.to_owned());
         heard.wait_for("the call connecting", |seen| {
-            seen.contains(&CallEvent::Connected {
-                room_id: GENERAL.to_owned(),
-            })
+            seen.contains(&connected(GENERAL))
         });
 
         bridge.disconnect();
@@ -259,12 +210,10 @@ mod tests {
         // wrong. The pump only ends once the call thread has dropped its
         // sender, and the call thread is what unwinds the membership, so
         // joining the pump first would wait for something waiting on it.
-        let (bridge, heard) = bridge(true);
+        let (bridge, heard) = bridge(FakeCallTransport::joining());
         bridge.connect(GENERAL.to_owned());
         heard.wait_for("the call connecting", |seen| {
-            seen.contains(&CallEvent::Connected {
-                room_id: GENERAL.to_owned(),
-            })
+            seen.contains(&connected(GENERAL))
         });
 
         drop(bridge);
@@ -272,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_bridge_nobody_asked_anything_of_still_shuts_down() {
-        let (bridge, heard) = bridge(true);
+        let (bridge, heard) = bridge(FakeCallTransport::joining());
 
         drop(bridge);
 

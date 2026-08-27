@@ -27,6 +27,16 @@ matrix-rtc-media = { workspace = true }
 # and the workspace pin already guarantees there is only one copy of them.
 matrix-sdk = { workspace = true }
 
+# For the `Participant` shape a roster is reported in, and for the one function
+# that fills it in: naming somebody is a per-room question and the room's member
+# store is the only thing that can answer it.
+#
+# This edge points one way and always will. `consort-matrix` must never depend
+# on this crate, because that would put libwebrtc in the way of every
+# `cargo test -p consort-matrix`, which is the loop most of this project is
+# developed in.
+consort-matrix = { path = "../consort-matrix" }
+
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -39,6 +49,11 @@ tracing = { workspace = true }
 # `AudioSourceConfig::default()`. A dev-dependency is the cheapest place to put
 # a check that would otherwise be a comment.
 consort-audio = { path = "../consort-audio" }
+
+# One type, `KeyRejection`, so a test can build the event that says why a media
+# key was refused. See the workspace manifest for why it is not reachable
+# through `matrix-rtc-media`.
+matrix-rtc-core = { workspace = true }
 
 # Only the tests need to see the wire format. The crate hands events to its
 # caller as a type and never chooses a serialisation.

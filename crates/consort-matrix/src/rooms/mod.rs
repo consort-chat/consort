@@ -86,6 +86,39 @@ pub async fn snapshot(client: &Client) -> Rooms {
     snapshot::assemble(facts)
 }
 
+/// Name the people a live call roster names, in the order it gives them.
+///
+/// The other half of what a voice channel's participant list can come from.
+/// [`snapshot`] reads room state, which is what every channel this session is
+/// not sitting in has to use; a channel it is sitting in has something better,
+/// a roster derived from MatrixRTC signalling and enriched with real media
+/// state. What that roster does not have is names, because a Matrix profile is
+/// per room and only a room can answer.
+///
+/// Local, and no request. Somebody in the call whose `m.room.member` has not
+/// arrived comes back as their user ID, which is the same answer the room-state
+/// path gives for the same reason. Per human, not per device: a roster is per
+/// membership, so the same person on a laptop and a phone arrives twice and
+/// leaves here once.
+///
+/// A room this account is not in comes back empty, because there is no local
+/// store to read names out of and inventing them would be worse than the
+/// absence.
+pub async fn name_participants(
+    client: &Client,
+    room_id: &str,
+    user_ids: &[String],
+) -> Vec<Participant> {
+    let Ok(parsed) = matrix_sdk::ruma::RoomId::parse(room_id) else {
+        return Vec::new();
+    };
+    let Some(room) = client.get_room(&parsed) else {
+        return Vec::new();
+    };
+
+    facts::name_all(&room, user_ids.iter().map(String::as_str)).await
+}
+
 /// Watch the account's rooms, reporting the whole tree whenever it changes.
 ///
 /// The first report arrives without waiting for a sync. By the time this is

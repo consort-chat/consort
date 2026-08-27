@@ -734,6 +734,11 @@ mod tests {
         fn in_general() -> CallEvent {
             CallEvent::Connected {
                 room_id: "!general:example.org".to_owned(),
+                participants: vec![consort_matrix::Participant {
+                    id: "@bob:example.org".to_owned(),
+                    name: "Bob".to_owned(),
+                }],
+                trouble: Some("nobody can hear you".to_owned()),
             }
         }
 
@@ -758,6 +763,10 @@ mod tests {
 
             assert_eq!(payload["state"], "connected");
             assert_eq!(payload["roomId"], "!general:example.org");
+            // The roster rides on the state rather than a channel of its own,
+            // so the two cannot arrive out of step with each other.
+            assert_eq!(payload["participants"][0]["name"], "Bob");
+            assert_eq!(payload["trouble"], "nobody can hear you");
             assert!(
                 payload.get("Call").is_none(),
                 "the variant name leaked into the wire format: {payload}"
@@ -813,6 +822,11 @@ mod tests {
                     room_id: "!general:example.org".to_owned(),
                 },
                 in_general(),
+                CallEvent::Connected {
+                    room_id: "!general:example.org".to_owned(),
+                    participants: Vec::new(),
+                    trouble: None,
+                },
                 CallEvent::Disconnected,
                 CallEvent::Failed {
                     room_id: "!general:example.org".to_owned(),

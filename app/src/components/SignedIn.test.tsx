@@ -13,6 +13,11 @@ const onCall = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
 const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
+// The people under a voice channel draw their avatars, which is a command.
+// Mocked rather than left to fail quietly: an unmocked `invoke` throws into
+// the catch that turns a missing picture into an initial, so the tests would
+// pass while exercising the wrong path.
+const memberAvatar = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
@@ -31,6 +36,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   callConnect,
   callDisconnect,
   roomAvatar,
+  memberAvatar,
   resendState,
   verificationVerifyThisSession,
   verificationOtherSessionsExist,
@@ -140,6 +146,7 @@ function resetApiMocks() {
   callConnect.mockReset().mockResolvedValue(undefined);
   callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
+  memberAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
   // The common case: another session is signed in, so the button is offered.
@@ -1283,7 +1290,12 @@ describe("SignedIn voice calls", () => {
     await showing();
     await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
 
-    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+    act(() => callHandler()({
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }));
 
     const panel = screen.getByRole("group", { name: /voice connection/i });
     expect(panel).toHaveTextContent(/voice connected/i);
@@ -1292,7 +1304,12 @@ describe("SignedIn voice calls", () => {
 
   it("asks to leave from the connection panel", async () => {
     await showing();
-    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+    act(() => callHandler()({
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }));
 
     await userEvent.click(
       screen.getByRole("button", { name: /disconnect from voice/i }),
@@ -1303,13 +1320,93 @@ describe("SignedIn voice calls", () => {
 
   it("clears the panel when the call channel says the call is over", async () => {
     await showing();
-    act(() => callHandler()({ state: "connected", roomId: LOUNGE }));
+    act(() => callHandler()({
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }));
 
     act(() => callHandler()({ state: "disconnected" }));
 
     expect(
       screen.queryByRole("group", { name: /voice connection/i }),
     ).toBeNull();
+  });
+
+  it("draws who is in the channel from the call rather than room state", async () => {
+    // End to end through the one screen that owns the subscription: the
+    // roster arrives on the call channel, and the channel list prefers it for
+    // the channel this session is in.
+    await showing();
+
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [{ id: "@ada:example.org", name: "Ada" }],
+        trouble: null,
+      }),
+    );
+
+    expect(screen.getByRole("list", { name: "In Lounge" })).toHaveTextContent(
+      "Ada",
+    );
+  });
+
+  it("follows the roster as it changes", async () => {
+    await showing();
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [{ id: "@ada:example.org", name: "Ada" }],
+        trouble: null,
+      }),
+    );
+
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [
+          { id: "@ada:example.org", name: "Ada" },
+          { id: "@bob:example.org", name: "Bob" },
+        ],
+        trouble: null,
+      }),
+    );
+
+    const people = screen.getByRole("list", { name: "In Lounge" });
+    expect(people).toHaveTextContent("Ada");
+    expect(people).toHaveTextContent("Bob");
+    // And it is still the same call, not a second one: a roster change is a
+    // `connected` and the panel must not blink.
+    expect(
+      screen.getByRole("group", { name: /voice connection/i }),
+    ).toHaveTextContent(/voice connected/i);
+  });
+
+  it("says why a call that connected cannot be heard", async () => {
+    // The failure with no other symptom. Everything else on screen, the panel
+    // and the roster included, says this call is working.
+    await showing();
+
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [{ id: "@ada:example.org", name: "Ada" }],
+        trouble: "Somebody's audio cannot be read: their media key never arrived.",
+      }),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "their media key never arrived",
+    );
+    expect(
+      screen.getByRole("group", { name: /voice connection/i }),
+    ).toHaveTextContent(/voice connected/i);
   });
 
   it("puts a failed join beside the channel that refused it", async () => {

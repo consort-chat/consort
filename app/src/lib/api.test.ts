@@ -582,10 +582,18 @@ describe("the call commands", () => {
   });
 
   it("hands the call payload to the handler unwrapped", async () => {
+    // Including the roster, which rides on the state rather than a channel of
+    // its own so that the two cannot arrive out of step.
+    const connected: Call = {
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [{ id: "@ada:example.org", name: "Ada" }],
+      trouble: null,
+    };
     const seen: Call[] = [];
     listen.mockImplementation(
       (_name: string, handler: (event: { payload: Call }) => void) => {
-        handler({ payload: { state: "connected", roomId: LOUNGE } });
+        handler({ payload: connected });
         return Promise.resolve(() => {});
       },
     );
@@ -593,7 +601,7 @@ describe("the call commands", () => {
     await onCall((call) => seen.push(call));
 
     expect(listen).toHaveBeenCalledWith("call", expect.any(Function));
-    expect(seen).toEqual([{ state: "connected", roomId: LOUNGE }]);
+    expect(seen).toEqual([connected]);
   });
 
   it("does not share a channel with the sync loop", async () => {
@@ -611,7 +619,14 @@ describe("the call commands", () => {
 
   it("reads the room out of every state that has one", () => {
     expect(callRoomId({ state: "connecting", roomId: LOUNGE })).toBe(LOUNGE);
-    expect(callRoomId({ state: "connected", roomId: LOUNGE })).toBe(LOUNGE);
+    expect(
+      callRoomId({
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    }),
+    ).toBe(LOUNGE);
     expect(callRoomId({ state: "failed", roomId: LOUNGE, error: "no" })).toBe(
       LOUNGE,
     );

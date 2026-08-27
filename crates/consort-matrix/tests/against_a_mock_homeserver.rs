@@ -2184,6 +2184,7 @@ mod room_list {
         use consort_matrix::Participant;
 
         const ADA: &str = "@ada:example.org";
+        const BOB: &str = "@bob:example.org";
         const BEN: &str = "@ben:example.org";
 
         /// Four hours, which is what Element Call asks for.
@@ -2277,6 +2278,96 @@ mod room_list {
                 .iter()
                 .map(|participant| participant.name.as_str())
                 .collect()
+        }
+
+        /// Name `user_ids` in the one voice channel, the way a live call
+        /// roster is named.
+        async fn named_roster(
+            events: Vec<serde_json::Value>,
+            user_ids: &[String],
+        ) -> (consort_matrix::Client, Vec<Participant>) {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, a_voice_channel_with(events)).await;
+
+            let people = rooms::name_participants(&client, "!lounge:example.org", user_ids).await;
+            (client, people)
+        }
+
+        #[tokio::test]
+        async fn a_live_roster_is_named_out_of_the_room_the_call_is_in() {
+            // The other source a voice channel's list can come from. It
+            // arrives from MatrixRTC signalling with user IDs and no names,
+            // because a Matrix profile is per room and only a room can answer.
+            let (_client, people) = named_roster(
+                vec![member(ADA, Some("Ada")), member(BOB, Some("Bob"))],
+                &[ADA.to_owned(), BOB.to_owned()],
+            )
+            .await;
+
+            assert_eq!(names(&people), ["Ada", "Bob"]);
+        }
+
+        #[tokio::test]
+        async fn a_live_roster_keeps_the_order_it_arrived_in() {
+            // Oldest membership first is a stable order, and re-sorting would
+            // make the list move under the pointer whenever anybody joined.
+            let (_client, people) = named_roster(
+                vec![member(ADA, Some("Ada")), member(BOB, Some("Bob"))],
+                &[BOB.to_owned(), ADA.to_owned()],
+            )
+            .await;
+
+            assert_eq!(names(&people), ["Bob", "Ada"]);
+        }
+
+        #[tokio::test]
+        async fn a_live_roster_names_each_person_once() {
+            // A roster is per membership and a membership is per device, so
+            // somebody on a laptop and a phone arrives twice.
+            let (_client, people) = named_roster(
+                vec![member(ADA, Some("Ada"))],
+                &[ADA.to_owned(), ADA.to_owned()],
+            )
+            .await;
+
+            assert_eq!(names(&people), ["Ada"]);
+        }
+
+        #[tokio::test]
+        async fn somebody_in_the_call_the_room_has_not_heard_of_is_their_user_id() {
+            // The membership arriving before the `m.room.member` that explains
+            // it. Unhelpful, honest, and fixed by the next sync.
+            let (_client, people) = named_roster(Vec::new(), &[ADA.to_owned()]).await;
+
+            assert_eq!(names(&people), [ADA]);
+        }
+
+        #[tokio::test]
+        async fn a_roster_carrying_something_that_is_not_a_user_id_drops_it() {
+            // Nothing local can be looked up under it, and putting it on
+            // screen as somebody's name would be worse than the absence.
+            let (_client, people) = named_roster(
+                vec![member(ADA, Some("Ada"))],
+                &["not a user id".to_owned(), ADA.to_owned()],
+            )
+            .await;
+
+            assert_eq!(names(&people), ["Ada"]);
+        }
+
+        #[tokio::test]
+        async fn a_roster_for_a_room_this_account_is_not_in_is_empty() {
+            // There is no local store to read names out of, and inventing them
+            // would be worse than the absence.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, a_voice_channel_with(Vec::new())).await;
+
+            let elsewhere =
+                rooms::name_participants(&client, "!nowhere:example.org", &[ADA.to_owned()]).await;
+            let nonsense = rooms::name_participants(&client, "not a room", &[ADA.to_owned()]).await;
+
+            assert!(elsewhere.is_empty(), "{elsewhere:?}");
+            assert!(nonsense.is_empty(), "{nonsense:?}");
         }
 
         #[tokio::test]

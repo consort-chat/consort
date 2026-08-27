@@ -94,6 +94,22 @@ export function CallPanel({ call, channelName, onDisconnect }: Props) {
       >
         <HangUpIcon />
       </button>
+
+      {/*
+        An alert, and the loudest thing on this strip when it is here. A call
+        whose audio will not decrypt looks exactly like a working one from
+        every other angle: the membership published, the roster is right, and
+        the packets are arriving. Nothing else on this screen would say so.
+
+        Spanning both columns rather than sitting in the text column, because
+        it is a sentence rather than a label and a 240px column with a button
+        beside it would break it over four lines.
+      */}
+      {call.state === "connected" && call.trouble !== null && (
+        <p className="call-panel__problem" role="alert">
+          {call.trouble}
+        </p>
+      )}
     </div>
   );
 }

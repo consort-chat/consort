@@ -16,15 +16,21 @@
 
 use std::sync::Arc;
 
+use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
-use matrix_rtc_media::{AudioFrame, AudioSourceConfig, LocalTrackHandle, PublishOptions};
+use matrix_rtc_media::{
+    AudioFrame, AudioSourceConfig, LocalTrackHandle, Participant as MediaParticipant,
+    PublishOptions,
+};
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{OwnedRoomId, RoomId};
 
 use crate::dialect::{self, Dialect};
 use crate::failure::{CallFailure, classify};
 use crate::publish::PublishedAudio;
-use crate::transport::{CallSession, CallTransport};
+use crate::transport::{CallSession, CallTransport, Roster};
+use crate::trouble::{Faults, what_it_says};
+use tokio::sync::{broadcast, watch};
 
 /// A MatrixRTC call over LiveKit.
 pub struct LiveKitTransport {
@@ -73,8 +79,20 @@ impl LiveKitTransport {
     }
 }
 
+/// A call this session is in, and what it takes to describe it.
+///
+/// `Call` alone cannot: its roster is memberships and user IDs, and turning
+/// those into names somebody recognises is a per-room question that only the
+/// room's member store can answer. So the client and the room travel with the
+/// call rather than being looked up again.
+pub struct LiveKitSession {
+    call: Call,
+    client: Client,
+    room_id: String,
+}
+
 impl CallTransport for LiveKitTransport {
-    type Session = Call;
+    type Session = LiveKitSession;
 
     async fn join(&self, room_id: &str) -> Result<Self::Session, CallFailure> {
         let room = self.room(room_id)?;
@@ -95,7 +113,7 @@ impl CallTransport for LiveKitTransport {
             "joining the call"
         );
 
-        Call::join(
+        let call = Call::join(
             &room,
             CallOptions {
                 element_call_compat: dialect.into(),
@@ -104,21 +122,121 @@ impl CallTransport for LiveKitTransport {
             },
         )
         .await
-        .map_err(|error| classify(&error))
+        .map_err(|error| classify(&error))?;
+
+        Ok(LiveKitSession {
+            call,
+            client: self.client.clone(),
+            room_id: room_id.to_owned(),
+        })
     }
 }
 
-impl CallSession for Call {
+impl CallSession for LiveKitSession {
     type Track = Arc<dyn LocalTrackHandle>;
+    type Roster = LiveKitRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
-        Call::publish(self, PublishOptions::microphone())
+        self.call
+            .publish(PublishOptions::microphone())
             .await
             .map_err(|error| classify(&error))
     }
 
+    fn roster(&self) -> Self::Roster {
+        LiveKitRoster {
+            memberships: self.call.subscribe_participants(),
+            reports: self.call.subscribe_call_events(),
+            faults: Faults::default(),
+            client: self.client.clone(),
+            room_id: self.room_id.clone(),
+        }
+    }
+
     async fn leave(self) -> Result<(), CallFailure> {
-        Call::leave(self).await.map_err(|error| classify(&error))
+        self.call.leave().await.map_err(|error| classify(&error))
+    }
+}
+
+/// One view of a call: who is in it, and what is wrong with it.
+///
+/// Two upstream streams behind one seam, because they describe one thing and
+/// are drawn in one place. Splitting them would mean two watchers racing to
+/// say what a call currently is, and whichever spoke last would win.
+pub struct LiveKitRoster {
+    /// Derived from MatrixRTC signalling and enriched with live media state,
+    /// and one entry per membership rather than per person.
+    memberships: watch::Receiver<Vec<MediaParticipant>>,
+    /// Everything else the call has to say. Only the encryption reports are
+    /// read here; the rest is phase 4's.
+    reports: broadcast::Receiver<matrix_rtc_media::CallEvent>,
+    /// What those reports currently add up to. See [`crate::trouble`].
+    faults: Faults,
+    client: Client,
+    room_id: String,
+}
+
+impl Roster for LiveKitRoster {
+    fn trouble(&self) -> Option<String> {
+        self.faults.sentence()
+    }
+
+    async fn now(&self) -> Vec<Participant> {
+        // Read out and released before the await. The borrow guards the
+        // watch's own lock, and holding one across a member-store read would
+        // block the call's signalling on this room's SQLite.
+        let user_ids: Vec<String> = self
+            .memberships
+            .borrow()
+            .iter()
+            .map(|member| member.user_id.clone())
+            .collect();
+
+        // Deduplication happens there, not here: a roster is per membership,
+        // so somebody on a laptop and a phone arrives twice, and the
+        // room-state path has exactly the same problem for the same reason.
+        rooms::name_participants(&self.client, &self.room_id, &user_ids).await
+    }
+
+    async fn changed(&mut self) -> bool {
+        // Destructured so the two futures below borrow different fields.
+        // `select!` over `self.memberships` and `self.reports` directly would
+        // be two mutable borrows of one `self`.
+        let Self {
+            memberships,
+            reports,
+            faults,
+            ..
+        } = self;
+
+        loop {
+            tokio::select! {
+                changed = memberships.changed() => return changed.is_ok(),
+                report = reports.recv() => match report {
+                    // Only a report that changes the answer is worth waking
+                    // anybody for. The cryptor reports its state per frame run
+                    // rather than only on a transition, so most of these say
+                    // what the last one said.
+                    Ok(event) => match what_it_says(&event) {
+                        Some((member_id, fault)) => {
+                            if faults.note(member_id, fault) {
+                                return true;
+                            }
+                            continue;
+                        }
+                        None => continue,
+                    },
+                    // Too many events while this task was busy. Nothing to do
+                    // about it: the next report re-states the state, because
+                    // they are per frame run rather than per transition.
+                    Err(broadcast::error::RecvError::Lagged(missed)) => {
+                        tracing::debug!(missed, "fell behind the call's own events");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return false,
+                },
+            }
+        }
     }
 }
 

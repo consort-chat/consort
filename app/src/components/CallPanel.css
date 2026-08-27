@@ -123,6 +123,25 @@
   outline-offset: 2px;
 }
 
+/*
+  Why this call cannot be heard.
+
+  Across both columns, under the state and the disconnect control. The panel is
+  otherwise two lines of label and this is a whole sentence, so giving it the
+  text column alone would break it over four lines in a 240px sidebar.
+*/
+.call-panel__problem {
+  grid-column: 1 / -1;
+  padding: var(--space-2);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--danger-surface);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+
 .call-panel__glyph {
   width: 16px;
   height: 16px;

@@ -48,6 +48,7 @@ pub mod microphone;
 pub mod publish;
 pub mod thread;
 pub mod transport;
+pub mod trouble;
 
 pub use dialect::{Dialect, detect};
 pub use event::CallEvent;
@@ -56,4 +57,5 @@ pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use publish::PublishedAudio;
 pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT};
-pub use transport::{CallSession, CallTransport};
+pub use transport::{CallSession, CallTransport, Roster};
+pub use trouble::{Fault, Faults};

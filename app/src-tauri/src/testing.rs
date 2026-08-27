@@ -193,3 +193,129 @@ pub fn wait_for_value<T>(what: &str, produce: impl Fn() -> Option<T>) -> T {
     }
     panic!("waited {PATIENCE:?} for {what}");
 }
+
+/// A call transport that joins whatever it is asked for, or refuses
+/// everything.
+///
+/// Here rather than in each test module for the same reason the sound card
+/// above is: `crate::call` and `crate::state` both need one, and two copies
+/// would drift until one of them was passing for a reason the other was not.
+pub struct FakeCallTransport {
+    joins: bool,
+    /// Who is in every call this transport hands out. Shared, because these
+    /// tests never have two calls at once and a channel per room would be
+    /// machinery for nobody.
+    roster: tokio::sync::watch::Sender<Standing>,
+}
+
+/// What a fake call currently is: who is in it, and what is wrong with it.
+type Standing = (Vec<consort_matrix::Participant>, Option<String>);
+
+impl FakeCallTransport {
+    /// A transport whose calls all work.
+    pub fn joining() -> Self {
+        Self {
+            joins: true,
+            roster: tokio::sync::watch::channel((Vec::new(), None)).0,
+        }
+    }
+
+    /// Put `people` in the calls this hands out.
+    ///
+    /// Before a join to seed the channel, or during one to make somebody
+    /// arrive or leave. `send_replace` rather than `send`, because a `watch`
+    /// with nothing subscribed refuses an ordinary send and seeding happens
+    /// before anything has subscribed.
+    pub fn set_roster(&self, people: Vec<consort_matrix::Participant>) {
+        self.roster.send_modify(|standing| standing.0 = people);
+    }
+
+    /// Say what is wrong with the calls this hands out, or that nothing is.
+    pub fn set_trouble(&self, trouble: Option<&str>) {
+        self.roster
+            .send_modify(|standing| standing.1 = trouble.map(str::to_owned));
+    }
+
+    /// A transport that will not join anything, the way a room sync has not
+    /// delivered will not.
+    pub fn refusing() -> Self {
+        Self {
+            joins: false,
+            ..Self::joining()
+        }
+    }
+}
+
+pub struct FakeCallSession {
+    roster: tokio::sync::watch::Sender<Standing>,
+}
+
+pub struct FakeCallTrack;
+
+impl consort_call::PublishedAudio for FakeCallTrack {
+    fn set_muted(&self, _muted: bool) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn send(&self, _samples: Vec<i16>) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+}
+
+pub struct FakeCallRoster(tokio::sync::watch::Receiver<Standing>);
+
+impl consort_call::Roster for FakeCallRoster {
+    async fn now(&self) -> Vec<consort_matrix::Participant> {
+        self.0.borrow().0.clone()
+    }
+
+    fn trouble(&self) -> Option<String> {
+        self.0.borrow().1.clone()
+    }
+
+    async fn changed(&mut self) -> bool {
+        self.0.changed().await.is_ok()
+    }
+}
+
+impl consort_call::CallSession for FakeCallSession {
+    type Track = FakeCallTrack;
+    type Roster = FakeCallRoster;
+
+    async fn publish_microphone(&self) -> Result<Self::Track, consort_call::CallFailure> {
+        Ok(FakeCallTrack)
+    }
+
+    fn roster(&self) -> Self::Roster {
+        FakeCallRoster(self.roster.subscribe())
+    }
+
+    async fn leave(self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+}
+
+impl consort_call::CallTransport for FakeCallTransport {
+    type Session = FakeCallSession;
+
+    async fn join(&self, room_id: &str) -> Result<Self::Session, consort_call::CallFailure> {
+        if self.joins {
+            Ok(FakeCallSession {
+                roster: self.roster.clone(),
+            })
+        } else {
+            Err(consort_call::CallFailure::UnknownRoom {
+                room_id: room_id.to_owned(),
+            })
+        }
+    }
+}
+
+/// The `Connected` a test expects, with nobody in the channel.
+pub fn connected(room_id: &str) -> consort_call::CallEvent {
+    consort_call::CallEvent::Connected {
+        room_id: room_id.to_owned(),
+        participants: Vec::new(),
+        trouble: None,
+    }
+}

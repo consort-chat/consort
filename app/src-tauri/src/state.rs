@@ -643,58 +643,12 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::events::RecordingSink;
-    use crate::testing::{fake_backends, wait_for};
-    use consort_call::{CallFailure, CallSession, PublishedAudio};
+    use crate::testing::{FakeCallTransport, fake_backends, wait_for};
     use consort_matrix::StopReason;
     use consort_matrix::secrets::MemoryBackend;
     use std::sync::Arc;
 
     const GENERAL: &str = "!general:example.org";
-
-    /// A transport that joins anything, or refuses everything.
-    struct FakeTransport {
-        joins: bool,
-    }
-
-    struct FakeSession;
-
-    struct FakeTrack;
-
-    impl PublishedAudio for FakeTrack {
-        fn set_muted(&self, _muted: bool) -> Result<(), CallFailure> {
-            Ok(())
-        }
-
-        async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
-            Ok(())
-        }
-    }
-
-    impl CallSession for FakeSession {
-        type Track = FakeTrack;
-
-        async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
-            Ok(FakeTrack)
-        }
-
-        async fn leave(self) -> Result<(), CallFailure> {
-            Ok(())
-        }
-    }
-
-    impl CallTransport for FakeTransport {
-        type Session = FakeSession;
-
-        async fn join(&self, room_id: &str) -> Result<Self::Session, CallFailure> {
-            if self.joins {
-                Ok(FakeSession)
-            } else {
-                Err(CallFailure::UnknownRoom {
-                    room_id: room_id.to_owned(),
-                })
-            }
-        }
-    }
 
     fn call_audio() -> CallAudio {
         CallAudio {
@@ -708,7 +662,13 @@ mod tests {
     fn join(state: &AppState, room_id: &str, joins: bool) {
         state.connect_call(
             room_id.to_owned(),
-            move || FakeTransport { joins },
+            move || {
+                if joins {
+                    FakeCallTransport::joining()
+                } else {
+                    FakeCallTransport::refusing()
+                }
+            },
             call_audio(),
         );
     }
@@ -1125,6 +1085,63 @@ mod tests {
                 0,
                 "a channel change reported the call as over"
             );
+        }
+
+        #[test]
+        fn who_is_in_the_channel_reaches_the_webview_with_the_call() {
+            // One state rather than two channels. A reader that keeps the
+            // latest thing said about the call then has the roster too, and
+            // one that missed a roster change has not also lost track of
+            // whether it is in a call.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::joining();
+            transport.set_roster(vec![consort_matrix::Participant {
+                id: "@ada:example.org".to_owned(),
+                name: "Ada".to_owned(),
+            }]);
+
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+
+            until_call(&sink, "connected");
+            let Some(AppEvent::Call(CallEvent::Connected { participants, .. })) = sink
+                .events()
+                .into_iter()
+                .rev()
+                .find(|event| matches!(event, AppEvent::Call(CallEvent::Connected { .. })))
+            else {
+                panic!("the call never connected: {:?}", sink.events());
+            };
+            assert_eq!(
+                participants
+                    .iter()
+                    .map(|person| person.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["Ada"]
+            );
+        }
+
+        #[test]
+        fn why_a_call_cannot_be_heard_reaches_the_webview_too() {
+            // The failure with no other symptom: the membership published, the
+            // roster is right, packets are flowing, and neither side can
+            // decrypt a word. If this does not reach the webview then nothing
+            // does, because everything else says the call is working.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::joining();
+            transport.set_trouble(Some("nobody can hear you"));
+
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+
+            until_call(&sink, "connected");
+            let Some(AppEvent::Call(CallEvent::Connected { trouble, .. })) = sink
+                .events()
+                .into_iter()
+                .rev()
+                .find(|event| matches!(event, AppEvent::Call(CallEvent::Connected { .. })))
+            else {
+                panic!("the call never connected: {:?}", sink.events());
+            };
+            assert_eq!(trouble.as_deref(), Some("nobody can hear you"));
         }
 
         #[test]

@@ -226,7 +226,12 @@ describe("AppShell", () => {
     it("names the channel it is connected to in the panel", () => {
       shell({
         rooms: withVoice,
-        call: { state: "connected", roomId: LOUNGE },
+        call: {
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    },
       });
 
       const panel = screen.getByRole("group", { name: /voice connection/i });
@@ -261,7 +266,12 @@ describe("AppShell", () => {
     it("leaves the call from the panel", async () => {
       const { onLeaveVoice } = shell({
         rooms: withVoice,
-        call: { state: "connected", roomId: LOUNGE },
+        call: {
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    },
       });
 
       await userEvent.click(
@@ -287,7 +297,12 @@ describe("AppShell", () => {
             },
           ],
         },
-        call: { state: "connected", roomId: LOUNGE },
+        call: {
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    },
       });
 
       expect(
@@ -298,7 +313,12 @@ describe("AppShell", () => {
     it("draws a placeholder rather than a room id for a channel it cannot name", () => {
       shell({
         rooms: EMPTY_HOME,
-        call: { state: "connected", roomId: LOUNGE },
+        call: {
+      state: "connected",
+      roomId: LOUNGE,
+      participants: [],
+      trouble: null,
+    },
       });
 
       const panel = screen.getByRole("group", { name: /voice connection/i });

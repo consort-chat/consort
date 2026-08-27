@@ -3,6 +3,7 @@
 
 //! What the call thread has to say.
 
+use consort_matrix::Participant;
 use serde::{Deserialize, Serialize};
 
 /// One thing that happened to this session's call.
@@ -20,8 +21,35 @@ pub enum CallEvent {
     /// Working on it. Emitted before anything that can take a while, so the
     /// interface has something to show between the click and the call.
     Connecting { room_id: String },
-    /// In the call.
-    Connected { room_id: String },
+    /// In the call, and here is who else is.
+    ///
+    /// Emitted again, unchanged apart from the roster, every time somebody
+    /// joins or leaves. Being in a call is a state and the people in it are
+    /// part of that state, so this is one message rather than two: a reader
+    /// that keeps the latest thing said on this channel is a reader that has
+    /// both, and one that missed a roster change has not also lost track of
+    /// whether it is in a call.
+    ///
+    /// The roster comes from MatrixRTC signalling rather than from room state,
+    /// which is what makes it right in every dialect. It is per person: a
+    /// membership is per device, and somebody on a laptop and a phone appears
+    /// once.
+    Connected {
+        room_id: String,
+        participants: Vec<Participant>,
+        /// Why this call cannot be heard, if it cannot.
+        ///
+        /// One sentence written for a person, already, or `None` when there is
+        /// nothing wrong. Here rather than on a channel of its own for the
+        /// same reason the roster is: it is part of what being in this call
+        /// currently means, and a reader that has the call has this too.
+        ///
+        /// The failure it exists for is the one phase 0 reproduced: a call
+        /// where every membership publishes, both rosters are right and RTP
+        /// flows, and neither side can decrypt a word. Everything an interface
+        /// normally draws says that call is working.
+        trouble: Option<String>,
+    },
     /// Not in a call, and nothing went wrong. Both a completed leave and the
     /// idle state at startup.
     Disconnected,
@@ -50,7 +78,11 @@ mod tests {
             "connecting"
         );
         assert_eq!(
-            tag(&CallEvent::Connected { room_id: room_id() }),
+            tag(&CallEvent::Connected {
+                room_id: room_id(),
+                participants: Vec::new(),
+                trouble: None,
+            }),
             "connected"
         );
         assert_eq!(tag(&CallEvent::Disconnected), "disconnected");
@@ -71,6 +103,11 @@ mod tests {
             },
             CallEvent::Connected {
                 room_id: "!a:example.org".to_owned(),
+                participants: vec![Participant {
+                    id: "@bob:example.org".to_owned(),
+                    name: "Bob".to_owned(),
+                }],
+                trouble: Some("nobody can hear you".to_owned()),
             },
             CallEvent::Disconnected,
             CallEvent::Failed {

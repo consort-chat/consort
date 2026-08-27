@@ -715,7 +715,34 @@ export function onAudio(
  */
 export type Call =
   | { state: "connecting"; roomId: string }
-  | { state: "connected"; roomId: string }
+  | {
+      state: "connected";
+      roomId: string;
+      /**
+       * Who is in the channel, from MatrixRTC signalling rather than room
+       * state, oldest membership first.
+       *
+       * Re-sent, as a whole `connected`, every time somebody joins or leaves.
+       * That is deliberate on the Rust side: being in a call and who is in it
+       * are one state, so a handler that keeps the latest thing said here has
+       * both, and one that missed a change has not also lost track of whether
+       * it is in a call.
+       *
+       * Better than the `participants` on the `Channel` for exactly one
+       * channel: this one. It is right in every MatrixRTC generation, where
+       * the room-state list is only right in the oldest.
+       */
+      participants: Participant[];
+      /**
+       * Why this call cannot be heard, or null when there is nothing wrong.
+       *
+       * One sentence, already written for a person, so render it as-is. The
+       * failure it exists for is the quiet one: every membership publishes,
+       * both rosters are right, packets flow, and neither side can decrypt a
+       * word. Nothing else on this screen would say so.
+       */
+      trouble: string | null;
+    }
   | { state: "disconnected" }
   | { state: "failed"; roomId: string; error: string };
 
