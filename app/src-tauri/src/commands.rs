@@ -9,6 +9,7 @@
 //! inside a command is logic no test can reach. The delegates below are the
 //! only untested lines in this file, and there is nothing in them to break.
 
+use consort_audio::{AudioDeviceReport, AudioDevices, AudioSettings, CpalHost};
 use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
 use serde::Serialize;
 use tauri::State;
@@ -41,6 +42,18 @@ impl CommandError {
     /// What goes to the console.
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+}
+
+impl From<crate::settings::SettingsError> for CommandError {
+    fn from(error: crate::settings::SettingsError) -> Self {
+        Self {
+            // Deliberately not "try again". A settings file that will not write
+            // is a full disk or a permissions problem, and neither is fixed by
+            // pressing the same button.
+            message: "Your settings could not be saved.".to_owned(),
+            detail: error.to_string(),
+        }
     }
 }
 
@@ -274,6 +287,53 @@ pub async fn member_avatar_for(
     Ok(rooms::member_avatar(&client, &room_id, &user_id).await)
 }
 
+/// What devices this machine has, and which of them are in use.
+///
+/// Asked for whenever the settings screen opens, and after every change: a
+/// device can appear or vanish while the window is open, and the only honest
+/// way to draw a picker is to have just asked.
+fn audio_devices_for(state: &AppState, host: &dyn AudioDevices) -> AudioDeviceReport {
+    let settings = state.settings().load().audio;
+    AudioDeviceReport::of(host, settings.input.as_deref(), settings.output.as_deref())
+}
+
+/// The saved audio settings, or the defaults on first run.
+fn audio_settings_for(state: &AppState) -> AudioSettings {
+    state.settings().load().audio
+}
+
+/// Replace the saved audio settings.
+///
+/// Writes the whole audio section rather than one field, because the settings
+/// screen holds all of it and a partial update would need a merge that could
+/// lose a concurrent change for no benefit.
+fn set_audio_settings_for(
+    state: &AppState,
+    audio: AudioSettings,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.audio = audio;
+    state.settings().save(&settings)
+}
+
+#[tauri::command]
+pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
+    audio_devices_for(&state, &CpalHost)
+}
+
+#[tauri::command]
+pub fn audio_settings(state: State<'_, AppState>) -> AudioSettings {
+    audio_settings_for(&state)
+}
+
+#[tauri::command]
+pub fn set_audio_settings(
+    state: State<'_, AppState>,
+    audio: AudioSettings,
+) -> Result<(), CommandError> {
+    set_audio_settings_for(&state, audio).map_err(CommandError::from)
+}
+
 /// Verify this session with the account's recovery key.
 pub async fn verification_recover_for(
     state: &AppState,
@@ -502,8 +562,140 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend = Arc::new(MemoryBackend::new());
         let store = SessionStore::with_backend(dir.path(), backend.clone());
-        let state = AppState::new(store, Arc::new(RecordingSink::new()));
+        let settings = crate::settings::SettingsStore::at(dir.path());
+        let state = AppState::new(store, settings, Arc::new(RecordingSink::new()));
         (dir, state, backend)
+    }
+
+    mod audio {
+        use super::*;
+        use consort_audio::{Device, Direction, GateConfig};
+
+        /// A machine with one microphone and one pair of speakers.
+        struct Fake;
+
+        impl AudioDevices for Fake {
+            fn enumerate(&self, direction: Direction) -> Vec<Device> {
+                let name = match direction {
+                    Direction::Input => "Yeti",
+                    Direction::Output => "Headphones",
+                };
+                vec![Device {
+                    name: name.to_owned(),
+                    is_default: true,
+                }]
+            }
+        }
+
+        #[test]
+        fn a_first_run_reports_the_defaults() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(audio_settings_for(&state), AudioSettings::default());
+        }
+
+        #[test]
+        fn what_was_set_is_what_comes_back() {
+            let (_dir, state, _) = state();
+            let chosen = AudioSettings {
+                input: Some("Yeti".to_owned()),
+                output: Some("Headphones".to_owned()),
+                gate: GateConfig {
+                    open_at: 0.8,
+                    ..GateConfig::default()
+                },
+            };
+
+            set_audio_settings_for(&state, chosen.clone()).expect("save");
+
+            assert_eq!(audio_settings_for(&state), chosen);
+        }
+
+        #[test]
+        fn the_device_report_resolves_against_what_was_saved() {
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            let report = audio_devices_for(&state, &Fake);
+
+            assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
+            assert_eq!(report.input.missing, None);
+        }
+
+        #[test]
+        fn a_saved_device_that_is_no_longer_here_is_reported_as_missing() {
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Some Other Microphone".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            let report = audio_devices_for(&state, &Fake);
+
+            assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
+            assert_eq!(
+                report.input.missing.as_deref(),
+                Some("Some Other Microphone"),
+                "somebody whose headset is unplugged has to be told, not \
+                 quietly switched"
+            );
+        }
+
+        #[test]
+        fn nothing_saved_reports_the_host_default() {
+            let (_dir, state, _) = state();
+
+            let report = audio_devices_for(&state, &Fake);
+
+            assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
+            assert_eq!(report.output.selected.as_deref(), Some("Headphones"));
+        }
+
+        #[test]
+        fn saving_audio_settings_leaves_the_rest_of_the_file_alone() {
+            // One section of one file. When appearance and keybinds arrive,
+            // changing a microphone must not wipe them.
+            let (_dir, state, _) = state();
+            let stored = crate::settings::Settings {
+                audio: AudioSettings::default(),
+            };
+            state.settings().save(&stored).expect("save");
+
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            assert_eq!(state.settings().load().audio.input.as_deref(), Some("Yeti"));
+        }
+
+        #[test]
+        fn a_settings_error_reads_as_something_a_person_can_act_on() {
+            let error = CommandError::from(crate::settings::SettingsError::Serialise(
+                serde_json::from_str::<AudioSettings>("nonsense").unwrap_err(),
+            ));
+
+            assert_eq!(error.message(), "Your settings could not be saved.");
+            assert!(
+                !error.detail().is_empty(),
+                "the console half has to carry the reason"
+            );
+        }
     }
 
     pub(super) fn status_name(status: &SessionStatus) -> &'static str {
@@ -852,7 +1044,8 @@ mod against_a_mock_homeserver {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
         let sink = Arc::new(RecordingSink::new());
-        (dir, AppState::new(store, sink.clone()), sink)
+        let settings = crate::settings::SettingsStore::at(dir.path());
+        (dir, AppState::new(store, settings, sink.clone()), sink)
     }
 
     async fn mount_login(server: &MatrixMockServer) {
@@ -974,7 +1167,11 @@ mod against_a_mock_homeserver {
             .unwrap();
         // A second run of the app over the same data directory, sharing the
         // secret backend the way a real keyring would be shared.
-        let fresh = AppState::new(first.store().clone(), Arc::new(RecordingSink::new()));
+        let fresh = AppState::new(
+            first.store().clone(),
+            first.settings().clone(),
+            Arc::new(RecordingSink::new()),
+        );
 
         let status = session_status_for(&fresh).await.unwrap();
 
@@ -1098,7 +1295,11 @@ mod against_a_mock_homeserver {
             .unwrap();
 
         let sink = Arc::new(RecordingSink::new());
-        let fresh = AppState::new(first.store().clone(), sink.clone());
+        let fresh = AppState::new(
+            first.store().clone(),
+            first.settings().clone(),
+            sink.clone(),
+        );
         session_status_for(&fresh).await.unwrap();
 
         assert!(fresh.has_verification_task().await);
@@ -1413,7 +1614,11 @@ mod against_a_mock_homeserver {
             .unwrap();
 
         let sink = Arc::new(RecordingSink::new());
-        let fresh = AppState::new(first.store().clone(), sink.clone());
+        let fresh = AppState::new(
+            first.store().clone(),
+            first.settings().clone(),
+            sink.clone(),
+        );
         session_status_for(&fresh).await.unwrap();
 
         assert!(fresh.has_sync_task().await);

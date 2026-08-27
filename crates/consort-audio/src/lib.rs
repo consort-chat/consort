@@ -13,10 +13,12 @@ pub mod cpal_host;
 pub mod devices;
 pub mod frames;
 pub mod gate;
+pub mod settings;
 
 pub use cpal_host::CpalHost;
-pub use devices::{AudioDevices, Device, Direction, Selection};
+pub use devices::{AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection};
 pub use frames::Frames;
 pub use gate::{
     FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, SAMPLE_RATE, VoiceGate,
 };
+pub use settings::AudioSettings;

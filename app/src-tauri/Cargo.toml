@@ -38,6 +38,7 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+consort-audio = { path = "../../crates/consort-audio" }
 consort-matrix = { path = "../../crates/consort-matrix" }
 tauri = { version = "2", features = [] }
 # One Consort per machine. Two would share one SQLite crypto store and one

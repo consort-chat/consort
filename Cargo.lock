@@ -851,6 +851,7 @@ dependencies = [
 name = "consort-app"
 version = "0.1.0"
 dependencies = [
+ "consort-audio",
  "consort-matrix",
  "matrix-sdk",
  "serde",
@@ -872,6 +873,7 @@ dependencies = [
  "cpal",
  "nnnoiseless",
  "serde",
+ "serde_json",
  "tracing",
 ]
 

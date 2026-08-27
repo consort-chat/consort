@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 use crate::events::{AppEvent, EventSink, LatestSink};
+use crate::settings::SettingsStore;
 
 /// One background task's handle.
 ///
@@ -138,10 +139,17 @@ pub struct AppState {
     /// which subscribed after these tasks started can ask for the current
     /// state instead of waiting for the next change.
     events: Arc<LatestSink>,
+    /// Where the audio choices are written down.
+    ///
+    /// Beside the session store rather than inside it, because the two have
+    /// nothing to do with each other beyond sharing a directory. A settings
+    /// file is not a secret, it survives a sign-out, and losing it costs
+    /// somebody their thresholds rather than their login.
+    settings: SettingsStore,
 }
 
 impl AppState {
-    pub fn new(store: SessionStore, events: Arc<dyn EventSink>) -> Self {
+    pub fn new(store: SessionStore, settings: SettingsStore, events: Arc<dyn EventSink>) -> Self {
         Self {
             client: RwLock::new(None),
             store,
@@ -154,6 +162,7 @@ impl AppState {
             rooms_task: Mutex::new(None),
             initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
+            settings,
         }
     }
 
@@ -168,6 +177,10 @@ impl AppState {
 
     pub fn store(&self) -> &SessionStore {
         &self.store
+    }
+
+    pub fn settings(&self) -> &SettingsStore {
+        &self.settings
     }
 
     /// Serialise sign-in and sign-out against each other.
@@ -394,7 +407,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
         let sink = Arc::new(RecordingSink::new());
-        (dir, AppState::new(store, sink.clone()), sink)
+        let settings = SettingsStore::at(dir.path());
+        (dir, AppState::new(store, settings, sink.clone()), sink)
     }
 
     #[tokio::test]

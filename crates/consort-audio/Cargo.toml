@@ -23,3 +23,8 @@ nnnoiseless = { version = "0.5.2", default-features = false }
 
 serde = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# Only the tests need to see the wire format. The crate itself hands settings to
+# its caller as a type and never chooses a serialisation.
+serde_json = { workspace = true }

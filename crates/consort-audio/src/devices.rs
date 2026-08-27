@@ -152,3 +152,64 @@ fn default_of(available: &[Device]) -> Option<&Device> {
         .find(|device| device.is_default)
         .or_else(|| available.first())
 }
+
+/// What the settings screen is told about one direction.
+///
+/// Three facts, because a picker needs three and no more: what there is, which
+/// one is in use, and whether that is the one that was asked for. The third is
+/// the easiest to leave out and the most expensive to have left out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceList {
+    /// Everything worth offering, in host order.
+    pub devices: Vec<Device>,
+    /// The device audio will actually go through, by name.
+    ///
+    /// `None` only when there are no devices at all. A picker showing nothing
+    /// selected while audio is flowing would be lying.
+    pub selected: Option<String>,
+    /// The saved device, when it is not here any more.
+    ///
+    /// `None` in every other case, including when there is nothing to fall back
+    /// to: with no devices at all there is no substitution to report, only an
+    /// empty machine.
+    pub missing: Option<String>,
+}
+
+impl DeviceList {
+    /// Resolve `saved` against `devices` and describe the outcome.
+    pub fn of(devices: Vec<Device>, saved: Option<&str>) -> Self {
+        let selection = choose(&devices, saved);
+        Self {
+            selected: selection.device().map(|device| device.name.clone()),
+            missing: match &selection {
+                Selection::Substituted { wanted, .. } => Some(wanted.clone()),
+                Selection::Saved(_) | Selection::Default(_) | Selection::Nothing => None,
+            },
+            devices,
+        }
+    }
+}
+
+/// Both directions at once, which is what the settings screen asks for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDeviceReport {
+    pub input: DeviceList,
+    pub output: DeviceList,
+}
+
+impl AudioDeviceReport {
+    /// Ask `host` what it has and resolve each direction against its own saved
+    /// choice.
+    ///
+    /// Two arguments rather than one settings struct, so that crossing them is
+    /// a type error at the call site rather than something that silently
+    /// records from the speakers.
+    pub fn of(host: &dyn AudioDevices, input: Option<&str>, output: Option<&str>) -> Self {
+        Self {
+            input: DeviceList::of(catalogue(host, Direction::Input), input),
+            output: DeviceList::of(catalogue(host, Direction::Output), output),
+        }
+    }
+}

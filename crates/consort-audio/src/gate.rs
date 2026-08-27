@@ -33,8 +33,10 @@ pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_MS: u32 = 10;
 
 /// How eagerly the gate opens, and how reluctantly it shuts.
+// `default` at the container level, so a file that carries one tuned threshold
+// does not silently reset the others to zero.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct GateConfig {
     /// Voice probability at or above which the gate may open.
     pub open_at: f32,

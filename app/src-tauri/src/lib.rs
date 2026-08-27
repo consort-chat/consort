@@ -10,6 +10,7 @@
 
 mod commands;
 mod events;
+mod settings;
 mod state;
 
 use std::path::PathBuf;
@@ -67,6 +68,7 @@ pub fn run() {
             // emits through.
             app.manage(AppState::new(
                 store,
+                crate::settings::SettingsStore::at(&data_dir),
                 std::sync::Arc::new(app.handle().clone()),
             ));
             Ok(())
@@ -84,6 +86,9 @@ pub fn run() {
             commands::resend_state,
             commands::room_avatar,
             commands::member_avatar,
+            commands::audio_devices,
+            commands::audio_settings,
+            commands::set_audio_settings,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,
