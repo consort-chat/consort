@@ -1387,6 +1387,201 @@ mod room_list {
         );
     }
 
+    /// The state event Element Call writes to say somebody is connected.
+    ///
+    /// Spelled out rather than built through ruma's typed content, so that the
+    /// bytes on the wire are the bytes a real Element Call puts there rather
+    /// than whatever this workspace's ruma happens to serialise today.
+    const CALL_MEMBER: &str = "org.matrix.msc3401.call.member";
+
+    /// One device's live membership in a room call, four hours long.
+    fn a_live_membership(device: &str) -> serde_json::Value {
+        serde_json::json!({
+            "application": "m.call",
+            "call_id": "",
+            "scope": "m.room",
+            "device_id": device,
+            "foci_preferred": [],
+            "focus_active": { "type": "livekit", "focus_selection": "oldest_membership" },
+            "expires": 14_400_000,
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn somebody_else_connecting_to_a_call_shows_up_in_the_channel() {
+        // The acceptance test, driven from Rust so it is repeatable without a
+        // browser: another account joins the call room and writes the state
+        // event Element Call writes, and this account's room list grows a
+        // person under that channel without joining anything.
+        let dir = tempfile::tempdir().unwrap();
+        let account = a_brand_new_account("room-list-presence").await;
+        let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+            .await
+            .unwrap();
+
+        // Public, so a stranger can join it, and with the call membership
+        // event explicitly at power level zero. That is not a test
+        // convenience: Element Call sets exactly this when it creates a call
+        // room, because otherwise an ordinary member cannot announce that they
+        // have connected.
+        let mut request = Request::new();
+        request.name = Some("Lounge".to_owned());
+        let mut content = CreationContent::new();
+        content.room_type = Some(RoomType::from(CALL));
+        request.creation_content = Some(Raw::new(&content).unwrap());
+        request.visibility = matrix_sdk::ruma::api::client::room::Visibility::Public;
+        request.preset =
+            Some(matrix_sdk::ruma::api::client::room::create_room::v3::RoomPreset::PublicChat);
+        request.power_level_content_override = Some(
+            Raw::new(&serde_json::json!({ "events": { CALL_MEMBER: 0 } }))
+                .unwrap()
+                .cast_unchecked(),
+        );
+        let lounge = client.create_room(request).await.unwrap();
+
+        let (connections, connection_sink) = recorder();
+        let sync_task = sync::start(client.clone(), connection_sink);
+        wait_for(&connections, Connection::Live).await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let seen = seen.clone();
+            move |rooms: Rooms| seen.lock().unwrap().push(rooms)
+        };
+        let watch_task = rooms::watch(client.clone(), sink);
+
+        let is_the_lounge =
+            |channel: &consort_matrix::Channel| channel.id == lounge.room_id().as_str();
+
+        // The channel first, so that a later wait on the person cannot pass by
+        // the room simply not being there yet.
+        wait_until(&seen, |rooms| {
+            rooms.spaces[0].channels.iter().any(is_the_lounge)
+        })
+        .await;
+
+        // Now somebody else connects. A different account, a different device,
+        // and nothing on this side asked for it.
+        let stranger_dir = tempfile::tempdir().unwrap();
+        let stranger_account = a_brand_new_account("room-list-caller").await;
+        let (stranger, _) = consort_matrix::auth::login(&store(&stranger_dir), &stranger_account)
+            .await
+            .unwrap();
+        let theirs = stranger.join_room_by_id(lounge.room_id()).await.unwrap();
+        let stranger_id = stranger.user_id().unwrap().to_owned();
+        theirs
+            .send_state_event_raw(
+                CALL_MEMBER,
+                &format!("_{stranger_id}_CONSORTTEST"),
+                a_live_membership("CONSORTTEST"),
+            )
+            .await
+            .unwrap();
+
+        let rooms = wait_until(&seen, |rooms| {
+            rooms.spaces[0]
+                .channels
+                .iter()
+                .any(|channel| is_the_lounge(channel) && !channel.participants.is_empty())
+        })
+        .await;
+
+        watch_task.abort();
+        sync_task.abort();
+
+        let lounge = rooms.spaces[0]
+            .channels
+            .iter()
+            .find(|channel| is_the_lounge(channel))
+            .unwrap();
+
+        assert_eq!(lounge.kind, ChannelKind::Voice);
+        assert_eq!(
+            lounge
+                .participants
+                .iter()
+                .map(|participant| participant.id.as_str())
+                .collect::<Vec<_>>(),
+            [stranger_id.as_str()],
+            "the account that connected has to be the one shown"
+        );
+        assert!(
+            !lounge.participants[0].name.is_empty(),
+            "somebody in a channel always has something to be called"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn somebody_leaving_a_call_stops_being_in_the_channel() {
+        // The other half. A leave is an empty content rather than a removed
+        // event, so a client that only watched for the state key appearing
+        // would show that person in the channel forever.
+        let dir = tempfile::tempdir().unwrap();
+        let account = a_brand_new_account("room-list-hangup").await;
+        let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+            .await
+            .unwrap();
+
+        let mut request = Request::new();
+        request.name = Some("Lounge".to_owned());
+        let mut content = CreationContent::new();
+        content.room_type = Some(RoomType::from(CALL));
+        request.creation_content = Some(Raw::new(&content).unwrap());
+        let lounge = client.create_room(request).await.unwrap();
+
+        let (connections, connection_sink) = recorder();
+        let sync_task = sync::start(client.clone(), connection_sink);
+        wait_for(&connections, Connection::Live).await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = {
+            let seen = seen.clone();
+            move |rooms: Rooms| seen.lock().unwrap().push(rooms)
+        };
+        let watch_task = rooms::watch(client.clone(), sink);
+
+        let me = client.user_id().unwrap().to_owned();
+        let state_key = format!("_{me}_CONSORTTEST");
+        lounge
+            .send_state_event_raw(CALL_MEMBER, &state_key, a_live_membership("CONSORTTEST"))
+            .await
+            .unwrap();
+
+        wait_until(&seen, |rooms| {
+            rooms.spaces[0]
+                .channels
+                .iter()
+                .any(|channel| !channel.participants.is_empty())
+        })
+        .await;
+
+        lounge
+            .send_state_event_raw(CALL_MEMBER, &state_key, serde_json::json!({}))
+            .await
+            .unwrap();
+
+        let rooms = wait_until(&seen, |rooms| {
+            rooms.spaces[0]
+                .channels
+                .iter()
+                .all(|channel| channel.participants.is_empty())
+        })
+        .await;
+
+        watch_task.abort();
+        sync_task.abort();
+
+        assert!(
+            rooms.spaces[0]
+                .channels
+                .iter()
+                .any(|channel| channel.id == lounge.room_id().as_str()),
+            "the channel itself has to still be there, only empty"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
     async fn a_space_becomes_a_rail_entry_with_its_channels_under_it() {

@@ -14,9 +14,15 @@
 //! sync that changed anything, so a network call in this file would turn an
 //! idle client into a client that polls.
 
+use std::collections::HashSet;
+
 use matrix_sdk::Room;
+use matrix_sdk::room::RoomMember;
+use matrix_sdk::ruma::events::StateEventType;
 use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
 use matrix_sdk::ruma::room::RoomType;
+
+use super::dto::Participant;
 
 /// The MSC3417 room type marking a room as a call.
 ///
@@ -33,6 +39,14 @@ const CALL_ROOM_TYPE_STABLE: &str = "m.call";
 
 /// The room type marking a room as a space.
 const SPACE_ROOM_TYPE: &str = "m.space";
+
+/// The MSC3401 state event Element Call writes to say somebody is connected.
+///
+/// Never parsed here: the typed accessor does the reading, and this is only
+/// used to tell an empty voice channel apart from a voice channel whose
+/// membership arrived in a dialect this build does not understand. See
+/// [`explain_an_empty_call`].
+const CALL_MEMBER_STATE_UNSTABLE: &str = "org.matrix.msc3401.call.member";
 
 /// What a room is, as far as the shell is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +70,8 @@ pub(crate) struct RoomFacts {
     pub(crate) kind: RoomKind,
     /// Empty unless this is a space.
     pub(crate) children: Vec<ChildFacts>,
+    /// Who is connected to the call. Empty unless this is a voice channel.
+    pub(crate) participants: Vec<Participant>,
 }
 
 /// One `m.space.child` event, reduced to what the ordering needs.
@@ -104,6 +120,137 @@ pub(crate) async fn extract(room: &Room) -> RoomFacts {
             RoomKind::Space => children_of(room).await,
             RoomKind::Text | RoomKind::Voice => Vec::new(),
         },
+        // A text room pays nothing for this. Both arms of the match are
+        // reached on every sync that touched anything, so the cheap one has
+        // to stay cheap.
+        participants: match kind {
+            RoomKind::Voice => participants_of(room).await,
+            RoomKind::Space | RoomKind::Text => Vec::new(),
+        },
+    }
+}
+
+/// Who is connected to a voice channel, in the order they joined.
+///
+/// The read itself is [`Room::active_room_call_participants`], which is worth
+/// being precise about because it does more than its signature suggests. It
+/// reads `RoomInfo.base_info.rtc_member_events` out of memory, so there is no
+/// request and nothing to fail. It keeps only memberships with application
+/// `m.call` and scope `m.room`, which is what makes a MatrixRTC session a room
+/// call rather than something else riding the same events. It drops expired
+/// memberships at the moment of reading, against the clock rather than against
+/// a cached decision, so the answer is never stale. And it returns oldest
+/// first, which is both a sensible order to draw and a stable one, so the list
+/// does not reshuffle under the pointer between renders.
+///
+/// What it does not do is deduplicate. A membership is per device, so somebody
+/// on a laptop and a phone comes back twice, and that is this function's job.
+/// It has to be done without disturbing the ordering, which is why it is a
+/// seen set over the vector rather than a collect into one.
+async fn participants_of(room: &Room) -> Vec<Participant> {
+    let connected = room.active_room_call_participants();
+
+    if connected.is_empty() {
+        explain_an_empty_call(room).await;
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::with_capacity(connected.len());
+    let mut participants = Vec::with_capacity(connected.len());
+
+    for user_id in connected {
+        if !seen.insert(user_id.clone()) {
+            continue;
+        }
+
+        // Local. `get_member_no_sync` reads the store and, unlike its
+        // requesting sibling, will not go and fetch the room's whole member
+        // list because somebody joined a call.
+        let name = match room.get_member_no_sync(&user_id).await {
+            Ok(Some(member)) => name_of_member(&member),
+            // In the call but not in the room, as far as this account has been
+            // told. It happens when the membership arrives before the
+            // `m.room.member` that explains it, and the next sync fixes it.
+            Ok(None) => user_id.to_string(),
+            Err(error) => {
+                tracing::warn!(%error, %user_id, room_id = %room.room_id(), "could not read a call participant");
+                user_id.to_string()
+            }
+        };
+
+        participants.push(Participant {
+            id: user_id.to_string(),
+            name,
+        });
+    }
+
+    participants
+}
+
+/// What to call somebody in a voice channel.
+///
+/// The user ID when there is no display name at all. Unhelpful, and honest,
+/// and better than the SDK's own fallback of the localpart, which drops the
+/// server and so can show two different people the same way.
+///
+/// Two people who have chosen the same display name get theirs qualified,
+/// which is the same thing every other Matrix client does and the reason
+/// `name_ambiguous` exists. Without it, one of them is impersonating the
+/// other in the only place the interface names them.
+fn name_of_member(member: &RoomMember) -> String {
+    let name = member
+        .display_name()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+
+    match name {
+        Some(name) if member.name_ambiguous() => format!("{name} ({})", member.user_id()),
+        Some(name) => name.to_owned(),
+        None => member.user_id().to_string(),
+    }
+}
+
+/// Say why a voice channel is empty.
+///
+/// The one failure this whole feature has that is otherwise silent. Element
+/// Call is moving MatrixRTC membership out of room state and into MSC4354
+/// sticky events, and on the day this deployment follows,
+/// [`Room::active_room_call_participants`] starts returning nothing at all. An
+/// empty list is indistinguishable from an empty call, so the symptom would be
+/// voice channels that quietly never show anybody again, with nothing on
+/// screen or in the log to say why.
+///
+/// So: if the store holds the state events and the accessor still found
+/// nobody, it is either every membership having expired, which is ordinary, or
+/// the dialect having moved, which is not. The count is what lets whoever is
+/// looking tell those apart. The fix, when it comes, is `unstable-msc4354` on
+/// matrix-sdk and a second read through `active_rtc_member_stickies`.
+///
+/// The read is done whether or not anybody is listening, rather than behind a
+/// level check. It is one indexed store query for a voice channel nobody is
+/// in, which is the same local cost [`children_of`] already pays for every
+/// space on every snapshot, and it is the only version of this that the tests
+/// actually exercise: a level check is cached per callsite for the whole
+/// process, so a test that turns the level up after another test has already
+/// been through here changes nothing and quietly proves nothing.
+async fn explain_an_empty_call(room: &Room) {
+    let events = match room
+        .get_state_events(StateEventType::from(CALL_MEMBER_STATE_UNSTABLE))
+        .await
+    {
+        Ok(events) => events.len(),
+        // The store failed, which is not worth a word of its own here: the
+        // caller has already decided the channel is empty, and every other
+        // read in this file logs its own failures.
+        Err(_) => return,
+    };
+
+    if events > 0 {
+        tracing::debug!(
+            room_id = %room.room_id(),
+            events,
+            "a voice channel has call membership state but nobody active: either all of it has expired, or the membership dialect has moved on"
+        );
     }
 }
 

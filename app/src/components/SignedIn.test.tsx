@@ -1079,6 +1079,7 @@ describe("SignedIn the room list", () => {
     kind: "text",
     avatar: null,
     joined: true,
+    participants: [],
   };
   const lounge: Channel = {
     id: "!lounge:example.org",
@@ -1086,6 +1087,7 @@ describe("SignedIn the room list", () => {
     kind: "voice",
     avatar: null,
     joined: true,
+    participants: [],
   };
   const homeSpace: Space = {
     id: "home",
@@ -1098,6 +1100,7 @@ describe("SignedIn the room list", () => {
         kind: "text",
         avatar: null,
         joined: true,
+        participants: [],
       },
     ],
   };

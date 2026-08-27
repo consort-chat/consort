@@ -58,6 +58,7 @@ const rooms: Rooms = {
           kind: "voice",
           avatar: null,
           joined: true,
+          participants: [],
         },
         {
           id: "!unknown:example.org",
@@ -65,6 +66,7 @@ const rooms: Rooms = {
           kind: "text",
           avatar: null,
           joined: false,
+          participants: [],
         },
       ],
     },

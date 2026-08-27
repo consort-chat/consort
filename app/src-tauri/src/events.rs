@@ -293,7 +293,7 @@ impl EventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use consort_matrix::{Channel, ChannelKind, FlowState, Space, StopReason};
+    use consort_matrix::{Channel, ChannelKind, FlowState, Participant, Space, StopReason};
 
     #[test]
     fn a_connection_event_goes_out_on_the_connection_channel() {
@@ -476,6 +476,10 @@ mod tests {
                         kind: ChannelKind::Voice,
                         avatar: None,
                         joined: true,
+                        participants: vec![Participant {
+                            id: "@ada:example.org".to_owned(),
+                            name: "Ada".to_owned(),
+                        }],
                     }],
                 },
             ],
@@ -499,6 +503,10 @@ mod tests {
 
         assert_eq!(payload["spaces"][0]["id"], "home");
         assert_eq!(payload["spaces"][1]["channels"][0]["kind"], "voice");
+        assert_eq!(
+            payload["spaces"][1]["channels"][0]["participants"][0]["name"], "Ada",
+            "who is in a voice channel has to survive the trip to the webview"
+        );
         assert!(
             payload.get("Rooms").is_none(),
             "the variant name leaked into the wire format: {payload}"

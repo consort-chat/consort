@@ -84,6 +84,39 @@ pub struct Channel {
     /// are shown, and shown as unavailable, because hiding them makes Consort
     /// disagree with every other client about how many channels a space has.
     pub joined: bool,
+    /// Who is connected to this voice channel right now, oldest membership
+    /// first.
+    ///
+    /// Always empty for a text channel, for a voice channel nobody is in, and
+    /// for a channel this account has not joined: the state of a room we are
+    /// not in is a room we cannot see, and guessing at it would be a lie the
+    /// interface would draw.
+    ///
+    /// Defaulted so that a snapshot serialised before this field existed still
+    /// reads back, which is what the round-trip test relies on.
+    #[serde(default)]
+    pub participants: Vec<Participant>,
+}
+
+/// One person connected to a voice channel.
+///
+/// A membership is per device, so the same human on a laptop and a phone is
+/// one of these and not two. See `facts::participants_of`, which does that
+/// deduplication, for why it is done there rather than here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Participant {
+    /// The user ID. Also half of the key their avatar is fetched by, the other
+    /// half being the room, because a person can have a different avatar in
+    /// every room they are in.
+    pub id: String,
+    /// What to call them.
+    ///
+    /// A plain `String` rather than an `Option`, unlike [`Channel::name`],
+    /// because there is always an answer: a display name, or failing that the
+    /// user ID, which is still something a person recognises. There is no case
+    /// where the interface would have nothing to draw.
+    pub name: String,
 }
 
 /// Which column a channel belongs in.
@@ -109,6 +142,7 @@ mod tests {
             kind: ChannelKind::Text,
             avatar: None,
             joined: true,
+            participants: Vec::new(),
         }
     }
 
@@ -142,6 +176,32 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_with_nobody_in_it_still_sends_a_list() {
+        // Not `null`, and not an absent key. The frontend maps over this
+        // without a guard, and an empty array is the shape that lets it.
+        let json = serde_json::to_value(channel()).unwrap();
+
+        assert_eq!(json["participants"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_channel_from_before_participants_existed_reads_back_empty() {
+        // The field is defaulted rather than required, so a snapshot written
+        // by an older build is still a snapshot.
+        let json = serde_json::json!({
+            "id": "!a:example.org",
+            "name": "general",
+            "kind": "text",
+            "avatar": null,
+            "joined": true,
+        });
+
+        let channel: Channel = serde_json::from_value(json).unwrap();
+
+        assert!(channel.participants.is_empty());
+    }
+
+    #[test]
     fn the_whole_tree_survives_a_round_trip() {
         let rooms = Rooms {
             spaces: vec![
@@ -152,6 +212,10 @@ mod tests {
                     avatar: Some("mxc://example.org/abc".to_owned()),
                     channels: vec![Channel {
                         kind: ChannelKind::Voice,
+                        participants: vec![Participant {
+                            id: "@bob:example.org".to_owned(),
+                            name: "Bob".to_owned(),
+                        }],
                         ..channel()
                     }],
                 },

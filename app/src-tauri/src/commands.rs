@@ -255,6 +255,25 @@ pub async fn room_avatar_for(
     Ok(rooms::avatar(&client, &room_id).await)
 }
 
+/// One person's avatar in one room, as a data URL.
+///
+/// Two identifiers rather than one because a Matrix profile is per room: the
+/// picture to draw beside a voice channel is the one that room knows the
+/// person by.
+///
+/// Same failure contract as [`room_avatar_for`]. `Ok(None)` for somebody with
+/// no avatar, somebody the room has never heard of, a room that has gone, and
+/// an image the homeserver would not hand over, because all four end in
+/// initials.
+pub async fn member_avatar_for(
+    state: &AppState,
+    room_id: String,
+    user_id: String,
+) -> Result<Option<String>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::member_avatar(&client, &room_id, &user_id).await)
+}
+
 /// Verify this session with the account's recovery key.
 pub async fn verification_recover_for(
     state: &AppState,
@@ -440,6 +459,19 @@ pub async fn room_avatar(
     room_id: String,
 ) -> Result<Option<String>, CommandError> {
     room_avatar_for(&state, room_id).await
+}
+
+/// One person's avatar in one room, as a data URL.
+///
+/// Asked for by the people drawn under a voice channel. See
+/// `member_avatar_for` for why the room is part of the question.
+#[tauri::command]
+pub async fn member_avatar(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_id: String,
+) -> Result<Option<String>, CommandError> {
+    member_avatar_for(&state, room_id, user_id).await
 }
 
 /// Verify this session with the account's recovery key.
@@ -1302,6 +1334,51 @@ mod against_a_mock_homeserver {
         );
         assert_eq!(
             room_avatar_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_for_a_member_avatar_while_signed_out_says_so() {
+        let (_dir, state, _sink) = state();
+
+        let error = member_avatar_for(
+            &state,
+            "!a:example.org".to_owned(),
+            "@ada:example.org".to_owned(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_avatar_of_somebody_the_room_never_heard_of_is_not_an_error() {
+        // A participant can arrive before the `m.room.member` that explains
+        // them. The list still draws them, by initial, and asking about their
+        // picture has to be as harmless as asking about a room with none.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            member_avatar_for(
+                &state,
+                "!gone:example.org".to_owned(),
+                "@ada:example.org".to_owned(),
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            member_avatar_for(&state, "home".to_owned(), "not a user".to_owned())
                 .await
                 .unwrap(),
             None

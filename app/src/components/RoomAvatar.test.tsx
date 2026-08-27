@@ -2,9 +2,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const roomAvatar = vi.hoisted(() => vi.fn());
+const memberAvatar = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   roomAvatar,
+  memberAvatar,
 }));
 
 import { RoomAvatar } from "./RoomAvatar";
@@ -44,6 +46,7 @@ describe("RoomAvatar", () => {
   beforeEach(() => {
     resetAvatarCache();
     roomAvatar.mockReset().mockResolvedValue(PNG);
+    memberAvatar.mockReset().mockResolvedValue(PNG);
   });
 
   it("draws the initial and asks nothing when the room has no avatar", async () => {
@@ -226,5 +229,91 @@ describe("RoomAvatar", () => {
 
     expect(screen.getByText("G")).toBeVisible();
     expect(screen.queryByRole("presentation")).not.toBeInTheDocument();
+  });
+
+  it("asks for a person rather than the room when given a user", async () => {
+    render(
+      <RoomAvatar
+        roomId="!v:example.org"
+        userId="@ada:example.org"
+        name="Ada"
+      />,
+    );
+
+    expect(await screen.findByRole("presentation")).toHaveAttribute("src", PNG);
+    expect(memberAvatar).toHaveBeenCalledWith(
+      "!v:example.org",
+      "@ada:example.org",
+    );
+    expect(roomAvatar).not.toHaveBeenCalled();
+  });
+
+  it("asks about a person even though nothing said they have a picture", async () => {
+    // Unlike a room, the list carries no `mxc://` hint for a person, so there
+    // is nothing to skip on. The answer is remembered either way.
+    memberAvatar.mockResolvedValue(null);
+
+    render(
+      <RoomAvatar
+        roomId="!v:example.org"
+        userId="@ada:example.org"
+        name="Ada"
+      />,
+    );
+
+    await waitFor(() => expect(memberAvatar).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("A")).toBeVisible();
+  });
+
+  it("keeps one person's picture apart from another's in the same room", async () => {
+    // The cache is one map. A key that ignored the user would give everybody
+    // in a channel the face of whoever loaded first.
+    memberAvatar.mockImplementation((_room: string, userId: string) =>
+      Promise.resolve(userId === "@ada:example.org" ? PNG : null),
+    );
+
+    render(
+      <>
+        <RoomAvatar
+          roomId="!v:example.org"
+          userId="@ada:example.org"
+          name="Ada"
+        />
+        <RoomAvatar
+          roomId="!v:example.org"
+          userId="@ben:example.org"
+          name="Ben"
+        />
+      </>,
+    );
+
+    await waitFor(() => expect(memberAvatar).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("presentation")).toHaveAttribute("src", PNG);
+    expect(screen.getByText("B")).toBeVisible();
+  });
+
+  it("keeps a room's picture apart from a person's in that room", async () => {
+    // Same map, and a room id cannot contain a slash, so the two keys cannot
+    // collide however similar they look.
+    render(
+      <>
+        <RoomAvatar
+          roomId="!v:example.org"
+          name="Lounge"
+          avatar="mxc://example.org/abc"
+        />
+        <RoomAvatar
+          roomId="!v:example.org"
+          userId="@ada:example.org"
+          name="Ada"
+        />
+      </>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("presentation")).toHaveLength(2),
+    );
+    expect(roomAvatar).toHaveBeenCalledTimes(1);
+    expect(memberAvatar).toHaveBeenCalledTimes(1);
   });
 });

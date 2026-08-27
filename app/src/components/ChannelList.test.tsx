@@ -1,16 +1,42 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The people under a voice channel draw their avatars, which is a command.
+// Mocked here rather than left to fail quietly, because an unmocked `invoke`
+// throws into the catch that turns a missing picture into an initial, and the
+// tests would still pass while exercising the wrong path.
+const memberAvatar = vi.hoisted(() => vi.fn());
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
+  memberAvatar,
+}));
 
 import { ChannelList } from "./ChannelList";
-import type { Channel, Space } from "../lib/api";
+import type { Channel, Participant, Space } from "../lib/api";
+import { resetAvatarCache } from "../lib/avatars";
 
 function text(id: string, name: string | null, joined = true): Channel {
-  return { id, name, kind: "text", avatar: null, joined };
+  return { id, name, kind: "text", avatar: null, joined, participants: [] };
 }
 
-function voice(id: string, name: string, joined = true): Channel {
-  return { id, name, kind: "voice", avatar: null, joined };
+function voice(
+  id: string,
+  name: string,
+  participants: Participant[] = [],
+): Channel {
+  return {
+    id,
+    name,
+    kind: "voice",
+    avatar: null,
+    joined: true,
+    participants,
+  };
+}
+
+function person(id: string, name: string): Participant {
+  return { id, name };
 }
 
 function space(channels: Channel[], name = "Kahu HQ"): Space {
@@ -24,7 +50,14 @@ function namesIn(label: string): string[] {
     .map((button) => button.textContent ?? "");
 }
 
+const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
 describe("ChannelList", () => {
+  beforeEach(() => {
+    resetAvatarCache();
+    memberAvatar.mockReset().mockResolvedValue(null);
+  });
+
   it("names the space at the top", () => {
     render(
       <ChannelList
@@ -150,6 +183,130 @@ describe("ChannelList", () => {
 
     await userEvent.click(entry);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("shows who is in a voice channel without anybody opening it", () => {
+    // The whole point of this half of the feature: presence is a read of room
+    // state, so it is on screen before anything is clicked or connected to.
+    render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [
+            person("@ada:example.org", "Ada"),
+            person("@ben:example.org", "Ben"),
+          ]),
+        ])}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    const people = within(screen.getByRole("list", { name: "In Lounge" }));
+    expect(
+      people.getAllByRole("listitem").map((item) => item.textContent),
+    ).toEqual(["AAda", "BBen"]);
+  });
+
+  it("draws people in the order it was given", () => {
+    // Oldest membership first, decided in Rust. Re-sorting here would make the
+    // list move under the pointer every time somebody joined.
+    render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [
+            person("@zoe:example.org", "Zoe"),
+            person("@ada:example.org", "Ada"),
+          ]),
+        ])}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    const people = within(screen.getByRole("list", { name: "In Lounge" }));
+    expect(
+      people.getAllByRole("listitem").map((item) => item.textContent),
+    ).toEqual(["ZZoe", "AAda"]);
+  });
+
+  it("draws nothing under a voice channel nobody is in", () => {
+    // An empty voice channel has to keep exactly the shape it had before
+    // presence existed, or every quiet channel gains a gap under it.
+    render(
+      <ChannelList
+        space={space([voice("!v:example.org", "Lounge")])}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("list", { name: "In Lounge" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not turn a person into a way to open the channel", async () => {
+    // Nesting the list inside the button would make every name a target that
+    // opens the room, which is not what clicking somebody should ever mean.
+    const onSelect = vi.fn();
+    render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
+        ])}
+        selectedId={null}
+        onSelect={onSelect}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Ada"));
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+  });
+
+  it("asks for a person's picture in the room they are in", async () => {
+    // A Matrix profile is per room, so the room is half of the question. The
+    // answer replaces the initial in place.
+    memberAvatar.mockResolvedValue(PNG);
+    render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
+        ])}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(memberAvatar).toHaveBeenCalledWith(
+        "!v:example.org",
+        "@ada:example.org",
+      );
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".avatar__image")).toHaveAttribute(
+        "src",
+        PNG,
+      );
+    });
+  });
+
+  it("falls back to an initial for somebody with no picture", async () => {
+    render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
+        ])}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(memberAvatar).toHaveBeenCalled());
+    expect(document.querySelector(".avatar__image")).toBeNull();
+    expect(screen.getByText("A")).toBeVisible();
   });
 
   it("never puts a room ID where a name goes", () => {

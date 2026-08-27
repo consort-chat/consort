@@ -41,11 +41,22 @@ at whatever homeserver you already run.
   verification unlock it, and a message sent before this session existed can be
   read on it afterwards. When an account has no backup at all the screen says
   so, because that is the case where losing this machine loses the messages.
+- The room list: a rail entry per joined space, a Home entry for everything
+  belonging to no joined space, and the channels under each of them split into
+  text and voice. A room a space lists and this account never joined is shown
+  as unavailable rather than hidden, and named by asking the space, because
+  disagreeing with every other client about how many channels there are is
+  worse than one request.
+- Who is already in a voice channel, drawn underneath it, without joining the
+  call or clicking the channel. Somebody connecting from Element Call in a
+  browser appears within a sync and disappears when they hang up, and the same
+  person on two devices appears once.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-No room list, no messages, no voice. See [the roadmap](#roadmap).
+No messages, and no way to join a voice channel: Consort can see who is in a
+call but cannot be in one itself. See [the roadmap](#roadmap).
 
 ---
 
@@ -309,6 +320,7 @@ whether a model wrote them or you did.
 | Verifying with a recovery key | working |
 | Key backup, so history older than this session decrypts | working |
 | Room list and voice channel discovery | working |
+| Seeing who is already in a voice channel | working |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
 | RNNoise voice activity detection with hysteresis gating | prototyped separately |
 | Text messaging | planned |

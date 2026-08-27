@@ -137,3 +137,42 @@
     transition: none;
   }
 }
+
+/*
+  The people in a voice channel, under it.
+
+  Indented to line up with the channel's own name rather than with its icon:
+  the icon column is 20px and the row's padding and gap are `--space-2` each,
+  so the names form one left edge down the whole list.
+*/
+.channels__people {
+  display: grid;
+  gap: 1px;
+  margin: var(--space-1) 0 var(--space-1);
+  padding: 0 0 0 calc(20px + var(--space-2) * 2);
+  list-style: none;
+}
+
+.channels__person {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  padding: 2px var(--space-2);
+}
+
+/*
+  Smaller than anywhere else one is drawn, which is what `--avatar-size` on
+  `.avatar` exists for.
+*/
+.channels__face {
+  --avatar-size: 20px;
+}
+
+.channels__who {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

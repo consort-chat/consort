@@ -60,7 +60,7 @@ pub mod verification;
 pub use auth::{Credentials, Profile};
 pub use backup::KeyBackup;
 pub use error::{Error, Result};
-pub use rooms::{Channel, ChannelKind, Rooms, Space};
+pub use rooms::{Channel, ChannelKind, Participant, Rooms, Space};
 pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
 pub use sync::{Connection, StopReason};

@@ -1,5 +1,6 @@
 import type { Channel, Space } from "../lib/api";
 import { channelLabel } from "../lib/labels";
+import { RoomAvatar } from "./RoomAvatar";
 import "./ChannelList.css";
 
 /**
@@ -25,6 +26,40 @@ function VoiceIcon() {
       <path d="M15.5 8.5a5 5 0 0 1 0 7" />
       <path d="M18.5 5.5a9 9 0 0 1 0 13" />
     </svg>
+  );
+}
+
+/**
+ * Who is in a voice channel, under it.
+ *
+ * Drawn without anybody clicking the channel and without connecting to
+ * anything: Element Call announces a connection by writing room state, so this
+ * is a read of something the account already has.
+ *
+ * Omitted entirely when the channel is empty, the same way a group with no
+ * channels is omitted, so a quiet voice channel keeps exactly the shape it had
+ * before this existed.
+ */
+function Participants({ channel }: { channel: Channel }) {
+  if (channel.participants.length === 0) return null;
+
+  return (
+    <ul
+      className="channels__people"
+      aria-label={`In ${channelLabel(channel)}`}
+    >
+      {channel.participants.map((participant) => (
+        <li key={participant.id} className="channels__person">
+          <RoomAvatar
+            roomId={channel.id}
+            userId={participant.id}
+            name={participant.name}
+            className="channels__face"
+          />
+          <span className="channels__who">{participant.name}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -64,6 +99,12 @@ function ChannelRow({
         {voice ? <VoiceIcon /> : <span className="channels__hash">#</span>}
         <span className="channels__name">{channelLabel(channel)}</span>
       </button>
+      {/*
+        Outside the button, deliberately. A person in the channel is not part
+        of the control that opens it, and nesting them would make every name a
+        target that opens the room instead.
+      */}
+      {voice && <Participants channel={channel} />}
     </li>
   );
 }

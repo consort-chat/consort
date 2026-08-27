@@ -1734,17 +1734,30 @@ mod room_list {
     }
 
     /// One state event, with the fields the SDK insists on.
+    ///
+    /// The event ID is derived from the event so that no two of them collide,
+    /// and stripped down to letters and digits because it has to survive
+    /// ruma's parsing. Everything after a colon in an event ID is read as a
+    /// server name, and a state key can hold both a colon and characters no
+    /// server name is allowed to have. An ID that fails to parse takes the
+    /// whole event with it, silently, which is a long way to look for a
+    /// fixture that simply never arrives.
     fn state_event(
         event_type: &str,
         state_key: &str,
         timestamp: u64,
         content: serde_json::Value,
     ) -> serde_json::Value {
+        let event_id: String = format!("{event_type}{state_key}{timestamp}")
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+
         serde_json::json!({
             "type": event_type,
             "state_key": state_key,
             "content": content,
-            "event_id": format!("$e{event_type}{state_key}{timestamp}"),
+            "event_id": format!("$e{event_id}"),
             "sender": USER,
             "origin_server_ts": timestamp,
         })
@@ -2158,6 +2171,297 @@ mod room_list {
         }
     }
 
+    /// Who is connected to a voice channel, without joining it.
+    ///
+    /// Element Call announces a connection by writing an
+    /// `org.matrix.msc3401.call.member` state event into the call room, so
+    /// every client in the room can see who is there without touching an SFU.
+    /// These are that read: the fixtures are the shapes the account this was
+    /// built against actually carries, down to the underscore state key and
+    /// the four hour `expires`.
+    mod voice_presence {
+        use super::*;
+        use consort_matrix::Participant;
+
+        const ADA: &str = "@ada:example.org";
+        const BEN: &str = "@ben:example.org";
+
+        /// Four hours, which is what Element Call asks for.
+        const FOUR_HOURS: u64 = 14_400_000;
+
+        /// The wall clock, in milliseconds.
+        ///
+        /// A membership expires against the real clock rather than against
+        /// anything in the event, so a fixture with a hardcoded join time is a
+        /// fixture that starts failing on its own.
+        fn now() -> u64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("the clock is after 1970")
+                .as_millis() as u64
+        }
+
+        /// One device's membership in a room call.
+        ///
+        /// `created_ts` is deliberately absent, because Element Call leaves it
+        /// out of the first event of a session and the SDK fills it in from
+        /// `origin_server_ts`. That fill-in is what decides expiry, so a
+        /// fixture that pre-empted it would be testing the wrong thing.
+        fn membership(user: &str, device: &str, at: u64, expires: u64) -> serde_json::Value {
+            state_event(
+                "org.matrix.msc3401.call.member",
+                &format!("_{user}_{device}"),
+                at,
+                serde_json::json!({
+                    "application": "m.call",
+                    "call_id": "",
+                    "scope": "m.room",
+                    "device_id": device,
+                    "foci_preferred": [],
+                    "focus_active": {
+                        "type": "livekit",
+                        "focus_selection": "oldest_membership",
+                    },
+                    "expires": expires,
+                }),
+            )
+        }
+
+        /// Somebody who is in the call right now.
+        fn connected(user: &str, device: &str) -> serde_json::Value {
+            membership(user, device, now(), FOUR_HOURS)
+        }
+
+        /// Somebody who left. An empty content is how this dialect says so.
+        fn left(user: &str, device: &str) -> serde_json::Value {
+            state_event(
+                "org.matrix.msc3401.call.member",
+                &format!("_{user}_{device}"),
+                now(),
+                serde_json::json!({}),
+            )
+        }
+
+        fn member(user: &str, display_name: Option<&str>) -> serde_json::Value {
+            let mut content = serde_json::json!({ "membership": "join" });
+            if let Some(display_name) = display_name {
+                content["displayname"] = display_name.into();
+            }
+            state_event("m.room.member", user, 3, content)
+        }
+
+        /// A joined call room carrying `events` on top of the usual state.
+        fn a_voice_channel_with(events: Vec<serde_json::Value>) -> serde_json::Value {
+            let mut state = vec![created(Some("org.matrix.msc3417.call")), named("Lounge")];
+            state.extend(events);
+
+            serde_json::json!({ "!lounge:example.org": { "state": { "events": state } } })
+        }
+
+        /// Who the snapshot says is in the one voice channel.
+        async fn participants(events: Vec<serde_json::Value>) -> Vec<Participant> {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, a_voice_channel_with(events)).await;
+
+            let rooms = rooms::snapshot(&client).await;
+            let channels = &home(&rooms).channels;
+
+            assert_eq!(ids(channels), ["!lounge:example.org"], "{rooms:?}");
+            assert_eq!(channels[0].kind, ChannelKind::Voice);
+
+            channels[0].participants.clone()
+        }
+
+        fn names(participants: &[Participant]) -> Vec<&str> {
+            participants
+                .iter()
+                .map(|participant| participant.name.as_str())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn somebody_connected_from_another_client_shows_up() {
+            // The whole point. Nothing here joined a call, asked an SFU
+            // anything, or clicked the channel.
+            let people =
+                participants(vec![member(ADA, Some("Ada")), connected(ADA, "LAPTOP")]).await;
+
+            assert_eq!(
+                people,
+                [Participant {
+                    id: ADA.to_owned(),
+                    name: "Ada".to_owned(),
+                }]
+            );
+        }
+
+        #[tokio::test]
+        async fn somebody_who_left_is_gone() {
+            // A leave is an empty content rather than a removed event, so the
+            // state key stays in the room forever. Twenty-five of the
+            // twenty-seven call member events on the real account are these.
+            let people = participants(vec![member(ADA, Some("Ada")), left(ADA, "LAPTOP")]).await;
+
+            assert!(people.is_empty(), "{people:?}");
+        }
+
+        #[tokio::test]
+        async fn a_membership_that_ran_out_is_gone_without_anything_saying_so() {
+            // The failure mode this guards is somebody whose client was killed
+            // rather than closed. No event announces it: the membership simply
+            // stops being valid, and every read after that has to agree.
+            let people = participants(vec![
+                member(ADA, Some("Ada")),
+                membership(ADA, "LAPTOP", 1_000, FOUR_HOURS),
+            ])
+            .await;
+
+            assert!(people.is_empty(), "{people:?}");
+        }
+
+        #[tokio::test]
+        async fn one_person_on_two_devices_is_one_person() {
+            // Memberships are per device. A laptop and a phone are two events,
+            // and drawing both would put the same face in the channel twice.
+            let people = participants(vec![
+                member(ADA, Some("Ada")),
+                connected(ADA, "LAPTOP"),
+                connected(ADA, "PHONE"),
+            ])
+            .await;
+
+            assert_eq!(names(&people), ["Ada"]);
+        }
+
+        #[tokio::test]
+        async fn the_oldest_membership_is_drawn_first() {
+            // Not for its own sake: an order that comes out of a map is an
+            // order that changes between renders, and a list that reshuffles
+            // under the pointer is worse than one in an arbitrary but fixed
+            // order.
+            let people = participants(vec![
+                member(ADA, Some("Ada")),
+                member(BEN, Some("Ben")),
+                membership(BEN, "LAPTOP", now() - 60_000, FOUR_HOURS),
+                membership(ADA, "LAPTOP", now() - 600_000, FOUR_HOURS),
+            ])
+            .await;
+
+            assert_eq!(names(&people), ["Ada", "Ben"]);
+        }
+
+        #[tokio::test]
+        async fn somebody_with_no_display_name_is_shown_by_their_user_id() {
+            // Unhelpful and honest. The SDK's own fallback is the localpart,
+            // which drops the server and can therefore show two different
+            // people identically.
+            let people = participants(vec![member(ADA, None), connected(ADA, "LAPTOP")]).await;
+
+            assert_eq!(names(&people), [ADA]);
+        }
+
+        #[tokio::test]
+        async fn somebody_the_room_has_never_mentioned_is_shown_by_their_user_id() {
+            // A membership can arrive before the `m.room.member` that explains
+            // it. Showing the ID is right until the next sync fixes it, and
+            // leaving them out of the channel entirely would not be.
+            let people = participants(vec![connected(ADA, "LAPTOP")]).await;
+
+            assert_eq!(names(&people), [ADA]);
+        }
+
+        #[tokio::test]
+        async fn two_people_who_picked_the_same_name_are_told_apart() {
+            // Otherwise one of them is impersonating the other in the only
+            // place the channel names either of them.
+            let people = participants(vec![
+                member(ADA, Some("Ada")),
+                member(BEN, Some("Ada")),
+                membership(ADA, "LAPTOP", now() - 600_000, FOUR_HOURS),
+                membership(BEN, "LAPTOP", now() - 60_000, FOUR_HOURS),
+            ])
+            .await;
+
+            assert_eq!(
+                names(&people),
+                [
+                    "Ada (@ada:example.org)".to_owned(),
+                    "Ada (@ben:example.org)".to_owned(),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_text_room_is_never_asked_who_is_in_it() {
+            // Being a call room is not the same as carrying call membership
+            // state, and this read runs on every sync for every room. A text
+            // channel has to pay nothing for it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(
+                &server,
+                serde_json::json!({ "!general:example.org": { "state": { "events": [
+                    created(None),
+                    named("general"),
+                    member(ADA, Some("Ada")),
+                    connected(ADA, "LAPTOP"),
+                ] } } }),
+            )
+            .await;
+
+            let rooms = rooms::snapshot(&client).await;
+            let channels = &home(&rooms).channels;
+
+            assert_eq!(channels[0].kind, ChannelKind::Text);
+            assert!(channels[0].participants.is_empty(), "{channels:?}");
+        }
+
+        #[tokio::test]
+        async fn a_voice_channel_nobody_is_in_looks_exactly_as_it_did_before() {
+            let people = participants(Vec::new()).await;
+
+            assert!(people.is_empty());
+        }
+
+        #[tokio::test]
+        async fn somebody_connecting_reaches_the_watcher_without_being_asked() {
+            // The end to end shape of the acceptance test, minus the browser:
+            // a call membership arriving in a sync is a room update, so the
+            // watcher re-derives and the shell hears about it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            sync_with(
+                &server,
+                a_voice_channel_with(vec![member(ADA, Some("Ada")), connected(ADA, "LAPTOP")]),
+            )
+            .await;
+
+            let (seen, sink) = recorder::<Rooms>();
+            let task = rooms::watch(client.clone(), sink);
+
+            // Nothing in the watcher syncs; it only listens. The membership
+            // has to arrive the way it would in the app, through the sync
+            // loop, for this to be testing the path the browser exercises.
+            let (connections, connection_sink) = recorder();
+            let sync_task = sync::start(client, connection_sink);
+            wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+            let reports = wait_until(&seen, |reports| {
+                reports.last().is_some_and(|rooms| {
+                    home(rooms)
+                        .channels
+                        .first()
+                        .is_some_and(|channel| !channel.participants.is_empty())
+                })
+            })
+            .await;
+            sync_task.abort();
+            task.abort();
+
+            let channel = &home(reports.last().unwrap()).channels[0];
+            assert_eq!(names(&channel.participants), ["Ada"]);
+        }
+    }
+
     mod avatars {
         use super::*;
         use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
@@ -2178,6 +2482,24 @@ mod room_list {
                         "",
                         3,
                         serde_json::json!({ "url": "mxc://example.org/abc" }),
+                    ),
+                    // A person in the room is drawn under a voice channel, and
+                    // their picture is per room rather than per account.
+                    state_event(
+                        "m.room.member",
+                        "@ada:example.org",
+                        4,
+                        serde_json::json!({
+                            "membership": "join",
+                            "displayname": "Ada",
+                            "avatar_url": "mxc://example.org/ada",
+                        }),
+                    ),
+                    state_event(
+                        "m.room.member",
+                        "@ben:example.org",
+                        4,
+                        serde_json::json!({ "membership": "join", "displayname": "Ben" }),
                     ),
                 ] } },
                 "!plain:example.org": { "state": { "events": [created(None), named("plain")] } },
@@ -2261,6 +2583,61 @@ mod room_list {
             mount_thumbnail(&server, b"<html>not an image</html>").await;
 
             assert_eq!(rooms::avatar(&client, "!general:example.org").await, None);
+        }
+
+        #[tokio::test]
+        async fn a_member_avatar_comes_back_as_a_data_url() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+            mount_thumbnail(&server, PNG).await;
+
+            let url =
+                rooms::member_avatar(&client, "!general:example.org", "@ada:example.org").await;
+
+            assert_eq!(url.as_deref(), Some("data:image/png;base64,iVBORw0KGgo="));
+        }
+
+        #[tokio::test]
+        async fn a_member_with_no_avatar_is_not_asked_about() {
+            // Most people in most rooms have no per-room picture, so this is
+            // the ordinary case rather than the exception. With no thumbnail
+            // endpoint mounted, a request here would come back a 404.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(
+                rooms::member_avatar(&client, "!general:example.org", "@ben:example.org").await,
+                None
+            );
+        }
+
+        #[tokio::test]
+        async fn a_member_the_room_has_never_mentioned_has_no_avatar() {
+            // A call membership can arrive before the `m.room.member` that
+            // explains it. The list draws them by initial, and asking about
+            // their picture has to be harmless rather than an error.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(
+                rooms::member_avatar(&client, "!general:example.org", "@nobody:example.org").await,
+                None
+            );
+        }
+
+        #[tokio::test]
+        async fn something_that_is_not_a_user_id_is_refused_rather_than_fetched() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = synced(&server, with_an_avatar()).await;
+
+            assert_eq!(
+                rooms::member_avatar(&client, "!general:example.org", "ada").await,
+                None
+            );
+            assert_eq!(
+                rooms::member_avatar(&client, "home", "@ada:example.org").await,
+                None
+            );
         }
 
         #[tokio::test]

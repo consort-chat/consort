@@ -17,8 +17,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use matrix_sdk::Client;
 use matrix_sdk::media::{MediaFormat, MediaThumbnailSettings};
-use matrix_sdk::ruma::RoomId;
 use matrix_sdk::ruma::api::client::media::get_content_thumbnail::v3::Method;
+use matrix_sdk::ruma::{RoomId, UserId};
 
 /// How big a thumbnail to ask for, in pixels.
 ///
@@ -52,11 +52,7 @@ pub async fn avatar(client: &Client, room_id: &str) -> Option<String> {
     // have no avatar at all.
     room.avatar_url()?;
 
-    // Crop rather than scale. An avatar is drawn in a circle, and a scaled
-    // thumbnail of a wide image is letterboxed inside it with the subject
-    // shrunk into the middle.
-    let settings = MediaThumbnailSettings::with_method(Method::Crop, SIZE.into(), SIZE.into());
-    let bytes = match room.avatar(MediaFormat::Thumbnail(settings)).await {
+    let bytes = match room.avatar(thumbnail()).await {
         Ok(bytes) => bytes?,
         Err(error) => {
             tracing::warn!(%error, %room_id, "could not fetch a room avatar");
@@ -64,16 +60,90 @@ pub async fn avatar(client: &Client, room_id: &str) -> Option<String> {
         }
     };
 
-    let Some(mime) = image_type(&bytes) else {
+    as_data_url(&bytes, "a room avatar")
+}
+
+/// One person's avatar in one room, as a data URL, or `None` when they have
+/// none.
+///
+/// Takes the room as well as the person, because a Matrix profile is per room:
+/// somebody can carry a different picture in every room they are in, and the
+/// one to draw beside a voice channel is the one that room knows.
+///
+/// Local up to the fetch itself. `get_member_no_sync` reads the store, so a
+/// member the account has never been told about costs nothing rather than
+/// pulling the room's whole member list.
+///
+/// `None` for every failure, like [`avatar`], and for the same reason: the
+/// fallback is an initial, which is a working interface, and a dialog about a
+/// picture would be worse than the initial.
+pub async fn member_avatar(client: &Client, room_id: &str, user_id: &str) -> Option<String> {
+    let room_id = match RoomId::parse(room_id) {
+        Ok(room_id) => room_id,
+        Err(error) => {
+            tracing::warn!(%error, room_id, "asked for a member of something that is not a room");
+            return None;
+        }
+    };
+    let user_id = match UserId::parse(user_id) {
+        Ok(user_id) => user_id,
+        Err(error) => {
+            tracing::warn!(%error, user_id, "asked for the avatar of something that is not a user");
+            return None;
+        }
+    };
+
+    let room = client.get_room(&room_id)?;
+    let member = match room.get_member_no_sync(&user_id).await {
+        Ok(member) => member?,
+        Err(error) => {
+            tracing::warn!(%error, %room_id, %user_id, "could not read a room member");
+            return None;
+        }
+    };
+    // Cheap and local, and it is the majority case: most people in most rooms
+    // have no per-room avatar at all.
+    member.avatar_url()?;
+
+    let bytes = match member.avatar(thumbnail()).await {
+        Ok(bytes) => bytes?,
+        Err(error) => {
+            tracing::warn!(%error, %room_id, %user_id, "could not fetch a member avatar");
+            return None;
+        }
+    };
+
+    as_data_url(&bytes, "a member avatar")
+}
+
+/// What to ask the homeserver for.
+///
+/// Crop rather than scale. An avatar is drawn in a circle, and a scaled
+/// thumbnail of a wide image is letterboxed inside it with the subject shrunk
+/// into the middle.
+fn thumbnail() -> MediaFormat {
+    MediaFormat::Thumbnail(MediaThumbnailSettings::with_method(
+        Method::Crop,
+        SIZE.into(),
+        SIZE.into(),
+    ))
+}
+
+/// Bytes an `img` tag can be pointed at, or `None` when they are not an image.
+///
+/// `what` names the caller in the log, because both callers reach here and a
+/// line saying only that something was not an image is a line that starts a
+/// search rather than ending one.
+fn as_data_url(bytes: &[u8], what: &str) -> Option<String> {
+    let Some(mime) = image_type(bytes) else {
         tracing::warn!(
-            %room_id,
             bytes = bytes.len(),
-            "a room avatar came back as something that is not an image this can name"
+            "{what} came back as something that is not an image this can name"
         );
         return None;
     };
 
-    Some(format!("data:{mime};base64,{}", STANDARD.encode(&bytes)))
+    Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
 /// What kind of image these bytes are, by their magic number.

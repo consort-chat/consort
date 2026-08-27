@@ -106,6 +106,10 @@ fn channels_of(
                 kind: ChannelKind::Text,
                 avatar: None,
                 joined: false,
+                // Nothing to put here. A room this account is not in is a room
+                // whose state it cannot read, so an empty list is not a guess,
+                // it is the only honest answer.
+                participants: Vec::new(),
             },
         })
         .collect()
@@ -166,12 +170,14 @@ fn joined_channel(room: &RoomFacts) -> Channel {
         },
         avatar: room.avatar.clone(),
         joined: true,
+        participants: room.participants.clone(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rooms::dto::Participant;
 
     fn room(id: &str, name: &str) -> RoomFacts {
         RoomFacts {
@@ -180,6 +186,14 @@ mod tests {
             avatar: None,
             kind: RoomKind::Text,
             children: Vec::new(),
+            participants: Vec::new(),
+        }
+    }
+
+    fn person(id: &str, name: &str) -> Participant {
+        Participant {
+            id: id.to_owned(),
+            name: name.to_owned(),
         }
     }
 
@@ -534,6 +548,35 @@ mod tests {
                 rooms.spaces[1].channels[0].avatar.as_deref(),
                 Some("mxc://example.org/abc")
             );
+        }
+
+        #[test]
+        fn a_voice_channel_carries_the_people_in_it() {
+            let rooms = assemble(vec![
+                space("!s:example.org", "Kahu HQ", vec![child("!v:example.org")]),
+                RoomFacts {
+                    participants: vec![person("@a:example.org", "Ada")],
+                    ..voice("!v:example.org", "Lounge")
+                },
+            ]);
+
+            assert_eq!(
+                rooms.spaces[1].channels[0].participants,
+                [person("@a:example.org", "Ada")]
+            );
+        }
+
+        #[test]
+        fn a_channel_nobody_joined_has_nobody_in_it() {
+            // Not a guess that it is empty. We are not in the room, so its
+            // call state is not something this account can see at all.
+            let rooms = assemble(vec![space(
+                "!s:example.org",
+                "Kahu HQ",
+                vec![child("!never:example.org")],
+            )]);
+
+            assert!(rooms.spaces[1].channels[0].participants.is_empty());
         }
 
         #[test]

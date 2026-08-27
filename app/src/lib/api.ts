@@ -80,6 +80,23 @@ export type KeyBackup =
  */
 export type ChannelKind = "text" | "voice";
 
+/**
+ * One person connected to a voice channel.
+ *
+ * Per human, not per device: somebody on a laptop and a phone appears once.
+ * Rust does that deduplication, because it is the side that knows a membership
+ * is per device in the first place.
+ */
+export interface Participant {
+  /** A user id. Half of the key `memberAvatar` takes; the room is the other. */
+  id: string;
+  /**
+   * What to call them. Never null, unlike a channel name: when there is no
+   * display name this is the user id, which is still a name a person knows.
+   */
+  name: string;
+}
+
 /** One room under a rail entry. */
 export interface Channel {
   id: string;
@@ -94,6 +111,15 @@ export interface Channel {
   avatar: string | null;
   /** False for a listed room this account is not in. Show it, unavailable. */
   joined: boolean;
+  /**
+   * Who is connected right now, oldest membership first. Draw in this order:
+   * it is stable across renders, and re-sorting would make the list move under
+   * the pointer whenever anybody joined.
+   *
+   * Empty for a text channel, for a voice channel nobody is in, and for a room
+   * this account has not joined, whose call state it cannot see at all.
+   */
+  participants: Participant[];
 }
 
 /** One entry in the left rail, and the channels underneath it. */
@@ -346,6 +372,24 @@ export function onRooms(handler: (rooms: Rooms) => void): Promise<UnlistenFn> {
  */
 export function roomAvatar(roomId: string): Promise<string | null> {
   return invoke<string | null>("room_avatar", { roomId });
+}
+
+/**
+ * One person's avatar in one room, as a `data:` URL ready for an `img` src.
+ *
+ * Two identifiers rather than one because a Matrix profile is per room:
+ * somebody can carry a different picture in every room they are in, and the
+ * one to draw beside a voice channel is the one that room knows them by.
+ *
+ * Resolves to null for somebody with no avatar, somebody the room has never
+ * mentioned, and an image the homeserver would not hand over. All three mean
+ * the same thing to a caller: draw an initial.
+ */
+export function memberAvatar(
+  roomId: string,
+  userId: string,
+): Promise<string | null> {
+  return invoke<string | null>("member_avatar", { roomId, userId });
 }
 
 /**

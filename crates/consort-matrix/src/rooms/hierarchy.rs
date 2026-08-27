@@ -219,6 +219,7 @@ mod tests {
             kind: ChannelKind::Text,
             avatar: None,
             joined,
+            participants: Vec::new(),
         }
     }
 
