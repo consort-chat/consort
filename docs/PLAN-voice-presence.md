@@ -288,7 +288,7 @@ connect half.
 
 ## What this deliberately does not do
 
-- Join a call. That is the rest of #6.
+- Join a call. That is the rest of #6, planned in [PLAN-voice-call.md](PLAN-voice-call.md).
 - Show who is speaking, muted, or deafened. Membership state carries none of it.
   `m.call.intent` says audio or video was intended, not what is happening now.
   Live state needs the SFU connection.
