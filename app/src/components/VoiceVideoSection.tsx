@@ -281,6 +281,38 @@ export function VoiceVideoSection() {
   }
 
   /**
+   * Turn voice activity detection on or off.
+   *
+   * No reopening and no re-reading of the device list. The Rust side retunes
+   * the gate that is already running, so the bar in front of somebody keeps
+   * moving and simply starts behaving differently, which is the clearest
+   * possible demonstration of what the switch does.
+   */
+  async function setVoiceActivity(on: boolean) {
+    const current = saved.current;
+    if (current === null) return;
+
+    const next: AudioSettings = {
+      ...current,
+      gate: { ...current.gate, voiceActivity: on },
+    };
+    setSettings(next);
+    saved.current = next;
+
+    try {
+      await setAudioSettings(next);
+    } catch (raw: unknown) {
+      // Put the switch back. Unlike a device picker, which at worst points at
+      // the wrong name, a switch stuck in a position the backend does not
+      // agree with is telling somebody their microphone is doing the opposite
+      // of what it is doing.
+      setSettings(current);
+      saved.current = current;
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
+  /**
    * Play the test chime.
    *
    * A failure to reach the backend at all lands in the same alert as a failure
@@ -344,12 +376,37 @@ export function VoiceVideoSection() {
         </>
       )}
 
+      {settings !== null && (
+        <div className="voice-field">
+          <span className="voice-field__label">Input mode</span>
+          <div className="voice-toggle">
+            <input
+              id="voice-activity"
+              className="voice-toggle__switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="voice-activity-note"
+              checked={settings.gate.voiceActivity}
+              onChange={(event) => void setVoiceActivity(event.target.checked)}
+            />
+            <label className="voice-toggle__label" htmlFor="voice-activity">
+              Voice activity detection
+            </label>
+          </div>
+          <p className="voice-field__note" id="voice-activity-note">
+            Send audio only while you are speaking. Turn it off to transmit
+            continuously, background noise included.
+          </p>
+        </div>
+      )}
+
       <div className="voice-field">
         <span className="voice-field__label">Mic test</span>
         <LevelMeter
           level={meter.level}
           open={meter.open}
           running={meter.running}
+          voiceActivity={settings?.gate.voiceActivity ?? true}
         />
         {meter.device !== null && (
           <p className="voice-field__note">Recording from {meter.device}.</p>

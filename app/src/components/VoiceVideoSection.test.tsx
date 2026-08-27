@@ -35,6 +35,7 @@ const defaults: AudioSettings = {
     attackFrames: 2,
     holdMs: 300,
     denoise: true,
+    voiceActivity: true,
   },
 };
 
@@ -349,6 +350,85 @@ describe("VoiceVideoSection", () => {
 
     expect(await screen.findByText(/nothing Consort can play sound/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /check/i })).not.toBeInTheDocument();
+  });
+
+  it("offers voice activity detection as a switch, on by default", async () => {
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", { name: /voice activity/i });
+    expect(toggle).toBeChecked();
+  });
+
+  it("saves voice activity being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /voice activity/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        gate: { ...defaults.gate, voiceActivity: false },
+      }),
+    );
+  });
+
+  it("does not reopen the microphone to change the input mode", async () => {
+    // The point of the retune. Somebody flipping this switch is watching the
+    // bar while they do it, and a sound card that closes and reopens under
+    // them drops the bar to zero and re-announces the device.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /voice activity/i });
+    audioTestStart.mockClear();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    expect(audioTestStart).not.toHaveBeenCalled();
+  });
+
+  it("changes what the meter says when voice activity goes off", async () => {
+    // The switch has to be visibly the thing deciding, or nobody can tell it
+    // from a microphone that has stopped working.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+    push({ state: "started", device: "Built-in Microphone" });
+    expect(await screen.findByText(/listening/i)).toBeVisible();
+
+    await userEvent.click(
+      await screen.findByRole("switch", { name: /voice activity/i }),
+    );
+
+    expect(
+      await screen.findByText(/everything the microphone hears/i),
+    ).toBeVisible();
+  });
+
+  it("puts the switch back when the save fails", async () => {
+    // Unlike a device picker, which at worst points at the wrong name, a
+    // switch stuck where the backend disagrees is telling somebody their
+    // microphone is doing the opposite of what it is doing.
+    setAudioSettings.mockRejectedValue({ message: "nope", detail: "nope" });
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /voice activity/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(await screen.findByRole("alert")).toHaveTextContent(/nope/);
+  });
+
+  it("reads the switch from what was saved rather than assuming", async () => {
+    audioSettings.mockResolvedValue({
+      ...defaults,
+      gate: { ...defaults.gate, voiceActivity: false },
+    });
+
+    render(<VoiceVideoSection />);
+
+    expect(
+      await screen.findByRole("switch", { name: /voice activity/i }),
+    ).not.toBeChecked();
   });
 
   it("survives the device list failing to load", async () => {

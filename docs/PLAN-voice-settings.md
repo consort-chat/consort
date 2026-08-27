@@ -285,7 +285,7 @@ which says "input" in four of its five messages. Somebody who pressed a button
 to hear their speakers and was told there is no audio input device would
 reasonably conclude Consort is confused, and would be right.
 
-### Phase 7.5: voice activity as a choice
+### Phase 7.5: voice activity as a choice (done)
 
 The gate is not always what somebody wants. A quiet room with a good
 microphone gains nothing from it, and anybody whose speech the model scores
@@ -299,6 +299,34 @@ including frames a threshold would reject; the retune reaches a running gate
 without reopening the device; the caption says which mode is in force.
 
 **Green.** A toggle on the Voice and Video pane, saved with the rest.
+
+**What it turned into.** One field, `GateConfig::voice_activity`, checked
+before the thresholds rather than implemented by setting them to zero, so that
+turning the gate back on finds the tuning exactly as it was left. Default on,
+because the default has to be the gate rather than the absence of one: somebody
+who never opens this screen should not be transmitting their keyboard to
+everybody in the room. Every settings file written before the field existed
+therefore has to read back as on, which is what the container-level serde
+default gives and what a test says out loud.
+
+The warm-up frame is still dropped with the gate off. That frame is about the
+denoiser and not about the gate: RNNoise's first output carries fade-in
+artifacts whether or not anything is going to judge it, and publishing it is
+publishing a click.
+
+It reaches a running gate through `AudioThread::retune` rather than through a
+restart, which is why that message exists. Somebody flipping this switch is
+watching the bar while they do it, and a sound card that closes and reopens
+under them drops the bar to zero and re-announces the device. `set_audio_settings`
+does the retune itself, after the save, so what the meter is doing and what the
+file says cannot disagree.
+
+The meter gains a fourth caption. "We can hear you" would be true on every
+frame with the gate off and would therefore say nothing; what is worth saying
+instead is that nothing is being held back, because that is the thing somebody
+chose and the thing they might have forgotten choosing. The bar going green and
+staying green through silence is also, incidentally, the cheapest proof
+available that the model is what decides the colour.
 
 ### Phase 8: by hand, at real hardware
 

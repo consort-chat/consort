@@ -322,7 +322,8 @@ whether a model wrote them or you did.
 | Room list and voice channel discovery | working |
 | Seeing who is already in a voice channel | working |
 | Join a voice channel over MatrixRTC and LiveKit | planned |
-| RNNoise voice activity detection with hysteresis gating | prototyped separately |
+| Audio device pickers, a level meter and an output test | working |
+| RNNoise voice activity detection with hysteresis gating | running, with nothing to publish to yet |
 | Text messaging | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 

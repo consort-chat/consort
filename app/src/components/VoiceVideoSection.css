@@ -92,3 +92,61 @@
 .voice-field__check:active {
   background: var(--surface-base);
 }
+
+/*
+  Voice activity detection, as a switch.
+
+  A real checkbox underneath, restyled rather than replaced. Two spans and a
+  click handler would mean reimplementing space, focus and the announced state,
+  all of which `role="switch"` on an input already has.
+*/
+.voice-toggle {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.voice-toggle__switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  appearance: none;
+  cursor: pointer;
+  background: var(--surface-overlay);
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+.voice-toggle__switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  content: "";
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition: transform var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.voice-toggle__switch:checked {
+  background: var(--violet);
+  border-color: var(--violet);
+}
+
+.voice-toggle__switch:checked::after {
+  background: oklch(99% 0 0);
+  transform: translateX(16px);
+}
+
+.voice-toggle__switch:hover {
+  border-color: var(--line-strong);
+}
+
+.voice-toggle__label {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}

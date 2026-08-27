@@ -63,6 +63,18 @@ pub struct GateConfig {
     /// behaves identically and only the audio differs. It exists to A/B the
     /// denoiser by ear.
     pub denoise: bool,
+    /// Send only while somebody is talking.
+    ///
+    /// Turning this off publishes every frame and makes the thresholds above
+    /// inert. The model still runs, so the probability is still reported and
+    /// the denoiser still denoises: this is a choice about what to send, not
+    /// about what to compute.
+    ///
+    /// A choice rather than a policy because the gate is not always wanted. A
+    /// quiet room with a good microphone gains nothing from it, and anybody
+    /// whose speech the model happens to score badly is better served by
+    /// transmitting everything than by being cut off mid-sentence.
+    pub voice_activity: bool,
 }
 
 impl Default for GateConfig {
@@ -73,6 +85,11 @@ impl Default for GateConfig {
             attack_frames: 2,
             hold_ms: 300,
             denoise: true,
+            // On, because the default has to be the gate rather than the
+            // absence of one. Somebody who never opens the settings screen
+            // should not be transmitting their keyboard to everybody in the
+            // room.
+            voice_activity: true,
         }
     }
 }
@@ -158,6 +175,14 @@ impl Hysteresis {
     fn advance(&mut self, probability: f32) {
         if self.warming_up {
             self.warming_up = false;
+            return;
+        }
+
+        if !self.config.voice_activity {
+            // Everything goes out. Checked before the thresholds rather than
+            // by setting them to zero, so that turning the gate back on finds
+            // the tuning exactly as it was left.
+            self.open = true;
             return;
         }
 

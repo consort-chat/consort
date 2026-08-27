@@ -563,6 +563,14 @@ export interface GateConfig {
   holdMs: number;
   /** Whether the noise suppressor runs. */
   denoise: boolean;
+  /**
+   * Whether to send only while somebody is talking.
+   *
+   * Off publishes every frame and makes the thresholds above inert. The model
+   * still runs either way, so the level meter reads the same: this is a choice
+   * about what gets sent, not about what gets computed.
+   */
+  voiceActivity: boolean;
 }
 
 /**

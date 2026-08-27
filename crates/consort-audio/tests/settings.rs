@@ -22,6 +22,7 @@ fn settings_round_trip_through_json_unchanged() {
             attack_frames: 4,
             hold_ms: 450,
             denoise: false,
+            voice_activity: false,
         },
     };
 
@@ -76,6 +77,7 @@ fn the_json_is_camel_case_because_the_frontend_reads_it() {
     assert!(json.contains("\"openAt\""), "got {json}");
     assert!(json.contains("\"attackFrames\""), "got {json}");
     assert!(json.contains("\"holdMs\""), "got {json}");
+    assert!(json.contains("\"voiceActivity\""), "got {json}");
     assert!(
         !json.contains("_"),
         "no snake_case should reach the wire: {json}"
@@ -100,4 +102,26 @@ fn a_null_device_reads_back_as_no_choice() {
         serde_json::from_str(r#"{"input":null,"output":null}"#).expect("deserialise");
 
     assert_eq!(settings, AudioSettings::default());
+}
+
+#[test]
+fn voice_activity_is_on_unless_somebody_turned_it_off() {
+    // The default has to be the gate, not the absence of one. Somebody who
+    // never opens this screen should not be transmitting their keyboard to
+    // everybody in the room.
+    let settings: AudioSettings = serde_json::from_str("{}").expect("deserialise");
+
+    assert!(settings.gate.voice_activity);
+}
+
+#[test]
+fn a_file_written_before_the_toggle_existed_keeps_the_gate() {
+    // Every settings file written so far. Reading one as "voice activity off"
+    // would turn the gate off for everybody who upgrades.
+    let json = r#"{"gate":{"openAt":0.8,"closeAt":0.3,"attackFrames":2,"holdMs":300}}"#;
+
+    let settings: AudioSettings = serde_json::from_str(json).expect("deserialise");
+
+    assert!(settings.gate.voice_activity);
+    assert_eq!(settings.gate.open_at, 0.8);
 }

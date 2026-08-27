@@ -476,6 +476,7 @@ describe("the audio commands", () => {
       attackFrames: 2,
       holdMs: 300,
       denoise: true,
+      voiceActivity: true,
     },
   };
 
