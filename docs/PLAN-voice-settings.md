@@ -308,6 +308,35 @@ made looking at the real UI:
 
 Left alone for now, and worth deciding once Phase 6 makes it visible.
 
+**Most of the devices ALSA lists cannot actually be opened.** Found by pointing
+the capture path at this machine's real hardware, one device at a time:
+
+| Device | What happens |
+| --- | --- |
+| `PipeWire Sound Server` | Opens every time, real audio, sensible noise floor |
+| `PulseAudio Sound Server` | Opens |
+| `Yeti Stereo Microphone` | `The requested audio device is not available` |
+| `Yeti Stereo Microphone, USB Audio` | Opens sometimes, otherwise `unable to open slave` |
+| `Default Audio Device` | Opens, then delivers digital silence, or refuses as busy |
+
+The pattern is that the raw ALSA hardware entries go through `dsnoop` to a card
+PipeWire is already holding, so they fail or hand back nothing. The sound-server
+entries work.
+
+The awkward part is the last row. `Default Audio Device` is what cpal reports as
+the host default, so it is what a first run would choose, and on this machine it
+is the worst of the fourteen. That collides with the fourth thing this plan says
+has to be true by the end: something sensible is already selected on first run.
+
+Not solved here, because "prefer a sound server over the host's own default" is
+a heuristic that would be wrong on a machine running neither PipeWire nor
+PulseAudio, and encoding it blind is worse than letting somebody choose. What is
+built instead is the reporting: a failed open carries the backend's own words,
+and `Substituted` names the device that went away. Both now have tests, because
+this is evidently a thing people will hit rather than an edge case.
+
+Worth deciding once Phase 6 makes the list visible.
+
 ## What this deliberately does not do
 
 - No joining a call, and no publishing anywhere.

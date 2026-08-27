@@ -9,11 +9,14 @@
 //! seconds. Picking a gate threshold is an iterate-by-ear loop, and a loop that
 //! runs through a matrix-sdk rebuild is a loop nobody runs.
 
+pub mod capture;
 pub mod cpal_host;
 pub mod devices;
 pub mod frames;
 pub mod gate;
+pub mod meter;
 pub mod settings;
+pub mod thread;
 
 pub use cpal_host::CpalHost;
 pub use devices::{AudioDeviceReport, AudioDevices, Device, DeviceList, Direction, Selection};
@@ -21,4 +24,6 @@ pub use frames::Frames;
 pub use gate::{
     FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, SAMPLE_RATE, VoiceGate,
 };
+pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
 pub use settings::AudioSettings;
+pub use thread::{AudioEvent, AudioThread};
