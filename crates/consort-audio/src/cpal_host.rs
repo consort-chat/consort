@@ -191,8 +191,12 @@ impl AudioCapture for CpalHost {
 /// about 300 ms for a whole ALSA namespace and nothing measurable on WASAPI or
 /// CoreAudio, where endpoints are enumerated rather than guessed at.
 ///
-/// A device busy elsewhere can report nothing and be dropped. That is the
-/// right trade: while it is busy, choosing it would not have worked either.
+/// "Cannot" is narrower than "did not say yes". A device another process has
+/// open answers `DeviceBusy` rather than answering the question, and the other
+/// process is usually Consort, holding the microphone for the level meter on
+/// the very screen this list is drawn on. Dropping those deletes the device in
+/// use from the picker offering it. [`Answer`] is where each reason a host can
+/// fail to say yes gets sorted into kept or dropped, and tested.
 fn collect<D: Iterator<Item = cpal::Device>>(devices: D, direction: Direction) -> Vec<String> {
     devices
         .filter(|device| offers_our_rate(device, direction))

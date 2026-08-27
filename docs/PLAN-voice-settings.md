@@ -372,9 +372,20 @@ them a cheap query. ALSA pays about 300 ms for a whole namespace because
 answering means opening each device, which is also why the picker now shows
 what was chosen straight away instead of waiting for the list to come back.
 
-The one thing it gives up: a device held exclusively by another application can
-report nothing and be dropped from the list. That is the right trade, because
-while it is held, choosing it would not have worked either.
+The first cut of this got the failures wrong and had to be redone. It treated
+any error from the query as a no, which deleted `Default Audio Device` and the
+Yeti from the input picker on the same machine. cpal separates the reasons and
+the separation is the whole value of asking: `DeviceBusy` means somebody has the
+device open, which is evidence that it works, and the somebody was Consort
+itself holding the microphone for the level meter on that very screen.
+
+So the reasons are sorted rather than collapsed. A definite no drops the device;
+busy, unrecognised, or anything short of an answer keeps it. The asymmetry is
+deliberate. Listing a device that turns out not to work costs somebody one
+confusing attempt, and hiding one that does work costs them the conclusion that
+Consort cannot hear them, with nothing on screen to argue with. That decision
+lives in an `Answer` type in `devices.rs` with tests against it, because
+`cpal_host.rs` cannot be tested without hardware and is excluded from coverage.
 
 The list questions above stay open, and they are cosmetic. Nothing selects a
 JACK entry on a machine without JACK unless a person picks it themselves.
