@@ -1,0 +1,26 @@
+[package]
+name = "consort-call-spike"
+description = "Throwaway. Phase 0 of PLAN-voice-call.md: does matrix-rtc-livekit build here, and does Call::join work against this account? Delete once the answers are recorded."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# The sibling checkout, by path. A spike, not a shipped dependency: CI cannot
+# see this path, which is exactly why this crate lives on a branch.
+matrix-rtc-livekit = { path = "../../../matrix-rust-rtc/crates/matrix-rtc-livekit", features = ["matrix-sdk"] }
+# The whole point of question one. If cargo resolves two matrix-sdk copies, the
+# `Room` this crate builds through consort-matrix is not the `Room` that
+# `Call::join` accepts, and this crate fails to compile.
+consort-matrix = { path = "../consort-matrix" }
+matrix-sdk = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true }
+consort-audio = { path = "../consort-audio" }
+matrix-rtc-media = { path = "../../../matrix-rust-rtc/crates/matrix-rtc-media" }
+matrix-sdk-ui = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", features = ["unstable-msc4354"] }
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+serde_json = { workspace = true }

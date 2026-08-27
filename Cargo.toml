@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/consort-audio", "crates/consort-matrix", "app/src-tauri"]
+members = ["crates/consort-audio", "crates/consort-call-spike", "crates/consort-matrix", "app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
