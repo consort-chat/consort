@@ -11,10 +11,10 @@ use consort_matrix::{
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
-use consort_audio::{AudioCapture, GateConfig};
+use consort_audio::GateConfig;
 
 use crate::events::{AppEvent, EventSink, LatestSink};
-use crate::microphone::Microphone;
+use crate::audio::{AudioBridge, Backends};
 use crate::settings::SettingsStore;
 
 /// One background task's handle.
@@ -159,7 +159,7 @@ pub struct AppState {
     ///
     /// A `std::sync::Mutex` rather than tokio's. Nothing here awaits while
     /// holding it, and the commands that reach it are synchronous.
-    microphone: std::sync::Mutex<Option<Microphone>>,
+    audio: std::sync::Mutex<Option<AudioBridge>>,
 }
 
 impl AppState {
@@ -177,15 +177,43 @@ impl AppState {
             initiator: Mutex::new(None),
             events: Arc::new(LatestSink::new(events)),
             settings,
-            microphone: std::sync::Mutex::new(None),
+            audio: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Do something with the audio thread, building it if this is the first
+    /// thing to want it.
+    ///
+    /// `backends` is a closure rather than a value so that nothing constructs
+    /// a sound backend on the calls that do not need one, which is every call
+    /// after the first.
+    fn with_audio(&self, backends: impl FnOnce() -> Backends, act: impl FnOnce(&AudioBridge)) {
+        let mut slot = self
+            .audio
+            .lock()
+            .expect("the audio mutex is never poisoned");
+        let bridge = slot.get_or_insert_with(|| AudioBridge::spawn(backends(), self.events.clone()));
+        act(bridge);
+    }
+
+    /// Do something with the audio thread only if it already exists.
+    ///
+    /// Every "stop" is this. Building a thread and a connection to a sound
+    /// server in order to tell it to stop doing something it was never doing
+    /// is the wrong shape, and closing the settings screen does exactly that
+    /// whether or not anybody touched anything.
+    fn if_audio_running(&self, act: impl FnOnce(&AudioBridge)) {
+        if let Some(bridge) = self
+            .audio
+            .lock()
+            .expect("the audio mutex is never poisoned")
+            .as_ref()
+        {
+            act(bridge);
         }
     }
 
     /// Begin the microphone test, opening the audio thread on first use.
-    ///
-    /// `capture` is a closure rather than a value so that nothing builds a
-    /// backend on the calls that do not need one, which is every call after
-    /// the first.
     ///
     /// `device` is a name to open, or `None` for whatever the host calls its
     /// default. Resolving a saved choice into one or the other is
@@ -193,17 +221,11 @@ impl AppState {
     /// business reading settings.
     pub fn start_microphone(
         &self,
-        capture: impl FnOnce() -> Box<dyn AudioCapture>,
+        backends: impl FnOnce() -> Backends,
         device: Option<String>,
         gate: GateConfig,
     ) {
-        let mut slot = self
-            .microphone
-            .lock()
-            .expect("the microphone mutex is never poisoned");
-        let microphone =
-            slot.get_or_insert_with(|| Microphone::spawn(capture(), self.events.clone()));
-        microphone.start(device, gate);
+        self.with_audio(backends, |bridge| bridge.start(device, gate));
     }
 
     /// End the microphone test, releasing the device.
@@ -212,14 +234,29 @@ impl AppState {
     /// settings screen does whether or not anybody pressed the button. The
     /// thread stays alive for next time; only the device is given back.
     pub fn stop_microphone(&self) {
-        if let Some(microphone) = self
-            .microphone
-            .lock()
-            .expect("the microphone mutex is never poisoned")
-            .as_ref()
-        {
-            microphone.stop();
-        }
+        self.if_audio_running(AudioBridge::stop);
+    }
+
+    /// Retune the running gate, leaving the device open.
+    ///
+    /// A no-op when nothing is running, because the tuning is handed to
+    /// [`start_microphone`](Self::start_microphone) anyway and there is
+    /// nothing here to remember it with.
+    pub fn retune_gate(&self, gate: GateConfig) {
+        self.if_audio_running(|bridge| bridge.retune(gate));
+    }
+
+    /// Play the test chime, opening the audio thread on first use.
+    ///
+    /// The output half of what `start_microphone` does for the input half, and
+    /// through the same thread: a cpal stream is `!Send` in either direction.
+    pub fn play_test_tone(&self, backends: impl FnOnce() -> Backends, device: Option<String>) {
+        self.with_audio(backends, |bridge| bridge.play_tone(device));
+    }
+
+    /// Cut the chime short, releasing the output.
+    pub fn stop_test_tone(&self) {
+        self.if_audio_running(AudioBridge::stop_tone);
     }
 
     /// Send the current state of every push channel again.

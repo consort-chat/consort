@@ -232,7 +232,7 @@ Account, and the icon replacing it is the whole point of this phase. Proposing
 a My Account section holding the user ID, the device ID, and Log Out. Worth
 confirming, since it makes signing out two clicks instead of one.
 
-### Phase 7: proving the output device
+### Phase 7: proving the output device (done)
 
 An input can be verified by talking. An output cannot be verified by anything
 already in this plan, because nothing plays audio yet. Without this phase, the
@@ -244,6 +244,61 @@ chosen device, and stops when the modal closes.
 
 **Green.** A short tone through the selected output, behind a button. Discord
 calls it "Let's Check".
+
+**What it turned into.** Two notes, A4 then E5, 160 ms each, with a raised
+cosine fade at both ends of both. The fades are not polish. A note that starts
+at full amplitude starts with a click, and a click is the one sound that comes
+out of every speaker ever made, so somebody testing their output would hear the
+click, learn that something played, and learn nothing about whether the tone
+did. Two notes rather than one for a related reason: a single steady tone is
+what a badly grounded interface produces on its own, and the job of this sound
+is to be unmistakably deliberate. Peak amplitude is 0.22 of full scale, because
+the person pressing this has just plugged in headphones and has no idea where
+the system volume is.
+
+The pieces landed where they could be tested. `tone.rs` is the arithmetic and
+answers only "what does sample *n* sound like", which makes the sound
+independent of whatever buffer size a backend happens to choose, and that
+independence is asserted rather than assumed. `playback.rs` holds the trait,
+its own error type, and `Playing`, which spreads the mono chime across however
+many channels the device negotiated. That last part is the mirror of `Frames`
+on the way in, and it exists as a separate type for the same reason: a 5.1 HDMI
+sink handed a buffer written as if it were mono plays the chime at a sixth of
+the right rate, and that is a bug worth a test rather than a bug worth
+discovering.
+
+The output stream shares the audio thread with the microphone, because a cpal
+stream is `!Send` in either direction and that thread is the only place either
+can live. Sharing invites exactly one bug, each tearing down the other, so
+there is a test that says it does not happen.
+
+`Playing` also owns the only answer to "is it over yet". Nothing else is in a
+position to know: the device goes on asking for buffers until somebody drops
+the stream, and the code filling those buffers is the only code that sees the
+end coming. It reports the end through the same channel the capture callback
+posts frames on, carrying a number that says which chime it was. Without that
+number, pressing the button twice quickly means the first chime's "I have
+finished" arrives while the second is playing and cuts it off.
+
+**A separate error type.** `PlaybackError` rather than reusing `CaptureError`,
+which says "input" in four of its five messages. Somebody who pressed a button
+to hear their speakers and was told there is no audio input device would
+reasonably conclude Consort is confused, and would be right.
+
+### Phase 7.5: voice activity as a choice
+
+The gate is not always what somebody wants. A quiet room with a good
+microphone gains nothing from it, and anybody whose speech the model scores
+badly is better served by transmitting everything than by being cut off. It is
+also the fastest way to see the model working: with the gate off the bar is
+green continuously, with it on the bar is green only while somebody talks, and
+the difference between those two is the model's opinion made visible.
+
+**Red.** The hysteresis reports open on every frame with voice activity off,
+including frames a threshold would reject; the retune reaches a running gate
+without reopening the device; the caption says which mode is in force.
+
+**Green.** A toggle on the Voice and Video pane, saved with the rest.
 
 ### Phase 8: by hand, at real hardware
 
@@ -257,6 +312,8 @@ The part CI cannot do:
   with the reason rather than silently
 - the test tone out of each output
 - talk, and tune `open_at` and `close_at` from what the meter shows
+- turn voice activity off and confirm the bar stays green through silence,
+  which is the cheapest proof that the gate is the thing deciding
 
 ## Risks
 

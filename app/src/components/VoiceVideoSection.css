@@ -61,3 +61,34 @@
   border-left: 3px solid var(--danger);
   border-radius: var(--radius-sm);
 }
+
+/*
+  The output test.
+
+  Deliberately quiet. The loud control on this pane is the level meter, which
+  moves on its own; this is a small thing tucked under the picker it belongs
+  to, the way Discord puts "Let's Check" under its output selector.
+*/
+.voice-field__check {
+  justify-self: start;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  /* Colour only. The button sits directly above a line of text that appears
+     when it is pressed, and anything that moves would shove that line about. */
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+.voice-field__check:hover {
+  background: var(--surface-overlay);
+  border-color: var(--line-strong);
+}
+
+.voice-field__check:active {
+  background: var(--surface-base);
+}

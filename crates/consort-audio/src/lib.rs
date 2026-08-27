@@ -15,8 +15,10 @@ pub mod devices;
 pub mod frames;
 pub mod gate;
 pub mod meter;
+pub mod playback;
 pub mod settings;
 pub mod thread;
+pub mod tone;
 
 pub use capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
 pub use cpal_host::CpalHost;
@@ -29,5 +31,7 @@ pub use gate::{
     FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, SAMPLE_RATE, VoiceGate,
 };
 pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
+pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
 pub use thread::{AudioEvent, AudioThread};
+pub use tone::Tone;

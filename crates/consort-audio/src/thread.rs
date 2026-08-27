@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 use crate::capture::{AudioCapture, CaptureStream};
 use crate::gate::{FRAME_SAMPLES, GateConfig, VoiceGate};
 use crate::meter::{Meter, Reading};
+use crate::playback::{AudioPlayback, PlaybackStream};
+use crate::tone::Tone;
 
 /// Something the audio thread has to say.
 ///
@@ -46,6 +48,15 @@ pub enum AudioEvent {
     Failed { error: String },
     /// One update for the level bar.
     Level(Reading),
+    /// The test chime began on this output, which is not always the one asked
+    /// for.
+    ToneStarted { device: String },
+    /// The chime is over, whether it finished or was cut short. One event for
+    /// both, because the only thing waiting on it is a button that needs to go
+    /// back to being pressable.
+    ToneStopped,
+    /// The chime could not begin.
+    ToneFailed { error: String },
 }
 
 /// What the thread accepts.
@@ -55,8 +66,25 @@ enum Message {
         gate: GateConfig,
     },
     Stop,
+    /// Retune the running gate without reopening the device.
+    ///
+    /// Its own message rather than another `Start`. Somebody moving a
+    /// threshold or turning voice activity off is watching the meter while
+    /// they do it, and reopening the sound card under them drops the bar to
+    /// zero for a moment and re-announces the device.
+    Retune { gate: GateConfig },
     /// One captured frame, posted by the backend's realtime callback.
     Frame(Vec<i16>),
+    PlayTone {
+        device: Option<String>,
+    },
+    StopTone,
+    /// The chime handed its last sample to the device, posted by the backend's
+    /// realtime callback.
+    ///
+    /// Carries which chime, because a second press can be underway by the time
+    /// this arrives and acting on a stale one would cut the new chime off.
+    ToneEnded(u64),
     Shutdown,
 }
 
@@ -70,12 +98,16 @@ pub struct AudioThread {
 
 impl AudioThread {
     /// Start the thread. It idles until told to [`start`](Self::start).
-    pub fn spawn(capture: Box<dyn AudioCapture>, events: Sender<AudioEvent>) -> Self {
+    pub fn spawn(
+        capture: Box<dyn AudioCapture>,
+        playback: Box<dyn AudioPlayback>,
+        events: Sender<AudioEvent>,
+    ) -> Self {
         let (commands, inbox) = channel::<Message>();
         let frames = commands.clone();
         let join = std::thread::Builder::new()
             .name("consort-audio".to_owned())
-            .spawn(move || run(capture, inbox, frames, events))
+            .spawn(move || run(capture, playback, inbox, frames, events))
             .expect("the operating system refused a thread");
 
         Self {
@@ -95,6 +127,28 @@ impl AudioThread {
     /// running.
     pub fn stop(&self) {
         self.send(Message::Stop);
+    }
+
+    /// Change the running gate's tuning, leaving the device open.
+    ///
+    /// Silently ignored when nothing is capturing: the tuning is passed to
+    /// [`start`](Self::start) anyway, so there is nothing to remember here.
+    /// Answered with nothing, because the meter is already the answer.
+    pub fn retune(&self, gate: GateConfig) {
+        self.send(Message::Retune { gate });
+    }
+
+    /// Play the test chime through `device`, or through the host's default.
+    ///
+    /// Replaces whatever was playing. Answered with `ToneStarted` or
+    /// `ToneFailed`, and later with `ToneStopped`.
+    pub fn play_tone(&self, device: Option<String>) {
+        self.send(Message::PlayTone { device });
+    }
+
+    /// Cut the chime short. Answered with `ToneStopped` either way.
+    pub fn stop_tone(&self) {
+        self.send(Message::StopTone);
     }
 
     fn send(&self, message: Message) {
@@ -129,11 +183,18 @@ struct Running {
 
 fn run(
     capture: Box<dyn AudioCapture>,
+    playback: Box<dyn AudioPlayback>,
     inbox: std::sync::mpsc::Receiver<Message>,
     frames: Sender<Message>,
     events: Sender<AudioEvent>,
 ) {
     let mut running: Option<Running> = None;
+    // Held only to keep the output open; dropping it silences the chime.
+    let mut tone: Option<Box<dyn PlaybackStream>> = None;
+    // Which chime is playing. Bumped on every start and every stop, so an
+    // ending reported by a chime that has already been replaced or cancelled
+    // arrives carrying a number nothing matches any more and is dropped.
+    let mut chime: u64 = 0;
 
     while let Ok(message) = inbox.recv() {
         match message {
@@ -189,6 +250,72 @@ fn run(
                 }
             }
 
+            Message::Retune { gate } => {
+                if let Some(state) = running.as_mut() {
+                    state.gate.retune(gate);
+                }
+            }
+
+            Message::PlayTone { device } => {
+                // Torn down first, like the microphone: two chimes at once is
+                // twice the volume and half the information.
+                tone = None;
+                chime += 1;
+                let mine = chime;
+                let post = frames.clone();
+                let played = playback.play(
+                    device.as_deref(),
+                    Tone::check(),
+                    Box::new(move || {
+                        let _ = post.send(Message::ToneEnded(mine));
+                    }),
+                );
+
+                match played {
+                    Ok(stream) => {
+                        let event = AudioEvent::ToneStarted {
+                            device: stream.device_name().to_owned(),
+                        };
+                        tone = Some(stream);
+                        if events.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if events
+                            .send(AudioEvent::ToneFailed {
+                                error: error.to_string(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Message::StopTone => {
+                tone = None;
+                chime += 1;
+                if events.send(AudioEvent::ToneStopped).is_err() {
+                    break;
+                }
+            }
+
+            Message::ToneEnded(which) => {
+                if which != chime {
+                    // A chime that was replaced or cancelled, reporting its
+                    // end afterwards. Believing it would silence whatever is
+                    // playing now.
+                    continue;
+                }
+                tone = None;
+                chime += 1;
+                if events.send(AudioEvent::ToneStopped).is_err() {
+                    break;
+                }
+            }
+
             Message::Frame(frame) => {
                 let Some(state) = running.as_mut() else {
                     // A frame from a stream that has just been torn down. There
@@ -225,7 +352,8 @@ fn run(
         }
     }
 
-    // Explicit, so the microphone is closed before the event channel does. A
-    // caller watching for the channel to close then knows the device is free.
+    // Explicit, so both devices are closed before the event channel is. A
+    // caller watching for the channel to close then knows they are free.
     drop(running);
+    drop(tone);
 }

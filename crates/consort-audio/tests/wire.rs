@@ -32,6 +32,13 @@ fn every_variant_is_tagged_by_a_state_field() {
             probability: 0.9,
             open: true,
         }),
+        AudioEvent::ToneStarted {
+            device: "Headphones".to_owned(),
+        },
+        AudioEvent::ToneStopped,
+        AudioEvent::ToneFailed {
+            error: "no".to_owned(),
+        },
     ];
 
     for event in events {
@@ -69,6 +76,45 @@ fn the_states_are_named_the_way_the_frontend_reads_them() {
         }))["state"],
         "level"
     );
+    assert_eq!(
+        json(&AudioEvent::ToneStarted {
+            device: "Headphones".to_owned()
+        })["state"],
+        "toneStarted"
+    );
+    assert_eq!(json(&AudioEvent::ToneStopped)["state"], "toneStopped");
+    assert_eq!(
+        json(&AudioEvent::ToneFailed {
+            error: "no".to_owned()
+        })["state"],
+        "toneFailed"
+    );
+}
+
+#[test]
+fn the_tone_and_the_microphone_are_told_apart_by_their_states() {
+    // Both open a device and both can fail, so they are two pairs of events on
+    // one channel. A frontend that matched `started` for either would put the
+    // level meter into "running" because somebody pressed the speaker test.
+    let microphone = json(&AudioEvent::Started {
+        device: "Yeti".to_owned(),
+    });
+    let speakers = json(&AudioEvent::ToneStarted {
+        device: "Headphones".to_owned(),
+    });
+
+    assert_ne!(microphone["state"], speakers["state"]);
+}
+
+#[test]
+fn a_tone_that_started_names_the_output_it_came_out_of() {
+    // The point of the button. Somebody pressing it wants to know which of
+    // three identically named sinks actually made the noise.
+    let payload = json(&AudioEvent::ToneStarted {
+        device: "HD-Audio Generic, Speaker".to_owned(),
+    });
+
+    assert_eq!(payload["device"], "HD-Audio Generic, Speaker");
 }
 
 #[test]

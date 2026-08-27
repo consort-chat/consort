@@ -129,6 +129,16 @@ impl Hysteresis {
         self.config
     }
 
+    /// Swap the tuning, keeping the state machine where it is.
+    ///
+    /// Not a reset. Somebody moving a threshold is doing it mid-sentence with
+    /// the meter in front of them, and starting the attack count and the hold
+    /// timer again would cut the word they are in the middle of saying. The
+    /// new thresholds apply from the next frame, which is 10 ms away.
+    pub fn retune(&mut self, config: GateConfig) {
+        self.config = config;
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -202,6 +212,15 @@ impl VoiceGate {
 
     pub fn config(&self) -> GateConfig {
         self.hysteresis.config()
+    }
+
+    /// Swap the tuning without disturbing the denoiser or the gate's state.
+    ///
+    /// The denoiser in particular must survive this: it carries the spectral
+    /// history that makes it work, and rebuilding it to change a threshold
+    /// would put a fresh warm-up artifact into the middle of a sentence.
+    pub fn retune(&mut self, config: GateConfig) {
+        self.hysteresis.retune(config);
     }
 
     /// Run one frame through the denoiser and the gate.

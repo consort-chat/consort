@@ -12,6 +12,8 @@ import {
   audioSettings,
   audioTestStart,
   audioTestStop,
+  audioTonePlay,
+  audioToneStop,
   login,
   logout,
   onConnection,
@@ -512,6 +514,19 @@ describe("the audio commands", () => {
 
     expect(invoke).toHaveBeenNthCalledWith(1, "audio_test_start");
     expect(invoke).toHaveBeenNthCalledWith(2, "audio_test_stop");
+  });
+
+  it("plays and stops the test tone with no arguments", async () => {
+    // No arguments for the same reason as the microphone test: the Rust side
+    // reads the saved output and resolves it against what is plugged in, so a
+    // device that has gone falls back rather than refusing.
+    invoke.mockResolvedValue(undefined);
+
+    await audioTonePlay();
+    await audioToneStop();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "audio_tone_play");
+    expect(invoke).toHaveBeenNthCalledWith(2, "audio_tone_stop");
   });
 
   it("hands the audio payload to the handler unwrapped", async () => {

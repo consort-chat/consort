@@ -8,9 +8,9 @@
 //! binary. Keeping that line sharp is what makes the interesting half testable
 //! without driving a webview.
 
+mod audio;
 mod commands;
 mod events;
-mod microphone;
 mod settings;
 mod state;
 
@@ -92,6 +92,8 @@ pub fn run() {
             commands::set_audio_settings,
             commands::audio_test_start,
             commands::audio_test_stop,
+            commands::audio_tone_play,
+            commands::audio_tone_stop,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,

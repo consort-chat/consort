@@ -19,6 +19,8 @@ use crate::capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
 use crate::devices::{Answer, AudioDevices, Device, Direction, catalogue};
 use crate::frames::Frames;
 use crate::gate::SAMPLE_RATE;
+use crate::playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
+use crate::tone::Tone;
 
 /// The default host: ALSA on Linux, CoreAudio on macOS, WASAPI on Windows.
 pub struct CpalHost;
@@ -173,6 +175,114 @@ impl AudioCapture for CpalHost {
     }
 }
 
+/// An open output, kept alive by being held.
+struct PlayingStream {
+    // Dropped last-in-first-out with the struct; the field exists to own it.
+    _stream: cpal::Stream,
+    device: String,
+}
+
+// `!Send` for the same reason `OpenStream` is, and kept structurally the same
+// way: the audio thread opens it, holds it and drops it without handing it
+// anywhere, and nothing else in the crate can name this type.
+unsafe impl Send for PlayingStream {}
+
+impl PlaybackStream for PlayingStream {
+    fn device_name(&self) -> &str {
+        &self.device
+    }
+}
+
+impl AudioPlayback for CpalHost {
+    fn play(
+        &self,
+        device: Option<&str>,
+        tone: Tone,
+        on_end: ToneEnded,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+        let host = cpal::default_host();
+        let device = match device {
+            None => host.default_output_device().ok_or(PlaybackError::NoDevice)?,
+            Some(wanted) => host
+                .output_devices()
+                .map_err(|error| PlaybackError::Backend(error.to_string()))?
+                .find(|candidate| candidate.to_string() == wanted)
+                .ok_or_else(|| PlaybackError::UnknownDevice {
+                    requested: wanted.to_owned(),
+                    available: catalogue(self, Direction::Output)
+                        .into_iter()
+                        .map(|device| device.name)
+                        .collect(),
+                })?,
+        };
+        let name = device.to_string();
+
+        // The same bargain the capture path makes: the chime is generated at
+        // 48 kHz, nothing resamples, so a device that cannot do 48 kHz is
+        // refused rather than played to at the wrong pitch. The picker already
+        // filters on this, so reaching it means the device changed underneath
+        // somebody between the list being drawn and the button being pressed.
+        let mut ranges: Vec<_> = device
+            .supported_output_configs()
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?
+            .filter(|range| {
+                range.min_sample_rate() <= SAMPLE_RATE && range.max_sample_rate() >= SAMPLE_RATE
+            })
+            .collect();
+        if ranges.is_empty() {
+            return Err(PlaybackError::NoFortyEightKilohertz { device: name });
+        }
+        ranges.sort_by_key(|range| match range.sample_format() {
+            SampleFormat::F32 => 0,
+            SampleFormat::I16 => 1,
+            _ => 2,
+        });
+        let chosen = ranges.remove(0);
+        let channels = chosen.channels();
+
+        let config = StreamConfig {
+            channels,
+            sample_rate: SAMPLE_RATE,
+            buffer_size: BufferSize::Default,
+        };
+        let mut playing = Playing::new(tone, channels, on_end);
+        let on_error = |error| tracing::error!(%error, "audio output stream error");
+
+        let stream = match chosen.sample_format() {
+            SampleFormat::F32 => device.build_output_stream(
+                config,
+                move |data: &mut [f32], _| playing.fill_f32(data),
+                on_error,
+                None,
+            ),
+            SampleFormat::I16 => device.build_output_stream(
+                config,
+                move |data: &mut [i16], _| playing.fill_i16(data),
+                on_error,
+                None,
+            ),
+            other => {
+                return Err(PlaybackError::UnsupportedFormat {
+                    device: name,
+                    format: format!("{other:?}"),
+                });
+            }
+        }
+        .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+
+        stream
+            .play()
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+
+        tracing::info!(device = %name, channels, format = ?chosen.sample_format(),
+            "playing the test tone");
+        Ok(Box::new(PlayingStream {
+            _stream: stream,
+            device: name,
+        }))
+    }
+}
+
 /// The names of the devices in `devices` that can actually be opened the way
 /// this crate opens them.
 ///
@@ -270,7 +380,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let (sender, events) = std::sync::mpsc::channel();
-        let audio = AudioThread::spawn(Box::new(CpalHost), sender);
+        let audio = AudioThread::spawn(Box::new(CpalHost), Box::new(CpalHost), sender);
         let device = std::env::var("AUDIO_DEVICE").ok();
         audio.start(device, GateConfig::default());
 
@@ -285,6 +395,10 @@ mod tests {
                 AudioEvent::Started { device } => println!("capturing from {device}"),
                 AudioEvent::Failed { error } => panic!("could not capture: {error}"),
                 AudioEvent::Stopped => break,
+                // Nothing here plays a tone, so these cannot arrive.
+                AudioEvent::ToneStarted { .. }
+                | AudioEvent::ToneStopped
+                | AudioEvent::ToneFailed { .. } => {}
                 AudioEvent::Level(reading) => {
                     readings += 1;
                     let bar = "#".repeat((reading.level * 40.0) as usize);
@@ -301,6 +415,39 @@ mod tests {
             readings > 0,
             "ten seconds of a real microphone produced no readings at all"
         );
+    }
+
+    /// Play the test chime out of a real output and listen to it.
+    ///
+    /// The other half of Phase 8: `watch_the_real_microphone` proves the input
+    /// by talking, and nothing proves an output except hearing it.
+    ///
+    /// ```sh
+    /// cargo test -p consort-audio --lib -- --ignored --nocapture play_the_real_tone
+    /// ```
+    ///
+    /// `AUDIO_DEVICE` picks an output by exact name; without it the host's
+    /// default is used.
+    #[test]
+    #[ignore = "needs real speakers and somebody to listen to them"]
+    fn play_the_real_tone() {
+        use crate::AudioEvent;
+        use crate::thread::AudioThread;
+        use std::time::Duration;
+
+        let (sender, events) = std::sync::mpsc::channel();
+        let audio = AudioThread::spawn(Box::new(CpalHost), Box::new(CpalHost), sender);
+        audio.play_tone(std::env::var("AUDIO_DEVICE").ok());
+
+        loop {
+            match events.recv_timeout(Duration::from_secs(5)) {
+                Ok(AudioEvent::ToneStarted { device }) => println!("playing through {device}"),
+                Ok(AudioEvent::ToneStopped) => break,
+                Ok(AudioEvent::ToneFailed { error }) => panic!("could not play: {error}"),
+                Ok(other) => println!("· {other:?}"),
+                Err(error) => panic!("the chime never ended: {error}"),
+            }
+        }
     }
 
     /// Ask this machine what it actually has.

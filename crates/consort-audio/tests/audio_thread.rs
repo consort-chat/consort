@@ -17,7 +17,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use consort_audio::capture::{AudioCapture, CaptureError, CaptureStream};
-use consort_audio::{AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig};
+use consort_audio::playback::{AudioPlayback, PlaybackError, PlaybackStream, ToneEnded};
+use consort_audio::{AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig, Tone};
 
 /// Long enough that a loaded machine is not the reason a test fails, short
 /// enough that a genuinely stuck thread does not hold the suite up.
@@ -117,9 +118,98 @@ fn next_state_change(events: &Receiver<AudioEvent>) -> AudioEvent {
     }
 }
 
+/// A pair of speakers that never make a sound.
+///
+/// The chime itself is `tests/tone.rs`. What is being checked here is the
+/// bookkeeping around it: which device was opened, when it was closed, and
+/// what happens when two presses overlap.
+struct FakePlayback {
+    log: Log,
+    /// A device name that cannot be opened.
+    broken: Option<String>,
+    /// Every `on_end` handed over so far, so a test can decide when a chime
+    /// finishes rather than racing a real one.
+    endings: Arc<Mutex<Vec<ToneEnded>>>,
+}
+
+impl FakePlayback {
+    fn new(log: &Log) -> Self {
+        Self {
+            log: Arc::clone(log),
+            broken: None,
+            endings: Arc::default(),
+        }
+    }
+
+    /// Tell the thread that the `nth` chime opened has finished playing.
+    fn finish(endings: &Arc<Mutex<Vec<ToneEnded>>>, nth: usize) {
+        let mut held = endings.lock().unwrap();
+        assert!(held.len() > nth, "only {} chimes have opened", held.len());
+        held[nth]();
+    }
+}
+
+struct FakeTone {
+    log: Log,
+    device: String,
+}
+
+impl PlaybackStream for FakeTone {
+    fn device_name(&self) -> &str {
+        &self.device
+    }
+}
+
+impl Drop for FakeTone {
+    fn drop(&mut self) {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("silence {}", self.device));
+    }
+}
+
+impl AudioPlayback for FakePlayback {
+    fn play(
+        &self,
+        device: Option<&str>,
+        _tone: Tone,
+        on_end: ToneEnded,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+        let device = device.unwrap_or("Default Out").to_owned();
+        self.log.lock().unwrap().push(format!("play {device}"));
+
+        if self.broken.as_deref() == Some(device.as_str()) {
+            return Err(PlaybackError::NoDevice);
+        }
+
+        self.endings.lock().unwrap().push(on_end);
+        Ok(Box::new(FakeTone {
+            log: Arc::clone(&self.log),
+            device,
+        }))
+    }
+}
+
 fn thread(capture: FakeCapture) -> (AudioThread, Receiver<AudioEvent>) {
+    let log = Arc::clone(&capture.log);
+    let (audio, events, _) = thread_with(capture, FakePlayback::new(&log));
+    (audio, events)
+}
+
+type Endings = Arc<Mutex<Vec<ToneEnded>>>;
+
+fn thread_with(
+    capture: FakeCapture,
+    playback: FakePlayback,
+) -> (AudioThread, Receiver<AudioEvent>, Endings) {
     let (sender, events) = std::sync::mpsc::channel();
-    (AudioThread::spawn(Box::new(capture), sender), events)
+    let endings = Arc::clone(&playback.endings);
+    (
+        AudioThread::spawn(Box::new(capture), Box::new(playback), sender),
+        events,
+        endings,
+    )
 }
 
 #[test]
@@ -331,4 +421,206 @@ fn the_thread_gives_up_when_nobody_is_listening_any_more() {
         entries.contains(&"close Yeti".to_owned()),
         "the microphone was left open: {entries:?}"
     );
+}
+
+// The test tone. An input can be verified by talking; an output cannot be
+// verified by anything unless something plays, so this is the only evidence
+// the output picker will ever have.
+
+#[test]
+fn playing_the_tone_opens_the_chosen_output_and_says_so() {
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+
+    audio.play_tone(Some("Headphones".to_owned()));
+
+    assert_eq!(
+        next_state_change(&events),
+        AudioEvent::ToneStarted {
+            device: "Headphones".to_owned()
+        }
+    );
+    assert_eq!(log_of(&log), vec!["play Headphones"]);
+}
+
+#[test]
+fn playing_without_a_device_asks_the_host_for_its_default() {
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+
+    audio.play_tone(None);
+
+    assert_eq!(
+        next_state_change(&events),
+        AudioEvent::ToneStarted {
+            device: "Default Out".to_owned()
+        }
+    );
+}
+
+#[test]
+fn the_chime_closes_the_device_when_it_finishes() {
+    // Nothing else will. The stream is what holds the output open, and a
+    // stream left behind after a 320 ms sound is an application that has
+    // quietly taken the speakers for the rest of the session.
+    let log = Log::default();
+    let (audio, events, endings) = thread_with(FakeCapture::new(&log), FakePlayback::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    FakePlayback::finish(&endings, 0);
+
+    assert_eq!(next_state_change(&events), AudioEvent::ToneStopped);
+    assert_eq!(log_of(&log), vec!["play Headphones", "silence Headphones"]);
+}
+
+#[test]
+fn stopping_the_tone_early_closes_the_device() {
+    // What closing the settings screen does, mid-chime.
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    audio.stop_tone();
+
+    assert_eq!(next_state_change(&events), AudioEvent::ToneStopped);
+    assert_eq!(log_of(&log), vec!["play Headphones", "silence Headphones"]);
+}
+
+#[test]
+fn stopping_a_tone_that_is_not_playing_is_not_an_error() {
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+
+    audio.stop_tone();
+
+    assert_eq!(next_state_change(&events), AudioEvent::ToneStopped);
+    assert!(log_of(&log).is_empty(), "nothing opened, so nothing closes");
+}
+
+#[test]
+fn pressing_twice_replaces_the_chime_rather_than_layering_it() {
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    assert_eq!(
+        log_of(&log),
+        vec!["play Headphones", "silence Headphones", "play Headphones"],
+        "two chimes at once is twice the volume and half the information"
+    );
+}
+
+#[test]
+fn a_chime_that_finishes_late_does_not_silence_the_one_that_replaced_it() {
+    // The race that makes the button feel broken. Press it, press it again
+    // before the first has finished, and the first one's "I am done" arrives
+    // while the second is playing. Acting on it cuts the second chime off and
+    // leaves the button saying nothing is playing while something is.
+    let log = Log::default();
+    let (audio, events, endings) = thread_with(FakeCapture::new(&log), FakePlayback::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    FakePlayback::finish(&endings, 0);
+
+    assert_eq!(
+        events.recv_timeout(Duration::from_millis(200)),
+        Err(RecvTimeoutError::Timeout),
+        "the stale ending stopped the chime that replaced it"
+    );
+    // And the live one still ends when it is actually over.
+    FakePlayback::finish(&endings, 1);
+    assert_eq!(next_state_change(&events), AudioEvent::ToneStopped);
+}
+
+#[test]
+fn an_ending_that_arrives_after_a_stop_is_ignored() {
+    // Same race, the other way round: the chime is stopped by hand and its
+    // callback reports the end afterwards. Two `ToneStopped` events would put
+    // the button back to idle twice, which is harmless, and would also close
+    // whatever started in between, which is not.
+    let log = Log::default();
+    let (audio, events, endings) = thread_with(FakeCapture::new(&log), FakePlayback::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+    audio.stop_tone();
+    next_state_change(&events);
+
+    FakePlayback::finish(&endings, 0);
+
+    assert_eq!(
+        events.recv_timeout(Duration::from_millis(200)),
+        Err(RecvTimeoutError::Timeout),
+        "a stopped chime reported its end and was believed twice"
+    );
+}
+
+#[test]
+fn an_output_that_will_not_open_is_reported_without_killing_the_thread() {
+    let log = Log::default();
+    let mut playback = FakePlayback::new(&log);
+    playback.broken = Some("Headphones".to_owned());
+    let (audio, events, _) = thread_with(FakeCapture::new(&log), playback);
+
+    audio.play_tone(Some("Headphones".to_owned()));
+
+    match next_state_change(&events) {
+        AudioEvent::ToneFailed { error } => assert!(!error.is_empty(), "the reason has to survive"),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+
+    // Still alive, and the microphone it also owns is unharmed.
+    audio.start(Some("Yeti".to_owned()), GateConfig::default());
+    assert_eq!(
+        next_state_change(&events),
+        AudioEvent::Started {
+            device: "Yeti".to_owned()
+        }
+    );
+}
+
+#[test]
+fn the_chime_and_the_microphone_do_not_disturb_each_other() {
+    // They share a thread, which is the only place a cpal stream can live, so
+    // the obvious bug is one of them tearing down the other.
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+    audio.start(Some("Yeti".to_owned()), GateConfig::default());
+    next_state_change(&events);
+
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+    audio.stop_tone();
+    next_state_change(&events);
+
+    assert_eq!(
+        log_of(&log),
+        vec![
+            "open Yeti",
+            "play Headphones",
+            "silence Headphones"
+        ],
+        "the microphone was disturbed by the test tone"
+    );
+    drop(audio);
+}
+
+#[test]
+fn dropping_the_handle_silences_a_chime_that_is_still_playing() {
+    let log = Log::default();
+    let (audio, events) = thread(FakeCapture::new(&log));
+    audio.play_tone(Some("Headphones".to_owned()));
+    next_state_change(&events);
+
+    drop(audio);
+
+    assert_eq!(log_of(&log), vec!["play Headphones", "silence Headphones"]);
 }

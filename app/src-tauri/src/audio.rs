@@ -1,7 +1,7 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The microphone test, joined to the webview.
+//! The settings screen's audio, joined to the webview.
 //!
 //! [`consort_audio::AudioThread`] already owns the sound card and reports over
 //! a `std::sync::mpsc` channel. Everything in this file is the short walk from
@@ -11,35 +11,47 @@
 //! the two.
 //!
 //! Deliberately not part of the signed-in session. The settings screen works
-//! signed out, the microphone has nothing to do with a Matrix account, and
-//! tying the two together would mean a sign-out silently killed a level meter
+//! signed out, a microphone has nothing to do with a Matrix account, and tying
+//! the two together would mean a sign-out silently killed a level meter
 //! somebody was in the middle of reading.
 
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 
-use consort_audio::{AudioCapture, AudioEvent, AudioThread, GateConfig};
+use consort_audio::{AudioCapture, AudioEvent, AudioPlayback, AudioThread, GateConfig};
 
 use crate::events::{AppEvent, EventSink};
+
+/// The two backends the audio thread needs.
+///
+/// Together rather than separately because the thread takes both at once and
+/// is built lazily, so anything that might be the first to want it has to be
+/// able to supply the pair. In the application both are `CpalHost`; in a test
+/// both are fakes.
+pub struct Backends {
+    pub capture: Box<dyn AudioCapture>,
+    pub playback: Box<dyn AudioPlayback>,
+}
 
 /// A running audio thread, with its events wired to the webview.
 ///
 /// Held for as long as the application runs rather than per test, because
 /// opening and closing the sound card is the slow part and a person adjusting
-/// a device picker does it repeatedly. Idle until [`start`](Self::start).
-pub struct Microphone {
+/// a device picker does it repeatedly. Idle until something asks it for
+/// something.
+pub struct AudioBridge {
     /// `Option` only so that [`Drop`] can take it and end the audio thread
     /// before joining the pump. Always `Some` otherwise.
     thread: Option<AudioThread>,
     pump: Option<JoinHandle<()>>,
 }
 
-impl Microphone {
+impl AudioBridge {
     /// Start the audio thread and the pump that forwards what it says.
-    pub fn spawn(capture: Box<dyn AudioCapture>, sink: Arc<dyn EventSink>) -> Self {
+    pub fn spawn(backends: Backends, sink: Arc<dyn EventSink>) -> Self {
         let (events, inbox) = channel::<AudioEvent>();
-        let thread = AudioThread::spawn(capture, events);
+        let thread = AudioThread::spawn(backends.capture, backends.playback, events);
 
         let pump = std::thread::Builder::new()
             .name("consort-audio-events".to_owned())
@@ -71,9 +83,30 @@ impl Microphone {
             thread.stop();
         }
     }
+
+    /// Change the running gate's tuning without reopening the microphone.
+    pub fn retune(&self, gate: GateConfig) {
+        if let Some(thread) = &self.thread {
+            thread.retune(gate);
+        }
+    }
+
+    /// Play the test chime through `device`, or through the host's default.
+    pub fn play_tone(&self, device: Option<String>) {
+        if let Some(thread) = &self.thread {
+            thread.play_tone(device);
+        }
+    }
+
+    /// Cut the chime short, releasing the output.
+    pub fn stop_tone(&self) {
+        if let Some(thread) = &self.thread {
+            thread.stop_tone();
+        }
+    }
 }
 
-impl Drop for Microphone {
+impl Drop for AudioBridge {
     fn drop(&mut self) {
         // Order matters and is the whole reason `thread` is an `Option`.
         // Dropping the audio thread joins it, and only once it has returned is
@@ -92,7 +125,10 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use consort_audio::{CaptureError, CaptureStream, FRAME_SAMPLES, FrameSink};
+    use consort_audio::{
+        CaptureError, CaptureStream, FRAME_SAMPLES, FrameSink, PlaybackError, PlaybackStream,
+        Tone, ToneEnded,
+    };
 
     use crate::events::RecordingSink;
 
@@ -114,6 +150,36 @@ mod tests {
     impl CaptureStream for FakeStream {
         fn device_name(&self) -> &str {
             &self.device
+        }
+    }
+
+    /// A pair of speakers that make no sound and finish when told to.
+    struct FakePlayback {
+        /// The chime's `on_end`, so a test can decide when it finishes.
+        endings: Mutex<Vec<ToneEnded>>,
+    }
+
+    struct FakeTone {
+        device: String,
+    }
+
+    impl PlaybackStream for FakeTone {
+        fn device_name(&self) -> &str {
+            &self.device
+        }
+    }
+
+    impl AudioPlayback for FakePlayback {
+        fn play(
+            &self,
+            device: Option<&str>,
+            _tone: Tone,
+            on_end: ToneEnded,
+        ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+            self.endings.lock().unwrap().push(on_end);
+            Ok(Box::new(FakeTone {
+                device: device.unwrap_or("Default Out").to_owned(),
+            }))
         }
     }
 
@@ -181,14 +247,17 @@ mod tests {
         }
     }
 
-    fn microphone(frames: usize, sink: Arc<Waitable>) -> Microphone {
-        Microphone::spawn(
-            Box::new(FakeCapture {
-                frames,
-                broken: false,
+    fn backends(frames: usize, broken: bool) -> Backends {
+        Backends {
+            capture: Box::new(FakeCapture { frames, broken }),
+            playback: Box::new(FakePlayback {
+                endings: Mutex::new(Vec::new()),
             }),
-            sink,
-        )
+        }
+    }
+
+    fn microphone(frames: usize, sink: Arc<Waitable>) -> AudioBridge {
+        AudioBridge::spawn(backends(frames, false), sink)
     }
 
     #[test]
@@ -256,13 +325,7 @@ mod tests {
         // held by something else, or it went away between the list being drawn
         // and the button being pressed.
         let sink = Waitable::new();
-        let microphone = Microphone::spawn(
-            Box::new(FakeCapture {
-                frames: 0,
-                broken: true,
-            }),
-            sink.clone(),
-        );
+        let microphone = AudioBridge::spawn(backends(0, true), sink.clone());
 
         microphone.start(None, GateConfig::default());
 
@@ -304,6 +367,76 @@ mod tests {
     }
 
     #[test]
+    fn the_test_tone_reaches_the_webview_and_names_the_output() {
+        let sink = Waitable::new();
+        let microphone = microphone(0, sink.clone());
+
+        microphone.play_tone(Some("Headphones".to_owned()));
+
+        let seen = sink.wait_for("the tone", |seen| !seen.is_empty());
+        assert_eq!(
+            seen[0],
+            AudioEvent::ToneStarted {
+                device: "Headphones".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn stopping_the_tone_reaches_the_webview() {
+        // What closing the settings screen does, mid-chime.
+        let sink = Waitable::new();
+        let microphone = microphone(0, sink.clone());
+        microphone.play_tone(None);
+        sink.wait_for("the tone", |seen| !seen.is_empty());
+
+        microphone.stop_tone();
+
+        sink.wait_for("the tone ending", |seen| {
+            seen.contains(&AudioEvent::ToneStopped)
+        });
+    }
+
+    #[test]
+    fn retuning_a_running_gate_does_not_reopen_the_device() {
+        // The point of having a retune at all. Somebody moving a threshold is
+        // watching the meter while they do it, and a device that closes and
+        // reopens under them drops the bar and re-announces itself.
+        let sink = Waitable::new();
+        let microphone = microphone(0, sink.clone());
+        microphone.start(None, GateConfig::default());
+        sink.wait_for("the started event", |seen| !seen.is_empty());
+
+        microphone.retune(GateConfig {
+            open_at: 0.9,
+            ..GateConfig::default()
+        });
+
+        // Still answering, and with nothing new to say about the device.
+        microphone.stop();
+        let seen = sink.wait_for("the stopped event", |seen| {
+            seen.contains(&AudioEvent::Stopped)
+        });
+        assert_eq!(
+            seen.iter()
+                .filter(|event| matches!(event, AudioEvent::Started { .. }))
+                .count(),
+            1,
+            "the device was reopened: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn retuning_before_anything_is_running_is_not_an_error() {
+        let sink = Waitable::new();
+        let microphone = microphone(0, sink.clone());
+
+        microphone.retune(GateConfig::default());
+
+        assert!(sink.seen().is_empty(), "an idle gate said something");
+    }
+
+    #[test]
     fn a_microphone_that_was_never_started_still_shuts_down() {
         let sink = Waitable::new();
 
@@ -317,13 +450,7 @@ mod tests {
         // The sink above asserts the variant. This one asserts the wire name,
         // which is what a listener in `api.ts` actually subscribes to.
         let sink = Arc::new(RecordingSink::new());
-        let microphone = Microphone::spawn(
-            Box::new(FakeCapture {
-                frames: 5,
-                broken: false,
-            }),
-            sink.clone(),
-        );
+        let microphone = AudioBridge::spawn(backends(5, false), sink.clone());
 
         microphone.start(None, GateConfig::default());
         let deadline = Instant::now() + PATIENCE;

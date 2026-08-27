@@ -10,13 +10,14 @@
 //! only untested lines in this file, and there is nothing in them to break.
 
 use consort_audio::{
-    AudioCapture, AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, catalogue,
+    AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, catalogue,
     choose,
 };
 use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
 use serde::Serialize;
 use tauri::State;
 
+use crate::audio::Backends;
 use crate::state::AppState;
 
 /// An error in the shape the frontend consumes.
@@ -314,9 +315,16 @@ fn set_audio_settings_for(
     state: &AppState,
     audio: AudioSettings,
 ) -> Result<(), crate::settings::SettingsError> {
+    let gate = audio.gate;
     let mut settings = state.settings().load();
     settings.audio = audio;
-    state.settings().save(&settings)
+    state.settings().save(&settings)?;
+    // After the save rather than instead of it, so what the meter is doing and
+    // what the file says can never disagree. A microphone that is open right
+    // now was started with the old tuning, and nothing else would tell it.
+    // Cheap and idempotent when only a device name changed.
+    state.retune_gate(gate);
+    Ok(())
 }
 
 /// Start the microphone test behind the settings screen's level meter.
@@ -329,7 +337,7 @@ fn set_audio_settings_for(
 fn audio_test_start_for(
     state: &AppState,
     host: &dyn AudioDevices,
-    capture: impl FnOnce() -> Box<dyn AudioCapture>,
+    backends: impl FnOnce() -> Backends,
 ) {
     let audio = state.settings().load().audio;
     let available = catalogue(host, Direction::Input);
@@ -337,12 +345,49 @@ fn audio_test_start_for(
         .name_to_open()
         .map(str::to_owned);
 
-    state.start_microphone(capture, device, audio.gate);
+    state.start_microphone(backends, device, audio.gate);
 }
 
 /// Stop the microphone test.
 fn audio_test_stop_for(state: &AppState) {
     state.stop_microphone();
+}
+
+/// Play the test chime out of the chosen output.
+///
+/// The output picker's only feedback. A microphone can be checked by talking
+/// at it and watching the meter; speakers cannot be checked by anything at all
+/// unless something plays, so without this the output picker is a control that
+/// gives no sign of having done anything.
+///
+/// Resolves the saved output the same way `audio_test_start_for` resolves the
+/// input, and for the same reason: a device that has gone should fall back to
+/// the host's default rather than refuse.
+fn audio_tone_play_for(
+    state: &AppState,
+    host: &dyn AudioDevices,
+    backends: impl FnOnce() -> Backends,
+) {
+    let audio = state.settings().load().audio;
+    let available = catalogue(host, Direction::Output);
+    let device = choose(&available, audio.output.as_deref())
+        .name_to_open()
+        .map(str::to_owned);
+
+    state.play_test_tone(backends, device);
+}
+
+/// Cut the chime short.
+fn audio_tone_stop_for(state: &AppState) {
+    state.stop_test_tone();
+}
+
+/// The real sound card, in both directions.
+fn cpal_backends() -> Backends {
+    Backends {
+        capture: Box::new(CpalHost),
+        playback: Box::new(CpalHost),
+    }
 }
 
 #[tauri::command]
@@ -365,12 +410,22 @@ pub fn set_audio_settings(
 
 #[tauri::command]
 pub fn audio_test_start(state: State<'_, AppState>) {
-    audio_test_start_for(&state, &CpalHost, || Box::new(CpalHost));
+    audio_test_start_for(&state, &CpalHost, cpal_backends);
 }
 
 #[tauri::command]
 pub fn audio_test_stop(state: State<'_, AppState>) {
     audio_test_stop_for(&state);
+}
+
+#[tauri::command]
+pub fn audio_tone_play(state: State<'_, AppState>) {
+    audio_tone_play_for(&state, &CpalHost, cpal_backends);
+}
+
+#[tauri::command]
+pub fn audio_tone_stop(state: State<'_, AppState>) {
+    audio_tone_stop_for(&state);
 }
 
 /// Verify this session with the account's recovery key.
@@ -723,9 +778,45 @@ mod tests {
             assert_eq!(state.settings().load().audio.input.as_deref(), Some("Yeti"));
         }
 
+        /// Backends that open whatever they are handed and report what that
+        /// was, without touching a sound card.
+        fn fake_backends() -> Backends {
+            Backends {
+                capture: Box::new(FakeCapture),
+                playback: Box::new(FakePlayback),
+            }
+        }
+
         /// A capture backend that opens whatever it is handed and reports
         /// what that was.
         struct FakeCapture;
+
+        /// The same, for the output side.
+        struct FakePlayback;
+
+        struct FakeTone {
+            device: String,
+        }
+
+        impl consort_audio::PlaybackStream for FakeTone {
+            fn device_name(&self) -> &str {
+                &self.device
+            }
+        }
+
+        impl consort_audio::AudioPlayback for FakePlayback {
+            fn play(
+                &self,
+                device: Option<&str>,
+                _tone: consort_audio::Tone,
+                _on_end: consort_audio::ToneEnded,
+            ) -> Result<Box<dyn consort_audio::PlaybackStream>, consort_audio::PlaybackError>
+            {
+                Ok(Box::new(FakeTone {
+                    device: device.unwrap_or("<the host default>").to_owned(),
+                }))
+            }
+        }
 
         struct FakeStream {
             device: String,
@@ -764,6 +855,26 @@ mod tests {
             (dir, state, sink)
         }
 
+        /// Block until the audio thread has said something matching, or give
+        /// up.
+        fn audio_event(
+            sink: &RecordingSink,
+            wanted: impl Fn(&consort_audio::AudioEvent) -> bool,
+        ) -> consort_audio::AudioEvent {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while std::time::Instant::now() < deadline {
+                let found = sink.events().into_iter().find_map(|event| match event {
+                    crate::events::AppEvent::Audio(event) if wanted(&event) => Some(event),
+                    _ => None,
+                });
+                if let Some(event) = found {
+                    return event;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("the audio thread said nothing matching within five seconds");
+        }
+
         /// Block until the audio thread has said something, or give up.
         fn first_audio_event(sink: &RecordingSink) -> consort_audio::AudioEvent {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -788,7 +899,7 @@ mod tests {
             // name read out of a list.
             let (_dir, state, sink) = observable_state();
 
-            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+            audio_test_start_for(&state, &Fake, fake_backends);
 
             assert_eq!(
                 first_audio_event(&sink),
@@ -810,7 +921,7 @@ mod tests {
             )
             .expect("save");
 
-            audio_test_start_for(&state, &TwoInputs, || Box::new(FakeCapture));
+            audio_test_start_for(&state, &TwoInputs, fake_backends);
 
             assert_eq!(
                 first_audio_event(&sink),
@@ -835,7 +946,7 @@ mod tests {
             )
             .expect("save");
 
-            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+            audio_test_start_for(&state, &Fake, fake_backends);
 
             assert_eq!(
                 first_audio_event(&sink),
@@ -848,7 +959,7 @@ mod tests {
         #[test]
         fn stopping_releases_the_device() {
             let (_dir, state, sink) = observable_state();
-            audio_test_start_for(&state, &Fake, || Box::new(FakeCapture));
+            audio_test_start_for(&state, &Fake, fake_backends);
             first_audio_event(&sink);
 
             audio_test_stop_for(&state);
@@ -877,6 +988,172 @@ mod tests {
             audio_test_stop_for(&state);
 
             assert!(sink.events().is_empty());
+        }
+
+        #[test]
+        fn the_test_tone_plays_out_of_whatever_the_host_calls_its_default() {
+            // Same first-run requirement as the microphone. Nothing has been
+            // configured, so nothing is named, and the backend picks.
+            let (_dir, state, sink) = observable_state();
+
+            audio_tone_play_for(&state, &Fake, fake_backends);
+
+            assert_eq!(
+                audio_event(&sink, |event| matches!(
+                    event,
+                    consort_audio::AudioEvent::ToneStarted { .. }
+                )),
+                consort_audio::AudioEvent::ToneStarted {
+                    device: "<the host default>".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn a_saved_output_that_is_not_the_default_is_played_through_by_name() {
+            let (_dir, state, sink) = observable_state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    output: Some("HDMI".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            audio_tone_play_for(&state, &TwoOutputs, fake_backends);
+
+            assert_eq!(
+                audio_event(&sink, |event| matches!(
+                    event,
+                    consort_audio::AudioEvent::ToneStarted { .. }
+                )),
+                consort_audio::AudioEvent::ToneStarted {
+                    device: "HDMI".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn a_saved_output_that_has_gone_falls_back_rather_than_failing() {
+            // Speakers unplugged between runs. Refusing to play would leave
+            // somebody pressing a button that does nothing and no way to work
+            // out why.
+            let (_dir, state, sink) = observable_state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    output: Some("Speakers Somebody Unplugged".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            audio_tone_play_for(&state, &Fake, fake_backends);
+
+            assert_eq!(
+                audio_event(&sink, |event| matches!(
+                    event,
+                    consort_audio::AudioEvent::ToneStarted { .. }
+                )),
+                consort_audio::AudioEvent::ToneStarted {
+                    device: "<the host default>".to_owned()
+                }
+            );
+        }
+
+        #[test]
+        fn the_tone_resolves_the_output_and_not_the_input() {
+            // The easy mistake, and an invisible one on a machine whose
+            // default output happens to be listed first. `TwoOutputs` has a
+            // microphone whose name is nothing like its speakers.
+            let (_dir, state, sink) = observable_state();
+
+            audio_tone_play_for(&state, &TwoOutputs, fake_backends);
+
+            let consort_audio::AudioEvent::ToneStarted { device } =
+                audio_event(&sink, |event| {
+                    matches!(event, consort_audio::AudioEvent::ToneStarted { .. })
+                })
+            else {
+                unreachable!()
+            };
+            assert_ne!(device, "A Microphone", "the chime went to the microphone");
+        }
+
+        #[test]
+        fn stopping_a_tone_that_was_never_played_is_not_an_error() {
+            // Which the settings screen does every time it closes, whether or
+            // not anybody pressed the button.
+            let (_dir, state, sink) = observable_state();
+
+            audio_tone_stop_for(&state);
+
+            assert!(sink.events().is_empty());
+        }
+
+        #[test]
+        fn stopping_the_tone_releases_the_output() {
+            let (_dir, state, sink) = observable_state();
+            audio_tone_play_for(&state, &Fake, fake_backends);
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::ToneStarted { .. })
+            });
+
+            audio_tone_stop_for(&state);
+
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::ToneStopped)
+            });
+        }
+
+        #[test]
+        fn the_chime_and_the_microphone_share_one_thread_without_disturbing_it() {
+            // They have to: a cpal stream is `!Send` in either direction, so
+            // there is one thread that can hold either. The bug that shape
+            // invites is one of them tearing down the other.
+            let (_dir, state, sink) = observable_state();
+            audio_test_start_for(&state, &Fake, fake_backends);
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::Started { .. })
+            });
+
+            audio_tone_play_for(&state, &Fake, fake_backends);
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::ToneStarted { .. })
+            });
+
+            assert!(
+                !sink.events().iter().any(|event| matches!(
+                    event,
+                    crate::events::AppEvent::Audio(consort_audio::AudioEvent::Stopped)
+                )),
+                "playing the chime closed the microphone"
+            );
+        }
+
+        /// A machine whose speakers and microphone are named nothing alike.
+        struct TwoOutputs;
+
+        impl AudioDevices for TwoOutputs {
+            fn enumerate(&self, direction: Direction) -> Vec<Device> {
+                match direction {
+                    Direction::Input => vec![Device {
+                        name: "A Microphone".to_owned(),
+                        is_default: true,
+                    }],
+                    Direction::Output => vec![
+                        Device {
+                            name: "Built-in Speakers".to_owned(),
+                            is_default: true,
+                        },
+                        Device {
+                            name: "HDMI".to_owned(),
+                            is_default: false,
+                        },
+                    ],
+                }
+            }
         }
 
         /// A machine with a default microphone and a second one.

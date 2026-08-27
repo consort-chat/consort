@@ -7,6 +7,8 @@ const audioSettings = vi.hoisted(() => vi.fn());
 const setAudioSettings = vi.hoisted(() => vi.fn());
 const audioTestStart = vi.hoisted(() => vi.fn());
 const audioTestStop = vi.hoisted(() => vi.fn());
+const audioTonePlay = vi.hoisted(() => vi.fn());
+const audioToneStop = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
@@ -16,6 +18,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setAudioSettings,
   audioTestStart,
   audioTestStop,
+  audioTonePlay,
+  audioToneStop,
   onAudio,
 }));
 
@@ -69,6 +73,8 @@ describe("VoiceVideoSection", () => {
     setAudioSettings.mockReset().mockResolvedValue(undefined);
     audioTestStart.mockReset().mockResolvedValue(undefined);
     audioTestStop.mockReset().mockResolvedValue(undefined);
+    audioTonePlay.mockReset().mockResolvedValue(undefined);
+    audioToneStop.mockReset().mockResolvedValue(undefined);
     unlisten.mockReset();
     onAudio.mockReset().mockImplementation((handler) => {
       emit = handler;
@@ -243,6 +249,106 @@ describe("VoiceVideoSection", () => {
     render(<VoiceVideoSection />);
 
     expect(await screen.findByText(/no microphone/i)).toBeVisible();
+  });
+
+  it("plays a test tone out of the chosen output when asked", async () => {
+    // The whole of Phase 7. An input can be checked by talking at it; an
+    // output cannot be checked by anything unless something plays.
+    render(<VoiceVideoSection />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /check/i }));
+
+    expect(audioTonePlay).toHaveBeenCalled();
+  });
+
+  it("names the output the tone actually came out of", async () => {
+    // The question the button was pressed to answer. "Something played" is
+    // half of it; "out of these speakers" is the half that settles whether
+    // the picker is pointing where somebody thought it was.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "toneStarted", device: "Headphones" });
+
+    expect(await screen.findByText(/Playing through Headphones/)).toBeVisible();
+  });
+
+  it("keeps saying which output it was after the chime has finished", async () => {
+    // The chime is about a third of a second. A note that appears and
+    // disappears inside that is a note nobody reads, so it stays and changes
+    // tense.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+    push({ state: "toneStarted", device: "Headphones" });
+
+    push({ state: "toneStopped" });
+
+    expect(await screen.findByText(/Played through Headphones/)).toBeVisible();
+  });
+
+  it("says nothing about a tone until one has been played", async () => {
+    render(<VoiceVideoSection />);
+    await screen.findByLabelText(/output device/i);
+
+    expect(screen.queryByText(/through/i)).not.toBeInTheDocument();
+  });
+
+  it("reports an output that would not play rather than staying silent", async () => {
+    // Silence is the failure mode this button exists to diagnose, so silence
+    // is the one thing it must never be the answer to.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "toneFailed", error: "there is no audio output device" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /no audio output device/,
+    );
+  });
+
+  it("reports a tone command that never reached the backend", async () => {
+    audioTonePlay.mockRejectedValue({ message: "no sound", detail: "no sound" });
+    render(<VoiceVideoSection />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /check/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no sound/);
+  });
+
+  it("does not put the level meter into running because a tone started", async () => {
+    // Two devices on one event channel. A handler that treated `toneStarted`
+    // as `started` would tell somebody their microphone was live because they
+    // pressed the speaker button.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "toneStarted", device: "Headphones" });
+
+    expect(await screen.findByText("Not running.")).toBeVisible();
+  });
+
+  it("stops the tone when the section goes away", async () => {
+    // Short, but not so short that it cannot outlive the panel that started
+    // it. A chime left playing into a closed screen holds the output open for
+    // a sound nobody can now stop.
+    const { unmount } = render(<VoiceVideoSection />);
+    await waitFor(() => expect(audioTestStart).toHaveBeenCalled());
+
+    unmount();
+
+    await waitFor(() => expect(audioToneStop).toHaveBeenCalled());
+  });
+
+  it("offers no test button on a machine with nothing to play through", async () => {
+    audioDevices.mockResolvedValue({
+      ...report,
+      output: { devices: [], selected: null, missing: null },
+    });
+
+    render(<VoiceVideoSection />);
+
+    expect(await screen.findByText(/nothing Consort can play sound/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /check/i })).not.toBeInTheDocument();
   });
 
   it("survives the device list failing to load", async () => {

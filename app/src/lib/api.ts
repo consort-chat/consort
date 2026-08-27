@@ -592,12 +592,20 @@ export interface AudioSettings {
  * `failed` is an ordinary outcome rather than an exception. A device gets held
  * by another application, or goes away between the list being drawn and the
  * button being pressed, and both are common enough to draw rather than throw.
+ *
+ * Two devices, one channel. The `tone` states are the output test and the
+ * others are the microphone, and they are told apart by name rather than
+ * shared: a `switch` that treated `toneStarted` as `started` would put the
+ * level meter into "running" because somebody pressed the speaker button.
  */
 export type AudioActivity =
   | { state: "started"; device: string }
   | { state: "stopped" }
   | { state: "failed"; error: string }
-  | { state: "level"; level: number; probability: number; open: boolean };
+  | { state: "level"; level: number; probability: number; open: boolean }
+  | { state: "toneStarted"; device: string }
+  | { state: "toneStopped" }
+  | { state: "toneFailed"; error: string };
 
 /**
  * What this machine has, and which of it is in use.
@@ -641,6 +649,27 @@ export function audioTestStart(): Promise<void> {
 /** Close the microphone. Safe to call when nothing is running. */
 export function audioTestStop(): Promise<void> {
   return invoke<void>("audio_test_stop");
+}
+
+/**
+ * Play the test chime out of the chosen output.
+ *
+ * The output picker's only feedback. A microphone can be checked by talking at
+ * it and watching the meter move; speakers cannot be checked by anything at
+ * all unless something plays.
+ *
+ * No arguments, for the same reason as `audioTestStart`: the Rust side reads
+ * the saved output and resolves it against what is plugged in. What happens
+ * next arrives through `onAudio` as `toneStarted`, then `toneStopped` once the
+ * chime is over, which takes about a third of a second.
+ */
+export function audioTonePlay(): Promise<void> {
+  return invoke<void>("audio_tone_play");
+}
+
+/** Cut the chime short. Safe to call when nothing is playing. */
+export function audioToneStop(): Promise<void> {
+  return invoke<void>("audio_tone_stop");
 }
 
 /**

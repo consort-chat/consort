@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   asCommandError,
@@ -6,6 +6,8 @@ import {
   audioSettings,
   audioTestStart,
   audioTestStop,
+  audioTonePlay,
+  audioToneStop,
   onAudio,
   setAudioSettings,
   type AudioDeviceList,
@@ -25,6 +27,15 @@ interface Meter {
 
 const SILENT: Meter = { level: 0, open: false, running: false, device: null };
 
+/** What the output test has to show for itself. */
+interface Chime {
+  /** The output the last chime came out of, or null before the first press. */
+  device: string | null;
+  playing: boolean;
+}
+
+const QUIET: Chime = { device: null, playing: false };
+
 interface PickerProps {
   id: string;
   label: string;
@@ -40,6 +51,8 @@ interface PickerProps {
   /** What to say when the machine has none of this kind. */
   absent: string;
   onChange: (name: string) => void;
+  /** Anything belonging under the picker, such as the output test button. */
+  children?: ReactNode;
 }
 
 /**
@@ -49,7 +62,15 @@ interface PickerProps {
  * that has to work the first time somebody opens it, is the wrong place to
  * reimplement keyboard handling and typeahead that the platform already has.
  */
-function DevicePicker({ id, label, list, selected, absent, onChange }: PickerProps) {
+function DevicePicker({
+  id,
+  label,
+  list,
+  selected,
+  absent,
+  onChange,
+  children,
+}: PickerProps) {
   if (list.devices.length === 0) {
     return (
       <div className="voice-field">
@@ -87,6 +108,7 @@ function DevicePicker({ id, label, list, selected, absent, onChange }: PickerPro
           {list.missing} is not plugged in. Using {list.selected} instead.
         </p>
       )}
+      {children}
     </div>
   );
 }
@@ -110,6 +132,7 @@ export function VoiceVideoSection() {
   } | null>(null);
   const [settings, setSettings] = useState<AudioSettings | null>(null);
   const [meter, setMeter] = useState<Meter>(SILENT);
+  const [chime, setChime] = useState<Chime>(QUIET);
   const [problem, setProblem] = useState<string | null>(null);
 
   /*
@@ -175,6 +198,20 @@ export function VoiceVideoSection() {
             open: activity.open,
           }));
           break;
+        case "toneStarted":
+          setProblem(null);
+          setChime({ device: activity.device, playing: true });
+          break;
+        case "toneStopped":
+          // The device is kept rather than cleared. It is the answer to the
+          // question the button was pressed to ask, and a note that vanishes a
+          // third of a second after it appears is one nobody reads.
+          setChime((current) => ({ ...current, playing: false }));
+          break;
+        case "toneFailed":
+          setChime(QUIET);
+          setProblem(activity.error);
+          break;
       }
     })
       .then((off) => {
@@ -203,6 +240,12 @@ export function VoiceVideoSection() {
       // unmounts while the start is still in flight.
       audioTestStop().catch((raw: unknown) => {
         console.error("could not close the microphone", asCommandError(raw).detail);
+      });
+      // The chime is short, but not so short that it cannot outlive the panel
+      // that started it. Leaving it playing into a closed screen would hold
+      // the output open for a sound nobody can now stop.
+      audioToneStop().catch((raw: unknown) => {
+        console.error("could not stop the test tone", asCommandError(raw).detail);
       });
     };
   }, [reload]);
@@ -237,6 +280,19 @@ export function VoiceVideoSection() {
     }
   }
 
+  /**
+   * Play the test chime.
+   *
+   * A failure to reach the backend at all lands in the same alert as a failure
+   * to play, because from the outside they are the same event: the button was
+   * pressed and no sound came out.
+   */
+  function check() {
+    audioTonePlay().catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
   return (
     <div className="voice">
       {/*
@@ -268,7 +324,23 @@ export function VoiceVideoSection() {
             selected={picked.output ?? devices.output.selected}
             absent="This machine has nothing Consort can play sound through."
             onChange={(name) => void change("output", name)}
-          />
+          >
+            {/*
+              Not disabled while it plays. The chime is about a third of a
+              second, so a button that greys out and comes back is a flicker,
+              and pressing again during one is handled where it should be: the
+              audio thread replaces the chime rather than layering a second one
+              on top of it.
+            */}
+            <button type="button" className="voice-field__check" onClick={check}>
+              Let&apos;s Check
+            </button>
+            {chime.device !== null && (
+              <p className="voice-field__note">
+                {chime.playing ? "Playing" : "Played"} through {chime.device}.
+              </p>
+            )}
+          </DevicePicker>
         </>
       )}
 
