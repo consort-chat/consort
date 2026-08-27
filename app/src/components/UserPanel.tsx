@@ -1,17 +1,15 @@
-import { asCommandError, logout, type Connection, type Profile } from "../lib/api";
+import type { Connection, Profile } from "../lib/api";
 import { connectionLabel, initialsOf } from "../lib/labels";
 import "./UserPanel.css";
 
 interface Props {
   profile: Profile;
   connection: Connection;
-  pending: boolean;
-  onSigningOut: () => void;
-  onSignedOut: () => void;
+  onOpenSettings: () => void;
 }
 
 /**
- * Who you are, whether the client is connected, and the way out.
+ * Who you are, whether the client is connected, and the way into settings.
  *
  * The strip along the bottom of the channel list, which is where Discord puts
  * it and where a hand already is. Small on purpose: it holds the three things
@@ -19,32 +17,20 @@ interface Props {
  * sentence to explain belongs in the main pane, which is why the verification
  * banner is not here.
  *
+ * The third thing used to be Sign out. It is a gear now, and signing out moved
+ * behind it into My Account. Not a rearrangement for its own sake: this strip
+ * is thirty-two pixels tall and sits directly under a list people click
+ * quickly, and the only irreversible action in the application does not belong
+ * one stray click from a channel.
+ *
  * A labelled group rather than a bare div. The account name used to be this
  * screen's `h1`, which was true when the screen was one centred card and is
  * not true of a thirty-two pixel strip in a corner. A group announces itself
  * on the way in, which is what somebody arriving here by keyboard needs, and
  * it gives the name somewhere to live that is not a heading it is not.
  */
-export function UserPanel({
-  profile,
-  connection,
-  pending,
-  onSigningOut,
-  onSignedOut,
-}: Props) {
+export function UserPanel({ profile, connection, onOpenSettings }: Props) {
   const name = profile.display_name ?? profile.user_id;
-
-  async function handleLogout() {
-    onSigningOut();
-    try {
-      await logout();
-    } catch (raw: unknown) {
-      // `logout` clears the local session even when the server call fails, so
-      // there is no state where staying on this screen is correct.
-      console.error("logout reported an error", asCommandError(raw).detail);
-    }
-    onSignedOut();
-  }
 
   return (
     <div
@@ -73,12 +59,19 @@ export function UserPanel({
         </span>
       </div>
 
+      {/*
+        An icon, so it needs a name that is not its glyph: the gear is drawn in
+        an `aria-hidden` span and the label lives in `aria-label`. `title` as
+        well, because this is the one control on the strip whose purpose is not
+        written next to it.
+      */}
       <button
-        className="button button--ghost button--small"
-        onClick={handleLogout}
-        disabled={pending}
+        className="user-panel__settings"
+        onClick={onOpenSettings}
+        aria-label="User settings"
+        title="User settings"
       >
-        {pending ? "Signing out…" : "Sign out"}
+        <span aria-hidden="true">⚙</span>
       </button>
     </div>
   );

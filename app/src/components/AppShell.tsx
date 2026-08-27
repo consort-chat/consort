@@ -13,6 +13,7 @@ import {
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
 import { ChannelList } from "./ChannelList";
+import { SettingsModal } from "./SettingsModal";
 import { SpaceRail } from "./SpaceRail";
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";
@@ -76,9 +77,7 @@ interface Props {
   storage: TokenStorage | null;
   flows: VerificationFlow[];
   canStartVerification: boolean;
-  signingOut: boolean;
   onDismissFlow: (flowId: string) => void;
-  onSigningOut: () => void;
   onSignedOut: () => void;
 }
 
@@ -106,13 +105,12 @@ export function AppShell({
   storage,
   flows,
   canStartVerification,
-  signingOut,
   onDismissFlow,
-  onSigningOut,
   onSignedOut,
 }: Props) {
   const [spaceId, setSpaceId] = useState(HOME_ID);
   const [channelId, setChannelId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   /*
     Both selections are derived rather than trusted. A space can be left and a
@@ -140,7 +138,14 @@ export function AppShell({
   }
 
   return (
-    <div className="shell">
+    <>
+      {/*
+        Inert rather than merely covered. The dialog's own focus trap keeps
+        Tab inside it; this is the other half, and it is what stops a pointer
+        or a screen reader reaching a channel list that is still rendered
+        behind a full-screen panel.
+      */}
+      <div className="shell" inert={settingsOpen}>
       <SpaceRail
         spaces={rooms.spaces}
         selectedId={space?.id ?? HOME_ID}
@@ -160,9 +165,7 @@ export function AppShell({
         <UserPanel
           profile={profile}
           connection={connection}
-          pending={signingOut}
-          onSigningOut={onSigningOut}
-          onSignedOut={onSignedOut}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </div>
 
@@ -231,6 +234,15 @@ export function AppShell({
           </div>
         </dl>
       </main>
-    </div>
+      </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          profile={profile}
+          onClose={() => setSettingsOpen(false)}
+          onSignedOut={onSignedOut}
+        />
+      )}
+    </>
   );
 }

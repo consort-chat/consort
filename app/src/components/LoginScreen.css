@@ -261,3 +261,28 @@
 .button--ghost:active:not(:disabled) {
   transform: translateY(1px);
 }
+
+/*
+  The one irreversible action in the application, and the only place this
+  variant is used. Danger red as a fill rather than an outline: an outlined
+  destructive button reads as secondary, which is the wrong thing to imply
+  about the control that ends the session.
+*/
+.button--danger {
+  color: oklch(99% 0 0);
+  background: var(--danger);
+  box-shadow: 0 1px 0 oklch(100% 0 0 / 0.12) inset;
+}
+
+.button--danger:hover:not(:disabled) {
+  background: oklch(58% 0.19 22);
+}
+
+.button--danger:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}

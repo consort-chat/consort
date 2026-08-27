@@ -112,7 +112,8 @@ describe("App", () => {
     render(<App />);
     await screen.findByRole("group", { name: "Account" });
 
-    await user.click(screen.getByRole("button", { name: /sign(ing)? out/i }));
+    await user.click(screen.getByRole("button", { name: /user settings/i }));
+    await user.click(screen.getByRole("button", { name: /log out/i }));
 
     expect(await screen.findByRole("heading", { name: /sign in/i })).toBeVisible();
   });

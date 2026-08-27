@@ -1,0 +1,60 @@
+/*
+  The input level bar.
+
+  Fixed height and a fixed track, so the panel does not reflow twenty times a
+  second. Only the fill's width changes, and only ever between 0 and 100 per
+  cent of a track that is already laid out.
+*/
+.level-meter {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.level-meter__track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  background: var(--surface-void);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 2px oklch(0% 0 0 / 0.35);
+}
+
+/*
+  Width rather than transform, deliberately, against the usual advice.
+
+  A scaled track would need the fill to be a full-width element scaled from its
+  left edge, and the rounded right cap would be squashed into an ellipse at low
+  levels. This is one element, 8px tall, inside a container with a fixed size,
+  so the layout it invalidates is its own.
+*/
+.level-meter__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--violet), var(--violet-hover));
+  border-radius: 999px;
+  transition: width 60ms linear;
+}
+
+/*
+  Mint is the presence colour and it means one thing: somebody is speaking.
+  The attribute beside it carries the same fact for anybody who cannot tell
+  mint from violet.
+*/
+.level-meter__fill[data-open="true"] {
+  background: linear-gradient(90deg, var(--mint), oklch(90% 0.11 168));
+}
+
+.level-meter__caption {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.level-meter[data-running="false"] .level-meter__track {
+  opacity: 0.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .level-meter__fill {
+    transition: none;
+  }
+}

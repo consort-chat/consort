@@ -1,0 +1,260 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  asCommandError,
+  audioDevices,
+  audioSettings,
+  audioTestStart,
+  audioTestStop,
+  onAudio,
+  setAudioSettings,
+  type AudioDeviceList,
+  type AudioSettings,
+} from "../lib/api";
+import { LevelMeter } from "./LevelMeter";
+import "./VoiceVideoSection.css";
+
+/** What the level meter is showing, which is nothing until the first reading. */
+interface Meter {
+  level: number;
+  open: boolean;
+  running: boolean;
+  /** The device the backend actually opened, which is the last word on it. */
+  device: string | null;
+}
+
+const SILENT: Meter = { level: 0, open: false, running: false, device: null };
+
+interface PickerProps {
+  id: string;
+  label: string;
+  list: AudioDeviceList;
+  /** What to say when the machine has none of this kind. */
+  absent: string;
+  onChange: (name: string) => void;
+}
+
+/**
+ * One device picker.
+ *
+ * A native `select` rather than a styled listbox. Two of them, on a screen
+ * that has to work the first time somebody opens it, is the wrong place to
+ * reimplement keyboard handling and typeahead that the platform already has.
+ */
+function DevicePicker({ id, label, list, absent, onChange }: PickerProps) {
+  if (list.devices.length === 0) {
+    return (
+      <div className="voice-field">
+        <span className="voice-field__label">{label}</span>
+        <p className="voice-field__note">{absent}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="voice-field">
+      <label className="voice-field__label" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        id={id}
+        className="voice-field__select"
+        value={list.selected ?? ""}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {list.devices.map((device) => (
+          <option key={device.name} value={device.name}>
+            {device.name}
+          </option>
+        ))}
+      </select>
+      {/*
+        Said out loud rather than resolved silently. Somebody who chose a
+        headset and is now being recorded by a laptop lid is entitled to know
+        that, and the moment to tell them is while they are looking at the
+        picker.
+      */}
+      {list.missing !== null && (
+        <p className="voice-field__note voice-field__note--warn">
+          {list.missing} is not plugged in. Using {list.selected} instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Input, output, and proof that the microphone works.
+ *
+ * The microphone opens when this appears and closes when it goes, with no
+ * button in between. That is the whole point of the screen: somebody who came
+ * here to find out whether Consort can hear them should find out by arriving,
+ * not by finding a second control and pressing it.
+ *
+ * Devices are re-read on every open and after every change rather than cached.
+ * A device can appear or vanish while the window is up, and a picker drawn
+ * from a stale list offers things that are not there.
+ */
+export function VoiceVideoSection() {
+  const [devices, setDevices] = useState<{
+    input: AudioDeviceList;
+    output: AudioDeviceList;
+  } | null>(null);
+  const [settings, setSettings] = useState<AudioSettings | null>(null);
+  const [meter, setMeter] = useState<Meter>(SILENT);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  // Held in a ref as well as in state because `change` needs the current value
+  // and is not re-created per render. Reading it from state there would close
+  // over whichever value existed when the handler was made.
+  const saved = useRef<AudioSettings | null>(null);
+
+  const reload = useCallback(async () => {
+    const [report, current] = await Promise.all([
+      audioDevices(),
+      audioSettings(),
+    ]);
+    setDevices({ input: report.input, output: report.output });
+    setSettings(current);
+    saved.current = current;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let stop: (() => void) | null = null;
+
+    onAudio((activity) => {
+      if (cancelled) return;
+      switch (activity.state) {
+        case "started":
+          setProblem(null);
+          setMeter({
+            level: 0,
+            open: false,
+            running: true,
+            device: activity.device,
+          });
+          break;
+        case "stopped":
+          setMeter(SILENT);
+          break;
+        case "failed":
+          setMeter(SILENT);
+          setProblem(activity.error);
+          break;
+        case "level":
+          // `running` is not read off the event. A reading can only exist
+          // while a stream is open, and taking the flag from `started` alone
+          // would drop the bar to "not running" for anybody whose first event
+          // arrived before this listener did.
+          setMeter((current) => ({
+            ...current,
+            running: true,
+            level: activity.level,
+            open: activity.open,
+          }));
+          break;
+      }
+    })
+      .then((off) => {
+        // Subscribing is asynchronous, so the section can be gone by the time
+        // the listener is handed over. Stopping it straight away is the
+        // difference between one that ends with the panel and one that lives
+        // as long as the process.
+        if (cancelled) off();
+        else stop = off;
+      })
+      .catch((raw: unknown) => {
+        console.error("could not follow the microphone", asCommandError(raw).detail);
+      });
+
+    reload()
+      .then(() => (cancelled ? undefined : audioTestStart()))
+      .catch((raw: unknown) => {
+        if (!cancelled) setProblem(asCommandError(raw).message);
+      });
+
+    return () => {
+      cancelled = true;
+      if (stop !== null) stop();
+      // Not conditional on having started. The command is a no-op when
+      // nothing is open, and the case worth covering is the one where this
+      // unmounts while the start is still in flight.
+      audioTestStop().catch((raw: unknown) => {
+        console.error("could not close the microphone", asCommandError(raw).detail);
+      });
+    };
+  }, [reload]);
+
+  /**
+   * Save one device choice.
+   *
+   * Reopens the microphone for an input change and not for an output one. The
+   * meter is showing the device that is open, so leaving the old one running
+   * under a picker that says otherwise would be the screen lying about the one
+   * thing it exists to report.
+   */
+  async function change(direction: "input" | "output", name: string) {
+    const current = saved.current;
+    if (current === null) return;
+
+    const next: AudioSettings = { ...current, [direction]: name };
+    setSettings(next);
+    saved.current = next;
+
+    try {
+      await setAudioSettings(next);
+      await reload();
+      if (direction === "input") await audioTestStart();
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
+  return (
+    <div className="voice">
+      {/*
+        An alert rather than a status. Every one of these means the panel is
+        not doing the thing it was opened to do, and none of them resolves on
+        its own.
+      */}
+      {problem !== null && (
+        <p className="voice__problem" role="alert">
+          {problem}
+        </p>
+      )}
+
+      {devices !== null && settings !== null && (
+        <>
+          <DevicePicker
+            id="voice-input"
+            label="Input device"
+            list={devices.input}
+            absent="This machine has no microphone Consort can open."
+            onChange={(name) => void change("input", name)}
+          />
+
+          <DevicePicker
+            id="voice-output"
+            label="Output device"
+            list={devices.output}
+            absent="This machine has nothing Consort can play sound through."
+            onChange={(name) => void change("output", name)}
+          />
+        </>
+      )}
+
+      <div className="voice-field">
+        <span className="voice-field__label">Mic test</span>
+        <LevelMeter
+          level={meter.level}
+          open={meter.open}
+          running={meter.running}
+        />
+        {meter.device !== null && (
+          <p className="voice-field__note">Recording from {meter.device}.</p>
+        )}
+      </div>
+    </div>
+  );
+}

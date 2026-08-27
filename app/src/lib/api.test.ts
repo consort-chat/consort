@@ -8,6 +8,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 import {
   asCommandError,
+  audioDevices,
+  audioSettings,
+  audioTestStart,
+  audioTestStop,
   login,
   logout,
   onConnection,
@@ -15,10 +19,15 @@ import {
   onKeyBackup,
   onRooms,
   onVerificationFlow,
+  onAudio,
   resendState,
   roomAvatar,
+  setAudioSettings,
   sessionStatus,
   tokenStorage,
+  type AudioActivity,
+  type AudioDeviceReport,
+  type AudioSettings,
   type Connection,
   type KeyBackup,
   type Profile,
@@ -439,5 +448,88 @@ describe("event subscriptions", () => {
     await resendState();
 
     expect(invoke).toHaveBeenCalledWith("resend_state");
+  });
+});
+
+describe("the audio commands", () => {
+  const report: AudioDeviceReport = {
+    input: {
+      devices: [{ name: "Yeti", isDefault: true }],
+      selected: "Yeti",
+      missing: null,
+    },
+    output: {
+      devices: [{ name: "Headphones", isDefault: true }],
+      selected: "Headphones",
+      missing: null,
+    },
+  };
+
+  const settings: AudioSettings = {
+    input: null,
+    output: null,
+    gate: {
+      openAt: 0.6,
+      closeAt: 0.3,
+      attackFrames: 2,
+      holdMs: 300,
+      denoise: true,
+    },
+  };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    listen.mockReset();
+  });
+
+  it("asks for the device list with no arguments", async () => {
+    invoke.mockResolvedValue(report);
+
+    await expect(audioDevices()).resolves.toEqual(report);
+    expect(invoke).toHaveBeenCalledWith("audio_devices");
+  });
+
+  it("asks for the saved settings with no arguments", async () => {
+    invoke.mockResolvedValue(settings);
+
+    await expect(audioSettings()).resolves.toEqual(settings);
+    expect(invoke).toHaveBeenCalledWith("audio_settings");
+  });
+
+  it("passes settings under the name the Rust command expects", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await setAudioSettings(settings);
+
+    expect(invoke).toHaveBeenCalledWith("set_audio_settings", { audio: settings });
+  });
+
+  it("starts and stops the microphone test with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await audioTestStart();
+    await audioTestStop();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "audio_test_start");
+    expect(invoke).toHaveBeenNthCalledWith(2, "audio_test_stop");
+  });
+
+  it("hands the audio payload to the handler unwrapped", async () => {
+    // The same contract as every other listener here: what arrives is the
+    // event's payload, not the Tauri envelope around it.
+    const seen: AudioActivity[] = [];
+    listen.mockImplementation(
+      (_name: string, handler: (event: { payload: AudioActivity }) => void) => {
+        handler({ payload: { state: "level", level: 0.5, probability: 0.9, open: true } });
+        return Promise.resolve(() => {});
+      },
+    );
+
+    await onAudio((activity) => seen.push(activity));
+
+    expect(listen).toHaveBeenCalledWith("audio", expect.any(Function));
+    expect(seen).toEqual([
+      { state: "level", level: 0.5, probability: 0.9, open: true },
+    ]);
   });
 });

@@ -1,0 +1,166 @@
+/*
+  Settings, over everything.
+
+  Full-bleed rather than a centred card. This is a place people go to do one
+  thing and leave, and covering the application removes any question about what
+  is still live behind it.
+*/
+.settings {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  background: oklch(8% 0.01 285 / 0.72);
+  animation: settings-fade var(--duration-normal) var(--ease-out-expo);
+}
+
+.settings__dialog {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--surface-base);
+}
+
+/* ---------- the sidebar ---------- */
+
+.settings__nav {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  padding: var(--space-8) var(--space-3);
+  overflow-y: auto;
+  background: var(--surface-void);
+  border-right: 1px solid var(--line-subtle);
+  /* The sidebar is the anchor; only the pane scrolls with content. */
+  justify-items: stretch;
+}
+
+.settings__nav-heading {
+  padding: 0 var(--space-3) var(--space-2);
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings__nav-item {
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    color var(--duration-fast) var(--ease-out-expo);
+}
+
+.settings__nav-item:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+.settings__nav-item:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  The selected pane, marked by weight and a surface as well as by colour. The
+  same rule as the presence dot: colour reinforces, never carries.
+*/
+.settings__nav-item[aria-current="page"] {
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+/* ---------- the pane ---------- */
+
+.settings__pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  /*
+    Capped and centred rather than filling a wide window. A settings form
+    stretched across 2000px is unreadable, and the left edge of the pane is
+    where the eye returns after every control.
+  */
+  padding: var(--space-8) var(--space-8) var(--space-12);
+  overflow: hidden;
+}
+
+.settings__pane-head {
+  display: flex;
+  gap: var(--space-4);
+  align-items: start;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto var(--space-6);
+}
+
+.settings__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings__body {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  overflow-y: auto;
+}
+
+.settings__close {
+  display: grid;
+  gap: 2px;
+  place-items: center;
+  padding: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo);
+}
+
+.settings__close:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.settings__close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.settings__close-hint {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+@keyframes settings-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings {
+    animation: none;
+  }
+}

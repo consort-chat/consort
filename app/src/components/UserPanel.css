@@ -104,3 +104,51 @@
     animation: none;
   }
 }
+
+/*
+  The gear.
+
+  Sized to the strip rather than to the glyph, so the hit target is the full
+  28px square even though the character inside is much smaller. A 12px icon
+  with a 12px target is a control people miss.
+*/
+.user-panel__settings {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-normal) var(--ease-out-expo);
+}
+
+.user-panel__settings:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  /* A quarter turn, which is the one bit of motion this strip earns. */
+  transform: rotate(90deg);
+}
+
+.user-panel__settings:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-panel__settings {
+    transition: none;
+  }
+
+  .user-panel__settings:hover {
+    transform: none;
+  }
+}

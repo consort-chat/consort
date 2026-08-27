@@ -267,59 +267,22 @@ describe("SignedIn", () => {
     expect(storageNotice()).not.toBeInTheDocument();
   });
 
-  it("signs out when the button is clicked", async () => {
+  it("signs out through settings", async () => {
+    // The route, not the behaviour. Signing out moved into the modal, under
+    // My Account, so what this screen still owes is a way to get there and a
+    // callback when it happens. What the button itself does is
+    // MyAccountSection's, and is tested there.
     const user = userEvent.setup();
     const onSignedOut = vi.fn();
     render(<SignedIn profile={profile} onSignedOut={onSignedOut} />);
 
-    await user.click(await screen.findByRole("button", { name: /sign(ing)? out/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /user settings/i }),
+    );
+    await user.click(screen.getByRole("button", { name: /log out/i }));
 
     await waitFor(() => expect(logout).toHaveBeenCalledOnce());
-    expect(onSignedOut).toHaveBeenCalledOnce();
-  });
-
-  it("leaves the screen even when the server-side logout fails", async () => {
-    // `logout` clears the local session regardless, so staying here would
-    // show a signed-in screen for a session that no longer exists.
-    const user = userEvent.setup();
-    const onSignedOut = vi.fn();
-    logout.mockRejectedValue({ message: "Could not reach it.", detail: "timeout" });
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    render(<SignedIn profile={profile} onSignedOut={onSignedOut} />);
-
-    await user.click(await screen.findByRole("button", { name: /sign(ing)? out/i }));
-
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
-  });
-
-  it("disables the button while signing out", async () => {
-    const user = userEvent.setup();
-    let release: () => void = () => {};
-    logout.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
-    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
-
-    await user.click(await screen.findByRole("button", { name: /sign(ing)? out/i }));
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /sign(ing)? out/i })).toBeDisabled(),
-    );
-    release();
-  });
-
-  it("logs the developer-facing detail of a failed sign-out", async () => {
-    const user = userEvent.setup();
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    logout.mockRejectedValue({ message: "Could not reach it.", detail: "timeout" });
-    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
-
-    await user.click(await screen.findByRole("button", { name: /sign(ing)? out/i }));
-
-    await waitFor(() =>
-      expect(consoleError).toHaveBeenCalledWith(
-        "logout reported an error",
-        "timeout",
-      ),
-    );
   });
 
   it("does not set state after unmounting", async () => {

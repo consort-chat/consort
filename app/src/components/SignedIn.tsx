@@ -40,7 +40,6 @@ interface Props {
  * apart means a layout change cannot quietly break a listener.
  */
 export function SignedIn({ profile, onSignedOut }: Props) {
-  const [signingOut, setSigningOut] = useState(false);
   const [storage, setStorage] = useState<TokenStorage | null>(null);
   // Not `live`. Claiming a connection before the sync loop has said anything
   // is the lie this replaced: the old header was the literal string
@@ -161,9 +160,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       storage={storage}
       flows={running}
       canStartVerification={!running.some(isRunning)}
-      signingOut={signingOut}
       onDismissFlow={dismiss}
-      onSigningOut={() => setSigningOut(true)}
       onSignedOut={onSignedOut}
     />
   );

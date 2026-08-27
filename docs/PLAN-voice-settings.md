@@ -105,7 +105,7 @@ treatment, and `CpalDevices` joins `keyring_store.rs` in the coverage regex.
 Each phase is red first. The test that cannot be written without hardware is
 the test that says so and gets deferred to the by-hand phase at the end.
 
-### Phase 1: the gate, ported, configured rather than environed
+### Phase 1: the gate, ported, configured rather than environed (done)
 
 **Red.** Port `tests/scaling.rs` unchanged, since the i16-range trap is the one
 mistake most likely to be reintroduced. Then the hysteresis tests the spike
@@ -126,7 +126,7 @@ and `Deserialize`.
 This phase is pure arithmetic over a fixed model, so it should reach 100% and
 carry the crate's coverage while the hardware-facing parts cannot.
 
-### Phase 2: the device catalogue, behind a trait
+### Phase 2: the device catalogue, behind a trait (done)
 
 **Red.** Against a fake catalogue, never cpal:
 
@@ -147,7 +147,7 @@ excluded from coverage.
 `Device::name()` and offers only `Display`, so a name is all the identity
 there is. Two identical capture cards are indistinguishable. Accepted for now.
 
-### Phase 3: settings that survive a restart
+### Phase 3: settings that survive a restart (done)
 
 **Red.**
 
@@ -165,7 +165,7 @@ through the existing `atomic::write_private`. Not because thresholds are
 secret, but because the helper is already correct about fsync ordering and
 writing a second, worse one would be silly.
 
-### Phase 4: the thread that owns the audio
+### Phase 4: the thread that owns the audio (done)
 
 **Red.** Against the fake backend, over the command channel:
 
@@ -180,7 +180,7 @@ writing a second, worse one would be silly.
 **Green.** A thread, an mpsc of commands, and an `AudioHandle` holding only the
 sender. `AppState` holds the handle.
 
-### Phase 5: the meter reaches the webview
+### Phase 5: the meter reaches the webview (done)
 
 **Red.** The gate runs at 100 frames a second. 100 Tauri events a second, each
 a JSON round trip, to move a bar that redraws at 60 Hz at best, is waste.
@@ -201,7 +201,7 @@ opposite of what that replay mechanism exists for.
 Commands: `audio_devices`, `audio_settings`, `set_audio_settings`,
 `audio_test_start`, `audio_test_stop`.
 
-### Phase 6: the modal
+### Phase 6: the modal (done)
 
 **Red, frontend first.** The modal is a new primitive here and gets tested as
 one before anything is put inside it:
@@ -328,14 +328,29 @@ the host default, so it is what a first run would choose, and on this machine it
 is the worst of the fourteen. That collides with the fourth thing this plan says
 has to be true by the end: something sensible is already selected on first run.
 
-Not solved here, because "prefer a sound server over the host's own default" is
-a heuristic that would be wrong on a machine running neither PipeWire nor
-PulseAudio, and encoding it blind is worse than letting somebody choose. What is
-built instead is the reporting: a failed open carries the backend's own words,
-and `Substituted` names the device that went away. Both now have tests, because
-this is evidently a thing people will hit rather than an edge case.
+**Decided: no heuristic. The host's default is the default, everywhere.**
 
-Worth deciding once Phase 6 makes the list visible.
+Two reasons, and the first is that the premise was wrong. `Default Audio Device`
+delivers silence on this machine because EasyEffects is already holding the
+input and running its own noise model over it. That is one desktop's
+configuration, not a fact about defaults, and a ranked preference list written
+to route around it would be Arch-shaped code shipped to Windows and macOS, where
+the host default is simply correct and is what every other application uses.
+
+The second is that `Selection::name_to_open` already covers the part that
+generalises. Nothing saved means the backend is asked for *its* default rather
+than for the name that default currently has, so the choice follows the machine:
+plug in a headset on Windows and the microphone moves, which is what somebody
+who never opened this screen expects. A saved name is a photograph; the host's
+default is a live answer.
+
+What is built alongside it is the reporting, because opening a device fails
+often on a real desktop and that is a state to draw rather than an exception: a
+failed open carries the backend's own words, and `Substituted` names the device
+that went away. Both have tests.
+
+The list questions above stay open, and they are cosmetic. Nothing selects a
+JACK entry on a machine without JACK unless a person picks it themselves.
 
 ## What this deliberately does not do
 

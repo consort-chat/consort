@@ -504,3 +504,155 @@ export function verificationRecover(recoveryKey: string): Promise<void> {
 export function resendState(): Promise<void> {
   return invoke<void>("resend_state");
 }
+
+/**
+ * One device the host offers, mirrored from `consort_audio::devices`.
+ *
+ * The name is the whole identity. cpal 0.18 removed the fallible name lookup
+ * and offers only a display string, so two identical capture cards are
+ * indistinguishable and a saved choice can resolve to the wrong twin. Known,
+ * accepted, and the reason `isDefault` is worth carrying separately.
+ */
+export interface AudioDevice {
+  name: string;
+  /** Whether the host reports this as the one it would pick. */
+  isDefault: boolean;
+}
+
+/**
+ * What there is in one direction, and what is actually being used.
+ *
+ * Three facts rather than a list and an index, because the third is the one
+ * that is easy to leave out and expensive to have left out.
+ */
+export interface AudioDeviceList {
+  /** Everything worth offering, in host order. Do not re-sort. */
+  devices: AudioDevice[];
+  /** The device audio will go through. Null only on a machine with none. */
+  selected: string | null;
+  /**
+   * The saved device, when it is not plugged in any more.
+   *
+   * Null in every other case. Say so when it is not: somebody who chose a
+   * headset and is being recorded by a laptop lid microphone should be told,
+   * not quietly switched.
+   */
+  missing: string | null;
+}
+
+export interface AudioDeviceReport {
+  input: AudioDeviceList;
+  output: AudioDeviceList;
+}
+
+/**
+ * The voice gate's thresholds, mirrored from `consort_audio::gate`.
+ *
+ * Two thresholds rather than one on purpose. A single threshold chatters: a
+ * voice sitting near it opens and shuts the gate every few frames, which
+ * clips the start of every other word.
+ */
+export interface GateConfig {
+  /** Speech probability at which the gate opens. */
+  openAt: number;
+  /** Speech probability below which it may close again. */
+  closeAt: number;
+  /** Consecutive frames above `openAt` before it opens. */
+  attackFrames: number;
+  /** How long it stays open after the last frame above `closeAt`. */
+  holdMs: number;
+  /** Whether the noise suppressor runs. */
+  denoise: boolean;
+}
+
+/**
+ * What has been chosen, mirrored from `consort_audio::settings`.
+ *
+ * Both device names are null until somebody picks one, and null means "use
+ * whatever this machine calls its default". That is not the same as writing
+ * down today's default by name: the host's answer follows the machine, so
+ * plugging in a headset moves the microphone, which is what somebody who
+ * never opened this screen expects.
+ */
+export interface AudioSettings {
+  input: string | null;
+  output: string | null;
+  gate: GateConfig;
+}
+
+/**
+ * What the microphone test is doing, mirrored from
+ * `consort_audio::thread::AudioEvent`.
+ *
+ * Unlike every other channel here this one carries no state worth replaying.
+ * A level is a measurement of a moment, and the Rust side deliberately never
+ * repeats the last one to a late subscriber: a bar moving for a microphone
+ * that stopped minutes ago is worse than no bar at all.
+ *
+ * `failed` is an ordinary outcome rather than an exception. A device gets held
+ * by another application, or goes away between the list being drawn and the
+ * button being pressed, and both are common enough to draw rather than throw.
+ */
+export type AudioActivity =
+  | { state: "started"; device: string }
+  | { state: "stopped" }
+  | { state: "failed"; error: string }
+  | { state: "level"; level: number; probability: number; open: boolean };
+
+/**
+ * What this machine has, and which of it is in use.
+ *
+ * Ask on every open rather than caching. A device can appear or vanish while
+ * the window is up, and a picker drawn from a stale list offers things that
+ * are not there.
+ */
+export function audioDevices(): Promise<AudioDeviceReport> {
+  return invoke<AudioDeviceReport>("audio_devices");
+}
+
+/** The saved audio choices, or the defaults on first run. */
+export function audioSettings(): Promise<AudioSettings> {
+  return invoke<AudioSettings>("audio_settings");
+}
+
+/**
+ * Replace the saved audio choices.
+ *
+ * Takes the whole object rather than one field. The screen holds all of it,
+ * and a partial update would need a merge on the Rust side that could lose a
+ * concurrent change for no benefit.
+ */
+export function setAudioSettings(audio: AudioSettings): Promise<void> {
+  return invoke<void>("set_audio_settings", { audio });
+}
+
+/**
+ * Open the microphone and start reporting levels.
+ *
+ * No arguments: the Rust side reads the saved input choice and resolves it
+ * against what is plugged in, so a device that has gone falls back to the
+ * default rather than refusing. Everything that happens next, including a
+ * failure to open, arrives through `onAudio`.
+ */
+export function audioTestStart(): Promise<void> {
+  return invoke<void>("audio_test_start");
+}
+
+/** Close the microphone. Safe to call when nothing is running. */
+export function audioTestStop(): Promise<void> {
+  return invoke<void>("audio_test_stop");
+}
+
+/**
+ * Listen to the microphone test.
+ *
+ * Same contract as `onConnection`: the channel name matches `AppEvent::AUDIO`,
+ * and the returned function stops listening. Unlike those, `resendState` will
+ * not repeat anything here, so a component that mounts mid-test hears nothing
+ * until the next reading, which is 50 ms away.
+ */
+export function onAudio(
+  handler: (activity: AudioActivity) => void,
+): Promise<UnlistenFn> {
+  return listen<AudioActivity>("audio", (event) => handler(event.payload));
+}
