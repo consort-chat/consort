@@ -12,7 +12,7 @@ Run them:
 ```sh
 # Rust, with the same exclusions CI uses
 cargo llvm-cov --workspace \
-  --ignore-filename-regex '(keyring_store\.rs|src-tauri/src/(main|lib)\.rs)' \
+  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|src-tauri/src/(main|lib)\.rs)' \
   --summary-only
 
 # Frontend, thresholds enforced from vitest.config.ts
@@ -29,8 +29,25 @@ LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata cargo llvm-cov .
 
 ## What is excluded, and why
 
-Three files are outside the measurement. Each is excluded because a test could
+Four files are outside the measurement. Each is excluded because a test could
 only reach it by pretending, not because the code is uninteresting.
+
+**`crates/consort-audio/src/cpal_host.rs`.** Every line talks to a sound card,
+and a CI runner has none. Covering it would mean a fake audio backend, which is
+what `AudioDevices` already is on the testable side of the boundary, so mocking
+cpal as well would only test the mock twice.
+
+The exclusion is honest only while this file stays thin. Deciding which device
+to use, filtering ALSA's plugin wrappers out of the list and turning a
+backend's buffers into frames are all decisions, and all three live in
+`devices.rs` and `frames.rs` at 100%. Anything in `cpal_host.rs` that starts
+deciding something belongs to move.
+
+It carries an `#[ignore]` test that asks a real machine what it has:
+
+```sh
+cargo test -p consort-audio --lib -- --ignored --nocapture list_the_real_devices
+```
 
 **`crates/consort-matrix/src/secrets/keyring_store.rs`.** Every line is a call
 into the platform credential store. Covering it would mean either a mock, which

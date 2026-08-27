@@ -1,0 +1,25 @@
+[package]
+name = "consort-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Cross-platform device enumeration and streams. Confined to `cpal_host.rs`,
+# which is excluded from coverage: CI has no sound card, so every line that
+# talks to one is a line no test can reach. Everything that decides anything
+# takes the device list as data instead.
+cpal = "0.18.2"
+
+# Pure-Rust RNNoise port. `process_frame` hands back the voice probability as a
+# byproduct of denoising, so one pass over a frame answers both halves of the
+# question this crate exists to answer.
+#
+# Default features are for its own CLI binary (clap, hound, dasp). The library
+# and its built-in model need none of them.
+nnnoiseless = { version = "0.5.2", default-features = false }
+
+serde = { workspace = true }
+tracing = { workspace = true }
