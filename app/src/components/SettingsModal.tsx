@@ -74,13 +74,33 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
     };
   }, []);
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
+  /*
+    Escape is bound to the document and not to the dialog.
+
+    A key event goes to whatever has focus, and plenty of what is inside here
+    cannot take focus: the headings, the labels, the level meter, the gaps
+    between fields. Clicking any of it leaves focus on `body`, and a handler
+    bound to the dialog element never sees a keystroke that started outside it.
+    Bound to the element, the shortcut works until the first click and then
+    quietly stops, which is worse than not having it.
+
+    Safe to have at the document because nothing else is listening: the shell
+    behind this is inert while it is up.
+  */
+  useEffect(() => {
+    function onEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
       event.stopPropagation();
       onClose();
-      return;
     }
 
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, [onClose]);
+
+  // Tab only. Escape is handled at the document, above, because it has to
+  // work when focus is on nothing in particular; Tab by definition does not.
+  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Tab" || dialog.current === null) return;
 
     const focusable = focusableWithin(dialog.current);
@@ -155,7 +175,9 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
               aria-label="Close settings"
               title="Close settings"
             >
-              <span aria-hidden="true">✕</span>
+              <span className="settings__close-mark" aria-hidden="true">
+                ✕
+              </span>
               <span className="settings__close-hint" aria-hidden="true">
                 ESC
               </span>

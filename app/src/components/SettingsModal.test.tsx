@@ -94,6 +94,24 @@ describe("SettingsModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closes on Escape after a click has landed on nothing focusable", async () => {
+    /*
+      The case the plain Escape test cannot reach. A key event is delivered to
+      whatever has focus, and clicking any dead space inside the dialog, a
+      heading, a label, the gap between two fields, leaves focus on `body`.
+      A handler bound to the dialog element never sees a keystroke that starts
+      outside it, so Escape stops working the moment somebody clicks anywhere
+      before pressing it. Which is to say: almost always.
+    */
+    const onClose = open();
+
+    await userEvent.click(screen.getByRole("heading", { name: /my account/i }));
+    expect(document.activeElement).toBe(document.body);
+    await userEvent.keyboard("{Escape}");
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("closes when the backdrop is clicked", async () => {
     const onClose = open();
 

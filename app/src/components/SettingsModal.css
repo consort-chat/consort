@@ -1,15 +1,22 @@
 /*
   Settings, over everything.
 
-  Full-bleed rather than a centred card. This is a place people go to do one
-  thing and leave, and covering the application removes any question about what
-  is still live behind it.
+  Nearly full-bleed, with a margin of dimmed application left showing. Two
+  reasons for the margin rather than covering the screen edge to edge. It reads
+  as a panel over the app rather than as a different app, which is what somebody
+  who opened it by accident needs to see. And it gives the backdrop a surface to
+  actually be clicked: a dialog covering its own backdrop makes click-outside a
+  handler that can never fire.
+
+  The margin collapses to nothing on a short or narrow window, where the space
+  is worth more than the effect.
 */
 .settings {
   position: fixed;
   inset: 0;
   z-index: 100;
   display: grid;
+  padding: clamp(0px, 4vh, 44px) clamp(0px, 4vw, 44px);
   background: oklch(8% 0.01 285 / 0.72);
   animation: settings-fade var(--duration-normal) var(--ease-out-expo);
 }
@@ -17,8 +24,20 @@
 .settings__dialog {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
+  width: 100%;
+  /*
+    Capped, then centred. A settings form stretched across an ultrawide is
+    unreadable, and the left edge of the pane is where the eye returns after
+    every control.
+  */
+  max-width: 1080px;
+  margin: 0 auto;
   overflow: hidden;
   background: var(--surface-base);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+  animation: settings-rise var(--duration-normal) var(--ease-out-expo);
 }
 
 /* ---------- the sidebar ---------- */
@@ -86,12 +105,7 @@
 .settings__pane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  /*
-    Capped and centred rather than filling a wide window. A settings form
-    stretched across 2000px is unreadable, and the left edge of the pane is
-    where the eye returns after every control.
-  */
-  padding: var(--space-8) var(--space-8) var(--space-12);
+  padding: var(--space-8);
   overflow: hidden;
 }
 
@@ -119,37 +133,60 @@
   overflow-y: auto;
 }
 
+/*
+  The ring belongs to the cross, not to the whole control.
+
+  Both of them inside one 36px circle was the first attempt and it did not fit:
+  "ESC" is wider than the circle at any size the cross is readable at, so the
+  word sat across the border with the stroke running through it. Discord puts
+  the word under the ring for the same reason. So the button is a plain column,
+  and only the cross is drawn as a circle.
+*/
 .settings__close {
   display: grid;
-  gap: 2px;
-  place-items: center;
-  padding: var(--space-1);
-  font-size: var(--text-sm);
+  gap: 5px;
+  justify-items: center;
+  padding: 0;
   color: var(--text-muted);
   background: none;
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out-expo);
+}
+
+.settings__close-mark {
+  display: grid;
+  place-items: center;
   width: 36px;
   height: 36px;
-  cursor: pointer;
-  transition:
-    color var(--duration-fast) var(--ease-out-expo),
-    border-color var(--duration-fast) var(--ease-out-expo);
+  font-size: var(--text-sm);
+  line-height: 1;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  transition: border-color var(--duration-fast) var(--ease-out-expo);
 }
 
 .settings__close:hover {
   color: var(--text-primary);
+}
+
+.settings__close:hover .settings__close-mark {
   border-color: var(--text-secondary);
 }
 
+/* On the ring, so the focus indicator traces the shape people see. */
 .settings__close:focus-visible {
   outline: none;
+}
+
+.settings__close:focus-visible .settings__close-mark {
   box-shadow: var(--shadow-focus);
 }
 
 .settings__close-hint {
   font-size: 9px;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.08em;
 }
 
@@ -159,8 +196,17 @@
   }
 }
 
+/* Transform and opacity only, so the entrance stays on the compositor. */
+@keyframes settings-rise {
+  from {
+    opacity: 0;
+    transform: scale(0.985) translateY(8px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .settings {
+  .settings,
+  .settings__dialog {
     animation: none;
   }
 }

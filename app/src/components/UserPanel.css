@@ -125,17 +125,20 @@
   border: 0;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  /*
+    Colour and background only. A quarter turn on hover was here and was wrong:
+    rotating a text glyph resamples it, so the gear appeared to jump sideways
+    before it turned. Motion has to earn its place, and nothing about a gear
+    spinning tells anybody anything they did not already know from the cursor.
+  */
   transition:
     color var(--duration-fast) var(--ease-out-expo),
-    background var(--duration-fast) var(--ease-out-expo),
-    transform var(--duration-normal) var(--ease-out-expo);
+    background var(--duration-fast) var(--ease-out-expo);
 }
 
 .user-panel__settings:hover {
   color: var(--text-primary);
   background: var(--surface-raised);
-  /* A quarter turn, which is the one bit of motion this strip earns. */
-  transform: rotate(90deg);
 }
 
 .user-panel__settings:focus-visible {
@@ -146,9 +149,5 @@
 @media (prefers-reduced-motion: reduce) {
   .user-panel__settings {
     transition: none;
-  }
-
-  .user-panel__settings:hover {
-    transform: none;
   }
 }
