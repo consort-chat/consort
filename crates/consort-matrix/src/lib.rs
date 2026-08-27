@@ -50,6 +50,7 @@
 pub mod atomic;
 pub mod auth;
 pub mod backup;
+pub mod calls;
 pub mod error;
 pub mod rooms;
 pub mod secrets;
@@ -59,6 +60,7 @@ pub mod verification;
 
 pub use auth::{Credentials, Profile};
 pub use backup::KeyBackup;
+pub use calls::CallReadiness;
 pub use error::{Error, Result};
 pub use rooms::{Channel, ChannelKind, Participant, Rooms, Space};
 pub use secrets::{Backend, BackendKind};

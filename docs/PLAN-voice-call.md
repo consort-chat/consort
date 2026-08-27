@@ -1,6 +1,6 @@
 # Plan: joining the voice channel
 
-Status: **phase 0 done**, the rest not started. This is the second half of issue #6. The first half,
+Status: **phases 0, 0.5 and 1 done**, phase 2 next. This is the second half of issue #6. The first half,
 drawing who is already in a channel, is done and described in
 [PLAN-voice-presence.md](PLAN-voice-presence.md). This half is the one that
 carries audio.
@@ -150,26 +150,105 @@ later: build time, target directory growth, and release binary size. libwebrtc
 enters through this crate and through nothing else. The release profile in
 `Cargo.toml` already strips symbols in anticipation.
 
-### Phase 1: the call thread
+### Phase 0.5: can this session be heard at all (done)
+
+Out of phase 0's one hard finding, and first because it decides whether
+anything after it is testable. `consort_matrix::calls::readiness` asks the two
+questions matrix-sdk-crypto's `IdentityBasedStrategy` asks before it will
+distribute a media key, in the same order, so the answer cannot drift from the
+one that matters: does the account have a cross-signing identity, and does this
+device trust it.
+
+Three answers, and the two failures are kept apart because they ask different
+things of a person. `NoIdentity` is fixed once, on any client, by setting up
+recovery. `SessionUnverified` is fixed on this device, again after every
+reinstall, by verifying it.
+
+The lookup is local, with one `/keys/query` on the negative path only: an
+identity missing from the store is not the same fact as an identity missing
+from the account, and telling somebody to go and set up cross-signing they
+already have is worse than one request.
+
+It is logged once when a session is adopted, permanently rather than only while
+this is being built, because an unverified session is the one fault that looks
+exactly like a working call until somebody speaks and nobody hears them.
+
+**One thing this phase corrected.** Consort's `base_builder` sets
+`auto_enable_cross_signing`, so both `auth::login` and `auth::restore` create an
+identity when the account has none. `NoIdentity` is therefore not the state a
+fresh Consort sign-in lands in, which is what phase 0 measured with a bare
+client. It is what a bootstrap that has not finished, or one the homeserver
+refused, looks like. The failure that will actually be met on an account that
+already has cross-signing is `SessionUnverified`, because the auto-bootstrap
+correctly declines to replace an identity other devices are already signed by.
+
+### Phase 1: the call thread (done)
 
 `Call::join` drives `!Send` futures and panics outside a
-`tokio::task::LocalSet`. Tauri's runtime is multi-threaded. So the call needs a
+`tokio::task::LocalSet`. Tauri's runtime is multi-threaded. So the call gets a
 dedicated thread owning a current-thread runtime and a `LocalSet`, fed by a
 command channel and emitting events over another.
 
 That is precisely the shape `AudioThread` already has, and for precisely the
-same reason: a resource that cannot move between threads. Building `CallThread`
-as a deliberate mirror of it means one pattern in this codebase rather than two,
-and it means the tests can be the same shape too.
+same reason: a resource that cannot move between threads. `CallThread` is a
+deliberate mirror of it, so this codebase has one pattern rather than two.
 
-The phase builds the thread, its message enum and its event enum against a
-`MatrixCall` trait with `join`, `leave`, `publish` and `set_muted`, plus a fake.
-No LiveKit is linked into anything tested here, exactly as `AudioCapture` and
-`AudioPlayback` keep cpal out of every test but three.
+It landed as a crate of its own, `consort-call`, rather than inside
+`consort-matrix`. libwebrtc is around eight gigabytes of build output, and
+putting it in `consort-matrix` would put it in the way of every `cargo test -p
+consort-matrix`, which is the loop most of this project is developed in. The
+readiness check from phase 0.5 stays in `consort-matrix` for the same reason
+in reverse: it is a cross-signing question with no LiveKit in it, and it should
+be answerable without linking any.
 
-The real implementation lands behind that trait and joins `cpal_host.rs` in the
-coverage ignore regex, for the same reason: code whose behaviour is a device's
-behaviour cannot be asserted without the device.
+Four modules, three of them tested and one of them not:
+
+- `dialect.rs`, which MatrixRTC generation to speak, as Consort's own three-way
+  enum rather than upstream's `ElementCallCompat`. That type is documented
+  upstream as scaffolding with a delete-by date, and keeping it out of
+  Consort's vocabulary means its removal is one mapping function to fix.
+- `failure.rs`, four categories out of `CallError`'s four variants, with
+  `Transport` and `Media` merged because from where somebody is sitting both
+  are the voice server not working.
+- `thread.rs`, the loop. Leaves before it joins somewhere else, so nobody is
+  ever published in two channels at once. Re-announces rather than rebuilds a
+  call it is already in. Gives up on a join after `JOIN_TIMEOUT` and keeps
+  serving commands, because a thread waiting forever on a remote step is a
+  channel stuck on "Connecting" with no way back. Bounds the leave too, and
+  more tightly, because dropping the handle waits for the thread and a leave
+  with no bound on it is an application that will not close. Unwinds the
+  membership on shutdown, because a process that exits without that leaves a
+  ghost in the roster for hours.
+- `livekit.rs`, one `Call::join` and one `Call::leave`, excluded from coverage
+  for the reason `cpal_host.rs` is, and kept thin enough that the exclusion
+  stays honest.
+
+The one phase 3 risk worth clearing early was cleared here rather than left to
+be discovered: `consort-call` was linked into `consort-app` temporarily and the
+Tauri binary built. libwebrtc and webkit2gtk do not collide, nothing needed a
+`recursion_limit` bump the way the phase 0 spike did, and the debug binary grew
+by 19 MB. The dependency was then removed again, because the wiring that would
+use it is phase 3 and an unused one would put libwebrtc in the way of every
+`cargo build` of the app for no benefit yet.
+
+**Two things this phase corrected.**
+
+The pin went to upstream `BillCarsonFr/matrix-rust-rtc`, not to a fork. The
+plan said a fork, reasoning that upstream can move underneath us. It can, and
+during this phase it did, but matrix-sdk is already pinned to upstream directly
+and shares exactly that risk. Taking it once for the larger dependency and not
+for the smaller one buys nothing. The fork is where this goes the moment
+matrix-rust-rtc needs a patch we carry ourselves, and that is a one-line
+change.
+
+The eight lock pins are worse than a comment can fully fix. `livekit`,
+`livekit-api`, `livekit-datatrack`, `livekit-protocol`, `livekit-runtime`,
+`libwebrtc`, `webrtc-sys` and `webrtc-sys-build` publish semver-compatible
+releases that do not compile with each other, and cargo cannot pin a transitive
+dependency from a manifest that does not name it. So they live in `Cargo.lock`
+with the explanation in the workspace manifest, and a bare `cargo update`
+breaks the build with a type error inside a dependency rather than anything
+naming a version.
 
 ### Phase 2: the audio goes somewhere
 

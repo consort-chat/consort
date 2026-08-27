@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/consort-audio", "crates/consort-matrix", "app/src-tauri"]
+members = [
+    "crates/consort-audio",
+    "crates/consort-call",
+    "crates/consort-matrix",
+    "app/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -36,6 +41,55 @@ matrix-sdk = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "3
 matrix-sdk-base = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", default-features = false, features = [
     "e2e-encryption",
 ] }
+
+# The MatrixRTC pin, and the reason the one above cannot move on its own.
+#
+# `Call::join` takes a `&matrix_sdk::Room`, so this rev's matrix-sdk pin and
+# ours have to be the same string. It is, and that was checked rather than
+# assumed: a spike compiled a function that only type-checks when the `Client`
+# this workspace builds and the one `matrix-rtc-livekit` expects are one type.
+#
+# Upstream rather than a fork, matching how matrix-sdk is pinned directly above.
+# The risk both share is a force-push making the rev unreachable, and taking
+# that risk once for the larger dependency and not for the smaller one would
+# buy nothing. If matrix-rust-rtc ever needs a patch we carry ourselves, that
+# is when this moves to a fork, and it is a one-line change when it does.
+#
+# `matrix-sdk` feature: the SDK-backed command sender, the sticky bridge, and
+# the pre-2026 Element Call compatibility modes. Without it `call` is not
+# compiled at all and there is no `Call::join`.
+matrix-rtc-livekit = { git = "https://github.com/BillCarsonFr/matrix-rust-rtc", rev = "7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8", features = [
+    "matrix-sdk",
+] }
+
+# The transport-agnostic media model, named directly because the types
+# `Call::publish` takes and returns live here rather than being re-exported:
+# `PublishOptions`, `LocalTrackHandle`, `AudioFrame`, `CallEvent`,
+# `Participant`. Same git source and rev, so it is the crate matrix-rtc-livekit
+# already links rather than a second copy. If the rev above moves, this moves
+# with it.
+matrix-rtc-media = { git = "https://github.com/BillCarsonFr/matrix-rust-rtc", rev = "7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8" }
+
+# Eight crates in Cargo.lock are pinned by hand and are load-bearing.
+#
+# `livekit`, `livekit-api`, `livekit-datatrack`, `livekit-protocol`,
+# `livekit-runtime`, `libwebrtc`, `webrtc-sys` and `webrtc-sys-build` publish
+# semver-compatible releases that do not compile with each other. A fresh
+# resolve of the ranges matrix-rtc-livekit asks for failed three times in a
+# row before they were pinned to the versions that crate's own lock carries:
+# a missing field in `ConnectWhatsAppCallRequest`, then the same error one
+# version down, then a non-exhaustive `RtcConfiguration` built with a struct
+# expression.
+#
+# The consequence: a bare `cargo update` breaks the build, and the error is a
+# type error inside a dependency rather than anything naming a version. If it
+# happens, compare against matrix-rust-rtc's Cargo.lock at the rev above and
+# pin back to what it holds, parents before children (`livekit` before
+# `livekit-api`, `livekit-datatrack` before `livekit-protocol`).
+#
+# Not expressible here. Cargo has no way to pin a transitive dependency from a
+# manifest that does not name it, and naming all eight as direct dependencies
+# to get `=` requirements would be a worse lie than the lock is.
 
 # Only for `StreamExt::next` on the `impl Stream` that matrix-sdk hands back
 # from `changes()`. Already in the graph by way of matrix-sdk, and no features

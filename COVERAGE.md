@@ -12,7 +12,7 @@ Run them:
 ```sh
 # Rust, with the same exclusions CI uses
 cargo llvm-cov --workspace \
-  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|src-tauri/src/(main|lib)\.rs)' \
+  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
   --summary-only
 
 # Frontend, thresholds enforced from vitest.config.ts
@@ -29,7 +29,7 @@ LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata cargo llvm-cov .
 
 ## What is excluded, and why
 
-Four files are outside the measurement. Each is excluded because a test could
+Five files are outside the measurement. Each is excluded because a test could
 only reach it by pretending, not because the code is uninteresting.
 
 **`crates/consort-audio/src/cpal_host.rs`.** Every line talks to a sound card,
@@ -60,6 +60,18 @@ against an actual keyring on a developer machine:
 ```sh
 cargo test -p consort-matrix -- --ignored keyring
 ```
+
+**`crates/consort-call/src/livekit.rs`.** The same shape as `cpal_host.rs`, one
+layer out: every line talks to a LiveKit SFU, and a CI runner has none. There is
+no useful fake either, because what would be faked is `Call::join`, which is the
+entire dependency.
+
+It is thin on purpose and has to stay that way. Which MatrixRTC generation to
+speak (`dialect.rs`), what a failure means (`failure.rs`) and everything the call
+thread does with either (`thread.rs`) are decisions, they are all measured, and
+the thread is driven through a fake `CallTransport` so none of it needs an SFU.
+What is left in `livekit.rs` is one `Call::join` and one `Call::leave`. Anything
+in it that starts deciding something belongs to move.
 
 **`app/src-tauri/src/main.rs`.** Three lines calling `run()`.
 

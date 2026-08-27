@@ -131,7 +131,7 @@ jobs:
         run: |
           cargo install cargo-llvm-cov --locked
           cargo llvm-cov --workspace \
-            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|src-tauri/src/(main|lib)\.rs)' \
+            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
             --fail-under-lines 90 \
             --lcov --output-path lcov.info
 

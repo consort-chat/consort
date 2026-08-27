@@ -2661,3 +2661,133 @@ mod room_list {
         }
     }
 }
+
+/// Whether this session could be heard if it joined a call.
+///
+/// A mock reaches further here than it looks like it should. Login runs the
+/// SDK's cross-signing bootstrap as a background task, so whether the account
+/// ends up with an identity is decided by whether the upload endpoint answers,
+/// which is a thing a mock controls exactly. That makes both ends of the
+/// question reachable without a real homeserver: mount the endpoint and this
+/// session has an identity it trusts, leave it unmounted and it has none, and
+/// those are the two states a real account is in before and after somebody
+/// sets up recovery.
+mod call_readiness {
+    use super::*;
+    use consort_matrix::calls::{self, CallReadiness};
+
+    /// Answer the keys query this account's own identity is looked up with.
+    ///
+    /// `mount_login` already mounts one, and it wants the mock crate's own
+    /// default access token while this harness signs in with its own, so that
+    /// one never matches. This is the one that does.
+    async fn answering_key_queries(server: &MatrixMockServer) {
+        server
+            .mock_query_keys()
+            .expect_any_access_token()
+            .ok()
+            .mount()
+            .await;
+    }
+
+    /// A signed-in client that has not bootstrapped cross-signing.
+    ///
+    /// Built by hand rather than through [`auth::login`] or [`auth::restore`],
+    /// because neither of those can end up here: `base_builder` sets
+    /// `auto_enable_cross_signing`, so both create an identity when the
+    /// account has none. What this stands in for is a bootstrap that has not
+    /// finished, or one the homeserver refused, which is what real Synapse
+    /// does to `/keys/device_signing/upload` on an account that already has
+    /// keys and wants interactive auth for replacing them.
+    async fn without_cross_signing(server: &MatrixMockServer) -> matrix_sdk::Client {
+        answering_key_queries(server).await;
+        server
+            .client_builder()
+            .logged_in_with_token(
+                "syt_no_identity".to_owned(),
+                ruma::user_id!("@bob:example.org").to_owned(),
+                DEVICE.into(),
+            )
+            .build()
+            .await
+    }
+
+    #[tokio::test]
+    async fn an_account_with_no_cross_signing_identity_is_not_ready() {
+        // The failure the spike measured, at the moment it can still be said
+        // out loud. Joining from here connects, publishes membership and
+        // fills in a roster, and hands a media key to nobody.
+        let server = MatrixMockServer::new().await;
+        let client = without_cross_signing(&server).await;
+
+        let readiness = calls::readiness(&client).await.unwrap();
+
+        assert_eq!(readiness, CallReadiness::NoIdentity);
+        assert!(!readiness.is_ready());
+    }
+
+    #[tokio::test]
+    async fn an_identity_missing_only_from_the_store_is_asked_about_before_being_ruled_out() {
+        // The reason for the second lookup. Nothing has run a keys query on
+        // this client, so the local store is empty whichever is true of the
+        // account, and an answer taken from it alone would tell somebody who
+        // has cross-signing to go and set it up.
+        let server = MatrixMockServer::new().await;
+        let client = without_cross_signing(&server).await;
+        let user_id = client.user_id().unwrap().to_owned();
+        assert!(
+            client
+                .encryption()
+                .get_user_identity(&user_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the local store was expected to be cold"
+        );
+
+        // Reaching a verdict at all means the homeserver was asked: there was
+        // nothing local to answer from, and the mock 404s anything it was not
+        // set up for, which would have surfaced as an error instead.
+        assert_eq!(
+            calls::readiness(&client).await.unwrap(),
+            CallReadiness::NoIdentity
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_holding_its_own_cross_signing_keys_is_ready() {
+        // The other end, reached the way the app reaches it. `auth::login`
+        // bootstraps, so a first sign-in onto an account with no
+        // cross-signing can be heard without anybody verifying anything.
+        let server = MatrixMockServer::new().await;
+        server
+            .mock_upload_cross_signing_keys()
+            .expect_any_access_token()
+            .ok()
+            .mount()
+            .await;
+        answering_key_queries(&server).await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let readiness = calls::readiness(&client).await.unwrap();
+
+        assert_eq!(readiness, CallReadiness::Ready);
+        assert!(readiness.is_ready());
+    }
+
+    #[tokio::test]
+    async fn asking_before_anybody_is_signed_in_is_not_a_verdict() {
+        // Reaching this is a bug in our own state handling, and the one thing
+        // it must not do is answer. Both `NoIdentity` and `Ready` would be
+        // inventions, and one of the two is the call nobody can hear.
+        let server = MatrixMockServer::new().await;
+        let client = server.client_builder().unlogged().build().await;
+
+        let error = calls::readiness(&client).await.unwrap_err();
+
+        assert!(
+            matches!(error, consort_matrix::Error::NotLoggedIn),
+            "{error}"
+        );
+    }
+}

@@ -6,15 +6,15 @@
 use std::sync::Arc;
 
 use consort_matrix::{
-    Client, Connection, Rooms, SessionStore, StopReason, backup, rooms, sync, verification,
+    Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync, verification,
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
 use consort_audio::GateConfig;
 
-use crate::events::{AppEvent, EventSink, LatestSink};
 use crate::audio::{AudioBridge, Backends};
+use crate::events::{AppEvent, EventSink, LatestSink};
 use crate::settings::SettingsStore;
 
 /// One background task's handle.
@@ -192,7 +192,8 @@ impl AppState {
             .audio
             .lock()
             .expect("the audio mutex is never poisoned");
-        let bridge = slot.get_or_insert_with(|| AudioBridge::spawn(backends(), self.events.clone()));
+        let bridge =
+            slot.get_or_insert_with(|| AudioBridge::spawn(backends(), self.events.clone()));
         act(bridge);
     }
 
@@ -349,6 +350,26 @@ impl AppState {
             }),
         )
         .await;
+
+        // Say once, out loud, whether this session could be heard in a call.
+        //
+        // Not tracked with the rest. It answers a question and ends, within a
+        // request at the very worst, so there is nothing later to abort and a
+        // slot to hold it in would only ever hold a finished task.
+        //
+        // Worth having in the log permanently rather than only while the call
+        // layer is being built: an unverified session is the one fault that
+        // looks exactly like a working call until somebody says something and
+        // nobody hears it.
+        let readiness_client = client.clone();
+        tokio::spawn(async move {
+            match calls::readiness(&readiness_client).await {
+                Ok(readiness) => {
+                    tracing::info!(?readiness, "whether this session can be heard in a call")
+                }
+                Err(error) => tracing::warn!(%error, "could not work out call readiness"),
+            }
+        });
 
         let events = self.events.clone();
         let (flow_task, initiator) = verification::supervise(client, move |flow| {

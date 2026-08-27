@@ -234,6 +234,12 @@ Consort one, and there is nothing to fix on this side.
 crates/consort-matrix/    Matrix authentication, session persistence, sync,
                           verification state. No Tauri, no UI. This is the
                           testable half.
+crates/consort-audio/     Devices, capture, playback, the voice gate and the
+                          level meter. Knows nothing about Matrix.
+crates/consort-call/      Being in a MatrixRTC call. Separate from
+                          consort-matrix because it brings libwebrtc, and that
+                          should not be in the way of every `cargo test -p
+                          consort-matrix`.
 app/src-tauri/            The Tauri shell. Commands, state, events, wiring.
 app/src/                  React + TypeScript frontend.
 testing/synapse/          A homeserver to throw away, for the tests that

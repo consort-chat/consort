@@ -1,0 +1,42 @@
+[package]
+name = "consort-call"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The MatrixRTC facade. `Call::join` publishes membership, runs the dead man's
+# switch and the heartbeat, distributes media keys over Olm to-device,
+# discovers the LiveKit transport and connects to the SFU with E2EE on. All of
+# it, behind one call.
+#
+# Confined to `livekit.rs`, which is excluded from coverage for the same reason
+# `cpal_host.rs` is: CI has no SFU, so every line that talks to one is a line
+# no test can reach. Everything that decides anything sits behind
+# `CallTransport` and is tested against a fake.
+matrix-rtc-livekit = { workspace = true }
+
+# The types `Call::publish` takes and returns, which live here rather than
+# being re-exported.
+matrix-rtc-media = { workspace = true }
+
+# The `Client` and `Room` a join needs. Named directly rather than reached
+# through consort-matrix, because this crate wants the SDK types themselves
+# and the workspace pin already guarantees there is only one copy of them.
+matrix-sdk = { workspace = true }
+
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Only the tests need to see the wire format. The crate hands events to its
+# caller as a type and never chooses a serialisation.
+serde_json = { workspace = true }
+
+# `start_paused` runtimes, so the join timeout can be proven without a test
+# that takes thirty seconds to run.
+tokio = { workspace = true, features = ["test-util"] }
