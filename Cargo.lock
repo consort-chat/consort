@@ -924,7 +924,6 @@ name = "consort-app"
 version = "0.1.0"
 dependencies = [
  "consort-audio",
- "consort-call",
  "consort-matrix",
  "matrix-sdk",
  "serde",
@@ -954,6 +953,7 @@ dependencies = [
 name = "consort-call"
 version = "0.1.0"
 dependencies = [
+ "consort-audio",
  "matrix-rtc-livekit",
  "matrix-rtc-media",
  "matrix-sdk",

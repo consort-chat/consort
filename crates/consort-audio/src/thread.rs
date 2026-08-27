@@ -59,6 +59,23 @@ pub enum AudioEvent {
     ToneFailed { error: String },
 }
 
+/// Where gated audio goes while a call is running.
+///
+/// A closure rather than a trait, matching [`crate::FrameSink`] on the way in,
+/// and for the same reason: the one thing on the other side of it is a queue,
+/// and a trait would put a name for that queue in this crate. Nothing here
+/// should know that calls exist.
+///
+/// `open` is the gate's verdict for this frame. `false` means the samples are
+/// the silence the gate substituted rather than anything anybody said, which
+/// is what lets the reader mute a publication instead of guessing from the
+/// amplitude.
+///
+/// Called on the audio thread, once per frame, so once per 10 ms. Not on the
+/// realtime callback, so it may allocate, but it must not block: everything
+/// else this thread does is behind it, including the meter.
+pub type GatedSink = Box<dyn FnMut(&[i16], bool) + Send>;
+
 /// What the thread accepts.
 enum Message {
     Start {
@@ -72,9 +89,18 @@ enum Message {
     /// threshold or turning voice activity off is watching the meter while
     /// they do it, and reopening the sound card under them drops the bar to
     /// zero for a moment and re-announces the device.
-    Retune { gate: GateConfig },
+    Retune {
+        gate: GateConfig,
+    },
     /// One captured frame, posted by the backend's realtime callback.
     Frame(Vec<i16>),
+    /// Install a reader for the gate's output, or `None` to remove the one
+    /// installed.
+    ///
+    /// Carried on the same channel as everything else, so a sink installed
+    /// before `Start` sees the first frame and one removed after `Stop` cannot
+    /// see a frame that arrived in between.
+    Publish(Option<GatedSink>),
     PlayTone {
         device: Option<String>,
     },
@@ -138,6 +164,26 @@ impl AudioThread {
         self.send(Message::Retune { gate });
     }
 
+    /// Send every gated frame to `sink` from now on, replacing any current
+    /// one.
+    ///
+    /// Answered with nothing. Whether audio is reaching anybody is a question
+    /// about the call, not about this thread, and the call is what can answer
+    /// it.
+    pub fn publish_to(&self, sink: GatedSink) {
+        self.send(Message::Publish(Some(sink)));
+    }
+
+    /// Stop sending gated frames anywhere.
+    ///
+    /// Called when the call ends. Leaving a sink installed past the end of a
+    /// call is not harmful, but it is work done for nobody, and on a queue
+    /// nothing is draining it is work that shows up in the log as dropped
+    /// frames.
+    pub fn stop_publishing(&self) {
+        self.send(Message::Publish(None));
+    }
+
     /// Play the test chime through `device`, or through the host's default.
     ///
     /// Replaces whatever was playing. Answered with `ToneStarted` or
@@ -189,6 +235,10 @@ fn run(
     events: Sender<AudioEvent>,
 ) {
     let mut running: Option<Running> = None;
+    // Where the gate's output goes, when anybody wants it. Outside `Running`
+    // on purpose: a call outlives a device change, and reopening the
+    // microphone must not silently stop feeding it.
+    let mut publishing: Option<GatedSink> = None;
     // Held only to keep the output open; dropping it silences the chime.
     let mut tone: Option<Box<dyn PlaybackStream>> = None;
     // Which chime is playing. Bumped on every start and every stop, so an
@@ -248,6 +298,10 @@ fn run(
                 if events.send(AudioEvent::Stopped).is_err() {
                     break;
                 }
+            }
+
+            Message::Publish(sink) => {
+                publishing = sink;
             }
 
             Message::Retune { gate } => {
@@ -336,6 +390,15 @@ fn run(
                 }
 
                 let decision = state.gate.process(&frame, &mut state.gated);
+
+                // Before the meter, because this is the frame's reason for
+                // existing and the meter is a picture of it. A send failure on
+                // the event channel below ends the loop, and ending it after
+                // the audio has gone out costs a caller nothing.
+                if let Some(sink) = publishing.as_mut() {
+                    sink(&state.gated, decision.open);
+                }
+
                 // Metered on the captured frame, not on the gate's output. A
                 // bar that reads zero whenever the gate is shut cannot tell
                 // "the microphone is dead" from "the microphone is fine and the
@@ -356,4 +419,5 @@ fn run(
     // caller watching for the channel to close then knows they are free.
     drop(running);
     drop(tone);
+    drop(publishing);
 }

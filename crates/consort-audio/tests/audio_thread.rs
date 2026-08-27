@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use consort_audio::capture::{AudioCapture, CaptureError, CaptureStream};
 use consort_audio::playback::{AudioPlayback, PlaybackError, PlaybackStream, ToneEnded};
-use consort_audio::{AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig, Tone};
+use consort_audio::{AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig, GatedSink, Tone};
 
 /// Long enough that a loaded machine is not the reason a test fails, short
 /// enough that a genuinely stuck thread does not hold the suite up.
@@ -603,11 +603,7 @@ fn the_chime_and_the_microphone_do_not_disturb_each_other() {
 
     assert_eq!(
         log_of(&log),
-        vec![
-            "open Yeti",
-            "play Headphones",
-            "silence Headphones"
-        ],
+        vec!["open Yeti", "play Headphones", "silence Headphones"],
         "the microphone was disturbed by the test tone"
     );
     drop(audio);
@@ -623,4 +619,146 @@ fn dropping_the_handle_silences_a_chime_that_is_still_playing() {
     drop(audio);
 
     assert_eq!(log_of(&log), vec!["play Headphones", "silence Headphones"]);
+}
+
+// Where the gate's output goes. Until a call is up it goes nowhere, which is
+// what it did for the whole of the settings work; these are about the reader
+// that arrives with one.
+
+/// Every frame handed to an installed sink, with the gate's verdict.
+type Published = Arc<Mutex<Vec<(Vec<i16>, bool)>>>;
+
+fn recording() -> (Published, GatedSink) {
+    let published: Published = Published::default();
+    let recorded = Arc::clone(&published);
+    (
+        published,
+        Box::new(move |samples: &[i16], open: bool| {
+            recorded.lock().unwrap().push((samples.to_vec(), open));
+        }),
+    )
+}
+
+/// Wait for the capture to open, then close it, and answer when it has.
+///
+/// Deterministic without a sleep, and the order matters. The fake backend
+/// posts its frames onto the same channel the commands arrive on, from inside
+/// `open`, so they are only queued behind a `Stop` if the `Stop` is sent after
+/// `Started` has been seen. Sending both at once discards every frame instead.
+fn capture_a_device(audio: &AudioThread, events: &Receiver<AudioEvent>, device: &str) {
+    audio.start(Some(device.to_owned()), GateConfig::default());
+    assert!(matches!(
+        next_state_change(events),
+        AudioEvent::Started { .. }
+    ));
+}
+
+fn stop_capturing(audio: &AudioThread, events: &Receiver<AudioEvent>) {
+    audio.stop();
+    assert_eq!(next_state_change(events), AudioEvent::Stopped);
+}
+
+/// Run one device's worth of frames through a thread and collect what a sink
+/// installed on it saw.
+fn published(capture: FakeCapture, install: bool) -> Vec<(Vec<i16>, bool)> {
+    let (published, sink) = recording();
+    let (audio, events) = thread(capture);
+
+    if install {
+        audio.publish_to(sink);
+    }
+    capture_a_device(&audio, &events, "Yeti");
+    stop_capturing(&audio, &events);
+    drop(audio);
+
+    published.lock().unwrap().clone()
+}
+
+#[test]
+fn every_gated_frame_reaches_the_installed_sink() {
+    let mut capture = FakeCapture::new(&Log::default());
+    capture.frames = 40;
+
+    let frames = published(capture, true);
+
+    assert_eq!(frames.len(), 40);
+    assert!(
+        frames
+            .iter()
+            .all(|(samples, _)| samples.len() == FRAME_SAMPLES),
+        "a publication only accepts whole frames"
+    );
+}
+
+#[test]
+fn nothing_is_published_until_a_sink_is_installed() {
+    // The state before a call, and the state this spent the whole of the
+    // settings work in. An idle Consort must do no more work than it did then.
+    let mut capture = FakeCapture::new(&Log::default());
+    capture.frames = 40;
+
+    assert!(published(capture, false).is_empty());
+}
+
+#[test]
+fn what_goes_out_is_the_gate_s_output_and_not_the_raw_capture() {
+    // The difference is the whole point of the gate. A shut gate substitutes
+    // silence, and the very first frame is always shut: RNNoise has a fade-in
+    // artifact on its first output and no useful probability for it.
+    let mut capture = FakeCapture::new(&Log::default());
+    capture.frames = 40;
+
+    let frames = published(capture, true);
+
+    let shut: Vec<_> = frames.iter().filter(|(_, open)| !open).collect();
+    assert!(!shut.is_empty(), "the warm-up frame is always shut");
+    assert!(
+        shut.iter()
+            .all(|(samples, _)| samples.iter().all(|sample| *sample == 0)),
+        "a shut gate published the microphone instead of silence"
+    );
+}
+
+#[test]
+fn removing_the_sink_stops_the_frames() {
+    let log = Log::default();
+    let mut capture = FakeCapture::new(&log);
+    capture.frames = 40;
+    let (published, sink) = recording();
+    let (audio, events) = thread(capture);
+
+    audio.publish_to(sink);
+    capture_a_device(&audio, &events, "Yeti");
+    stop_capturing(&audio, &events);
+    let during = published.lock().unwrap().len();
+    assert_eq!(during, 40, "nothing was published while the call was up");
+
+    audio.stop_publishing();
+    capture_a_device(&audio, &events, "Yeti");
+    stop_capturing(&audio, &events);
+
+    assert_eq!(
+        published.lock().unwrap().len(),
+        during,
+        "frames kept going out after the call ended"
+    );
+}
+
+#[test]
+fn changing_microphone_mid_call_keeps_publishing() {
+    // The sink outlives the device, which is why it is not held inside
+    // whatever is currently capturing. Somebody unplugging a headset during a
+    // call must not go silent for the rest of it.
+    let log = Log::default();
+    let mut capture = FakeCapture::new(&log);
+    capture.frames = 40;
+    let (published, sink) = recording();
+    let (audio, events) = thread(capture);
+
+    audio.publish_to(sink);
+    capture_a_device(&audio, &events, "Yeti");
+    capture_a_device(&audio, &events, "Webcam");
+    stop_capturing(&audio, &events);
+
+    assert_eq!(published.lock().unwrap().len(), 80);
 }

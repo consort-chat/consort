@@ -27,6 +27,11 @@
 //! [`CallTransport`] is the seam that lets everything above the SFU be tested
 //! without one.
 //!
+//! Audio arrives through [`Microphone`], a bounded queue the audio thread
+//! fills and the call thread drains. It is bounded because the two ends are
+//! paced by different clocks and the producer must never be the one that
+//! waits: a capture loop stalled on an SFU is a glitching microphone.
+//!
 //! ## The rustls provider, again
 //!
 //! Nothing here installs one, for the same reason `consort_matrix` does not.
@@ -39,11 +44,15 @@ pub mod dialect;
 pub mod event;
 pub mod failure;
 pub mod livekit;
+pub mod microphone;
+pub mod publish;
 pub mod thread;
 pub mod transport;
 
 pub use dialect::Dialect;
 pub use event::CallEvent;
 pub use failure::CallFailure;
-pub use thread::{CallThread, JOIN_TIMEOUT};
+pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
+pub use publish::PublishedAudio;
+pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT};
 pub use transport::{CallSession, CallTransport};

@@ -22,6 +22,7 @@
 //! once at the call site.
 
 use crate::failure::CallFailure;
+use crate::publish::PublishedAudio;
 
 /// Something that can put this session into a call.
 ///
@@ -54,6 +55,21 @@ pub trait CallTransport: Send + 'static {
               thread, so a Send bound is one no implementation can keep"
 )]
 pub trait CallSession {
+    /// The microphone publication this call hands back.
+    ///
+    /// `'static` follows from [`PublishedAudio`], and it is load bearing: the
+    /// call thread moves one into a task of its own so the command loop stays
+    /// answerable while a frame is in flight. That is also why this is not
+    /// tied to the session's lifetime the way a borrow would be.
+    type Track: PublishedAudio;
+
+    /// Publish this session's microphone and hand back somewhere to push PCM.
+    ///
+    /// Separate from joining because they fail differently and because the
+    /// call thread does something different with each: the session it holds,
+    /// the publication it hands to a task.
+    async fn publish_microphone(&self) -> Result<Self::Track, CallFailure>;
+
     /// Leave the call, unwinding membership and the media session.
     ///
     /// By value, because leaving is the end of the session and anything that

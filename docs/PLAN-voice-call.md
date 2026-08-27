@@ -1,6 +1,6 @@
 # Plan: joining the voice channel
 
-Status: **phases 0, 0.5 and 1 done**, phase 2 next. This is the second half of issue #6. The first half,
+Status: **phases 0, 0.5, 1 and 2 done**, phase 3 next. This is the second half of issue #6. The first half,
 drawing who is already in a channel, is done and described in
 [PLAN-voice-presence.md](PLAN-voice-presence.md). This half is the one that
 carries audio.
@@ -250,32 +250,73 @@ with the explanation in the workspace manifest, and a bare `cargo update`
 breaks the build with a type error inside a dependency rather than anything
 naming a version.
 
-### Phase 2: the audio goes somewhere
+### Phase 2: the audio goes somewhere (done)
 
-`state.gated` gains its first reader.
+`state.gated` has its first reader.
 
-One real design decision, and it is a decision rather than a wiring job.
-`capture_audio` is `async` and applies backpressure: it "resolves when the frame
-has been accepted". The audio thread must never await it, because the audio
-thread is also servicing a cpal callback and a stalled capture loop is a
-glitching microphone. So the two threads meet at a bounded queue that drops the
-oldest frame when full, and the drop is counted and logged rather than silent.
+The seam is a closure, `consort_audio::GatedSink`, matching the one on the way
+in. `AudioThread::publish_to` installs one and `stop_publishing` removes it, and
+it is held outside whatever is currently capturing so that changing microphone
+mid-call does not silently stop the audio. `consort-audio` gained no dependency
+and still knows nothing about calls.
 
-That queue is its own type with its own tests: a full queue drops the oldest,
-the level meter is unaffected by drops, and a call that goes away does not wedge
-the capture thread.
+The queue is `consort_call::Microphone`. Bounded at eight frames, and the bound
+is the interesting part. Both ends run at a hundred frames a second, so a
+backlog never drains on its own: whatever is sitting in the queue is permanent
+added latency until something drops. Eight frames caps that at 80 ms, which is
+enough to absorb the scheduling jitter of a desktop that is also drawing an
+interface. Full, it drops the **oldest**, because a frame that has been waiting
+is one the listener would hear late and late audio puts every frame behind it
+further behind. Drops are counted, and reported about once a second rather than
+a hundred times.
 
-The second decision is smaller and easier to get wrong. When the gate closes,
-Consort must **mute the publication**, not merely stop pushing frames.
-`LocalTrackHandle::set_muted` exists for this and its documentation says why:
-simply not calling `capture_audio` is what a wedged client looks like to a peer.
-Muting tells them it is deliberate so their interface can show it. Getting this
-wrong produces a call where everyone appears frozen whenever they stop talking.
+`consort_call::publish` is the other end: one task per call, spawned onto the
+same `LocalSet`, so a frame waiting on the SFU never sits in front of the click
+that disconnects. It is aborted when the call is left, by an `AbortOnDrop` tied
+to the call itself, because nothing else would ever end it: it waits on a queue,
+and a microphone that has been switched off stops filling that queue rather than
+closing it.
 
-This is also where the voice activity switch from
-[PLAN-voice-settings.md](PLAN-voice-settings.md) stops being a demonstration and
-starts being a policy: with it off, the publication is never muted and every
-frame goes out.
+Four things came out different from what is written above, and all four are
+worth stating.
+
+**Muting is not instead of publishing, it is as well as.** The plan said mute
+rather than merely stop pushing frames. `gate.rs` had already argued the other
+half, in a doc comment written during the settings work: a shut gate fills the
+frame with silence and the caller is expected to keep publishing it, because a
+sender that stops sending is what a wedged client looks like and Opus collapses
+silence for nothing. Both are right and they compose. What landed publishes
+every frame and mutes as well, with the mute set immediately before the first
+frame it applies to, so a peer never has voice under a mute it has been told
+about nor silence it reads as a stall.
+
+That leaves one thing to watch. Every mute is a signalling update to every peer,
+and at conversational cadence the gate closes on any pause longer than its
+300 ms hold. A peer running Element Call may see this session's mic-off icon
+flicker between sentences. Phase 5 is where that gets looked at against a real
+client rather than guessed at, and `Publication::send` is the one place it
+would be changed.
+
+**The voice activity switch needed no code.** With it off, `Hysteresis` already
+reports every frame open, so there is never a closing edge and nothing in the
+publication path has to know the setting exists.
+
+**A call that will not carry a microphone is a failed join.** Not a connected
+call with a caveat. `Connected` is what the panel draws, and drawing it for a
+call this session cannot be heard in is a lie the interface then has to be
+corrected out of. The membership is unwound on the way out rather than left
+published.
+
+**The two ends agreeing on the PCM format is asserted, not trusted.** The plan
+called it a good sign and a thing to verify. The verification is
+`matches_the_capture_format.rs`, in this crate's `tests/`: a mismatch there
+would neither fail to compile nor fail to run, it would produce a call where
+everybody sounds an octave out.
+
+One thing is deliberately not here. Nothing calls `publish_to` yet, because what
+knows a call has connected is the bridge in `AppState`, and that is phase 3.
+Until then the mechanism is complete and unattached, which is also why an idle
+Consort still does exactly what it did before.
 
 ### Phase 3: join and leave from the interface
 

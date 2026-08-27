@@ -33,6 +33,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Only so one test can assert that the PCM this crate hands to a publication is
+# the PCM the gate produces. Nothing in the type system connects the two: the
+# audio crate knows nothing about calls, and this crate takes its format from
+# `AudioSourceConfig::default()`. A dev-dependency is the cheapest place to put
+# a check that would otherwise be a comment.
+consort-audio = { path = "../consort-audio" }
+
 # Only the tests need to see the wire format. The crate hands events to its
 # caller as a type and never chooses a serialisation.
 serde_json = { workspace = true }

@@ -33,5 +33,5 @@ pub use gate::{
 pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
-pub use thread::{AudioEvent, AudioThread};
+pub use thread::{AudioEvent, AudioThread, GatedSink};
 pub use tone::Tone;

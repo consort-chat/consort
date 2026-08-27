@@ -40,6 +40,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::event::CallEvent;
 use crate::failure::CallFailure;
+use crate::microphone::Microphone;
+use crate::publish::pump;
 use crate::transport::{CallSession, CallTransport};
 
 /// How long a join may take before it is abandoned.
@@ -82,12 +84,21 @@ pub struct CallThread {
 
 impl CallThread {
     /// Start the thread. It idles until told to [`connect`](Self::connect).
-    pub fn spawn<T: CallTransport>(transport: T, events: UnboundedSender<CallEvent>) -> Self {
+    ///
+    /// `microphone` is where captured audio arrives from. It is taken here
+    /// rather than at each connect because the audio thread has to be able to
+    /// hold the other end of it whether or not a call is up: the two threads
+    /// are started once, and the queue between them outlives any one call.
+    pub fn spawn<T: CallTransport>(
+        transport: T,
+        events: UnboundedSender<CallEvent>,
+        microphone: Microphone,
+    ) -> Self {
         let (commands, inbox) = unbounded_channel::<Message>();
 
         let join = std::thread::Builder::new()
             .name("consort-call".to_owned())
-            .spawn(move || run(transport, inbox, events))
+            .spawn(move || run(transport, inbox, events, microphone))
             .expect("the operating system refused a thread");
 
         Self {
@@ -139,6 +150,7 @@ fn run<T: CallTransport>(
     transport: T,
     inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
+    microphone: Microphone,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -156,7 +168,28 @@ fn run<T: CallTransport>(
     };
 
     let local = tokio::task::LocalSet::new();
-    runtime.block_on(local.run_until(serve(transport, inbox, events)));
+    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone)));
+}
+
+/// A call this session is in, and the task carrying its microphone.
+struct Joined<S> {
+    room_id: String,
+    session: S,
+    /// Ends when this is dropped. See [`AbortOnDrop`].
+    publishing: AbortOnDrop,
+}
+
+/// A task that ends when this handle is dropped.
+///
+/// The task it holds waits on a queue, so nothing else would ever end it: a
+/// microphone that has been switched off stops filling the queue rather than
+/// closing it. Tying it to a handle means no path out of a call can forget.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// The loop. Returns when told to shut down, or when the handle is dropped.
@@ -164,13 +197,14 @@ async fn serve<T: CallTransport>(
     transport: T,
     mut inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
+    microphone: Microphone,
 ) {
-    let mut current: Option<(String, T::Session)> = None;
+    let mut current: Option<Joined<T::Session>> = None;
 
     while let Some(message) = inbox.recv().await {
         match message {
             Message::Connect { room_id } => {
-                current = connect(&transport, current, room_id, &events).await;
+                current = connect(&transport, current, room_id, &events, &microphone).await;
             }
             Message::Disconnect => {
                 if leave(current.take()).await {
@@ -198,16 +232,17 @@ async fn serve<T: CallTransport>(
 /// that failed and one that was asked for while already in that same call.
 async fn connect<T: CallTransport>(
     transport: &T,
-    current: Option<(String, T::Session)>,
+    current: Option<Joined<T::Session>>,
     room_id: String,
     events: &UnboundedSender<CallEvent>,
-) -> Option<(String, T::Session)> {
+    microphone: &Microphone,
+) -> Option<Joined<T::Session>> {
     // Already there. Re-announced rather than ignored, because the interface
     // may be asking precisely because it has lost track of where it is, and a
     // second `Connected` costs nothing.
     if current
         .as_ref()
-        .is_some_and(|(current, _)| *current == room_id)
+        .is_some_and(|joined| joined.room_id == room_id)
     {
         emit(events, CallEvent::Connected { room_id });
         return current;
@@ -227,25 +262,51 @@ async fn connect<T: CallTransport>(
         },
     );
 
-    match tokio::time::timeout(JOIN_TIMEOUT, transport.join(&room_id)).await {
-        Ok(Ok(session)) => {
-            emit(
-                events,
-                CallEvent::Connected {
-                    room_id: room_id.clone(),
-                },
-            );
-            Some((room_id, session))
-        }
+    let session = match tokio::time::timeout(JOIN_TIMEOUT, transport.join(&room_id)).await {
+        Ok(Ok(session)) => session,
         Ok(Err(failure)) => {
             fail(events, room_id, failure);
-            None
+            return None;
         }
         Err(_) => {
             fail(events, room_id, CallFailure::TimedOut(JOIN_TIMEOUT));
-            None
+            return None;
         }
-    }
+    };
+
+    // Publishing is part of joining, not something that happens afterwards. A
+    // call this session cannot be heard in is not a call somebody wanted, and
+    // saying `Connected` for one would be a lie the interface then has to be
+    // corrected out of.
+    let track = match session.publish_microphone().await {
+        Ok(track) => track,
+        Err(failure) => {
+            // Unwound rather than kept. A membership left published for a call
+            // this session cannot speak in is a name sitting in the channel
+            // that nobody can reach.
+            leave_session(&room_id, session).await;
+            fail(events, room_id, failure);
+            return None;
+        }
+    };
+
+    // Its own task, so a frame waiting on the SFU does not sit in front of the
+    // click that disconnects. `spawn_local` rather than `spawn` because this
+    // whole thread is one `LocalSet` and the publication came out of a session
+    // that cannot leave it.
+    let publishing = AbortOnDrop(tokio::task::spawn_local(pump(track, microphone.clone())));
+
+    emit(
+        events,
+        CallEvent::Connected {
+            room_id: room_id.clone(),
+        },
+    );
+    Some(Joined {
+        room_id,
+        session,
+        publishing,
+    })
 }
 
 /// Leave `current`, if there is one. Says whether there was.
@@ -254,11 +315,27 @@ async fn connect<T: CallTransport>(
 /// nothing a person can do about it and nothing useful to retry: the
 /// membership carries a dead man's switch, so the worst case is a ghost that
 /// clears itself.
-async fn leave<S: CallSession>(current: Option<(String, S)>) -> bool {
-    let Some((room_id, session)) = current else {
+async fn leave<S: CallSession>(current: Option<Joined<S>>) -> bool {
+    let Some(Joined {
+        room_id,
+        session,
+        publishing,
+    }) = current
+    else {
         return false;
     };
 
+    // Stopped before the leave rather than after it, so no frame is still
+    // being pushed into a publication that is being torn down underneath it.
+    drop(publishing);
+
+    leave_session(&room_id, session).await;
+    true
+}
+
+/// Leave one call. Separate from [`leave`] because a join that got as far as
+/// the membership and no further has a session to unwind and no task to stop.
+async fn leave_session<S: CallSession>(room_id: &str, session: S) {
     match tokio::time::timeout(LEAVE_TIMEOUT, session.leave()).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
@@ -268,7 +345,6 @@ async fn leave<S: CallSession>(current: Option<(String, S)>) -> bool {
             tracing::warn!(%room_id, "leaving the call did not finish in time; giving up on it")
         }
     }
-    true
 }
 
 /// Report a failure on the event channel and in the log.
@@ -294,7 +370,10 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    use crate::publish::PublishedAudio;
 
     /// What the fake transport was asked to do, in order.
     ///
@@ -304,6 +383,10 @@ mod tests {
     struct Log {
         joined: Arc<Mutex<Vec<String>>>,
         left: Arc<Mutex<Vec<String>>>,
+        published: Arc<Mutex<Vec<String>>>,
+        /// Publications not yet dropped. The task carrying the microphone owns
+        /// one, so this falling back to zero is how a test sees that task end.
+        live: Arc<AtomicUsize>,
     }
 
     impl Log {
@@ -314,6 +397,47 @@ mod tests {
         fn left(&self) -> Vec<String> {
             self.left.lock().unwrap().clone()
         }
+
+        fn published(&self) -> Vec<String> {
+            self.published.lock().unwrap().clone()
+        }
+
+        fn live(&self) -> usize {
+            self.live.load(Ordering::Relaxed)
+        }
+    }
+
+    /// A publication that does nothing but count itself alive.
+    ///
+    /// What is being checked here is the call thread's bookkeeping. What the
+    /// frames themselves do is `publish.rs`.
+    struct FakeTrack {
+        log: Log,
+    }
+
+    impl Drop for FakeTrack {
+        fn drop(&mut self) {
+            self.log.live.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    impl PublishedAudio for FakeTrack {
+        fn set_muted(&self, _muted: bool) -> Result<(), CallFailure> {
+            Ok(())
+        }
+
+        async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
+            Ok(())
+        }
+    }
+
+    /// What publishing the microphone does.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Publishing {
+        Succeeds,
+        /// The call was joined and then would not carry a microphone. A
+        /// deployment whose SFU accepted the connection and refused the track.
+        Fails,
     }
 
     /// What a join does.
@@ -330,6 +454,7 @@ mod tests {
         log: Log,
         joining: Joining,
         leaving: Leaving,
+        publishing: Publishing,
     }
 
     /// What a leave does.
@@ -350,6 +475,7 @@ mod tests {
                     log: log.clone(),
                     joining,
                     leaving: Leaving::Succeeds,
+                    publishing: Publishing::Succeeds,
                 },
                 log,
             )
@@ -358,6 +484,12 @@ mod tests {
         fn whose_leaves(leaving: Leaving) -> (Self, Log) {
             let (mut transport, log) = Self::new(Joining::Succeeds);
             transport.leaving = leaving;
+            (transport, log)
+        }
+
+        fn whose_microphone_is_refused() -> (Self, Log) {
+            let (mut transport, log) = Self::new(Joining::Succeeds);
+            transport.publishing = Publishing::Fails;
             (transport, log)
         }
     }
@@ -373,6 +505,7 @@ mod tests {
                     room_id: room_id.to_owned(),
                     log: self.log.clone(),
                     leaving: self.leaving,
+                    publishing: self.publishing,
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
                 Joining::Hangs => std::future::pending().await,
@@ -384,9 +517,32 @@ mod tests {
         room_id: String,
         log: Log,
         leaving: Leaving,
+        publishing: Publishing,
     }
 
     impl CallSession for FakeSession {
+        type Track = FakeTrack;
+
+        async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
+            self.log
+                .published
+                .lock()
+                .unwrap()
+                .push(self.room_id.clone());
+
+            match self.publishing {
+                Publishing::Succeeds => {
+                    self.log.live.fetch_add(1, Ordering::Relaxed);
+                    Ok(FakeTrack {
+                        log: self.log.clone(),
+                    })
+                }
+                Publishing::Fails => Err(CallFailure::NoTransport(
+                    "the focus refused the microphone".to_owned(),
+                )),
+            }
+        }
+
         async fn leave(self) -> Result<(), CallFailure> {
             self.log.left.lock().unwrap().push(self.room_id);
 
@@ -429,7 +585,12 @@ mod tests {
         drop(to_loop);
 
         let (events, mut said) = unbounded_channel();
-        serve(transport, inbox, events).await;
+        // A `LocalSet`, because the loop spawns the task that carries the
+        // microphone into one. The real thread builds its own; here the test's
+        // runtime provides it.
+        tokio::task::LocalSet::new()
+            .run_until(serve(transport, inbox, events, Microphone::new()))
+            .await;
 
         let mut transcript = Vec::new();
         while let Some(event) = said.recv().await {
@@ -624,7 +785,9 @@ mod tests {
         drop(to_loop);
         let (events, _said) = unbounded_channel();
 
-        serve(transport, inbox, events).await;
+        tokio::task::LocalSet::new()
+            .run_until(serve(transport, inbox, events, Microphone::new()))
+            .await;
 
         assert_eq!(log.left(), vec![GENERAL]);
     }
@@ -664,7 +827,7 @@ mod tests {
         let (transport, log) = FakeTransport::new(Joining::Succeeds);
         let (events, mut said) = unbounded_channel();
 
-        let thread = CallThread::spawn(transport, events);
+        let thread = CallThread::spawn(transport, events, Microphone::new());
         thread.connect(GENERAL.to_owned());
         // Dropping is what ends the thread, and its `Drop` joins, so by the
         // time this returns the loop has finished and every event is queued.
@@ -685,7 +848,7 @@ mod tests {
         // click is still in flight through the command layer.
         let (transport, _log) = FakeTransport::new(Joining::Succeeds);
         let (events, _said) = unbounded_channel();
-        let mut thread = CallThread::spawn(transport, events);
+        let mut thread = CallThread::spawn(transport, events, Microphone::new());
 
         // Stand the handle down the way `Drop` does, then keep using it.
         let _ = thread.commands.send(Message::Shutdown);
@@ -695,5 +858,121 @@ mod tests {
 
         thread.connect(GENERAL.to_owned());
         thread.disconnect();
+    }
+
+    #[tokio::test]
+    async fn joining_publishes_the_microphone() {
+        // Being in a call nobody can hear you in is not what the click meant.
+        let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+        let said = transcript(transport, vec![connect_to(GENERAL)]).await;
+
+        assert_eq!(said, vec![connecting(GENERAL), connected(GENERAL)]);
+        assert_eq!(log.published(), vec![GENERAL]);
+    }
+
+    #[tokio::test]
+    async fn a_call_that_will_not_carry_a_microphone_is_a_failed_join() {
+        // Not a connected call with a caveat. `Connected` is what the panel
+        // draws, and drawing it for a call this session is inaudible in is a
+        // lie the interface then has to be corrected out of.
+        let (transport, log) = FakeTransport::whose_microphone_is_refused();
+
+        let said = transcript(transport, vec![connect_to(GENERAL)]).await;
+
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0], connecting(GENERAL));
+        assert!(
+            matches!(said[1], CallEvent::Failed { .. }),
+            "expected a failure, got {:?}",
+            said[1]
+        );
+        assert_eq!(
+            log.left(),
+            vec![GENERAL],
+            "the membership was left published for a call nobody could reach"
+        );
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_call_it_is_already_in_does_not_publish_a_second_time() {
+        // The re-announce path. It exists so an interface that has lost track
+        // of where it is can ask again, and asking again must not open a
+        // second microphone.
+        let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+        transcript(transport, vec![connect_to(GENERAL), connect_to(GENERAL)]).await;
+
+        assert_eq!(log.published(), vec![GENERAL]);
+    }
+
+    #[tokio::test]
+    async fn moving_to_another_call_publishes_into_the_new_one() {
+        let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+        transcript(transport, vec![connect_to(GENERAL), connect_to(MUSIC)]).await;
+
+        assert_eq!(log.published(), vec![GENERAL, MUSIC]);
+    }
+
+    /// Let the local task queue run, without ever hanging on it.
+    ///
+    /// Aborting a task marks it; the runtime is what drops it, and it only
+    /// gets the chance when whatever asked yields. A bounded number of yields
+    /// gives it that chance and fails the test rather than waiting forever.
+    async fn settle(log: &Log) {
+        for _ in 0..8 {
+            if log.live() == 0 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn leaving_stops_the_task_carrying_the_microphone() {
+        // Nothing else would. It waits on a queue, and a microphone that has
+        // been switched off stops filling that queue rather than closing it,
+        // so the task would sit there for the life of the application.
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                let (events, _said) = unbounded_channel();
+                let microphone = Microphone::new();
+
+                let joined =
+                    connect(&transport, None, GENERAL.to_owned(), &events, &microphone).await;
+                assert_eq!(log.live(), 1, "nothing was publishing");
+
+                leave(joined).await;
+                settle(&log).await;
+
+                assert_eq!(
+                    log.live(),
+                    0,
+                    "the microphone is still being pushed into a call that is over"
+                );
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_join_that_fails_leaves_nothing_publishing() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let (transport, log) = FakeTransport::whose_microphone_is_refused();
+                let (events, _said) = unbounded_channel();
+                let microphone = Microphone::new();
+
+                let joined =
+                    connect(&transport, None, GENERAL.to_owned(), &events, &microphone).await;
+
+                assert!(joined.is_none());
+                settle(&log).await;
+                assert_eq!(log.live(), 0);
+            })
+            .await;
     }
 }

@@ -14,12 +14,16 @@
 //! to-device, discovers the LiveKit transport, and connects to the SFU with
 //! frame encryption on. There is nothing to reimplement.
 
-use matrix_rtc_livekit::{Call, CallOptions};
+use std::sync::Arc;
+
+use matrix_rtc_livekit::{Call, CallError, CallOptions};
+use matrix_rtc_media::{AudioFrame, AudioSourceConfig, LocalTrackHandle, PublishOptions};
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{OwnedRoomId, RoomId};
 
 use crate::dialect::Dialect;
 use crate::failure::{CallFailure, classify};
+use crate::publish::PublishedAudio;
 use crate::transport::{CallSession, CallTransport};
 
 /// A MatrixRTC call over LiveKit.
@@ -81,7 +85,45 @@ impl CallTransport for LiveKitTransport {
 }
 
 impl CallSession for Call {
+    type Track = Arc<dyn LocalTrackHandle>;
+
+    async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
+        Call::publish(self, PublishOptions::microphone())
+            .await
+            .map_err(|error| classify(&error))
+    }
+
     async fn leave(self) -> Result<(), CallFailure> {
         Call::leave(self).await.map_err(|error| classify(&error))
+    }
+}
+
+impl PublishedAudio for Arc<dyn LocalTrackHandle> {
+    fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
+        self.as_ref()
+            .set_muted(muted)
+            .map_err(|error| classify(&CallError::Media(error)))
+    }
+
+    async fn send(&self, samples: Vec<i16>) -> Result<(), CallFailure> {
+        // Taken from the publication's own defaults rather than restated, so
+        // this cannot drift from what `PublishOptions::microphone` asked for.
+        // That it also matches what `consort-audio` produces is asserted in
+        // `tests/matches_the_capture_format.rs`, because nothing in the type
+        // system connects the two.
+        let config = AudioSourceConfig::default();
+        let channels = config.num_channels.max(1);
+
+        let frame = AudioFrame {
+            samples_per_channel: samples.len() as u32 / channels,
+            data: samples,
+            sample_rate: config.sample_rate,
+            num_channels: config.num_channels,
+        };
+
+        self.as_ref()
+            .capture_audio(frame)
+            .await
+            .map_err(|error| classify(&CallError::Media(error)))
     }
 }
