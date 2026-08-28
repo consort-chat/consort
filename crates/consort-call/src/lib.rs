@@ -40,6 +40,7 @@
 //! not choose gets a panic on its first TLS connection rather than a default.
 //! See `consort_matrix::install_crypto_provider`.
 
+pub mod arrivals;
 pub mod dialect;
 pub mod discovery;
 pub mod event;
@@ -54,10 +55,11 @@ pub mod thread;
 pub mod transport;
 pub mod trouble;
 
+pub use arrivals::Arrivals;
 pub use dialect::{Dialect, detect};
 pub use event::{CallEvent, SelfAudio};
 pub use failure::CallFailure;
-pub use hearing::{Ears, Heard, audible, changes, mono};
+pub use hearing::{Chime, Ears, Heard, audible, changes, mono};
 pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use notices::{Announced, Flags, Notice};

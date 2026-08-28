@@ -112,7 +112,7 @@ async fn encrypts(client: &Client, room_id: &str) -> Encrypts {
         // Matched positively rather than through `is_encrypted`, which is
         // false for `Unknown` and would make an unanswerable room joinable.
         Ok(state) if state.is_encrypted() => Encrypts::Yes,
-        Ok(state) if matches!(state, matrix_sdk::EncryptionState::NotEncrypted) => Encrypts::No,
+        Ok(matrix_sdk::EncryptionState::NotEncrypted) => Encrypts::No,
         Ok(_) => Encrypts::Unknown,
         Err(error) => {
             tracing::warn!(%error, %room_id, "could not find out whether the room encrypts");

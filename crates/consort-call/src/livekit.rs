@@ -39,8 +39,8 @@ use livekit::DataPacket;
 use futures_util::StreamExt;
 
 use crate::dialect::{self, Dialect};
-use crate::event::SelfAudio;
 use crate::discovery;
+use crate::event::SelfAudio;
 use crate::failure::{CallFailure, classify};
 use crate::hearing::{self, Ears};
 use crate::notices::{self, Notice};
@@ -634,6 +634,14 @@ pub struct LiveKitRoster {
 impl Roster for LiveKitRoster {
     fn trouble(&self) -> Option<String> {
         self.faults.sentence()
+    }
+
+    fn me(&self) -> Option<String> {
+        // The signed-in account, not the membership. A roster is per person
+        // and the two devices of one human are one entry in it, so the answer
+        // has to be at the same granularity as the thing it is compared
+        // against.
+        self.client.user_id().map(|user| user.to_string())
     }
 
     async fn now(&self) -> Vec<Participant> {

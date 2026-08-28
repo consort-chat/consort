@@ -38,6 +38,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::arrivals::Arrivals;
 use crate::event::{CallEvent, SelfAudio};
 use crate::failure::CallFailure;
 use crate::hearing::Ears;
@@ -303,8 +304,16 @@ async fn serve<T: CallTransport>(
                 // to hear in the new one. `connect` leaves the old call on the
                 // way past, and its queued audio goes with it.
                 ears.silence();
-                current =
-                    connect(&transport, current, room_id, &events, &microphone, &restate).await;
+                current = connect(
+                    &transport,
+                    current,
+                    room_id,
+                    &events,
+                    &microphone,
+                    &restate,
+                    &ears,
+                )
+                .await;
                 // Re-applied rather than assumed. A new session starts unmuted
                 // and undeafened however this one was left, so a person who
                 // muted themselves in one channel and clicked another would
@@ -433,6 +442,7 @@ async fn connect<T: CallTransport>(
     events: &UnboundedSender<CallEvent>,
     microphone: &Microphone,
     restate: &UnboundedSender<()>,
+    ears: &Ears,
 ) -> Option<Joined<T::Session>> {
     // Already there. Re-announced rather than ignored, because the interface
     // may be asking precisely because it has lost track of where it is, and a
@@ -520,6 +530,7 @@ async fn connect<T: CallTransport>(
         roster,
         events.clone(),
         restate.clone(),
+        ears.clone(),
     )));
 
     Some(Joined {
@@ -545,7 +556,14 @@ async fn watch_roster<R: Roster>(
     mut roster: R,
     events: UnboundedSender<CallEvent>,
     restate: UnboundedSender<()>,
+    ears: Ears,
 ) {
+    // Per call, and that is what makes a channel switch silent: the people in
+    // the channel just left are not people who left, and a set carried across
+    // would announce every one of them as a departure and everybody in the new
+    // channel as an arrival. See `Arrivals::settle`.
+    let mut arrivals = Arrivals::new(roster.me());
+
     while let Some(change) = roster.changed().await {
         match change {
             Change::Roster => {
@@ -555,6 +573,18 @@ async fn watch_roster<R: Roster>(
                 // and unheard until their audio is attached.
                 let _ = restate.send(());
                 let said = connected(&room_id, &roster).await;
+
+                // Diffed against the people rather than against the event.
+                // `Connected` is re-emitted for reasons that are not arrivals:
+                // it carries the call's trouble, which changes on its own, and
+                // a chime for a refused media key would be the wrong sound for
+                // the wrong thing.
+                if let CallEvent::Connected { participants, .. } = &said {
+                    for chime in arrivals.settle(participants) {
+                        ears.chime(chime);
+                    }
+                }
+
                 emit(&events, said);
             }
             // Nothing is re-read and nothing is restated. This arrives many
@@ -642,6 +672,7 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hearing::Chime;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -742,11 +773,16 @@ mod tests {
     #[derive(Clone, Default)]
     struct Deaf {
         silences: Arc<AtomicUsize>,
+        chimes: Arc<Mutex<Vec<Chime>>>,
     }
 
     impl Deaf {
         fn silences(&self) -> usize {
             self.silences.load(Ordering::Relaxed)
+        }
+
+        fn chimes(&self) -> Vec<Chime> {
+            self.chimes.lock().unwrap().clone()
         }
     }
 
@@ -757,6 +793,10 @@ mod tests {
 
         fn silence(&self) {
             self.silences.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn chime(&self, chime: Chime) {
+            self.chimes.lock().unwrap().push(chime);
         }
     }
 
@@ -906,6 +946,15 @@ mod tests {
     }
 
     impl Roster for FakeRoster {
+        fn me(&self) -> Option<String> {
+            // The fake roster never puts this session in its own list, so
+            // there is nothing to leave out. Said explicitly rather than left
+            // to a default, because a `Roster` that answered wrongly here
+            // would suppress a real arrival and the test would pass by not
+            // testing anything.
+            None
+        }
+
         async fn now(&self) -> Vec<Participant> {
             self.standing.borrow().0.clone()
         }
@@ -1547,6 +1596,7 @@ mod tests {
                     &events,
                     &microphone,
                     &restate,
+                    &(Arc::new(Deaf::default()) as Ears),
                 )
                 .await;
                 assert_eq!(log.live(), 1, "nothing was publishing");
@@ -1580,6 +1630,7 @@ mod tests {
                     &events,
                     &microphone,
                     &restate,
+                    &(Arc::new(Deaf::default()) as Ears),
                 )
                 .await;
 
@@ -1653,7 +1704,10 @@ mod tests {
             // the next room and come back.
             let (log, _) = ending_with(vec![connect_to(GENERAL), Message::SetAway(true)]).await;
 
-            assert!(!log.deafened(), "away stopped this session hearing the call");
+            assert!(
+                !log.deafened(),
+                "away stopped this session hearing the call"
+            );
         }
 
         #[tokio::test]
@@ -1699,7 +1753,10 @@ mod tests {
             ])
             .await;
 
-            assert!(log.muted(), "coming back unmuted a microphone nobody unmuted");
+            assert!(
+                log.muted(),
+                "coming back unmuted a microphone nobody unmuted"
+            );
             assert_eq!(said.last(), Some(&muted(true, false)));
         }
 
@@ -1944,6 +2001,124 @@ mod tests {
                     rest
                 })
                 .await
+        }
+
+        /// Like [`driving`], and reports what was played rather than what was
+        /// said.
+        ///
+        /// A sibling rather than a parameter on the one above, because every
+        /// other test there is about the event channel and threading an unused
+        /// handle through all of them to serve these three would make the
+        /// interesting ones harder to read.
+        async fn chiming<F, Fut>(transport: FakeTransport, act: F) -> Vec<Chime>
+        where
+            F: FnOnce(watch::Sender<Standing>, Driver) -> Fut,
+            Fut: Future<Output = Driver>,
+        {
+            let roster = transport.roster.clone();
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, said) = unbounded_channel();
+            let ears = Deaf::default();
+
+            let heard = ears.clone();
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(heard),
+                    ));
+
+                    let Driver { to_loop, said } = act(roster, Driver { to_loop, said }).await;
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+                    drop(said);
+                })
+                .await;
+
+            ears.chimes()
+        }
+
+        #[tokio::test]
+        async fn somebody_walking_in_is_heard() {
+            // The whole feature. Without it the only way to know somebody
+            // joined is to be looking at the right corner of the screen at the
+            // moment they do, and the result is two people starting a sentence
+            // at once.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.roster.subscribe();
+
+            let played = chiming(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                // The empty roster the join reports, absorbed as the baseline.
+                roster.send((Vec::new(), None)).unwrap();
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert_eq!(played, vec![Chime::Arrived]);
+        }
+
+        #[tokio::test]
+        async fn joining_a_channel_that_already_has_people_in_it_is_silent() {
+            // Four people already there is not four people arriving. The rule
+            // most easily left out, and the one whose absence is loudest.
+            let (transport, _log) =
+                FakeTransport::whose_roster_holds(vec![person("Ada"), person("Bob")]);
+            let _watching = transport.roster.subscribe();
+
+            let played = chiming(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                driver.next().await;
+
+                roster
+                    .send((vec![person("Ada"), person("Bob")], None))
+                    .unwrap();
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert!(played.is_empty(), "{played:?}");
+        }
+
+        #[tokio::test]
+        async fn a_call_whose_trouble_changed_makes_no_sound() {
+            // `Connected` carries the call's trouble, which changes for
+            // reasons that have nothing to do with anybody moving. Diffing the
+            // event rather than the people would play an arrival for a refused
+            // media key.
+            let (transport, _log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+            let _watching = transport.roster.subscribe();
+
+            let played = chiming(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                driver.next().await;
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+                driver.next().await;
+
+                roster
+                    .send((vec![person("Ada")], Some("no key".to_owned())))
+                    .unwrap();
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert!(played.is_empty(), "{played:?}");
         }
 
         /// The two ends of the loop, handed to a test to drive by hand.

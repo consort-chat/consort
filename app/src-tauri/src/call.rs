@@ -172,7 +172,10 @@ mod tests {
         let bridge = CallBridge::spawn(
             transport,
             Microphone::new(),
-            crate::ears::speakers(consort_audio::Voices::new()),
+            crate::ears::speakers(
+                consort_audio::Voices::new(),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            ),
             move |event| recorder.0.lock().unwrap().push(event),
         );
         (bridge, heard)

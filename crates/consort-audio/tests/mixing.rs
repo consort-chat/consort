@@ -244,3 +244,128 @@ fn every_clone_is_the_same_set_of_queues() {
 
     assert_eq!(play(&voices, 2), vec![3, 3]);
 }
+
+/// Sounds this client makes about the call, rather than audio from anybody in
+/// it.
+///
+/// A separate queue with separate rules, and the rules are the reason these
+/// are worth writing down: a voice queue drops its oldest samples when it
+/// overflows, which for a chime would silently turn a recognisable sound into
+/// its own last fragment.
+mod sounds {
+    use super::*;
+    use consort_audio::SOUND_SAMPLES;
+
+    #[test]
+    fn a_sound_plays_out_of_the_call_s_own_output() {
+        let voices = Voices::new();
+        voices.play(&[7, 7, 7, 7]);
+
+        assert_eq!(play(&voices, 4), vec![7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn a_sound_mixes_with_whoever_is_talking() {
+        // Not instead of them. Somebody arriving while a person is mid-word
+        // must not mute that word, and it must not clip either: both go into
+        // the same accumulator and are clamped once at the end.
+        let voices = Voices::new();
+        voices.hear("alice", &[100, 100]);
+        voices.play(&[5, 5]);
+
+        assert_eq!(play(&voices, 2), vec![105, 105]);
+    }
+
+    #[test]
+    fn two_sounds_queue_rather_than_overlapping() {
+        // Two people arriving at once is two sounds one after another. Summed
+        // on top of each other it would be one sound at twice the amplitude,
+        // which is a different sound and a louder one.
+        let voices = Voices::new();
+        voices.play(&[1, 2]);
+        voices.play(&[3, 4]);
+
+        assert_eq!(play(&voices, 4), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn what_is_played_is_taken_off_the_queue() {
+        let voices = Voices::new();
+        voices.play(&[1, 2, 3, 4]);
+
+        assert_eq!(play(&voices, 2), vec![1, 2]);
+        assert_eq!(voices.sound_waiting(), 2);
+        assert_eq!(play(&voices, 2), vec![3, 4]);
+        assert_eq!(voices.sound_waiting(), 0);
+    }
+
+    #[test]
+    fn a_sound_is_not_capped_at_the_jitter_buffer() {
+        // The whole reason this is not just another entry in the voice map.
+        // `JITTER_SAMPLES` is 120 ms, which is right for speech and would cut
+        // all but the tail off anything long enough to recognise.
+        let voices = Voices::new();
+        let chime = vec![9i16; JITTER_SAMPLES * 3];
+
+        voices.play(&chime);
+
+        assert_eq!(voices.sound_waiting(), chime.len());
+    }
+
+    #[test]
+    fn a_burst_of_arrivals_cannot_queue_forever() {
+        // Somebody rejoining a busy channel must not sit through a minute of
+        // chiming for people who were already there.
+        let voices = Voices::new();
+
+        for _ in 0..100 {
+            voices.play(&vec![1i16; SOUND_SAMPLES]);
+        }
+
+        assert_eq!(voices.sound_waiting(), SOUND_SAMPLES);
+    }
+
+    #[test]
+    fn the_overflow_is_dropped_from_the_end() {
+        // The opposite of what a voice queue does, and deliberately. A
+        // truncated chime is still recognisably the chime; one missing its
+        // beginning is a click.
+        let voices = Voices::new();
+        voices.play(&vec![1i16; SOUND_SAMPLES - 2]);
+
+        voices.play(&[2, 2, 3, 3]);
+
+        assert_eq!(voices.sound_waiting(), SOUND_SAMPLES);
+        let played = play(&voices, SOUND_SAMPLES);
+        assert_eq!(
+            &played[SOUND_SAMPLES - 2..],
+            &[2, 2],
+            "the tail of the queue is not the start of the newest sound"
+        );
+    }
+
+    #[test]
+    fn deafening_drops_whatever_had_not_played_yet() {
+        // Undeafening otherwise replays a burst of arrivals for people who
+        // have been in the channel for a minute by then.
+        let voices = Voices::new();
+        voices.play(&[1, 2, 3, 4]);
+
+        voices.silence();
+
+        assert_eq!(voices.sound_waiting(), 0);
+        assert_eq!(play(&voices, 4), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn every_clone_shares_the_sound_queue_too() {
+        // The call thread queues and the audio thread drains, exactly as for
+        // voices. A clone that copied would chime into a buffer nobody plays.
+        let voices = Voices::new();
+        let calling = voices.clone();
+
+        calling.play(&[8, 8]);
+
+        assert_eq!(play(&voices, 2), vec![8, 8]);
+    }
+}

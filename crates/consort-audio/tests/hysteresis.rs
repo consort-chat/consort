@@ -312,7 +312,10 @@ fn turning_voice_activity_back_on_shuts_a_gate_that_nothing_is_holding_open() {
     gate.retune(config());
 
     let decision = gate.step(0.0);
-    assert!(!decision.open, "silence held the gate open after the gate came back");
+    assert!(
+        !decision.open,
+        "silence held the gate open after the gate came back"
+    );
     assert!(decision.closed, "the closing edge went unreported");
 }
 

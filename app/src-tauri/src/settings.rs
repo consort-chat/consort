@@ -191,6 +191,7 @@ mod tests {
                     open_at: 0.75,
                     ..GateConfig::default()
                 },
+                call_sounds: false,
             },
             calls: CallSettings::default(),
         }

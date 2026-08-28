@@ -18,6 +18,7 @@ pub mod meter;
 pub mod mixing;
 pub mod playback;
 pub mod settings;
+pub mod sound;
 pub mod thread;
 pub mod tone;
 
@@ -33,8 +34,9 @@ pub use gate::{
     SAMPLE_RATE, VoiceGate,
 };
 pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
-pub use mixing::{JITTER_FRAMES, JITTER_SAMPLES, Mixing, Voices};
+pub use mixing::{JITTER_FRAMES, JITTER_SAMPLES, Mixing, SOUND_SAMPLES, Voices};
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
+pub use sound::Sound;
 pub use thread::{AudioEvent, AudioThread, GatedSink};
 pub use tone::Tone;

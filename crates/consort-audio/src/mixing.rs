@@ -63,12 +63,52 @@ pub const JITTER_SAMPLES: usize = JITTER_FRAMES * FRAME_SAMPLES;
 /// looks inside the key, so the call layer's `member_id` is what ends up in it
 /// without this crate having to know that MatrixRTC exists.
 #[derive(Clone, Default)]
-pub struct Voices(Arc<Mutex<HashMap<String, VecDeque<i16>>>>);
+pub struct Voices {
+    people: Arc<Mutex<HashMap<String, VecDeque<i16>>>>,
+    /// Sounds this client is making about the call, rather than audio from
+    /// anybody in it.
+    ///
+    /// A queue of its own, and not a reserved key in the map above, for one
+    /// concrete reason: a person's queue is capped at [`JITTER_SAMPLES`] and
+    /// drops the oldest when it overflows. That is right for speech, where
+    /// late audio is worthless, and wrong for a sound half a second long,
+    /// which would arrive as its own last 120 milliseconds.
+    sounds: Arc<Mutex<VecDeque<i16>>>,
+}
+
+/// How much sound may be queued before the rest is dropped.
+///
+/// Two seconds. Long enough for several arrivals in a row to be heard one
+/// after another, short enough that somebody rejoining a busy channel does not
+/// sit through a minute of chiming for people who are already there.
+pub const SOUND_SAMPLES: usize = 2 * crate::gate::SAMPLE_RATE as usize;
 
 impl Voices {
     /// Nobody, yet.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Queue a sound to play into the call.
+    ///
+    /// Appended rather than replacing what is already queued, so two people
+    /// arriving at once are two sounds in sequence rather than one sound
+    /// played on top of itself.
+    ///
+    /// `samples` is mono PCM at [`crate::SAMPLE_RATE`], like everything else
+    /// here. Dropped past [`SOUND_SAMPLES`], and dropped from the *end* rather
+    /// than the start, which is the opposite of what a voice queue does: a
+    /// truncated chime is still recognisably the chime, while a chime missing
+    /// its beginning is a click.
+    pub fn play(&self, samples: &[i16]) {
+        let mut sounds = self.sounds();
+        let room = SOUND_SAMPLES.saturating_sub(sounds.len());
+        sounds.extend(samples.iter().copied().take(room));
+    }
+
+    /// How much sound is waiting to play.
+    pub fn sound_waiting(&self) -> usize {
+        self.sounds().len()
     }
 
     /// Add what `who` just said to what is waiting to be played.
@@ -115,6 +155,10 @@ impl Voices {
     /// asked for silence.
     pub fn silence(&self) {
         self.voices().clear();
+        // The sounds too. Undeafening otherwise replays whatever chimed while
+        // nobody was listening, which is a burst of arrivals for people who
+        // have been in the channel for a minute by then.
+        self.sounds().clear();
     }
 
     /// How many samples `who` has waiting.
@@ -147,6 +191,16 @@ impl Voices {
                 *slot += i32::from(sample);
             }
         }
+        drop(voices);
+
+        // Into the same accumulator, so a sound that lands while four people
+        // are talking is clamped once with everything else rather than
+        // separately against a total it cannot see.
+        let mut sounds = self.sounds();
+        let taking = sounds.len().min(sum.len());
+        for (slot, sample) in sum.iter_mut().zip(sounds.drain(..taking)) {
+            *slot += i32::from(sample);
+        }
     }
 
     /// The queues, recovering from a poisoned lock rather than spreading a
@@ -157,7 +211,17 @@ impl Voices {
     /// the sound card with it. Nothing inside a critical section here can
     /// panic, so the recovery is unreachable.
     fn voices(&self) -> MutexGuard<'_, HashMap<String, VecDeque<i16>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.people.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The sound queue, on the same terms.
+    ///
+    /// Locked separately from the voices rather than under one guard, so a
+    /// call thread queueing a chime never waits on the audio thread mixing a
+    /// buffer. Nothing reads both at once except [`mix`](Self::mix), which
+    /// takes them one after the other.
+    fn sounds(&self) -> MutexGuard<'_, VecDeque<i16>> {
+        self.sounds.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

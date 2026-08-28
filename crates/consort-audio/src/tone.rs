@@ -114,8 +114,9 @@ fn amplitude_at(at: usize) -> i16 {
 /// corner of a linear fade as a faint tick, which is the thing the fade exists
 /// to avoid.
 fn envelope(within: usize) -> f32 {
-    let rise = |progress: usize| 0.5 - 0.5 * (std::f32::consts::PI * progress as f32
-        / FADE_SAMPLES as f32).cos();
+    let rise = |progress: usize| {
+        0.5 - 0.5 * (std::f32::consts::PI * progress as f32 / FADE_SAMPLES as f32).cos()
+    };
 
     if within < FADE_SAMPLES {
         return rise(within);

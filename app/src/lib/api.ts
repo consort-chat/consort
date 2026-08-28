@@ -691,6 +691,14 @@ export interface AudioSettings {
   input: string | null;
   output: string | null;
   gate: GateConfig;
+  /**
+   * Whether a call makes a sound when somebody joins or leaves it.
+   *
+   * Optional here so a payload written before the field existed still parses,
+   * and read as `!== false` wherever it is drawn: the Rust default is on, and
+   * a missing field must not render as off.
+   */
+  callSounds?: boolean;
 }
 
 /**

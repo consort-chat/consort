@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::gate::GateConfig;
 
-/// Which devices to use, and how eager the voice gate should be.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Which devices to use, how eager the voice gate should be, and whether a
+/// call makes a noise when somebody walks into it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioSettings {
     /// The chosen input device by name, or `None` to ask the host.
@@ -31,4 +32,27 @@ pub struct AudioSettings {
     /// How the voice gate is tuned. Per person and per room, so there is no
     /// useful default beyond a starting point.
     pub gate: GateConfig,
+    /// Whether to make a sound when somebody joins or leaves the voice
+    /// channel this session is in.
+    ///
+    /// On by default, which is why this struct writes its own `Default`
+    /// instead of deriving one: a derived `bool` is `false`, and the whole
+    /// point of these is that somebody who has not gone looking for a setting
+    /// still hears that company arrived.
+    ///
+    /// Worth turning off, which is why it is a setting at all. A channel with
+    /// a lot of coming and going is one where these stop being information
+    /// and become a noise.
+    pub call_sounds: bool,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            input: None,
+            output: None,
+            gate: GateConfig::default(),
+            call_sounds: true,
+        }
+    }
 }

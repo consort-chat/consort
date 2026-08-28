@@ -343,7 +343,10 @@ mod tests {
         // Deafening a laptop says nothing about a phone that is also in the
         // call, and the roster folds the two together afterwards.
         let mut announced = Announced::new();
-        announced.note("ada-laptop-identity", Notice::new("ada-laptop", true, false));
+        announced.note(
+            "ada-laptop-identity",
+            Notice::new("ada-laptop", true, false),
+        );
         announced.note("ada-phone-identity", Notice::new("ada-phone", false, false));
 
         assert_eq!(announced.flags().deafened, vec!["ada-laptop".to_owned()]);

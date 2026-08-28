@@ -24,6 +24,7 @@ fn settings_round_trip_through_json_unchanged() {
             denoise: false,
             voice_activity: false,
         },
+        call_sounds: false,
     };
 
     let json = serde_json::to_string(&settings).expect("serialise");
@@ -124,4 +125,44 @@ fn a_file_written_before_the_toggle_existed_keeps_the_gate() {
 
     assert!(settings.gate.voice_activity);
     assert_eq!(settings.gate.open_at, 0.8);
+}
+
+#[test]
+fn call_sounds_are_on_for_somebody_who_never_chose() {
+    // The one field here whose default is not the zero value, which is why
+    // `AudioSettings` writes its own `Default` rather than deriving one. A
+    // derived `bool` is false, and a voice channel that makes no sound when
+    // somebody walks in is one where people talk over each other.
+    let settings: AudioSettings = serde_json::from_str("{}").expect("deserialise");
+
+    assert!(settings.call_sounds);
+}
+
+#[test]
+fn a_settings_file_written_before_call_sounds_existed_still_has_them_on() {
+    // The upgrade case. A file from an older build has no such key, and the
+    // container-level `default` fills it in from `Default` rather than from
+    // the zero value.
+    let older = r#"{"input":"Yeti Stereo Microphone","output":null}"#;
+
+    let settings: AudioSettings = serde_json::from_str(older).expect("deserialise");
+
+    assert_eq!(settings.input.as_deref(), Some("Yeti Stereo Microphone"));
+    assert!(settings.call_sounds);
+}
+
+#[test]
+fn turning_them_off_survives_the_round_trip() {
+    // The setting exists to be turned off, and a preference that does not
+    // persist is worse than no preference at all: it looks like it worked and
+    // comes back on the next launch.
+    let off = AudioSettings {
+        call_sounds: false,
+        ..AudioSettings::default()
+    };
+
+    let json = serde_json::to_string(&off).expect("serialise");
+    let read_back: AudioSettings = serde_json::from_str(&json).expect("deserialise");
+
+    assert!(!read_back.call_sounds);
 }

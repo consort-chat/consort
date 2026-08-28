@@ -292,6 +292,30 @@ export function VoiceVideoSection() {
    * Both switches come through here for the rollback below, which is the part
    * worth getting right once rather than twice.
    */
+  /**
+   * Change a setting that is not part of the gate.
+   *
+   * Same shape as `retune` and the same rollback, split out because a gate
+   * patch and a top-level one merge at different depths and a single function
+   * taking both would be a function taking a shape nobody can read.
+   */
+  async function reset(patch: Partial<AudioSettings>) {
+    const current = saved.current;
+    if (current === null) return;
+
+    const next: AudioSettings = { ...current, ...patch };
+    setSettings(next);
+    saved.current = next;
+
+    try {
+      await setAudioSettings(next);
+    } catch (raw: unknown) {
+      setSettings(current);
+      saved.current = current;
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
   async function retune(patch: Partial<GateConfig>) {
     const current = saved.current;
     if (current === null) return;
@@ -428,6 +452,33 @@ export function VoiceVideoSection() {
             from the switch above: turning voice activity detection off still
             leaves this running, and this is the one to turn off to hear your
             microphone untouched.
+          </p>
+        </div>
+      )}
+
+      {settings !== null && (
+        <div className="voice-field">
+          <span className="voice-field__label">Call sounds</span>
+          <div className="voice-toggle">
+            <input
+              id="voice-call-sounds"
+              className="voice-toggle__switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="voice-call-sounds-note"
+              checked={settings.callSounds !== false}
+              onChange={(event) =>
+                void reset({ callSounds: event.target.checked })
+              }
+            />
+            <label className="voice-toggle__label" htmlFor="voice-call-sounds">
+              Play a sound when somebody joins or leaves
+            </label>
+          </div>
+          <p className="voice-field__note" id="voice-call-sounds-note">
+            Only for the voice channel you are in, and only for people other
+            than you. Worth turning off in a channel with a lot of coming and
+            going, where they stop being information and become a noise.
           </p>
         </div>
       )}

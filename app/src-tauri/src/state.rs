@@ -198,6 +198,17 @@ pub struct AppState {
     /// same reason: both ends outlive any one call. The call thread fills it
     /// and the sound card drains it, and it is empty and harmless in between.
     voices: Voices,
+    /// Whether a call makes a sound when somebody walks into it.
+    ///
+    /// Lifted out of the settings file into an atomic because it is read on
+    /// the call thread, at the moment a roster changes, and written from
+    /// whichever thread saved the settings. Reading the file there would be a
+    /// disk touch in the middle of a call for one boolean.
+    ///
+    /// Seeded from the file at startup and kept in step by
+    /// `commands::set_audio_settings_for`, which is the only thing that writes
+    /// it.
+    chiming: crate::ears::Wanted,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -215,6 +226,12 @@ pub struct AppState {
 impl AppState {
     pub fn new(store: SessionStore, settings: SettingsStore, events: Arc<dyn EventSink>) -> Self {
         let events = Arc::new(LatestSink::new(events));
+        // Read once here rather than defaulted, so a call joined before
+        // anybody opens the settings screen already honours what the file
+        // says.
+        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(
+            settings.load().audio.call_sounds,
+        ));
 
         Self {
             client: RwLock::new(None),
@@ -233,6 +250,7 @@ impl AppState {
             settings,
             microphone: Microphone::new(),
             voices: Voices::new(),
+            chiming,
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -304,7 +322,7 @@ impl AppState {
             CallBridge::spawn(
                 transport(),
                 self.microphone.clone(),
-                speakers(self.voices.clone()),
+                speakers(self.voices.clone(), self.chiming.clone()),
                 self.call_reporter(),
             )
         });
@@ -459,6 +477,17 @@ impl AppState {
 
     pub fn store(&self) -> &SessionStore {
         &self.store
+    }
+
+    /// Switch the join and leave sounds on or off for a call in progress.
+    ///
+    /// Beside `settings()` rather than derived from it, because the call
+    /// thread cannot read a file at the moment a roster changes. Called by the
+    /// command that saves the settings, right after it saves them, so that
+    /// what is on disk and what a call is doing can never disagree.
+    pub fn set_call_sounds(&self, wanted: bool) {
+        self.chiming
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn settings(&self) -> &SettingsStore {
@@ -1294,7 +1323,10 @@ mod tests {
             state.connect_call(GENERAL.to_owned(), FakeCallTransport::joining, call_audio());
             until_call(&sink, "connected");
 
-            state.refuse_call("!lounge:example.org".to_owned(), CallReadiness::SessionUnverified);
+            state.refuse_call(
+                "!lounge:example.org".to_owned(),
+                CallReadiness::SessionUnverified,
+            );
 
             let latest = sink
                 .events()

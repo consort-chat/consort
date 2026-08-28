@@ -178,6 +178,20 @@ pub trait Roster {
     /// and this session's own membership coming back round.
     async fn now(&self) -> Vec<Participant>;
 
+    /// Which of the people in [`now`](Self::now) is this session's own user.
+    ///
+    /// The roster deliberately includes us: a voice channel draws everybody in
+    /// it, and leaving the reader out would be a list that is wrong by one for
+    /// the one person looking at it. So something has to say which entry that
+    /// is, and this is the only layer that can: a `member_id` is per device and
+    /// a roster is per person, so the two cannot be matched up further down.
+    ///
+    /// `None` from an implementation that does not know, which is treated as
+    /// "none of them". Being wrong that way costs one chime at the start of a
+    /// call; being wrong by guessing would put somebody's own name in a
+    /// diff every time their second device connected.
+    fn me(&self) -> Option<String>;
+
     /// What is wrong with this call's audio, if anything.
     ///
     /// Here rather than on a seam of its own because it changes for the same

@@ -319,9 +319,13 @@ fn set_audio_settings_for(
     audio: AudioSettings,
 ) -> Result<(), crate::settings::SettingsError> {
     let gate = audio.gate;
+    let call_sounds = audio.call_sounds;
     let mut settings = state.settings().load();
     settings.audio = audio;
     state.settings().save(&settings)?;
+    // Same reasoning as the retune below, and the same ordering: after the
+    // save, so a call already in progress and the file can never disagree.
+    state.set_call_sounds(call_sounds);
     // After the save rather than instead of it, so what the meter is doing and
     // what the file says can never disagree. A microphone that is open right
     // now was started with the old tuning, and nothing else would tell it.
@@ -932,6 +936,7 @@ mod tests {
                     open_at: 0.8,
                     ..GateConfig::default()
                 },
+                call_sounds: false,
             };
 
             set_audio_settings_for(&state, chosen.clone()).expect("save");

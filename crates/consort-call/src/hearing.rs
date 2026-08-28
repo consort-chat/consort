@@ -58,6 +58,31 @@ pub trait Heard: Send + Sync + 'static {
     /// that travels to the SFU and back, and without this the audio already in
     /// the buffer plays out underneath somebody who has just asked for quiet.
     fn silence(&self);
+
+    /// Make the sound that goes with somebody arriving or leaving.
+    ///
+    /// A request rather than samples, because this crate must never link an
+    /// audio backend: what the sound actually is belongs to `consort-audio`,
+    /// and the seam that already exists for playing a call is the right place
+    /// to hand this over too.
+    ///
+    /// Must not block, like everything else here. It is called from the call
+    /// thread while it is servicing the SFU.
+    fn chime(&self, chime: Chime);
+}
+
+/// Something in a call worth making a sound about.
+///
+/// Only what this session's own membership can be sure of. There is no
+/// "somebody muted" here and there should not be: mute is toggled far more
+/// often than people arrive, and a channel that pinged for every one of them
+/// is a channel people turn the sounds off in within the hour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chime {
+    /// Somebody joined the voice channel this session is in.
+    Arrived,
+    /// Somebody left it.
+    Departed,
 }
 
 /// A shared handle on somewhere to play a call.

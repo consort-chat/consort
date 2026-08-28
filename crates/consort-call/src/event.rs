@@ -225,8 +225,7 @@ mod tests {
     fn a_payload_from_a_client_that_predates_away_still_reads() {
         // Two Consort builds in one call. The older one sends two fields and
         // this must not refuse the whole message over the third.
-        let old: SelfAudio =
-            serde_json::from_str(r#"{"muted":true,"deafened":false}"#).unwrap();
+        let old: SelfAudio = serde_json::from_str(r#"{"muted":true,"deafened":false}"#).unwrap();
 
         assert!(old.muted);
         assert!(!old.away);

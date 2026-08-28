@@ -37,6 +37,7 @@ const defaults: AudioSettings = {
     denoise: true,
     voiceActivity: true,
   },
+  callSounds: true,
 };
 
 const report: AudioDeviceReport = {
@@ -371,6 +372,43 @@ describe("VoiceVideoSection", () => {
         gate: { ...defaults.gate, voiceActivity: false },
       }),
     );
+  });
+
+  it("offers call sounds as a switch, on by default", async () => {
+    // On is the default in Rust too, and this is where the two would drift.
+    // A missing field on the wire has to render as on, not as off.
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+    expect(toggle).toBeChecked();
+  });
+
+  it("saves call sounds being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        callSounds: false,
+      }),
+    );
+  });
+
+  it("leaves the gate alone when call sounds change", async () => {
+    // The two patches merge at different depths, and a top-level change that
+    // reached in and rewrote the gate would silently reset somebody's voice
+    // activity tuning every time they touched an unrelated switch.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.gate).toEqual(defaults.gate);
   });
 
   it("does not reopen the microphone to change the input mode", async () => {

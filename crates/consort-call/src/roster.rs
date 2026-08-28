@@ -108,8 +108,8 @@ fn with_flag(
 
             // `all` is true of nothing, so the emptiness has to be asked about
             // separately. Same trap as `with_mutes`.
-            let every = theirs.peek().is_some()
-                && theirs.all(|(member_id, _)| flagged.contains(member_id));
+            let every =
+                theirs.peek().is_some() && theirs.all(|(member_id, _)| flagged.contains(member_id));
 
             set(person, every)
         })
