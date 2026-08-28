@@ -293,18 +293,39 @@ where
 
     let mut report = Report::about(&request, on_change);
 
-    // Before the stream, because `changes()` reports what happens next rather
-    // than where the request already is. A flow this session started is
-    // normally `Created` here, but resolving it took two awaits and the other
-    // side can answer inside them, in which case this first look is the only
-    // `Ready` there will ever be.
-    let initial = request.state();
-    if matches!(initial, VerificationRequestState::Ready { .. }) {
-        start_the_comparison(&request).await;
-    }
-    report.state(state_of(&initial));
-
+    // Subscribed before anything is read and before anything is sent, and that
+    // ordering is the whole of the fix for a flow that used to strand.
+    //
+    // `changes()` is eyeball's `SharedObservable::subscribe`, which resolves
+    // "only once the inner value has been updated again after the call to
+    // `subscribe`". It does not replay. So every transition between the last
+    // read and this line is lost, and one of them is load-bearing:
+    // `VerificationRequest::start_sas` sets the observable to `Transitioned`
+    // *before* it sends anything, so starting the comparison and then
+    // subscribing meant the `Transitioned` that moves this flow onto the SAS
+    // stream had already happened with nobody listening. The request has no
+    // further transitions of its own, so the loop below waited for an event
+    // that was never coming and the interface sat on `Ready` until it timed
+    // out.
+    //
+    // Subscribing first closes it completely: the subscriber records a version
+    // and buffers by it, so anything after this line arrives however long the
+    // reads below take. A state that lands in between is reported twice, once
+    // by the read and once by the stream, and `Report::state` already drops
+    // the repeat.
     let mut changes = request.changes();
+
+    // A flow this session started is normally `Created` here, but resolving it
+    // took two awaits and the other side can answer inside them, in which case
+    // this first look is the only `Ready` there will ever be.
+    let initial = request.state();
+    report.state(state_of(&initial));
+    if matches!(initial, VerificationRequestState::Ready { .. })
+        && let Some(sas) = start_the_comparison(&request).await
+    {
+        return follow_sas(sas, report).await;
+    }
+
     while let Some(state) = changes.next().await {
         if let VerificationRequestState::Transitioned { verification } = state {
             match verification.sas() {
@@ -319,15 +340,20 @@ where
             }
         }
 
-        if matches!(state, VerificationRequestState::Ready { .. }) {
-            start_the_comparison(&request).await;
-        }
-
         let mapped = state_of(&state);
         let is_final = mapped.is_final();
         report.state(mapped);
         if is_final {
             return;
+        }
+
+        // The SAS this returns is the same object the `Transitioned` above
+        // would have carried, and taking it directly means not depending on
+        // observing a transition this very call has already caused.
+        if matches!(state, VerificationRequestState::Ready { .. })
+            && let Some(sas) = start_the_comparison(&request).await
+        {
+            return follow_sas(sas, report).await;
         }
     }
 }
@@ -349,13 +375,31 @@ where
 /// for the case where the far end never starts, and that is a button, because
 /// by then something has gone wrong and the person is the one deciding to
 /// nudge it.
-async fn start_the_comparison(request: &VerificationRequest) {
+///
+/// Hands back what it started. The alternative is to send the start, wait to
+/// observe the `Transitioned` it causes, and take the SAS out of that, which is
+/// the same object arriving by a route that can drop it: the transition happens
+/// inside `start_sas` before it sends, so a caller subscribing afterwards never
+/// sees it. Returning it removes the dependency on observing something that has
+/// already happened.
+///
+/// `None` covers three different things, and none of them is worth
+/// distinguishing here. We are the responder, so there is nothing to start. The
+/// SDK declined to start one, which it does when the request is already past
+/// that point. Or the send failed, which is logged. In all three the caller
+/// falls through to the stream, which is where the other side starting would
+/// arrive anyway.
+async fn start_the_comparison(request: &VerificationRequest) -> Option<SasVerification> {
     if !request.we_started() {
-        return;
+        return None;
     }
 
-    if let Err(error) = request.start_sas().await {
-        tracing::error!(%error, "could not start the emoji comparison");
+    match request.start_sas().await {
+        Ok(sas) => sas,
+        Err(error) => {
+            tracing::error!(%error, "could not start the emoji comparison");
+            None
+        }
     }
 }
 
@@ -374,6 +418,15 @@ where
     // Only as the responder. When we started the exchange there is nothing to
     // accept: the other side sends `m.key.verification.accept` in answer to
     // the `start` this session sent.
+    //
+    // Subscribed before the accept, not after, for the reason spelled out in
+    // `drive`: `changes()` yields nothing that happened before it was called,
+    // and `accept()` is a network round trip during which the other side can
+    // answer and move this straight to `KeysExchanged`. Reading the state after
+    // it covers what has already landed; the subscription covers everything
+    // from here on. The overlap is one duplicate report and `Report` drops it.
+    let mut changes = sas.changes();
+
     if !sas.we_started()
         && let Err(error) = sas.accept().await
     {
@@ -386,7 +439,6 @@ where
 
     report.state(FlowState::from(&sas.state()));
 
-    let mut changes = sas.changes();
     while let Some(state) = changes.next().await {
         let mapped = FlowState::from(&state);
         let is_final = mapped.is_final();
