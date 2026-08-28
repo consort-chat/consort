@@ -360,6 +360,17 @@ impl AppState {
         }
     }
 
+    /// Say that nobody is at this computer.
+    ///
+    /// Mutes and does not deafen, which is the whole difference from the
+    /// button below it. A no-op before the first call of the session, like the
+    /// other two and for the same reason.
+    pub fn set_call_away(&self, away: bool) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_away(away);
+        }
+    }
+
     /// Stop or resume receiving the audio of everybody else in the call.
     pub fn set_call_deafened(&self, deafened: bool) {
         if let Some(bridge) = self.locked_call().as_ref() {

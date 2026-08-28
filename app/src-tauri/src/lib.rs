@@ -109,6 +109,7 @@ pub fn run() {
             commands::call_disconnect,
             commands::call_set_muted,
             commands::call_set_deafened,
+            commands::call_set_away,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,

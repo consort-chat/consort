@@ -143,6 +143,18 @@ export interface Participant {
    * can say which of the two somebody chose.
    */
   deafened?: boolean;
+  /**
+   * Whether they have said they are not at their computer.
+   *
+   * Carried the same way `deafened` is, between Consort clients over the
+   * call's data channel, and true under the same rule: every one of their
+   * memberships said so.
+   *
+   * Implies the microphone is off and implies nothing about `deafened`.
+   * Somebody away with their headphones on can still hear their name, which
+   * is the entire difference between walking away and leaving.
+   */
+  away?: boolean;
 }
 
 /** One room under a rail entry. */
@@ -903,10 +915,32 @@ export interface SelfAudio {
   muted: boolean;
   /** Whether this session has stopped receiving everybody else's audio. */
   deafened: boolean;
+  /**
+   * Whether this session has said nobody is at the computer.
+   *
+   * Mutes and does not deafen. Optional on the wire so a payload written
+   * before the field existed still parses.
+   */
+  away?: boolean;
 }
 
-/** Neither, which is where every session starts and where Rust starts too. */
-export const HEARING: SelfAudio = { muted: false, deafened: false };
+/** None of the three, which is where every session starts and Rust too. */
+export const HEARING: SelfAudio = {
+  muted: false,
+  deafened: false,
+  away: false,
+};
+
+/**
+ * Whether the microphone is off, for any of the three reasons.
+ *
+ * Mirrors `SelfAudio::microphone_off` in Rust, and must keep mirroring it: the
+ * button draws itself from this, and a disagreement is a microphone icon that
+ * says the opposite of what the call is doing.
+ */
+export function microphoneOff(audio: SelfAudio): boolean {
+  return audio.muted || audio.deafened || audio.away === true;
+}
 
 /**
  * Listen to whether this session is muted or deafened.
@@ -970,4 +1004,15 @@ export function callSetMuted(muted: boolean): Promise<void> {
  */
 export function callSetDeafened(deafened: boolean): Promise<void> {
   return invoke<void>("call_set_deafened", { deafened });
+}
+
+/**
+ * Say that nobody is at this computer, or that somebody is again.
+ *
+ * Mutes and deliberately does not deafen. Same contract as the two above: what
+ * comes back is the `self-audio` channel saying what the state now is, so this
+ * resolves as soon as the request is queued rather than when it has landed.
+ */
+export function callSetAway(away: boolean): Promise<void> {
+  return invoke<void>("call_set_away", { away });
 }

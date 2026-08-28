@@ -15,6 +15,7 @@ function panel(
   const onDisconnect = vi.fn();
   const onSetMuted = vi.fn();
   const onSetDeafened = vi.fn();
+  const onSetAway = vi.fn();
   const { container } = render(
     <CallPanel
       call={call}
@@ -23,9 +24,10 @@ function panel(
       onDisconnect={onDisconnect}
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
+      onSetAway={onSetAway}
     />,
   );
-  return { container, onDisconnect, onSetMuted, onSetDeafened };
+  return { container, onDisconnect, onSetMuted, onSetDeafened, onSetAway };
 }
 
 /** A call that is up, which is the only state the controls are drawn in. */
@@ -249,6 +251,47 @@ describe("CallPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: /deafen/i }));
 
     expect(onSetDeafened).toHaveBeenCalledWith(false);
+  });
+
+  it("asks to be marked away", async () => {
+    const { onSetAway } = panel(CONNECTED, "Lounge", HEARING);
+
+    await userEvent.click(screen.getByRole("button", { name: /away/i }));
+
+    expect(onSetAway).toHaveBeenCalledWith(true);
+  });
+
+  it("asks to come back when it is already away", async () => {
+    const { onSetAway } = panel(CONNECTED, "Lounge", {
+      muted: false,
+      deafened: false,
+      away: true,
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /away/i }));
+
+    expect(onSetAway).toHaveBeenCalledWith(false);
+  });
+
+  it("draws the microphone as off while away", async () => {
+    // Away mutes. A microphone button that looked live would be telling
+    // somebody the room can hear them when it cannot.
+    panel(CONNECTED, "Lounge", { muted: false, deafened: false, away: true });
+
+    expect(
+      screen.getByRole("button", { name: /mute microphone/i }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("does not deafen when it marks somebody away", async () => {
+    // The entire difference from the button beside it. Somebody away is still
+    // listening, and a deafen indicator would say otherwise.
+    panel(CONNECTED, "Lounge", { muted: false, deafened: false, away: true });
+
+    expect(screen.getByRole("button", { name: /deafen/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("keeps each control named the same whichever way it is set", () => {

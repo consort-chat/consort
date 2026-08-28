@@ -515,6 +515,15 @@ fn call_set_deafened_for(state: &AppState, deafened: bool) {
     state.set_call_deafened(deafened);
 }
 
+/// Say that nobody is at this computer.
+///
+/// Not a third way of muting, though it mutes. The microphone going off is a
+/// consequence; the point is that everybody else in the call can see it and
+/// stop waiting for an answer, which is the one thing a plain mute cannot say.
+fn call_set_away_for(state: &AppState, away: bool) {
+    state.set_call_away(away);
+}
+
 #[tauri::command]
 pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
     audio_devices_for(&state, &CpalHost)
@@ -571,6 +580,11 @@ pub fn call_set_muted(state: State<'_, AppState>, muted: bool) {
 #[tauri::command]
 pub fn call_set_deafened(state: State<'_, AppState>, deafened: bool) {
     call_set_deafened_for(&state, deafened);
+}
+
+#[tauri::command]
+pub fn call_set_away(state: State<'_, AppState>, away: bool) {
+    call_set_away_for(&state, away);
 }
 
 /// Verify this session with the account's recovery key.
@@ -870,6 +884,7 @@ mod tests {
 
             call_set_muted_for(&state, true);
             call_set_deafened_for(&state, true);
+            call_set_away_for(&state, true);
 
             assert!(!state.has_call_thread());
             assert!(

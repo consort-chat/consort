@@ -125,6 +125,7 @@ interface Props {
   onLeaveVoice: () => void;
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
+  onSetAway: (away: boolean) => void;
   onSignedOut: () => void;
 }
 
@@ -161,6 +162,7 @@ export function AppShell({
   onLeaveVoice,
   onSetMuted,
   onSetDeafened,
+  onSetAway,
   onSignedOut,
 }: Props) {
   const [spaceId, setSpaceId] = useState(HOME_ID);
@@ -251,6 +253,7 @@ export function AppShell({
           onDisconnect={onLeaveVoice}
           onSetMuted={onSetMuted}
           onSetDeafened={onSetDeafened}
+          onSetAway={onSetAway}
         />
         <UserPanel
           profile={profile}

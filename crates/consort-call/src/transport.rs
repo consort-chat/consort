@@ -23,6 +23,7 @@
 
 use consort_matrix::Participant;
 
+use crate::event::SelfAudio;
 use crate::failure::CallFailure;
 use crate::hearing::Ears;
 use crate::publish::PublishedAudio;
@@ -100,7 +101,28 @@ pub trait CallSession {
     /// Whoever implements this owns keeping it true as people join. A person
     /// who deafened and then had somebody walk into the channel must not start
     /// hearing them.
+    ///
+    /// Telling anybody else is not part of this. See
+    /// [`announce_self`](Self::announce_self).
     async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure>;
+
+    /// Tell the other Consort clients in the call what this session is doing
+    /// with its own audio.
+    ///
+    /// Separate from the two setters above because it is a different kind of
+    /// act and because it does not correspond to either of them one for one.
+    /// Muting is already broadcast by the SFU and needs nothing here; deafening
+    /// and being away are invisible to everything in the stack and need all of
+    /// it. Folding this into `set_deafened` meant that adding a second thing
+    /// worth announcing had nowhere to go.
+    ///
+    /// Called on every roster change as well as on every button, because a
+    /// person who walks in has missed everything said before they arrived.
+    ///
+    /// A failure is the implementation's to log. This is an icon on somebody
+    /// else's screen: it is not worth ending a call over, and whatever was
+    /// announced has already happened locally.
+    async fn announce_self(&self, audio: SelfAudio) -> Result<(), CallFailure>;
 
     /// Play everybody else in this call into `ears`, and keep doing it as
     /// people come and go.

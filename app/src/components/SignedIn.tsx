@@ -4,6 +4,7 @@ import {
   asCommandError,
   callConnect,
   callDisconnect,
+  callSetAway,
   callSetDeafened,
   callSetMuted,
   HEARING,
@@ -242,6 +243,12 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     });
   }
 
+  function setAway(away: boolean) {
+    callSetAway(away).catch((raw: unknown) => {
+      console.error("could not ask to be marked away", asCommandError(raw).detail);
+    });
+  }
+
   const running = Object.values(flows);
 
   return (
@@ -263,6 +270,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onLeaveVoice={leaveVoice}
       onSetMuted={setMuted}
       onSetDeafened={setDeafened}
+      onSetAway={setAway}
       onSignedOut={onSignedOut}
     />
   );

@@ -106,6 +106,13 @@ impl CallBridge {
             thread.set_deafened(deafened);
         }
     }
+
+    /// Say that nobody is at this computer.
+    pub fn set_away(&self, away: bool) {
+        if let Some(thread) = &self.thread {
+            thread.set_away(away);
+        }
+    }
 }
 
 impl Drop for CallBridge {
@@ -207,12 +214,14 @@ mod tests {
             seen.contains(&CallEvent::SelfAudio(consort_call::SelfAudio {
                 muted: true,
                 deafened: true,
+                away: false,
             }))
         });
         assert!(
             seen.contains(&CallEvent::SelfAudio(consort_call::SelfAudio {
                 muted: true,
                 deafened: false,
+                away: false,
             })),
             "the mute on its own never arrived: {seen:?}"
         );

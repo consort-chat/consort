@@ -104,6 +104,32 @@ function DeafenedIcon({ "aria-label": label }: { "aria-label": string }) {
   );
 }
 
+/**
+ * A clock, next to somebody who is not at their computer.
+ *
+ * The one icon here that is not a struck-through anything, deliberately. The
+ * other two say what somebody switched off; this one says they are not there,
+ * which is a different kind of fact and should not look like a fault.
+ */
+function AwayIcon({ "aria-label": label }: { "aria-label": string }) {
+  return (
+    <svg
+      className="channels__muted"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
 function Participants({
   channel,
   people,
@@ -146,11 +172,19 @@ function Participants({
             noticing that one of them is a shade lighter, and a colour with no
             glyph beside it is nothing at all to a screen reader.
 
-            One icon, not two. Deafening mutes, so both flags are set on the
-            same person, and the headphones are the stronger claim.
+            One icon, never two. All three flags can be set on one person at
+            once, because each of the stronger ones implies the microphone is
+            off, so this is a precedence rather than a set of conditions.
+
+            Deafened first: it is the only one that says talking to them will
+            not reach them at all. Then away, which says they are not there to
+            answer. Muted last, because it is the weakest claim of the three
+            and the only one that leaves somebody listening and present.
           */}
           {participant.deafened === true ? (
             <DeafenedIcon aria-label={`${participant.name} is deafened`} />
+          ) : participant.away === true ? (
+            <AwayIcon aria-label={`${participant.name} is away`} />
           ) : (
             participant.muted === true && (
               <MutedIcon aria-label={`${participant.name} is muted`} />

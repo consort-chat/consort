@@ -523,6 +523,81 @@ describe("ChannelList", () => {
       expect(screen.queryByLabelText("Ada is muted")).toBeNull();
     });
 
+    it("shows a clock for somebody who is away", () => {
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [
+              { id: "@ada:example.org", name: "Ada", muted: true, away: true },
+            ],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByLabelText("Ada is away")).toBeVisible();
+      // The clock replaces the microphone rather than joining it. Away mutes,
+      // so both flags are set, and two icons would spend twice the width on
+      // one fact.
+      expect(screen.queryByLabelText("Ada is muted")).toBeNull();
+    });
+
+    it("shows headphones rather than a clock for somebody both away and deafened", () => {
+      // The precedence, at the one point where all three flags are true.
+      // Deafened outranks away because it is the stronger claim: an away
+      // person may come back and hear what was said, a deafened one will not.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [
+              {
+                id: "@ada:example.org",
+                name: "Ada",
+                muted: true,
+                deafened: true,
+                away: true,
+              },
+            ],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByLabelText("Ada is deafened")).toBeVisible();
+      expect(screen.queryByLabelText("Ada is away")).toBeNull();
+    });
+
+    it("says nothing about being away for somebody who has only muted", () => {
+      // Away is Consort clients telling each other over the call's data
+      // channel. Somebody in Element Call says nothing, and guessing would put
+      // a clock beside a person sitting right there.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada", true)],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByLabelText(/is away/)).toBeNull();
+    });
+
     it("says nothing about deafening for somebody who has only muted", () => {
       // Deafening is Consort clients telling each other over the call's data
       // channel. Somebody in Element Call says nothing, and guessing would put

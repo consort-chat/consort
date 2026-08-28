@@ -339,6 +339,13 @@ impl consort_call::CallSession for FakeCallSession {
         Ok(())
     }
 
+    async fn announce_self(
+        &self,
+        _audio: consort_call::SelfAudio,
+    ) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
     async fn leave(self) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }

@@ -69,6 +69,35 @@ pub fn with_deafened(
     memberships: &[(String, String)],
     deafened: &[String],
 ) -> Vec<Participant> {
+    with_flag(people, memberships, deafened, Participant::with_deafened)
+}
+
+/// Mark the people every one of whose memberships has said it is away.
+///
+/// Every one, for the reason [`with_deafened`] says: somebody away on their
+/// laptop who is at their phone is at their computer, and a clock beside their
+/// name would tell the room to stop expecting an answer they are able to give.
+pub fn with_away(
+    people: Vec<Participant>,
+    memberships: &[(String, String)],
+    away: &[String],
+) -> Vec<Participant> {
+    with_flag(people, memberships, away, Participant::with_away)
+}
+
+/// The shape both of the above are.
+///
+/// One function rather than two copies, because the rule is the interesting
+/// part and it is the same rule: a person is flagged only when every
+/// membership they have in this call says so, and a person with no memberships
+/// at all is not flagged. Getting that wrong in one of two copies is the kind
+/// of divergence nobody notices until somebody joins on a second device.
+fn with_flag(
+    people: Vec<Participant>,
+    memberships: &[(String, String)],
+    flagged: &[String],
+    set: fn(Participant, bool) -> Participant,
+) -> Vec<Participant> {
     people
         .into_iter()
         .map(|person| {
@@ -79,10 +108,10 @@ pub fn with_deafened(
 
             // `all` is true of nothing, so the emptiness has to be asked about
             // separately. Same trap as `with_mutes`.
-            let quiet = theirs.peek().is_some()
-                && theirs.all(|(member_id, _)| deafened.contains(member_id));
+            let every = theirs.peek().is_some()
+                && theirs.all(|(member_id, _)| flagged.contains(member_id));
 
-            person.with_deafened(quiet)
+            set(person, every)
         })
         .collect()
 }

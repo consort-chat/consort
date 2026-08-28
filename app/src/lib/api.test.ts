@@ -676,7 +676,7 @@ describe("the call commands", () => {
     // The two never exchange an opening value: nothing is emitted until
     // something changes. Agreeing on the default is what makes silence mean
     // "neither" rather than "not known yet".
-    expect(HEARING).toEqual({ muted: false, deafened: false });
+    expect(HEARING).toEqual({ muted: false, deafened: false, away: false });
   });
 
   it("reads the room out of every state that has one", () => {

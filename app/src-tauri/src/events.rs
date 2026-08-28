@@ -859,6 +859,7 @@ mod tests {
             let muted = AppEvent::SelfAudio(SelfAudio {
                 muted: true,
                 deafened: false,
+                away: false,
             });
 
             assert_eq!(muted.channel(), AppEvent::SELF_AUDIO);
@@ -874,6 +875,7 @@ mod tests {
                 AppEvent::SelfAudio(SelfAudio {
                     muted: true,
                     deafened: false,
+                    away: false,
                 })
                 .is_worth_keeping()
             );
@@ -884,6 +886,7 @@ mod tests {
             let payload = AppEvent::SelfAudio(SelfAudio {
                 muted: false,
                 deafened: true,
+                away: false,
             })
             .payload()
             .unwrap();

@@ -142,6 +142,18 @@ pub struct Participant {
     /// so an interface can say which of the two somebody chose.
     #[serde(default)]
     pub deafened: bool,
+    /// Whether they have said they are not at their computer.
+    ///
+    /// Carried the same way `deafened` is, over the call's data channel and
+    /// between Consort clients only, and true under the same rule: every one
+    /// of their memberships said so. Somebody away on a laptop who is at their
+    /// phone is at their computer.
+    ///
+    /// Implies the microphone is off, and deliberately implies nothing about
+    /// [`deafened`](Self::deafened). Still hearing the call is the entire
+    /// difference between walking away and leaving.
+    #[serde(default)]
+    pub away: bool,
 }
 
 impl Participant {
@@ -156,6 +168,7 @@ impl Participant {
             name: name.into(),
             muted: false,
             deafened: false,
+            away: false,
         }
     }
 
@@ -167,6 +180,11 @@ impl Participant {
     /// The same person, with what their own client said about them.
     pub fn with_deafened(self, deafened: bool) -> Self {
         Self { deafened, ..self }
+    }
+
+    /// The same person, with whether their own client says they are there.
+    pub fn with_away(self, away: bool) -> Self {
+        Self { away, ..self }
     }
 }
 

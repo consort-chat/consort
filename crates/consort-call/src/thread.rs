@@ -94,6 +94,7 @@ enum Message {
     SetMuted(bool),
     /// Stop or resume receiving everybody else's audio.
     SetDeafened(bool),
+    SetAway(bool),
     Shutdown,
 }
 
@@ -163,6 +164,19 @@ impl CallThread {
     /// button they did not press means.
     pub fn set_deafened(&self, deafened: bool) {
         self.send(Message::SetDeafened(deafened));
+    }
+
+    /// Say that nobody is at this computer.
+    ///
+    /// Mutes, like deafening does, and unlike deafening leaves everybody else
+    /// audible: walking away and still hearing your name is the reason to
+    /// press this rather than to leave the channel.
+    ///
+    /// Remembered across calls like the other two, which is what makes it
+    /// useful: somebody who marked themselves away and then had the call
+    /// switch channels underneath them is still away.
+    pub fn set_away(&self, away: bool) {
+        self.send(Message::SetAway(away));
     }
 
     /// Post a command, ignoring a thread that has already gone.
@@ -329,6 +343,10 @@ async fn serve<T: CallTransport>(
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
                 apply(current.as_ref(), audio, &ears).await;
             }
+            Message::SetAway(away) => {
+                audio = announce(&events, audio, SelfAudio { away, ..audio });
+                apply(current.as_ref(), audio, &ears).await;
+            }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
                 // already gone, and an event nobody is left to receive is not
@@ -377,6 +395,15 @@ async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ea
     }
     if let Err(error) = joined.session.set_deafened(audio.deafened).await {
         tracing::warn!(%error, deafened = audio.deafened, "could not change what this session hears");
+    }
+
+    // After both setters, so that what is announced is what has been done
+    // rather than what is about to be. Deafening and being away are invisible
+    // to everything in the stack, so this is the only way anybody else learns
+    // about either; mute is not in it, because the SFU already broadcasts that
+    // and a second source for one fact is a disagreement waiting to happen.
+    if let Err(error) = joined.session.announce_self(audio).await {
+        tracing::warn!(%error, ?audio, "could not tell the call about this session's audio");
     }
 
     // Attached here rather than at the join, because at the join there is
@@ -646,6 +673,16 @@ mod tests {
         muted: Arc<AtomicBool>,
         mutes: Arc<AtomicUsize>,
         deafened: Arc<AtomicBool>,
+        /// What the session last announced to the rest of the call, and how
+        /// many times it announced anything.
+        ///
+        /// The count is the interesting half, for the reason the mute count
+        /// is: a newcomer only learns about an away flag set before they
+        /// arrived because everybody re-announces on every roster change, so
+        /// a test that only looked at the value could not tell that happening
+        /// from it not.
+        announced: Arc<Mutex<Option<SelfAudio>>>,
+        announcements: Arc<AtomicUsize>,
         /// How many times the session was asked to play the call.
         ///
         /// Counted rather than recorded, because what matters is that it is
@@ -678,6 +715,14 @@ mod tests {
 
         fn mutes(&self) -> usize {
             self.mutes.load(Ordering::Relaxed)
+        }
+
+        fn announced(&self) -> Option<SelfAudio> {
+            *self.announced.lock().unwrap()
+        }
+
+        fn announcements(&self) -> usize {
+            self.announcements.load(Ordering::Relaxed)
         }
 
         fn deafened(&self) -> bool {
@@ -923,6 +968,12 @@ mod tests {
         async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
             self.log.muted.store(muted, Ordering::Relaxed);
             self.log.mutes.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn announce_self(&self, audio: SelfAudio) -> Result<(), CallFailure> {
+            *self.log.announced.lock().unwrap() = Some(audio);
+            self.log.announcements.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
 
@@ -1548,7 +1599,11 @@ mod tests {
         use super::*;
 
         fn muted(muted: bool, deafened: bool) -> CallEvent {
-            CallEvent::SelfAudio(SelfAudio { muted, deafened })
+            CallEvent::SelfAudio(SelfAudio {
+                muted,
+                deafened,
+                away: false,
+            })
         }
 
         /// Run `commands` and report what the session was left holding.
@@ -1566,6 +1621,134 @@ mod tests {
             assert!(
                 said.contains(&muted(true, false)),
                 "nothing told the interface what happened: {said:?}"
+            );
+        }
+
+        fn away(muted: bool, deafened: bool) -> CallEvent {
+            CallEvent::SelfAudio(SelfAudio {
+                muted,
+                deafened,
+                away: true,
+            })
+        }
+
+        #[tokio::test]
+        async fn being_away_mutes_the_microphone() {
+            // The half of away that is not an icon. Nobody is at the keyboard,
+            // so nothing said near it was said to the call.
+            let (log, said) = ending_with(vec![connect_to(GENERAL), Message::SetAway(true)]).await;
+
+            assert!(log.muted(), "away left the microphone live");
+            assert_eq!(
+                said.last(),
+                Some(&away(false, false)),
+                "the mute away implies is not one the person pressed: {said:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn being_away_leaves_everybody_else_audible() {
+            // The entire difference from deafen, and the reason to press this
+            // rather than to leave the channel: you can hear your name from
+            // the next room and come back.
+            let (log, _) = ending_with(vec![connect_to(GENERAL), Message::SetAway(true)]).await;
+
+            assert!(!log.deafened(), "away stopped this session hearing the call");
+        }
+
+        #[tokio::test]
+        async fn being_away_is_announced_to_the_rest_of_the_call() {
+            // Nothing in MatrixRTC or LiveKit has a name for it, so this
+            // channel is the only way anybody else ever finds out. An away
+            // flag nobody can see is mute with extra steps.
+            let (log, _) = ending_with(vec![connect_to(GENERAL), Message::SetAway(true)]).await;
+
+            assert_eq!(
+                log.announced().map(|audio| audio.away),
+                Some(true),
+                "the call was never told"
+            );
+        }
+
+        #[tokio::test]
+        async fn coming_back_is_announced_too() {
+            // The direction that is easy to leave out, and the one that leaves
+            // a clock beside somebody who is sitting right there.
+            let (log, said) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetAway(true),
+                Message::SetAway(false),
+            ])
+            .await;
+
+            assert_eq!(log.announced().map(|audio| audio.away), Some(false));
+            assert!(!log.muted(), "coming back left the microphone muted");
+            assert_eq!(said.last(), Some(&muted(false, false)));
+        }
+
+        #[tokio::test]
+        async fn away_and_muted_are_remembered_separately() {
+            // `microphone_off` collapses them for the one question it answers
+            // and nothing else may. Somebody who muted, went away, and came
+            // back asked for one of those to survive the other.
+            let (log, said) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetMuted(true),
+                Message::SetAway(true),
+                Message::SetAway(false),
+            ])
+            .await;
+
+            assert!(log.muted(), "coming back unmuted a microphone nobody unmuted");
+            assert_eq!(said.last(), Some(&muted(true, false)));
+        }
+
+        #[tokio::test]
+        async fn away_survives_a_channel_switch() {
+            // Somebody who marked themselves away and then had the call move
+            // is still away. A new session starts with nothing set, so this
+            // only holds because the state is re-applied on joining.
+            let (log, _) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetAway(true),
+                connect_to("!lounge:example.org"),
+            ])
+            .await;
+
+            assert!(log.muted(), "the new channel had a live microphone in it");
+            assert_eq!(log.announced().map(|audio| audio.away), Some(true));
+        }
+
+        #[tokio::test]
+        async fn joining_announces_without_anybody_pressing_anything() {
+            // The mechanism a newcomer is told by. A data message reaches
+            // whoever is connected when it is sent, so somebody arriving
+            // afterwards has missed every announcement made before they got
+            // there. What saves it is that this runs on joining and on every
+            // roster change, not only on a button, so everybody re-announces
+            // whenever anybody walks in.
+            let (log, _) = ending_with(vec![connect_to(GENERAL)]).await;
+
+            assert_eq!(
+                log.announced(),
+                Some(SelfAudio::default()),
+                "joining a call said nothing about this session's audio"
+            );
+        }
+
+        #[tokio::test]
+        async fn every_change_is_announced_rather_than_only_the_last() {
+            let (log, _) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetAway(true),
+                Message::SetDeafened(true),
+            ])
+            .await;
+
+            assert!(
+                log.announcements() >= 3,
+                "only {} announcements for a join and two buttons",
+                log.announcements()
             );
         }
 
