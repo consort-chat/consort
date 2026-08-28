@@ -11,6 +11,8 @@
 //! It starts with the question that has to be answered before the join rather
 //! than after it. See [`readiness`].
 
+pub mod gate;
 pub mod readiness;
 
+pub use gate::{JoinVerdict, can_join};
 pub use readiness::{CallReadiness, readiness, watch as watch_readiness};

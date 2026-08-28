@@ -14,7 +14,9 @@ use consort_audio::{
     choose,
 };
 use consort_call::LiveKitTransport;
-use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
+use consort_matrix::{
+    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, verification,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -439,7 +441,30 @@ async fn call_connect_for(
     room_id: String,
 ) -> Result<(), CommandError> {
     let client = signed_in_client(state).await?;
-    let calls = state.settings().load().calls;
+
+    // Asked before anything is opened, published or connected, because every
+    // one of those steps succeeds in the failure this prevents. A call joined
+    // by a session that cannot distribute a media key connects, fills its
+    // roster and carries RTP, and is heard by nobody.
+    //
+    // A gate that cannot reach an answer lets the join through. The error is
+    // about not being able to ask rather than about the answer, `CallReadiness`
+    // has no variant for "not known" on purpose, and there is no honest
+    // refusal to draw from a request that timed out. The same network that
+    // stopped the question will stop the join a moment later and say so in the
+    // vocabulary of the thing that actually failed.
+    match calls::can_join(&client, &room_id).await {
+        Ok(JoinVerdict::Allowed) => {}
+        Ok(JoinVerdict::Refused(readiness)) => {
+            state.refuse_call(room_id, readiness);
+            return Ok(());
+        }
+        Err(error) => {
+            tracing::warn!(%error, %room_id, "joining without knowing whether it can be heard");
+        }
+    }
+
+    let settings = state.settings().load().calls;
     let (device, gate) = microphone_to_open(state, host);
     let output = speakers_to_open(state, host);
 
@@ -448,7 +473,13 @@ async fn call_connect_for(
         // Only called if this session has never joined a call before. The
         // dialect here is the fallback for a channel nobody is in;
         // `consort_call::detect` looks at the channel first.
-        move || LiveKitTransport::new(client, calls.fallback_dialect, calls.service_url_fallback),
+        move || {
+            LiveKitTransport::new(
+                client,
+                settings.fallback_dialect,
+                settings.service_url_fallback,
+            )
+        },
         CallAudio {
             device,
             output,

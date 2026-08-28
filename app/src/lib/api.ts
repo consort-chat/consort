@@ -378,6 +378,32 @@ export function onCallReadiness(
 }
 
 /**
+ * A voice channel that was clicked and not joined, mirrored from
+ * `crate::events::CallRefused`.
+ *
+ * Deliberately not on the `call` channel. That one carries what this session
+ * is currently doing, and somebody sitting in one voice channel who clicks a
+ * second one and is refused is still sitting in the first.
+ */
+export interface CallRefused {
+  roomId: string;
+  readiness: CallReadiness;
+}
+
+/**
+ * Listen for a join that was refused before it was attempted.
+ *
+ * An incident rather than state, so `resendState` never repeats it: a
+ * complaint about a click made twenty minutes ago is not news to somebody who
+ * has since verified. The standing answer lives on `onCallReadiness`.
+ */
+export function onCallRefused(
+  handler: (refusal: CallRefused) => void,
+): Promise<UnlistenFn> {
+  return listen<CallRefused>("call-refused", (event) => handler(event.payload));
+}
+
+/**
  * Listen for verification flows starting, moving on, and ending.
  *
  * Unlike the two channels above this one carries incidents rather than state,

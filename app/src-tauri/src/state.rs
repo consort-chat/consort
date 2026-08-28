@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
-    Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync, verification,
+    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync,
+    verification,
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -17,7 +18,7 @@ use consort_audio::{GateConfig, Voices};
 use crate::audio::Backends;
 use crate::call::CallBridge;
 use crate::ears::speakers;
-use crate::events::{AppEvent, EventSink, LatestSink};
+use crate::events::{AppEvent, CallRefused, EventSink, LatestSink};
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
 
@@ -308,6 +309,28 @@ impl AppState {
             )
         });
         bridge.connect(room_id);
+    }
+
+    /// Say that a join will not be attempted, and why.
+    ///
+    /// On the call channel rather than as an error from the command, because
+    /// this is the answer to "what is my call doing" and the interface reads
+    /// that in exactly one place. A refusal returned as a command error would
+    /// be a second thing to render, in a second component, saying something
+    /// about the same call.
+    ///
+    /// It starts no call thread, which is the point. Nothing is opened, no
+    /// membership is published, and a session that is already in a call
+    /// elsewhere stays in it: refusing a new channel must not evict the
+    /// channel somebody is currently talking in.
+    pub fn refuse_call(&self, room_id: String, readiness: CallReadiness) {
+        tracing::info!(
+            %room_id,
+            ?readiness,
+            "refusing to join an encrypted call this session cannot be heard in"
+        );
+        self.events
+            .emit(AppEvent::CallRefused(CallRefused { room_id, readiness }));
     }
 
     /// Leave the voice channel, if this session is in one.
@@ -1208,6 +1231,88 @@ mod tests {
                 panic!("the call never connected: {:?}", sink.events());
             };
             assert_eq!(trouble.as_deref(), Some("nobody can hear you"));
+        }
+
+        #[test]
+        fn a_refused_join_starts_nothing() {
+            // The whole point of asking before the join rather than after it.
+            // Nothing is opened, no membership is published, and there is no
+            // thread left behind holding a device.
+            let (_dir, state, sink) = state();
+
+            state.refuse_call(GENERAL.to_owned(), CallReadiness::SessionUnverified);
+
+            assert!(!state.has_call_thread());
+            assert!(
+                sink.events()
+                    .iter()
+                    .all(|event| !matches!(event, AppEvent::Call(_))),
+                "a refusal spoke on the call channel: {:?}",
+                sink.events()
+            );
+        }
+
+        #[test]
+        fn a_refused_join_says_which_room_and_which_failure() {
+            let (_dir, state, sink) = state();
+
+            state.refuse_call(GENERAL.to_owned(), CallReadiness::NoIdentity);
+
+            let Some(AppEvent::CallRefused(refusal)) = sink
+                .events()
+                .into_iter()
+                .find(|event| matches!(event, AppEvent::CallRefused(_)))
+            else {
+                panic!("no refusal reached the webview: {:?}", sink.events());
+            };
+            assert_eq!(refusal.room_id, GENERAL);
+            // Which one it was, not merely that it was one. The two are
+            // cleared in two different places and the interface has to say
+            // which.
+            assert_eq!(refusal.readiness, CallReadiness::NoIdentity);
+        }
+
+        #[test]
+        fn refusing_one_channel_does_not_evict_the_call_in_another() {
+            // The reason a refusal is not a call state. Somebody sitting in a
+            // voice channel who clicks a second one and is refused is still
+            // sitting in the first, and an interface told otherwise would draw
+            // a client connected to nothing while this process is publishing a
+            // membership.
+            let (_dir, state, sink) = state();
+            state.connect_call(GENERAL.to_owned(), FakeCallTransport::joining, call_audio());
+            until_call(&sink, "connected");
+
+            state.refuse_call("!lounge:example.org".to_owned(), CallReadiness::SessionUnverified);
+
+            let latest = sink
+                .events()
+                .into_iter()
+                .rev()
+                .find_map(|event| match event {
+                    AppEvent::Call(call) => Some(call),
+                    _ => None,
+                })
+                .expect("the call channel said nothing at all");
+            assert!(
+                matches!(latest, CallEvent::Connected { ref room_id, .. } if room_id == GENERAL),
+                "the refusal changed what call this session is in: {latest:?}"
+            );
+        }
+
+        #[test]
+        fn a_refusal_is_not_replayed_to_a_webview_that_reloaded() {
+            // It is an incident, not a state. What it reports is already a
+            // standing answer on the readiness channel; this only adds "the
+            // thing you just clicked", and a click from twenty minutes ago is
+            // not news to somebody who has since verified.
+            assert!(
+                !AppEvent::CallRefused(CallRefused {
+                    room_id: GENERAL.to_owned(),
+                    readiness: CallReadiness::SessionUnverified,
+                })
+                .is_worth_keeping()
+            );
         }
 
         #[test]
