@@ -6,6 +6,32 @@
 use consort_matrix::Participant;
 use serde::{Deserialize, Serialize};
 
+/// What a session is doing with its own audio.
+///
+/// Two switches over one state, because each is only meaningful next to the
+/// other: deafening mutes, and undeafening must not unmute somebody who had
+/// already muted themselves. Kept together so there is one answer rather than
+/// two that can disagree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfAudio {
+    /// Whether this session's microphone is off because somebody said so.
+    pub muted: bool,
+    /// Whether this session has stopped receiving everybody else's audio.
+    pub deafened: bool,
+}
+
+impl SelfAudio {
+    /// Whether the microphone is off, for either reason.
+    ///
+    /// Deafening mutes. It is what every client with both buttons does, and it
+    /// is the only honest option: carrying on talking into a room you have
+    /// stopped listening to is not a state anybody means to be in.
+    pub fn microphone_off(self) -> bool {
+        self.muted || self.deafened
+    }
+}
+
 /// One thing that happened to this session's call.
 ///
 /// Serialised internally tagged, matching every other union that crosses the
@@ -53,6 +79,39 @@ pub enum CallEvent {
     /// Not in a call, and nothing went wrong. Both a completed leave and the
     /// idle state at startup.
     Disconnected,
+    /// What this session is doing with its own audio.
+    ///
+    /// Its own event rather than two more fields on [`Connected`], for two
+    /// reasons. It is not part of any one call: mute and deafen survive a
+    /// channel switch, because a person who muted themselves and then moved
+    /// rooms has not asked to be heard again. And `Connected` carries a roster,
+    /// which costs a member-store read per person to name, which is not a price
+    /// worth paying every time somebody taps a button.
+    ///
+    /// Emitted whenever either changes, and only then. Both start false, here
+    /// and in the interface, so a reader that has heard nothing is not a
+    /// reader that knows nothing.
+    ///
+    /// [`Connected`]: Self::Connected
+    SelfAudio(SelfAudio),
+    /// Who is talking right now, by Matrix user ID.
+    ///
+    /// Its own event, and deliberately not part of [`Connected`]. The SFU
+    /// revises this several times a second, and `Connected` carries a roster
+    /// that costs a member-store read per person to name. Folding the two
+    /// together would put a database read behind every syllable anybody says.
+    ///
+    /// Per person rather than per membership, to match the roster it is drawn
+    /// against: somebody talking on one of their two devices is one person
+    /// talking.
+    ///
+    /// The SFU decides who counts as speaking, from the RTP it is already
+    /// receiving. That is deliberate: it is one answer for everybody in the
+    /// call, arrived at the same way, rather than each client guessing from
+    /// whatever it happens to be able to measure.
+    ///
+    /// [`Connected`]: Self::Connected
+    Speaking { user_ids: Vec<String> },
     /// The join did not happen. The thread is still alive and can be asked
     /// again.
     Failed { room_id: String, error: String },
@@ -61,6 +120,35 @@ pub enum CallEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_audio_puts_its_two_flags_beside_the_tag() {
+        // A newtype variant under an internal tag flattens, which is what the
+        // frontend reads: `{state, muted, deafened}` and no nesting. Worth
+        // pinning, because it is the one shape here that comes from how serde
+        // treats the variant rather than from how the enum is written.
+        let json = serde_json::to_value(CallEvent::SelfAudio(SelfAudio {
+            muted: true,
+            deafened: false,
+        }))
+        .unwrap();
+
+        assert_eq!(json["state"], "selfAudio");
+        assert_eq!(json["muted"], true);
+        assert_eq!(json["deafened"], false);
+    }
+
+    #[test]
+    fn deafening_is_enough_to_have_the_microphone_off() {
+        assert!(
+            SelfAudio {
+                muted: false,
+                deafened: true
+            }
+            .microphone_off()
+        );
+        assert!(!SelfAudio::default().microphone_off());
+    }
 
     fn tag(event: &CallEvent) -> String {
         serde_json::to_value(event).unwrap()["state"]
@@ -87,6 +175,10 @@ mod tests {
         );
         assert_eq!(tag(&CallEvent::Disconnected), "disconnected");
         assert_eq!(
+            tag(&CallEvent::SelfAudio(SelfAudio::default())),
+            "selfAudio"
+        );
+        assert_eq!(
             tag(&CallEvent::Failed {
                 room_id: room_id(),
                 error: "no".to_owned(),
@@ -103,10 +195,7 @@ mod tests {
             },
             CallEvent::Connected {
                 room_id: "!a:example.org".to_owned(),
-                participants: vec![Participant {
-                    id: "@bob:example.org".to_owned(),
-                    name: "Bob".to_owned(),
-                }],
+                participants: vec![Participant::named("@bob:example.org", "Bob")],
                 trouble: Some("nobody can hear you".to_owned()),
             },
             CallEvent::Disconnected,

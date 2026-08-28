@@ -97,6 +97,21 @@
   this is the only control in the sidebar that ends something, and a strip that
   is permanently red reads as an error rather than as an exit.
 */
+/*
+  The three controls, as one cell of the panel's grid.
+
+  Tight against each other rather than evenly spread. They are one instrument
+  with three keys, and the eye should find the row before it finds any one
+  button in it. The gap is smaller than the panel's own so the group reads as a
+  unit next to the channel name rather than as three separate things.
+*/
+.call-panel__controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.call-panel__control,
 .call-panel__leave {
   display: grid;
   place-items: center;
@@ -113,11 +128,31 @@
     background var(--duration-fast) var(--ease-out-expo);
 }
 
+.call-panel__control:hover {
+  color: var(--text-primary);
+  background: var(--surface-raised);
+}
+
+/*
+  Pressed is red, and it is red whether or not the pointer is over it.
+
+  These two are the controls whose state has to be readable from across the
+  room, because the failure they cause is somebody talking to a channel that
+  cannot hear them. The struck-through glyph is the message; this is the
+  reinforcement, in the same colour the disconnect button uses on hover, which
+  is already this strip's word for "your voice is not going out".
+*/
+.call-panel__control[aria-pressed="true"],
+.call-panel__control[aria-pressed="true"]:hover {
+  color: var(--danger);
+}
+
 .call-panel__leave:hover {
   color: var(--danger);
   background: var(--surface-raised);
 }
 
+.call-panel__control:focus-visible,
 .call-panel__leave:focus-visible {
   outline: 2px solid var(--violet);
   outline-offset: 2px;

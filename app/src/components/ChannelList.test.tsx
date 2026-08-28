@@ -35,8 +35,8 @@ function voice(
   };
 }
 
-function person(id: string, name: string): Participant {
-  return { id, name };
+function person(id: string, name: string, muted = false): Participant {
+  return { id, name, muted };
 }
 
 function space(channels: Channel[], name = "Kahu HQ"): Space {
@@ -471,6 +471,172 @@ describe("ChannelList", () => {
       const people = screen.getByRole("list", { name: "In Lounge" });
       expect(people).toHaveTextContent("Ada");
       expect(people).not.toHaveTextContent("Stale");
+    });
+
+    it("marks somebody who has muted themselves", () => {
+      // Comes from the SFU rather than from anything this session did, so it
+      // is the one thing here that is true of other people. Named as well as
+      // drawn: a colour with no glyph beside it is nothing to a screen reader,
+      // and a glyph with no name on it is nothing either.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [
+              person("@ada:example.org", "Ada", true),
+              person("@bob:example.org", "Bob"),
+            ],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByLabelText("Ada is muted")).toBeVisible();
+      expect(screen.queryByLabelText("Bob is muted")).toBeNull();
+    });
+
+    it("shows headphones rather than a microphone for somebody deafened", () => {
+      // One icon, not two. Deafening mutes, so both flags are set on the same
+      // person, and the headphones are the stronger claim: somebody muted may
+      // still be listening, somebody deafened is not.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [
+              { id: "@ada:example.org", name: "Ada", muted: true, deafened: true },
+            ],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByLabelText("Ada is deafened")).toBeVisible();
+      expect(screen.queryByLabelText("Ada is muted")).toBeNull();
+    });
+
+    it("says nothing about deafening for somebody who has only muted", () => {
+      // Deafening is Consort clients telling each other over the call's data
+      // channel. Somebody in Element Call says nothing, and guessing would put
+      // headphones beside a person who can hear perfectly well.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada", true)],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByLabelText("Ada is muted")).toBeVisible();
+      expect(screen.queryByLabelText(/is deafened/)).toBeNull();
+    });
+
+    it("marks who is talking", () => {
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [
+              person("@ada:example.org", "Ada"),
+              person("@bob:example.org", "Bob"),
+            ],
+            trouble: null,
+          }}
+          speaking={new Set(["@ada:example.org"])}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      const people = within(
+        screen.getByRole("list", { name: "In Lounge" }),
+      ).getAllByRole("listitem");
+
+      expect(people[0]).toHaveAttribute("data-speaking", "true");
+      expect(people[1]).toHaveAttribute("data-speaking", "false");
+    });
+
+    it("marks this session's own user when they are the one talking", () => {
+      // The SFU reports every speaker it can hear, including us. Excluding
+      // ourselves would leave the one person most likely to be looking for the
+      // ring as the only one who never gets it.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@me:example.org", "Me")],
+            trouble: null,
+          }}
+          speaking={new Set(["@me:example.org"])}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      const [me] = within(
+        screen.getByRole("list", { name: "In Lounge" }),
+      ).getAllByRole("listitem");
+
+      expect(me).toHaveAttribute("data-speaking", "true");
+    });
+
+    it("marks nobody when nobody is talking", () => {
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada")],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      const [ada] = within(
+        screen.getByRole("list", { name: "In Lounge" }),
+      ).getAllByRole("listitem");
+
+      expect(ada).toHaveAttribute("data-speaking", "false");
+    });
+
+    it("says nothing about mute for a channel this session is not in", () => {
+      // Room state lists who is in a channel and nothing else about them. An
+      // unmuted mark there would be a finding rather than a silence, and it
+      // would be wrong for anybody who had in fact muted.
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
+          selectedId={null}
+          call={{ state: "disconnected" }}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByRole("list", { name: "In Lounge" })).toHaveTextContent(
+        "Ada",
+      );
+      expect(screen.queryByLabelText(/is muted/)).toBeNull();
     });
 
     it("leaves every other channel on room state", () => {

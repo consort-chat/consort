@@ -160,6 +160,17 @@ impl Hysteresis {
         self.open
     }
 
+    /// Whether the next frame is the one whose output has to be discarded.
+    ///
+    /// True exactly once per gate, before the first [`step`](Self::step).
+    /// [`VoiceGate`] asks so that it can publish silence for that frame: the
+    /// probability is meaningless, which this type already handles, and the
+    /// denoiser's output for it is a fade-in ramp rather than anything that was
+    /// said, which it cannot.
+    pub fn is_warming_up(&self) -> bool {
+        self.warming_up
+    }
+
     /// Advance by one frame's worth of probability.
     pub fn step(&mut self, probability: f32) -> GateDecision {
         let was_open = self.open;
@@ -217,6 +228,144 @@ impl Hysteresis {
     }
 }
 
+/// How many frames the gate's output is held back, so that an opening edge
+/// can still reach for what came before it.
+///
+/// One more than the default [`GateConfig::attack_frames`], which is the whole
+/// point: the attack spends 20 ms proving somebody has started talking, and
+/// those 20 ms are the start of the word they said. Three frames is 30 ms, so
+/// the proof is covered with a frame to spare.
+///
+/// Not configurable, because the number that matters is the attack and nothing
+/// exposes that either. If the attack ever becomes tunable this has to follow
+/// it up.
+pub const PRE_ROLL_FRAMES: usize = 3;
+
+/// One frame waiting its turn, and what the gate thought of it at the time.
+struct Held {
+    samples: Vec<i16>,
+    open: bool,
+}
+
+impl Held {
+    fn silent() -> Self {
+        Self {
+            samples: vec![0; FRAME_SAMPLES],
+            open: false,
+        }
+    }
+}
+
+/// A delay line that lets the gate change its mind about frames it has already
+/// seen.
+///
+/// The gate cannot open on the first frame of a word: [`attack_frames`] exists
+/// so that a key press or a desk bump does not open it, and the cost is that by
+/// the time the gate is sure, the consonant that made it sure has been and
+/// gone. "Pop" arrives as "op".
+///
+/// So hold every frame back by [`PRE_ROLL_FRAMES`] and publish the oldest. When
+/// the gate opens, the frames that convinced it are still here, and marking
+/// them open sends the whole word. The attack is paid for in latency instead of
+/// in consonants, which is the trade worth making: 30 ms is inaudible next to
+/// what a jitter buffer already costs, and a clipped word is not.
+///
+/// The delay runs even with [`voice_activity`] off, when nothing is ever
+/// withheld and it achieves nothing. Bypassing it would mean the audio jumping
+/// 30 ms whenever somebody flips that switch, and a click on a settings screen
+/// is a worse thing to hear than 30 ms nobody can perceive.
+///
+/// [`attack_frames`]: GateConfig::attack_frames
+/// [`voice_activity`]: GateConfig::voice_activity
+pub struct PreRoll {
+    depth: usize,
+    /// Oldest first. Never longer than `depth + 1`, briefly, inside [`step`].
+    ///
+    /// [`step`]: Self::step
+    line: std::collections::VecDeque<Held>,
+    /// The frame handed out last call.
+    ///
+    /// The caller is done with it by the time it calls again, so it comes back
+    /// here to be refilled. That makes this whole type allocation-free after
+    /// the first `depth + 1` frames, which matters because it runs on the audio
+    /// thread once every 10 ms.
+    returned: Option<Held>,
+}
+
+impl Default for PreRoll {
+    fn default() -> Self {
+        Self::new(PRE_ROLL_FRAMES)
+    }
+}
+
+impl PreRoll {
+    /// A line `depth` frames long. Zero is allowed and means no delay at all.
+    pub fn new(depth: usize) -> Self {
+        Self {
+            depth,
+            line: std::collections::VecDeque::with_capacity(depth + 1),
+            returned: None,
+        }
+    }
+
+    /// How far behind the microphone this puts the published audio.
+    pub fn latency_ms(&self) -> u32 {
+        self.depth as u32 * FRAME_MS
+    }
+
+    /// Put one frame in, take the frame `depth` frames older out.
+    ///
+    /// `None` while the line is still filling, which is the first `depth`
+    /// frames of a capture and nothing else. The frame that comes back is
+    /// already silenced if it is not being sent, so the pair matches
+    /// [`crate::GatedSink`] exactly.
+    ///
+    /// # Panics
+    ///
+    /// If `frame` is not [`FRAME_SAMPLES`] long, for the reason
+    /// [`VoiceGate::process`] panics.
+    pub fn step(&mut self, frame: &[i16], decision: GateDecision) -> Option<(&[i16], bool)> {
+        assert_eq!(
+            frame.len(),
+            FRAME_SAMPLES,
+            "the frame must be one RNNoise frame"
+        );
+
+        if decision.opened {
+            // The reason this type exists. Everything still in the line was
+            // captured while the gate was making its mind up, which is to say
+            // during the start of the word that changed it.
+            for held in self.line.iter_mut() {
+                held.open = true;
+            }
+        }
+
+        let mut slot = self.returned.take().unwrap_or_else(Held::silent);
+        slot.samples.copy_from_slice(frame);
+        slot.open = decision.open;
+        self.line.push_back(slot);
+
+        if self.line.len() <= self.depth {
+            return None;
+        }
+
+        let mut out = self
+            .line
+            .pop_front()
+            .expect("the line is longer than depth, so it is not empty");
+        if !out.open {
+            // Silenced here rather than by the gate, so that a frame the gate
+            // shut on can still be reopened while it waits. The caller keeps
+            // publishing it either way: a sender that stops sending looks like
+            // a wedged client to a peer, while Opus collapses silence on the
+            // wire and costs nothing.
+            out.samples.fill(0);
+        }
+        let out = self.returned.insert(out);
+        Some((&out.samples, out.open))
+    }
+}
+
 /// The denoiser plus the state machine. One per capture stream.
 pub struct VoiceGate {
     denoiser: Box<DenoiseState<'static>>,
@@ -263,6 +412,25 @@ impl VoiceGate {
     /// length means the capture layer is misconfigured, which is a bug at
     /// startup rather than something to recover from once per 10 ms.
     pub fn process(&mut self, input: &[i16], output: &mut [i16]) -> GateDecision {
+        let decision = self.process_ungated(input, output);
+        if !decision.open {
+            output.fill(0);
+        }
+        decision
+    }
+
+    /// [`process`](Self::process) without the verdict applied to the audio.
+    ///
+    /// `output` always carries the processed frame, whatever the gate decided.
+    /// The decision comes back untouched for the caller to act on, or not act
+    /// on yet: [`PreRoll`] exists because the frames worth keeping are the ones
+    /// captured *before* the gate opened, and it cannot keep what `process`
+    /// has already zeroed.
+    ///
+    /// # Panics
+    ///
+    /// As [`process`](Self::process).
+    pub fn process_ungated(&mut self, input: &[i16], output: &mut [i16]) -> GateDecision {
         assert_eq!(
             input.len(),
             FRAME_SAMPLES,
@@ -282,12 +450,19 @@ impl VoiceGate {
             *destination = f32::from(*source);
         }
 
+        let warming_up = self.hysteresis.is_warming_up();
         let probability = self
             .denoiser
             .process_frame(&mut self.output_f32, &self.input_f32);
         let decision = self.hysteresis.step(probability);
 
-        if !decision.open {
+        if warming_up {
+            // The one frame with no audio worth publishing. RNNoise fades in
+            // over its first output, so this frame is a ramp rather than
+            // anything anybody said. Silenced here rather than left to the
+            // gate, because [`PreRoll`] can reopen a frame the gate shut on and
+            // would otherwise send the ramp as the first thing a listener
+            // hears.
             output.fill(0);
             return decision;
         }

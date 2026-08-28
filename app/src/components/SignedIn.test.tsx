@@ -10,6 +10,11 @@ const onVerificationFlow = vi.hoisted(() => vi.fn());
 const onKeyBackup = vi.hoisted(() => vi.fn());
 const onRooms = vi.hoisted(() => vi.fn());
 const onCall = vi.hoisted(() => vi.fn());
+const onSelfAudio = vi.hoisted(() => vi.fn());
+const onSpeaking = vi.hoisted(() => vi.fn());
+const onAudio = vi.hoisted(() => vi.fn());
+const callSetMuted = vi.hoisted(() => vi.fn());
+const callSetDeafened = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
 const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
@@ -33,6 +38,11 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onKeyBackup,
   onRooms,
   onCall,
+  onSelfAudio,
+  onSpeaking,
+  onAudio,
+  callSetMuted,
+  callSetDeafened,
   callConnect,
   callDisconnect,
   roomAvatar,
@@ -52,6 +62,7 @@ import type {
   KeyBackup,
   Profile,
   Rooms,
+  SelfAudio,
   Space,
   TokenStorage,
   Verification,
@@ -143,6 +154,11 @@ function resetApiMocks() {
   onKeyBackup.mockReset().mockResolvedValue(() => {});
   onRooms.mockReset().mockResolvedValue(() => {});
   onCall.mockReset().mockResolvedValue(() => {});
+  onSelfAudio.mockReset().mockResolvedValue(() => {});
+  onSpeaking.mockReset().mockResolvedValue(() => {});
+  onAudio.mockReset().mockResolvedValue(() => {});
+  callSetMuted.mockReset().mockResolvedValue(undefined);
+  callSetDeafened.mockReset().mockResolvedValue(undefined);
   callConnect.mockReset().mockResolvedValue(undefined);
   callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
@@ -1300,6 +1316,195 @@ describe("SignedIn voice calls", () => {
     const panel = screen.getByRole("group", { name: /voice connection/i });
     expect(panel).toHaveTextContent(/voice connected/i);
     expect(panel).toHaveTextContent("Lounge");
+  });
+
+  /** The handler the component registered for the speaking channel. */
+  function speakingHandler(): (userIds: string[]) => void {
+    const registered = onSpeaking.mock.calls.at(-1) as
+      | [(userIds: string[]) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to who is talking");
+    }
+    return registered[0];
+  }
+
+  /** The handler the component registered for the audio channel. */
+  function audioHandler(): (activity: { state: string; error?: string }) => void {
+    const registered = onAudio.mock.calls.at(-1) as
+      | [(activity: { state: string; error?: string }) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to the audio channel");
+    }
+    return registered[0];
+  }
+
+  it("rings the avatar of whoever the call says is talking", async () => {
+    await showing();
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [{ id: "@ada:example.org", name: "Ada" }],
+        trouble: null,
+      }),
+    );
+
+    const [ada] = within(
+      screen.getByRole("list", { name: "In Lounge" }),
+    ).getAllByRole("listitem");
+    expect(ada).toHaveAttribute("data-speaking", "false");
+
+    act(() => speakingHandler()(["@ada:example.org"]));
+
+    expect(ada).toHaveAttribute("data-speaking", "true");
+  });
+
+  it("takes the ring off again when they stop", async () => {
+    // The empty list is a real answer and is what arrives when the last person
+    // stops. Treating it as "nothing to do" would leave a ring on forever.
+    await showing();
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [{ id: "@ada:example.org", name: "Ada" }],
+        trouble: null,
+      }),
+    );
+    act(() => speakingHandler()(["@ada:example.org"]));
+
+    act(() => speakingHandler()([]));
+
+    const [ada] = within(
+      screen.getByRole("list", { name: "In Lounge" }),
+    ).getAllByRole("listitem");
+    expect(ada).toHaveAttribute("data-speaking", "false");
+  });
+
+  it("says so when the call cannot be played", async () => {
+    // The bug the whole incoming-audio path exists to fix, in the case where
+    // it still cannot work: speakers that will not open look exactly like a
+    // call nobody is speaking in.
+    await inACall();
+
+    act(() =>
+      audioHandler()({
+        state: "callAudioFailed",
+        error: 'no output device called "Headphones"',
+      }),
+    );
+
+    const warning = screen.getByText(/cannot play this call/i);
+    expect(warning).toBeVisible();
+    expect(warning).toHaveTextContent("Headphones");
+    // An alert, so a screen reader is told without having to be looking at the
+    // panel. Somebody who cannot hear the call is the least likely person to
+    // notice a new line of text appearing.
+    expect(warning).toHaveAttribute("role", "alert");
+  });
+
+  it("takes the warning down once the call can be played", async () => {
+    await inACall();
+    act(() => audioHandler()({ state: "callAudioFailed", error: "no device" }));
+
+    act(() => audioHandler()({ state: "callAudioStarted" }));
+
+    expect(screen.queryByText(/cannot play this call/i)).toBeNull();
+  });
+
+  it("ignores the microphone half of the audio channel", async () => {
+    // One channel carries the microphone test, the chime and the call's own
+    // output. A failed chime is the settings screen's business and is already
+    // drawn there; showing it as a call problem would be wrong twice.
+    await inACall();
+
+    act(() => audioHandler()({ state: "toneFailed", error: "no speakers" }));
+    act(() => audioHandler()({ state: "failed", error: "no microphone" }));
+
+    expect(screen.queryByText(/cannot play this call/i)).toBeNull();
+  });
+
+  /** The handler the component registered for the mute channel. */
+  function selfAudioHandler(): (audio: SelfAudio) => void {
+    const registered = onSelfAudio.mock.calls.at(-1) as
+      | [(audio: SelfAudio) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to its own audio");
+    }
+    return registered[0];
+  }
+
+  /** Showing a call that is up, which is where the controls are drawn. */
+  async function inACall() {
+    await showing();
+    act(() =>
+      callHandler()({
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [],
+        trouble: null,
+      }),
+    );
+  }
+
+  it("asks to mute from the connection panel", async () => {
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /mute microphone/i }),
+    );
+
+    expect(callSetMuted).toHaveBeenCalledWith(true);
+  });
+
+  it("asks to deafen from the connection panel", async () => {
+    await inACall();
+
+    await userEvent.click(screen.getByRole("button", { name: /deafen/i }));
+
+    expect(callSetDeafened).toHaveBeenCalledWith(true);
+  });
+
+  it("shows nothing about a mute until the channel says so", async () => {
+    // Same rule as joining. The button reflects what the call thread did, so a
+    // press that never reached it leaves the button where it was, which is the
+    // truth about the microphone.
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /mute microphone/i }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /mute microphone/i }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("draws the mute once the channel reports it", async () => {
+    await inACall();
+
+    act(() => selfAudioHandler()({ muted: true, deafened: false }));
+
+    expect(
+      screen.getByRole("button", { name: /mute microphone/i }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the call on screen when a mute arrives", async () => {
+    // The reason the two are on different channels. A mute that replaced the
+    // call state would close the panel it was pressed in.
+    await inACall();
+
+    act(() => selfAudioHandler()({ muted: true, deafened: true }));
+
+    expect(
+      screen.getByRole("group", { name: /voice connection/i }),
+    ).toHaveTextContent("Lounge");
   });
 
   it("asks to leave from the connection panel", async () => {

@@ -20,23 +20,33 @@
 //! deployments have. So the other half is read here, and parsed in
 //! [`crate::discovery`] where a test can reach it.
 
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, LocalTrackHandle, Participant as MediaParticipant,
-    PublishOptions,
+    AudioFrame, AudioSourceConfig, LocalTrackHandle, MediaConstraints, MediaStreamKind,
+    Participant as MediaParticipant, PublishOptions,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{OwnedRoomId, RoomId};
 
+use livekit::DataPacket;
+
+use futures_util::StreamExt;
+
 use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::failure::{CallFailure, classify};
+use crate::hearing::{self, Ears};
+use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
-use crate::transport::{CallSession, CallTransport, Roster};
+use crate::roster;
+use crate::thread::AbortOnDrop;
+use crate::transport::{CallSession, CallTransport, Change, Roster};
 use crate::trouble::{Faults, what_it_says};
 use tokio::sync::{broadcast, watch};
 
@@ -193,6 +203,39 @@ pub struct LiveKitSession {
     call: Call,
     client: Client,
     room_id: String,
+    /// The microphone publication, kept so it can be muted.
+    ///
+    /// A second handle on the one [`CallSession::publish_microphone`] hands
+    /// back, which the call thread moves into the task that pumps frames at it.
+    /// Muting is not something that task does and must never become something
+    /// it does: see the header of [`crate::publish`]. It is a person pressing a
+    /// button, arriving from somewhere else entirely, and it needs its own way
+    /// to reach the track.
+    ///
+    /// Set once, by `publish_microphone`. Empty before that, which is the
+    /// window between joining and publishing and no longer.
+    microphone: OnceLock<Arc<dyn LocalTrackHandle>>,
+    /// One task per participant whose audio is being played, keyed by
+    /// `member_id`. Dropping one stops that person's audio; dropping the
+    /// session stops everybody's, which is what ends a call cleanly.
+    ///
+    /// A `RefCell` rather than a `Mutex` because a session never leaves the
+    /// call thread. That is not a shortcut, it is the same constraint that put
+    /// the call on a thread of its own: `Call::join` drives `!Send` futures.
+    playing: RefCell<HashMap<String, AbortOnDrop>>,
+    /// What this session last said about its own audio.
+    ///
+    /// LiveKit never delivers a data message back to whoever published it, and
+    /// the event says so in its type: `DataReceived` carries an
+    /// `Option<RemoteParticipant>`, and there is no variant of that for
+    /// ourselves. So the one announcement this session will never hear is its
+    /// own, and without this the headphones would appear beside everybody in
+    /// the call except the person who pressed the button.
+    ///
+    /// A channel rather than a flag because the reader is a task, and the same
+    /// task owns the map so that the local and remote halves cannot race to
+    /// say what the call currently looks like.
+    saying: watch::Sender<bool>,
 }
 
 impl CallTransport for LiveKitTransport {
@@ -238,7 +281,141 @@ impl CallTransport for LiveKitTransport {
             call,
             client: self.client.clone(),
             room_id: room_id.to_owned(),
+            microphone: OnceLock::new(),
+            playing: RefCell::default(),
+            saying: watch::channel(false).0,
         })
+    }
+}
+
+impl LiveKitSession {
+    /// Tell the other Consort clients in the call what this session is doing.
+    ///
+    /// Failure is logged and swallowed on purpose. This is an indicator on
+    /// somebody else's screen: a call is not worth ending over it, and the
+    /// deafening itself has already happened locally whatever the SFU makes of
+    /// this.
+    ///
+    /// Called on every roster change as well as on the button, because the
+    /// call thread re-pushes this session's audio state each time somebody
+    /// arrives. That is what tells a newcomer, who by definition missed the
+    /// announcement made before they were there. See [`crate::notices`].
+    async fn announce(&self, deafened: bool) {
+        let notice = Notice::new(self.call.membership_id(), deafened);
+        let packet = DataPacket {
+            payload: notice.encode(),
+            topic: Some(notices::TOPIC.to_owned()),
+            // Reliable: this is a state change, not a sample. A lost one leaves
+            // an icon wrong until the next roster change, which could be the
+            // rest of the call.
+            reliable: true,
+            ..DataPacket::default()
+        };
+
+        if let Err(error) = self
+            .call
+            .session()
+            .room()
+            .local_participant()
+            .publish_data(packet)
+            .await
+        {
+            tracing::warn!(%error, deafened, "could not tell the call about this session's audio");
+        }
+    }
+}
+
+/// Who this session is, to the two systems that name it differently.
+///
+/// Both are fixed for the life of a call, and carrying them together keeps the
+/// pairing in one place: filing our own notice under the wrong identity would
+/// hide it behind somebody else's.
+struct Us {
+    /// How the SFU names this session. The key our own notice is filed under,
+    /// alongside everybody else's, so that one map answers the whole question.
+    identity: String,
+    /// How MatrixRTC names it. What a notice carries, and what the roster
+    /// matches a person against.
+    member_id: String,
+}
+
+/// What one room event does to the record, if anything.
+fn heard(known: &mut notices::Deafened, event: livekit::RoomEvent) -> bool {
+    match event {
+        livekit::RoomEvent::DataReceived {
+            payload,
+            topic,
+            participant: Some(participant),
+            ..
+        } if topic.as_deref() == Some(notices::TOPIC) => match Notice::decode(&payload) {
+            Some(notice) => known.note(participant.identity().as_str(), notice),
+            None => false,
+        },
+        // Somebody who crashed or dropped their connection says nothing on the
+        // way out, and leaving them deafened forever would put a headphone icon
+        // beside a person who is not in the call.
+        livekit::RoomEvent::ParticipantDisconnected(participant) => {
+            known.gone(participant.identity().as_str())
+        }
+        _ => false,
+    }
+}
+
+/// Keep `deafened` up to date from what the Consort clients in the call say,
+/// this one included.
+///
+/// Its own task because the room's event stream is the only place the others
+/// arrive, and nothing else in this crate reads it. `Room::subscribe` hands
+/// over an independent receiver, so this competes with nothing.
+///
+/// This session's own state arrives on `mine` instead, because LiveKit does
+/// not deliver a data message back to whoever published it. One task holds the
+/// map so that the local and the remote half cannot race to say what the call
+/// currently looks like.
+///
+/// Ends when the room does, or when the roster holding its handle is dropped.
+async fn watch_notices(
+    mut events: tokio::sync::mpsc::UnboundedReceiver<livekit::RoomEvent>,
+    mut mine: watch::Receiver<bool>,
+    me: Us,
+    deafened: watch::Sender<Vec<String>>,
+) {
+    let mut known = notices::Deafened::new();
+
+    // Seeded rather than waited for. `subscribe` marks the value current at
+    // the time it was called as already seen, and this session can have
+    // deafened itself before there was a roster watching, in which case
+    // nothing would ever arrive below to say so.
+    known.note(
+        &me.identity,
+        Notice::new(&me.member_id, *mine.borrow_and_update()),
+    );
+
+    loop {
+        let changed = tokio::select! {
+            event = events.recv() => match event {
+                Some(event) => heard(&mut known, event),
+                // The room has gone.
+                None => break,
+            },
+            ours = mine.changed() => match ours {
+                Ok(()) => {
+                    let deafened = *mine.borrow_and_update();
+                    known.note(&me.identity, Notice::new(&me.member_id, deafened))
+                }
+                // The session has gone, which means so has the call.
+                Err(_) => break,
+            },
+        };
+
+        // Only a genuine change is published. Everybody re-announces on every
+        // roster change, so most of these repeat what the last one said, and
+        // sending each would redraw the roster once per participant per
+        // arrival.
+        if changed && deafened.send(known.members()).is_err() {
+            // Nothing is watching any more, which means the call has gone.
+            break;
+        }
     }
 }
 
@@ -247,25 +424,169 @@ impl CallSession for LiveKitSession {
     type Roster = LiveKitRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
-        self.call
+        let track = self
+            .call
             .publish(PublishOptions::microphone())
             .await
-            .map_err(|error| classify(&error))
+            .map_err(|error| classify(&error))?;
+
+        // Ignored if it is somehow already set. A session publishes once, and
+        // the alternative to ignoring is a panic on a path that is otherwise
+        // recoverable.
+        let _ = self.microphone.set(track.clone());
+        Ok(track)
+    }
+
+    async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
+        let Some(track) = self.microphone.get() else {
+            // Between joining and publishing. The call thread applies this
+            // again once the join has finished, so there is nothing lost and
+            // nothing to report.
+            return Ok(());
+        };
+
+        track
+            .set_muted(muted)
+            .map_err(|error| classify(&CallError::Media(error)))
+    }
+
+    async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure> {
+        // Per participant, because that is the only granularity anything in
+        // this stack has. There is no "stop playing this call", so deafen is
+        // built by asking for every microphone in it at once.
+        //
+        // Through `visible` rather than `enabled`. Both currently resolve to a
+        // server-side pause, but they are documented to diverge: `enabled` is
+        // meant to become a full unsubscribe, whose resume renegotiates and,
+        // upstream says, currently strands the stream. A pause is what deafen
+        // wants anyway. No data crosses the wire, and undeafening is immediate
+        // rather than a renegotiation somebody waits through.
+        let constraints = MediaConstraints {
+            visible: !deafened,
+            ..MediaConstraints::default()
+        };
+
+        for participant in self.call.engine().participants() {
+            // Ours is not something we are listening to. Asking to pause our
+            // own microphone through the subscription path would be asking the
+            // SFU about a stream it does not send us.
+            if participant.is_local {
+                continue;
+            }
+            self.call.set_constraints(
+                &participant.member_id,
+                MediaStreamKind::Microphone,
+                constraints,
+            );
+        }
+
+        // Said to ourselves before it is said to anybody else, because the
+        // one client that will not be told by the announcement below is this
+        // one.
+        self.saying.send_replace(deafened);
+        self.announce(deafened).await;
+        Ok(())
+    }
+
+    fn listen(&self, ears: &Ears) {
+        // Asked of the engine rather than tracked from events, so that this is
+        // a statement of what should currently be true rather than a tally that
+        // can drift. It is called on every roster change and has to be
+        // idempotent anyway; see `CallSession::listen`.
+        let audible = hearing::audible(&self.call.engine().participants());
+
+        let mut playing = self.playing.borrow_mut();
+        let attached: BTreeSet<String> = playing.keys().cloned().collect();
+        let (start, stop) = hearing::changes(&attached, &audible);
+
+        for who in stop {
+            // Dropping the handle aborts the pump; forgetting drops whatever it
+            // had already queued. Both, because a participant who left mid-word
+            // would otherwise finish it several seconds later.
+            playing.remove(&who);
+            ears.forget(&who);
+            tracing::debug!(member_id = %who, "stopped playing a participant");
+        }
+
+        for who in start {
+            let Some(track) = self.call.remote_track(&who, MediaStreamKind::Microphone) else {
+                // The membership is known but its track has not been subscribed
+                // yet, which is the ordinary order of events rather than a
+                // fault. The next roster change asks again.
+                continue;
+            };
+            let Some(mut frames) = track.audio_frames() else {
+                tracing::warn!(member_id = %who, "a microphone track with no audio to pull");
+                continue;
+            };
+
+            let ears = Arc::clone(ears);
+            let name = who.clone();
+            let pump = tokio::task::spawn_local(async move {
+                while let Some(frame) = frames.next().await {
+                    ears.hear(
+                        &name,
+                        hearing::mono(&frame.data, frame.num_channels).as_ref(),
+                    );
+                }
+                // The stream ended, which means the track went away rather than
+                // that they stopped talking. A silent participant keeps
+                // producing frames.
+                ears.forget(&name);
+            });
+
+            tracing::debug!(member_id = %who, "playing a participant");
+            playing.insert(who, AbortOnDrop(pump));
+        }
     }
 
     fn roster(&self) -> Self::Roster {
+        // Started here rather than at the join so that its lifetime is the
+        // roster's. The roster is what the call thread aborts when a call
+        // ends, so there is no path out of a call that leaves this running.
+        let (deafened, deafening) = watch::channel(Vec::new());
+        let me = Us {
+            identity: self
+                .call
+                .session()
+                .room()
+                .local_participant()
+                .identity()
+                .to_string(),
+            member_id: self.call.membership_id().to_owned(),
+        };
+        let watching = AbortOnDrop(tokio::task::spawn_local(watch_notices(
+            self.call.session().room().subscribe(),
+            self.saying.subscribe(),
+            me,
+            deafened,
+        )));
+
         LiveKitRoster {
             memberships: self.call.subscribe_participants(),
             reports: self.call.subscribe_call_events(),
             faults: Faults::default(),
             client: self.client.clone(),
             room_id: self.room_id.clone(),
+            deafening,
+            _watching: watching,
         }
     }
 
     async fn leave(self) -> Result<(), CallFailure> {
         self.call.leave().await.map_err(|error| classify(&error))
     }
+}
+
+/// One membership, read out of the watch under a single borrow.
+///
+/// Its own type rather than a tuple, and read once rather than three times, so
+/// that a person leaving between two reads cannot shift the pairing by one and
+/// hang somebody else's mute on their name.
+struct Seen {
+    member_id: String,
+    user_id: String,
+    muted: bool,
 }
 
 /// One view of a call: who is in it, and what is wrong with it.
@@ -284,6 +605,14 @@ pub struct LiveKitRoster {
     faults: Faults,
     client: Client,
     room_id: String,
+    /// Which memberships have deafened themselves, as their own clients say.
+    ///
+    /// A separate channel because it comes from a separate place: this is
+    /// Consort clients talking to each other over the call's data channel, and
+    /// nothing in MatrixRTC or LiveKit reports it. See [`crate::notices`].
+    deafening: watch::Receiver<Vec<String>>,
+    /// The task filling it in. Ends when this roster is dropped.
+    _watching: AbortOnDrop,
 }
 
 impl Roster for LiveKitRoster {
@@ -295,20 +624,43 @@ impl Roster for LiveKitRoster {
         // Read out and released before the await. The borrow guards the
         // watch's own lock, and holding one across a member-store read would
         // block the call's signalling on this room's SQLite.
-        let user_ids: Vec<String> = self
+        //
+        // The mute travels with the user id rather than being looked up again
+        // afterwards, because between the two reads somebody can leave and the
+        // pairing would silently shift by one.
+        let seen: Vec<Seen> = self
             .memberships
             .borrow()
             .iter()
-            .map(|member| member.user_id.clone())
+            .map(|member| Seen {
+                member_id: member.member_id.clone(),
+                user_id: member.user_id.clone(),
+                muted: roster::microphone_muted(member),
+            })
+            .collect();
+
+        let deafened = self.deafening.borrow().clone();
+
+        let user_ids: Vec<String> = seen.iter().map(|one| one.user_id.clone()).collect();
+        let mutes: Vec<(String, bool)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.muted))
+            .collect();
+        let whose: Vec<(String, String)> = seen
+            .into_iter()
+            .map(|one| (one.member_id, one.user_id))
             .collect();
 
         // Deduplication happens there, not here: a roster is per membership,
         // so somebody on a laptop and a phone arrives twice, and the
         // room-state path has exactly the same problem for the same reason.
-        rooms::name_participants(&self.client, &self.room_id, &user_ids).await
+        let named = rooms::name_participants(&self.client, &self.room_id, &user_ids).await;
+
+        let named = roster::with_mutes(named, &mutes);
+        roster::with_deafened(named, &whose, &deafened)
     }
 
-    async fn changed(&mut self) -> bool {
+    async fn changed(&mut self) -> Option<Change> {
         // Destructured so the two futures below borrow different fields.
         // `select!` over `self.memberships` and `self.reports` directly would
         // be two mutable borrows of one `self`.
@@ -316,13 +668,30 @@ impl Roster for LiveKitRoster {
             memberships,
             reports,
             faults,
+            deafening,
             ..
         } = self;
 
         loop {
             tokio::select! {
-                changed = memberships.changed() => return changed.is_ok(),
+                changed = memberships.changed() => return changed.is_ok().then_some(Change::Roster),
+                // Rare, and worth a full redraw when it happens: it is drawn
+                // beside the mute, in the roster, by name.
+                changed = deafening.changed() => return changed.is_ok().then_some(Change::Roster),
                 report = reports.recv() => match report {
+                    // Answered here rather than through `what_it_says`, which
+                    // is about what is wrong with a call. This one is cheap and
+                    // frequent, and the whole point of telling it apart is that
+                    // it must not cost a roster read.
+                    //
+                    // `borrow` rather than `borrow_and_update`: this is reading
+                    // the memberships to name somebody, not waiting on them,
+                    // and marking them seen here would swallow a genuine roster
+                    // change from the arm above.
+                    Ok(matrix_rtc_media::CallEvent::ActiveSpeakers { speakers }) => {
+                        let talking = roster::speaking_users(&speakers, &memberships.borrow());
+                        return Some(Change::Speaking(talking));
+                    }
                     // Only a report that changes the answer is worth waking
                     // anybody for. The cryptor reports its state per frame run
                     // rather than only on a transition, so most of these say
@@ -330,7 +699,7 @@ impl Roster for LiveKitRoster {
                     Ok(event) => match what_it_says(&event) {
                         Some((member_id, fault)) => {
                             if faults.note(member_id, fault) {
-                                return true;
+                                return Some(Change::Roster);
                             }
                             continue;
                         }
@@ -343,7 +712,7 @@ impl Roster for LiveKitRoster {
                         tracing::debug!(missed, "fell behind the call's own events");
                         continue;
                     }
-                    Err(broadcast::error::RecvError::Closed) => return false,
+                    Err(broadcast::error::RecvError::Closed) => return None,
                 },
             }
         }

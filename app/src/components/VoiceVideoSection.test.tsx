@@ -431,6 +431,73 @@ describe("VoiceVideoSection", () => {
     ).not.toBeChecked();
   });
 
+  it("offers noise suppression as a switch, on by default", async () => {
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", { name: /background noise/i });
+    expect(toggle).toBeChecked();
+  });
+
+  it("saves noise suppression being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /background noise/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        gate: { ...defaults.gate, denoise: false },
+      }),
+    );
+  });
+
+  it("leaves voice activity alone when noise suppression changes", async () => {
+    // The two are separate switches over one model pass, and somebody who
+    // turns the denoiser off to hear their raw microphone must not find the
+    // gate has come off with it.
+    render(<VoiceVideoSection />);
+
+    await userEvent.click(
+      await screen.findByRole("switch", { name: /background noise/i }),
+    );
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          gate: expect.objectContaining({ voiceActivity: true }),
+        }),
+      ),
+    );
+    expect(
+      await screen.findByRole("switch", { name: /voice activity/i }),
+    ).toBeChecked();
+  });
+
+  it("puts the noise suppression switch back when the save fails", async () => {
+    setAudioSettings.mockRejectedValue({ message: "nope", detail: "nope" });
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /background noise/i });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(await screen.findByRole("alert")).toHaveTextContent(/nope/);
+  });
+
+  it("reads noise suppression from what was saved rather than assuming", async () => {
+    audioSettings.mockResolvedValue({
+      ...defaults,
+      gate: { ...defaults.gate, denoise: false },
+    });
+
+    render(<VoiceVideoSection />);
+
+    expect(
+      await screen.findByRole("switch", { name: /background noise/i }),
+    ).not.toBeChecked();
+  });
+
   it("survives the device list failing to load", async () => {
     // A rejected command must not take the panel with it. The section is
     // reachable from a strip somebody clicks by accident.

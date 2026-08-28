@@ -349,6 +349,21 @@ fn microphone_to_open(state: &AppState, host: &dyn AudioDevices) -> (Option<Stri
     (device, audio.gate)
 }
 
+/// Which output to play a call out of, resolved the same way the chime's is.
+///
+/// Its own function beside [`microphone_to_open`] rather than a second return
+/// value from it, because the chime resolves an output too and all three must
+/// agree. A person who tested their speakers and heard the chime has tested the
+/// device the call comes out of.
+fn speakers_to_open(state: &AppState, host: &dyn AudioDevices) -> Option<String> {
+    let audio = state.settings().load().audio;
+    let available = catalogue(host, Direction::Output);
+
+    choose(&available, audio.output.as_deref())
+        .name_to_open()
+        .map(str::to_owned)
+}
+
 /// Start the microphone test behind the settings screen's level meter.
 ///
 /// The result arrives on the `audio` event channel, including the failure
@@ -426,6 +441,7 @@ async fn call_connect_for(
     let client = signed_in_client(state).await?;
     let calls = state.settings().load().calls;
     let (device, gate) = microphone_to_open(state, host);
+    let output = speakers_to_open(state, host);
 
     state.connect_call(
         room_id,
@@ -435,6 +451,7 @@ async fn call_connect_for(
         move || LiveKitTransport::new(client, calls.fallback_dialect, calls.service_url_fallback),
         CallAudio {
             device,
+            output,
             gate,
             backends: Box::new(backends),
         },
@@ -450,6 +467,21 @@ async fn call_connect_for(
 /// nothing rather than complain.
 fn call_disconnect_for(state: &AppState) {
     state.disconnect_call();
+}
+
+/// Mute or unmute this session's microphone.
+///
+/// Infallible and idempotent, like the disconnect above and for the same
+/// reason: what comes back is the `call` event channel saying what the state
+/// now is, and a command that also returned it would be a second answer for
+/// the interface to disagree with.
+fn call_set_muted_for(state: &AppState, muted: bool) {
+    state.set_call_muted(muted);
+}
+
+/// Stop or resume receiving the audio of everybody else in the call.
+fn call_set_deafened_for(state: &AppState, deafened: bool) {
+    state.set_call_deafened(deafened);
 }
 
 #[tauri::command]
@@ -498,6 +530,16 @@ pub async fn call_connect(state: State<'_, AppState>, room_id: String) -> Result
 #[tauri::command]
 pub fn call_disconnect(state: State<'_, AppState>) {
     call_disconnect_for(&state);
+}
+
+#[tauri::command]
+pub fn call_set_muted(state: State<'_, AppState>, muted: bool) {
+    call_set_muted_for(&state, muted);
+}
+
+#[tauri::command]
+pub fn call_set_deafened(state: State<'_, AppState>, deafened: bool) {
+    call_set_deafened_for(&state, deafened);
 }
 
 /// Verify this session with the account's recovery key.
@@ -786,6 +828,25 @@ mod tests {
             assert!(!state.has_call_thread());
             assert!(sink.events().is_empty());
         }
+
+        #[test]
+        fn muting_before_there_is_a_call_thread_does_nothing() {
+            // The controls live inside the call panel, so there is nothing to
+            // press until a call exists. Reached anyway (an old webview, a
+            // command sent by hand) this is the state being asked for, not an
+            // error worth drawing.
+            let (_dir, state, sink) = state();
+
+            call_set_muted_for(&state, true);
+            call_set_deafened_for(&state, true);
+
+            assert!(!state.has_call_thread());
+            assert!(
+                sink.events().is_empty(),
+                "a press with nothing to apply it to was announced as though \
+                 something had changed"
+            );
+        }
     }
 
     mod audio {
@@ -945,6 +1006,17 @@ mod tests {
                 device: Option<&str>,
                 _tone: consort_audio::Tone,
                 _on_end: consort_audio::ToneEnded,
+            ) -> Result<Box<dyn consort_audio::PlaybackStream>, consort_audio::PlaybackError>
+            {
+                Ok(Box::new(FakeTone {
+                    device: device.unwrap_or("<the host default>").to_owned(),
+                }))
+            }
+
+            fn play_call(
+                &self,
+                device: Option<&str>,
+                _voices: consort_audio::Voices,
             ) -> Result<Box<dyn consort_audio::PlaybackStream>, consort_audio::PlaybackError>
             {
                 Ok(Box::new(FakeTone {

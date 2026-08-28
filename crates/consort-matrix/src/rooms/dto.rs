@@ -117,6 +117,57 @@ pub struct Participant {
     /// user ID, which is still something a person recognises. There is no case
     /// where the interface would have nothing to draw.
     pub name: String,
+    /// Whether they have muted themselves.
+    ///
+    /// Only ever true for somebody in the call this session is also in. It
+    /// comes from the media layer, which learns it from the SFU, and room state
+    /// carries nothing like it: a person listed from `m.rtc.member` alone is
+    /// reported unmuted because nothing there could say otherwise, not because
+    /// anything checked.
+    ///
+    /// `#[serde(default)]` so the field can be left out. Every construction
+    /// site that has no answer says so by omission rather than by writing down
+    /// a `false` that looks like a finding.
+    #[serde(default)]
+    pub muted: bool,
+    /// Whether they have stopped listening to the call.
+    ///
+    /// Only ever true of another Consort client, and not because of a
+    /// limitation worth apologising for: deafening is built out of one
+    /// session's own subscriptions and nothing in MatrixRTC or LiveKit has a
+    /// name for it, so Consort clients tell each other over the call's data
+    /// channel and nobody else is listening. See `consort_call::notices`.
+    ///
+    /// Implies [`muted`](Self::muted), because deafening mutes. Kept separate
+    /// so an interface can say which of the two somebody chose.
+    #[serde(default)]
+    pub deafened: bool,
+}
+
+impl Participant {
+    /// Somebody nothing is known about beyond who they are.
+    ///
+    /// Which is every source but one: room state says who is in a channel and
+    /// nothing else about them, and only the live roster of the call this
+    /// session is sitting in can say whether somebody has muted themselves.
+    pub fn named(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            muted: false,
+            deafened: false,
+        }
+    }
+
+    /// The same person, with what the media layer says about them.
+    pub fn with_muted(self, muted: bool) -> Self {
+        Self { muted, ..self }
+    }
+
+    /// The same person, with what their own client said about them.
+    pub fn with_deafened(self, deafened: bool) -> Self {
+        Self { deafened, ..self }
+    }
 }
 
 /// Which column a channel belongs in.
@@ -212,10 +263,7 @@ mod tests {
                     avatar: Some("mxc://example.org/abc".to_owned()),
                     channels: vec![Channel {
                         kind: ChannelKind::Voice,
-                        participants: vec![Participant {
-                            id: "@bob:example.org".to_owned(),
-                            name: "Bob".to_owned(),
-                        }],
+                        participants: vec![Participant::named("@bob:example.org", "Bob")],
                         ..channel()
                     }],
                 },

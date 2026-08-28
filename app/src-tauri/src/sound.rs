@@ -23,7 +23,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use consort_audio::{GateConfig, GatedSink};
+use consort_audio::{GateConfig, GatedSink, Voices};
 
 use crate::audio::{AudioBridge, Backends};
 use crate::events::EventSink;
@@ -101,9 +101,22 @@ impl Sound {
         device: Option<String>,
         gate: GateConfig,
         sink: GatedSink,
+        output: Option<String>,
+        voices: Voices,
     ) {
         self.open(backends, device, gate, |demand| demand.call = true);
-        self.with_running(|bridge| bridge.publish_to(sink));
+        self.with_running(|bridge| {
+            bridge.publish_to(sink);
+            // No demand tracking on this one, unlike the microphone. Two
+            // things fight over an input; an output is opened a second time
+            // without complaint, which is what lets somebody test their
+            // speakers during a call.
+            //
+            // Started even when the capture above failed. A broken microphone
+            // is a reason to be unable to speak, not a reason to be unable to
+            // hear, and the two devices are not usually even the same one.
+            bridge.play_call(output, voices);
+        });
     }
 
     /// The call is over.
@@ -111,7 +124,10 @@ impl Sound {
     /// Stops the frames before releasing the device, so nothing is still being
     /// pushed into a call that has gone.
     pub fn stop_call(&self) {
-        self.with_running(AudioBridge::stop_publishing);
+        self.with_running(|bridge| {
+            bridge.stop_publishing();
+            bridge.stop_call();
+        });
         self.close(|demand| demand.call = false);
     }
 
@@ -251,6 +267,74 @@ mod tests {
     const ENOUGH_TO_GO_WRONG: Duration = Duration::from_millis(50);
 
     #[test]
+    fn a_call_opens_the_speakers_as_well_as_the_microphone() {
+        // The bug the whole incoming-audio path exists to fix. Every layer
+        // under this reported success while nothing was ever opened to play
+        // the call out of, so the call was silent and nothing said why.
+        let (sound, heard) = sound();
+        let (_count, sink) = counting_sink();
+
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            Some("Headphones".to_owned()),
+            Voices::new(),
+        );
+
+        heard.wait_for("the speakers opening", |heard| heard.call_outputs() == 1);
+    }
+
+    #[test]
+    fn ending_a_call_gives_the_speakers_back() {
+        let (sound, heard) = sound();
+        let (_count, sink) = counting_sink();
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            Some("Headphones".to_owned()),
+            Voices::new(),
+        );
+        heard.wait_for("the speakers opening", |heard| heard.call_outputs() == 1);
+
+        sound.stop_call();
+
+        heard.wait_for("the speakers closing", |heard| {
+            heard.call_outputs_stopped() == 1
+        });
+    }
+
+    #[test]
+    fn testing_the_speakers_during_a_call_does_not_take_them_from_it() {
+        // Unlike the microphone, which two things fight over, an output can be
+        // opened twice. Refusing the chime here would refuse it at the one
+        // moment it is most useful: when somebody cannot hear the call.
+        let (sound, heard) = sound();
+        let (_count, sink) = counting_sink();
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            Some("Headphones".to_owned()),
+            Voices::new(),
+        );
+        heard.wait_for("the speakers opening", |heard| heard.call_outputs() == 1);
+
+        sound.play_tone(fake_backends, Some("Headphones".to_owned()));
+
+        std::thread::sleep(ENOUGH_TO_GO_WRONG);
+        assert_eq!(
+            heard.call_outputs_stopped(),
+            0,
+            "the chime took the output away from the call"
+        );
+    }
+
+    #[test]
     fn a_microphone_nobody_has_asked_for_is_not_open() {
         let (sound, heard) = sound();
 
@@ -279,7 +363,14 @@ mod tests {
         // knows is a person nobody can hear.
         let (sound, heard) = sound();
         let (count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
 
         sound.start_test(fake_backends, yeti(), GateConfig::default());
@@ -287,7 +378,15 @@ mod tests {
 
         assert!(sound.capturing(), "the call lost its microphone");
         assert_eq!(heard.stops(), 0);
-        assert!(frames(&count) > 0);
+        // Waited for rather than asserted outright. Frames reach a sink from
+        // the audio thread, several of them behind the gate's pre-roll, so
+        // reading the count the instant the settings screen closes is reading
+        // it before the answer exists.
+        crate::testing::wait_for(
+            "a frame after the settings screen closed",
+            || frames(&count) > 0,
+            || "none".to_owned(),
+        );
     }
 
     #[test]
@@ -297,7 +396,14 @@ mod tests {
         let (sound, heard) = sound();
         sound.start_test(fake_backends, yeti(), GateConfig::default());
         let (_count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
 
         sound.stop_call();
@@ -311,7 +417,14 @@ mod tests {
         let (sound, heard) = sound();
         sound.start_test(fake_backends, yeti(), GateConfig::default());
         let (_count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
 
         sound.stop_call();
@@ -329,7 +442,14 @@ mod tests {
         // picker.
         let (sound, heard) = sound();
         let (_count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
 
         sound.start_test(fake_backends, yeti(), GateConfig::default());
@@ -389,7 +509,14 @@ mod tests {
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
 
         let (count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
 
         // The fake hands over its frame from inside `open`, so the running
         // device has already delivered everything it is going to. Changing
@@ -412,7 +539,14 @@ mod tests {
     fn the_call_stops_getting_frames_when_it_ends() {
         let (sound, heard) = sound();
         let (count, sink) = counting_sink();
-        sound.start_call(fake_backends, yeti(), GateConfig::default(), sink);
+        sound.start_call(
+            fake_backends,
+            yeti(),
+            GateConfig::default(),
+            sink,
+            None,
+            Voices::new(),
+        );
         heard.wait_for("the device opening", |heard| heard.opens() == 1);
         crate::testing::wait_for("a frame", || frames(&count) > 0, || "none".to_owned());
 

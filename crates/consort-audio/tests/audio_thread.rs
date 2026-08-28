@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use consort_audio::capture::{AudioCapture, CaptureError, CaptureStream};
 use consort_audio::playback::{AudioPlayback, PlaybackError, PlaybackStream, ToneEnded};
-use consort_audio::{AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig, GatedSink, Tone};
+use consort_audio::{
+    AudioEvent, AudioThread, FRAME_SAMPLES, GateConfig, GatedSink, PRE_ROLL_FRAMES, Tone, Voices,
+};
 
 /// Long enough that a loaded machine is not the reason a test fails, short
 /// enough that a genuinely stuck thread does not hold the suite up.
@@ -130,6 +132,9 @@ struct FakePlayback {
     /// Every `on_end` handed over so far, so a test can decide when a chime
     /// finishes rather than racing a real one.
     endings: Arc<Mutex<Vec<ToneEnded>>>,
+    /// The voices the call output was opened on, so a test can put audio into
+    /// the far end and see it arrive.
+    voices: Arc<Mutex<Option<Voices>>>,
 }
 
 impl FakePlayback {
@@ -138,6 +143,7 @@ impl FakePlayback {
             log: Arc::clone(log),
             broken: None,
             endings: Arc::default(),
+            voices: Arc::default(),
         }
     }
 
@@ -184,6 +190,26 @@ impl AudioPlayback for FakePlayback {
         }
 
         self.endings.lock().unwrap().push(on_end);
+        Ok(Box::new(FakeTone {
+            log: Arc::clone(&self.log),
+            device,
+        }))
+    }
+
+    fn play_call(
+        &self,
+        device: Option<&str>,
+        voices: Voices,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+        let device = device.unwrap_or("Default Out").to_owned();
+        self.log.lock().unwrap().push(format!("call {device}"));
+
+        if self.broken.as_deref() == Some(device.as_str()) {
+            return Err(PlaybackError::NoDevice);
+        }
+
+        // Held so the test can see what the thread would be playing.
+        *self.voices.lock().unwrap() = Some(voices);
         Ok(Box::new(FakeTone {
             log: Arc::clone(&self.log),
             device,
@@ -675,13 +701,18 @@ fn published(capture: FakeCapture, install: bool) -> Vec<(Vec<i16>, bool)> {
 }
 
 #[test]
-fn every_gated_frame_reaches_the_installed_sink() {
+fn every_gated_frame_reaches_the_sink_bar_the_ones_still_in_the_pre_roll() {
     let mut capture = FakeCapture::new(&Log::default());
     capture.frames = 40;
 
     let frames = published(capture, true);
 
-    assert_eq!(frames.len(), 40);
+    assert_eq!(
+        frames.len(),
+        40 - PRE_ROLL_FRAMES,
+        "the publication runs a pre-roll behind the microphone, so the last \
+         few frames of a capture are still in the line when it stops"
+    );
     assert!(
         frames
             .iter()
@@ -702,20 +733,37 @@ fn nothing_is_published_until_a_sink_is_installed() {
 
 #[test]
 fn what_goes_out_is_the_gate_s_output_and_not_the_raw_capture() {
-    // The difference is the whole point of the gate. A shut gate substitutes
-    // silence, and the very first frame is always shut: RNNoise has a fade-in
-    // artifact on its first output and no useful probability for it.
+    // The difference is the whole point of the gate. The fake microphone hands
+    // over one constant value, and the denoiser cannot leave it that way.
     let mut capture = FakeCapture::new(&Log::default());
     capture.frames = 40;
 
     let frames = published(capture, true);
 
-    let shut: Vec<_> = frames.iter().filter(|(_, open)| !open).collect();
-    assert!(!shut.is_empty(), "the warm-up frame is always shut");
     assert!(
-        shut.iter()
-            .all(|(samples, _)| samples.iter().all(|sample| *sample == 0)),
-        "a shut gate published the microphone instead of silence"
+        frames
+            .iter()
+            .any(|(samples, _)| samples.iter().any(|sample| *sample != 6_000)),
+        "the raw capture reached the sink untouched"
+    );
+}
+
+#[test]
+fn the_warm_up_frame_goes_out_silent_however_the_gate_ends_up_marking_it() {
+    // RNNoise fades in over its first output, so that frame is a ramp rather
+    // than anything anybody said. It used to be safe to leave it alone because
+    // the gate is always shut on it, but the pre-roll reaches backwards: a gate
+    // that opens in the first 30 ms marks it open on the way past.
+    let mut capture = FakeCapture::new(&Log::default());
+    capture.frames = 40;
+
+    let frames = published(capture, true);
+
+    let (first, open) = &frames[0];
+    assert!(open, "this capture opens the gate inside the pre-roll");
+    assert!(
+        first.iter().all(|sample| *sample == 0),
+        "the fade-in ramp was published as the first thing a listener hears"
     );
 }
 
@@ -731,7 +779,11 @@ fn removing_the_sink_stops_the_frames() {
     capture_a_device(&audio, &events, "Yeti");
     stop_capturing(&audio, &events);
     let during = published.lock().unwrap().len();
-    assert_eq!(during, 40, "nothing was published while the call was up");
+    assert_eq!(
+        during,
+        40 - PRE_ROLL_FRAMES,
+        "nothing was published while the call was up"
+    );
 
     audio.stop_publishing();
     capture_a_device(&audio, &events, "Yeti");
@@ -760,5 +812,11 @@ fn changing_microphone_mid_call_keeps_publishing() {
     capture_a_device(&audio, &events, "Webcam");
     stop_capturing(&audio, &events);
 
-    assert_eq!(published.lock().unwrap().len(), 80);
+    assert_eq!(
+        published.lock().unwrap().len(),
+        2 * (40 - PRE_ROLL_FRAMES),
+        "each device runs its own pre-roll, because publishing 30 ms captured \
+         from the microphone somebody just switched away from is worse than \
+         the gap"
+    );
 }

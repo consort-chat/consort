@@ -191,10 +191,7 @@ mod tests {
     }
 
     fn person(id: &str, name: &str) -> Participant {
-        Participant {
-            id: id.to_owned(),
-            name: name.to_owned(),
-        }
+        Participant::named(id, name)
     }
 
     fn voice(id: &str, name: &str) -> RoomFacts {

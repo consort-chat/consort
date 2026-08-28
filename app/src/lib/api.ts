@@ -95,6 +95,32 @@ export interface Participant {
    * display name this is the user id, which is still a name a person knows.
    */
   name: string;
+  /**
+   * Whether they have muted themselves.
+   *
+   * Only ever true for somebody in the call this session is also in. It comes
+   * from the media layer, which learns it from the SFU. Room state carries
+   * nothing like it, so a person listed from a channel this session is not
+   * sitting in is reported unmuted because nothing there could say otherwise,
+   * not because anything checked.
+   *
+   * Optional on the wire and defaulted here, so a payload written before the
+   * field existed still parses.
+   */
+  muted?: boolean;
+  /**
+   * Whether they have stopped listening to the call.
+   *
+   * Only ever true of another Consort client. Deafening is built out of one
+   * session's own subscriptions, so nothing in MatrixRTC or LiveKit reports
+   * it and Consort clients tell each other over the call's data channel.
+   * Somebody in Element Call is reported as merely muted, which is what
+   * deafening looks like from outside.
+   *
+   * Implies `muted`, because deafening mutes. Kept separate so the interface
+   * can say which of the two somebody chose.
+   */
+  deafened?: boolean;
 }
 
 /** One room under a rail entry. */
@@ -601,10 +627,15 @@ export interface AudioSettings {
  * by another application, or goes away between the list being drawn and the
  * button being pressed, and both are common enough to draw rather than throw.
  *
- * Two devices, one channel. The `tone` states are the output test and the
- * others are the microphone, and they are told apart by name rather than
- * shared: a `switch` that treated `toneStarted` as `started` would put the
- * level meter into "running" because somebody pressed the speaker button.
+ * Three devices, one channel. The `tone` states are the output test, the
+ * `callAudio` ones are the call's own output, and the rest are the microphone.
+ * They are told apart by name rather than shared: a `switch` that treated
+ * `toneStarted` as `started` would put the level meter into "running" because
+ * somebody pressed the speaker button.
+ *
+ * `callAudioFailed` is the one worth drawing prominently. Speakers that will
+ * not open look exactly like a call nobody is speaking in, and without it
+ * somebody spends an evening blaming their microphone.
  */
 export type AudioActivity =
   | { state: "started"; device: string }
@@ -613,7 +644,10 @@ export type AudioActivity =
   | { state: "level"; level: number; probability: number; open: boolean }
   | { state: "toneStarted"; device: string }
   | { state: "toneStopped" }
-  | { state: "toneFailed"; error: string };
+  | { state: "toneFailed"; error: string }
+  | { state: "callAudioStarted"; device: string }
+  | { state: "callAudioStopped" }
+  | { state: "callAudioFailed"; error: string };
 
 /**
  * What this machine has, and which of it is in use.
@@ -786,4 +820,87 @@ export function callDisconnect(): Promise<void> {
  */
 export function onCall(handler: (call: Call) => void): Promise<UnlistenFn> {
   return listen<Call>("call", (event) => handler(event.payload));
+}
+
+/**
+ * What this session is doing with its own audio, mirrored from
+ * `consort_call::SelfAudio`.
+ *
+ * Two flags rather than one tri-state, because they are two buttons and either
+ * can be pressed while the other is down. `deafened` implies the microphone is
+ * off, but it does not imply `muted`: that flag is what somebody pressed, and
+ * it is what decides whether undeafening hands the microphone back.
+ */
+export interface SelfAudio {
+  /** Whether the microphone is off because somebody said so. */
+  muted: boolean;
+  /** Whether this session has stopped receiving everybody else's audio. */
+  deafened: boolean;
+}
+
+/** Neither, which is where every session starts and where Rust starts too. */
+export const HEARING: SelfAudio = { muted: false, deafened: false };
+
+/**
+ * Listen to whether this session is muted or deafened.
+ *
+ * A channel of its own rather than a fifth call state, because only the last
+ * event per channel is replayed to a webview that reloaded: a mute sent as a
+ * call state would evict the call it was pressed during.
+ */
+export function onSelfAudio(
+  handler: (audio: SelfAudio) => void,
+): Promise<UnlistenFn> {
+  return listen<SelfAudio>("self-audio", (event) => handler(event.payload));
+}
+
+/**
+ * Nobody is talking, which is where every session starts.
+ *
+ * A single frozen instance rather than a fresh `new Set()` per default, so a
+ * component that falls back to it does not hand React a different object on
+ * every render and redraw a list for it.
+ */
+export const NOBODY: ReadonlySet<string> = new Set();
+
+/**
+ * Listen to who in the current call is talking, by Matrix user ID.
+ *
+ * Its own channel and never replayed, unlike the mute above. This arrives
+ * several times a second, and it describes a moment: replaying the last one to
+ * a webview that reloaded would leave a ring drawn around somebody who stopped
+ * talking before the reload, with nothing to take it off again.
+ *
+ * The empty list is a real answer and arrives whenever the last person stops.
+ *
+ * The SFU decides who counts as talking, from the audio it is already
+ * receiving. That is one answer for everybody in the call, arrived at the same
+ * way, rather than each client guessing from what it happens to be able to
+ * measure.
+ */
+export function onSpeaking(
+  handler: (userIds: string[]) => void,
+): Promise<UnlistenFn> {
+  return listen<string[]>("speaking", (event) => handler(event.payload));
+}
+
+/**
+ * Mute or unmute this session's microphone.
+ *
+ * Nothing comes back but the acknowledgement. What the state now is arrives
+ * through `onSelfAudio`, so that what is drawn is what the call thread did
+ * rather than what was asked of it.
+ */
+export function callSetMuted(muted: boolean): Promise<void> {
+  return invoke<void>("call_set_muted", { muted });
+}
+
+/**
+ * Stop or resume receiving the audio of everybody else in the call.
+ *
+ * Mutes on the way, which arrives through `onSelfAudio` as part of the same
+ * change. Undeafening does not unmute somebody who had already muted.
+ */
+export function callSetDeafened(deafened: boolean): Promise<void> {
+  return invoke<void>("call_set_deafened", { deafened });
 }

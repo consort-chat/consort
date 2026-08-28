@@ -1,4 +1,4 @@
-import type { Call } from "../lib/api";
+import type { Call, SelfAudio } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
 
@@ -27,6 +27,61 @@ function HangUpIcon() {
   );
 }
 
+/**
+ * A microphone, and the same microphone struck through.
+ *
+ * One component with a slash it can draw or not, rather than two icons. The
+ * body has to stay in exactly the same place between the two states or the
+ * button appears to jump when it is pressed, and the surest way to keep two
+ * drawings identical is for there to be one drawing.
+ */
+function MicrophoneIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <path d="M12 17v4" />
+      {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
+/**
+ * Headphones, struck through when this session has stopped listening.
+ *
+ * Headphones rather than a second speaker. The disconnect button is already a
+ * struck-through speaker, and three buttons in a row where two are the same
+ * crossed-out glyph is a row nobody can read at a glance.
+ */
+function HeadphonesIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 15v-3a8 8 0 0 1 16 0v3" />
+      <path d="M4 15h3v5H5.5A1.5 1.5 0 0 1 4 18.5z" />
+      <path d="M20 15h-3v5h1.5a1.5 1.5 0 0 0 1.5-1.5z" />
+      {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
 interface Props {
   call: Call;
   /**
@@ -37,7 +92,30 @@ interface Props {
    * answer to drift from the first.
    */
   channelName: string | null;
+  /**
+   * Whether this session has muted or deafened itself.
+   *
+   * Carried in rather than held here, because it survives this panel: it is
+   * true of the session rather than of the call, and a component that unmounts
+   * when a call ends is the wrong place to keep something that does not.
+   */
+  selfAudio: SelfAudio;
+  /**
+   * Why this session cannot play the call, if it cannot.
+   *
+   * A separate sentence from `call.trouble`, which is about whether the audio
+   * decrypts. This is about whether there is anywhere to put it once it has,
+   * and the two fail independently: a call can be perfectly healthy and still
+   * be coming out of a device that another application is holding.
+   *
+   * Worth its own line rather than a log entry, because speakers that will not
+   * open look exactly like a call nobody is speaking in. Without it somebody
+   * spends an evening blaming their microphone.
+   */
+  audioProblem?: string | null;
   onDisconnect: () => void;
+  onSetMuted: (muted: boolean) => void;
+  onSetDeafened: (deafened: boolean) => void;
 }
 
 /**
@@ -56,8 +134,23 @@ interface Props {
  * is still carried in so this can change its mind without the shell changing
  * shape.
  */
-export function CallPanel({ call, channelName, onDisconnect }: Props) {
+export function CallPanel({
+  call,
+  channelName,
+  selfAudio,
+  audioProblem = null,
+  onDisconnect,
+  onSetMuted,
+  onSetDeafened,
+}: Props) {
   if (call.state === "disconnected" || call.state === "failed") return null;
+
+  // Deafening mutes, so the microphone button reads as off either way. It stays
+  // pressable: unmuting while deafened is a reasonable thing to ask for and the
+  // Rust side takes it, it simply does not take effect until the ears come back
+  // on. What it must not do is claim the microphone is live when it is not.
+  const { muted, deafened } = selfAudio;
+  const microphoneOff = muted || deafened;
 
   return (
     <div
@@ -81,19 +174,49 @@ export function CallPanel({ call, channelName, onDisconnect }: Props) {
       </div>
 
       {/*
-        An icon, so it needs a name that is not its glyph. `title` as well,
-        because this is the one control here whose purpose is not written
-        beside it, and it is the one that ends a conversation.
+        Icons, so each needs a name that is not its glyph. `title` as well,
+        because none of these has its purpose written beside it and one of them
+        ends a conversation.
+
+        `aria-pressed` on the two that toggle, and not on the one that does not.
+        A screen reader then says "mute, pressed" rather than leaving somebody
+        to work out from a label whether the thing they just did took. The
+        labels stay put across the press for the same reason: a button whose
+        name changes under the cursor is announced as a new button.
       */}
-      <button
-        type="button"
-        className="call-panel__leave"
-        onClick={onDisconnect}
-        aria-label="Disconnect from voice"
-        title="Disconnect"
-      >
-        <HangUpIcon />
-      </button>
+      <div className="call-panel__controls">
+        <button
+          type="button"
+          className="call-panel__control"
+          onClick={() => onSetMuted(!muted)}
+          aria-pressed={microphoneOff}
+          aria-label="Mute microphone"
+          title={microphoneOff ? "Unmute" : "Mute"}
+        >
+          <MicrophoneIcon off={microphoneOff} />
+        </button>
+
+        <button
+          type="button"
+          className="call-panel__control"
+          onClick={() => onSetDeafened(!deafened)}
+          aria-pressed={deafened}
+          aria-label="Deafen"
+          title={deafened ? "Undeafen" : "Deafen"}
+        >
+          <HeadphonesIcon off={deafened} />
+        </button>
+
+        <button
+          type="button"
+          className="call-panel__leave"
+          onClick={onDisconnect}
+          aria-label="Disconnect from voice"
+          title="Disconnect"
+        >
+          <HangUpIcon />
+        </button>
+      </div>
 
       {/*
         An alert, and the loudest thing on this strip when it is here. A call
@@ -108,6 +231,16 @@ export function CallPanel({ call, channelName, onDisconnect }: Props) {
       {call.state === "connected" && call.trouble !== null && (
         <p className="call-panel__problem" role="alert">
           {call.trouble}
+        </p>
+      )}
+      {/*
+        Below the other one and never instead of it. They are different
+        failures with different fixes, and a call can have both: nothing
+        decrypts *and* there is nowhere to play it.
+      */}
+      {audioProblem !== null && (
+        <p className="call-panel__problem" role="alert">
+          {audioProblem}
         </p>
       )}
     </div>

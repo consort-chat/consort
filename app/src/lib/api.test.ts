@@ -12,7 +12,11 @@ import {
   callConnect,
   callDisconnect,
   callRoomId,
+  callSetDeafened,
+  callSetMuted,
   onCall,
+  onSelfAudio,
+  HEARING,
   audioSettings,
   audioTestStart,
   audioTestStop,
@@ -34,6 +38,7 @@ import {
   type AudioActivity,
   type AudioDeviceReport,
   type Call,
+  type SelfAudio,
   type AudioSettings,
   type Connection,
   type KeyBackup,
@@ -615,6 +620,63 @@ describe("the call commands", () => {
 
     expect(listen).toHaveBeenNthCalledWith(1, "call", expect.any(Function));
     expect(listen).toHaveBeenNthCalledWith(2, "connection", expect.any(Function));
+  });
+
+  it("asks to mute and to unmute by the same command", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await callSetMuted(true);
+    await callSetMuted(false);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "call_set_muted", { muted: true });
+    expect(invoke).toHaveBeenNthCalledWith(2, "call_set_muted", { muted: false });
+  });
+
+  it("asks to deafen and to undeafen by the same command", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await callSetDeafened(true);
+
+    expect(invoke).toHaveBeenCalledWith("call_set_deafened", { deafened: true });
+  });
+
+  it("does not put mute on the channel the call is on", async () => {
+    // Only the last event per channel is replayed to a webview that reloaded.
+    // Sharing would mean a mute evicting the call it was pressed during, and a
+    // client coming back believing it is in no channel while it is publishing
+    // one.
+    listen.mockResolvedValue(() => {});
+
+    await onCall(() => {});
+    await onSelfAudio(() => {});
+
+    expect(listen).toHaveBeenNthCalledWith(1, "call", expect.any(Function));
+    expect(listen).toHaveBeenNthCalledWith(
+      2,
+      "self-audio",
+      expect.any(Function),
+    );
+  });
+
+  it("hands the mute state to the handler unwrapped", async () => {
+    const seen: SelfAudio[] = [];
+    listen.mockImplementation(
+      (_channel: string, handler: (event: { payload: SelfAudio }) => void) => {
+        handler({ payload: { muted: true, deafened: true } });
+        return Promise.resolve(() => {});
+      },
+    );
+
+    await onSelfAudio((audio) => seen.push(audio));
+
+    expect(seen).toEqual([{ muted: true, deafened: true }]);
+  });
+
+  it("starts where Rust starts", () => {
+    // The two never exchange an opening value: nothing is emitted until
+    // something changes. Agreeing on the default is what makes silence mean
+    // "neither" rather than "not known yet".
+    expect(HEARING).toEqual({ muted: false, deafened: false });
   });
 
   it("reads the room out of every state that has one", () => {

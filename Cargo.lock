@@ -956,6 +956,8 @@ version = "0.1.0"
 dependencies = [
  "consort-audio",
  "consort-matrix",
+ "futures-util",
+ "livekit",
  "matrix-rtc-core",
  "matrix-rtc-livekit",
  "matrix-rtc-media",

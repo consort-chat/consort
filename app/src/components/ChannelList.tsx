@@ -1,4 +1,5 @@
 import {
+  NOBODY,
   callRoomId,
   type Call,
   type Channel,
@@ -46,12 +47,71 @@ function VoiceIcon() {
  * channels is omitted, so a quiet voice channel keeps exactly the shape it had
  * before this existed.
  */
+/**
+ * A struck-through microphone, next to somebody who has muted themselves.
+ *
+ * Smaller and thinner than the one in the call panel. That one is a control
+ * somebody presses; this is a fact about a name in a list, and drawing them at
+ * the same weight would make the list look like a row of buttons.
+ */
+function MutedIcon({ "aria-label": label }: { "aria-label": string }) {
+  return (
+    <svg
+      className="channels__muted"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <path d="M12 17v4" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+
+/**
+ * Struck-through headphones, next to somebody who has stopped listening.
+ *
+ * Drawn instead of the microphone rather than beside it. Deafening mutes, so
+ * both are true of the same person, and showing two icons would spend twice
+ * the width saying one thing. The headphones are the stronger claim: somebody
+ * muted might still be listening, somebody deafened is not.
+ */
+function DeafenedIcon({ "aria-label": label }: { "aria-label": string }) {
+  return (
+    <svg
+      className="channels__muted"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
+      <path d="M4 14h3v6H5.5A1.5 1.5 0 0 1 4 18.5z" />
+      <path d="M20 14h-3v6h1.5a1.5 1.5 0 0 0 1.5-1.5z" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+
 function Participants({
   channel,
   people,
+  speaking,
 }: {
   channel: Channel;
   people: Participant[];
+  speaking: ReadonlySet<string>;
 }) {
   if (people.length === 0) return null;
 
@@ -60,8 +120,19 @@ function Participants({
       className="channels__people"
       aria-label={`In ${channelLabel(channel)}`}
     >
+      {/*
+        `data-speaking` sits on the row rather than on the avatar, because
+        `RoomAvatar` takes the props it knows about and drops the rest. The
+        ring is drawn on the face from here, which is where every other client
+        puts it and where somebody scanning a list of faces is already looking.
+      */}
       {people.map((participant) => (
-        <li key={participant.id} className="channels__person">
+        <li
+          key={participant.id}
+          className="channels__person"
+          data-muted={participant.muted === true}
+          data-speaking={speaking.has(participant.id)}
+        >
           <RoomAvatar
             roomId={channel.id}
             userId={participant.id}
@@ -69,6 +140,22 @@ function Participants({
             className="channels__face"
           />
           <span className="channels__who">{participant.name}</span>
+          {/*
+            Drawn rather than only dimmed, and with a name on it. Somebody
+            scanning this list for who to talk to is reading names, not
+            noticing that one of them is a shade lighter, and a colour with no
+            glyph beside it is nothing at all to a screen reader.
+
+            One icon, not two. Deafening mutes, so both flags are set on the
+            same person, and the headphones are the stronger claim.
+          */}
+          {participant.deafened === true ? (
+            <DeafenedIcon aria-label={`${participant.name} is deafened`} />
+          ) : (
+            participant.muted === true && (
+              <MutedIcon aria-label={`${participant.name} is muted`} />
+            )
+          )}
         </li>
       ))}
     </ul>
@@ -111,11 +198,13 @@ function ChannelRow({
   channel,
   selected,
   call,
+  speaking,
   onSelect,
 }: {
   channel: Channel;
   selected: boolean;
   call: Call;
+  speaking: ReadonlySet<string>;
   onSelect: () => void;
 }) {
   const voice = channel.kind === "voice";
@@ -170,7 +259,11 @@ function ChannelRow({
         target that opens the room instead.
       */}
       {voice && (
-        <Participants channel={channel} people={peopleIn(channel, call)} />
+        <Participants
+          channel={channel}
+          people={peopleIn(channel, call)}
+          speaking={speaking}
+        />
       )}
     </li>
   );
@@ -181,12 +274,14 @@ function Group({
   channels,
   selectedId,
   call,
+  speaking,
   onSelect,
 }: {
   label: string;
   channels: Channel[];
   selectedId: string | null;
   call: Call;
+  speaking: ReadonlySet<string>;
   onSelect: (id: string) => void;
 }) {
   // An empty group is no group. A "VOICE" header over nothing reads as a
@@ -203,6 +298,7 @@ function Group({
             channel={channel}
             selected={channel.id === selectedId}
             call={call}
+            speaking={speaking}
             onSelect={() => onSelect(channel.id)}
           />
         ))}
@@ -222,6 +318,15 @@ interface Props {
    * connected, and a failure that names a channel and a reason.
    */
   call: Call;
+  /**
+   * Who in the call is talking, by Matrix user ID.
+   *
+   * Drilled the way `call` is rather than put in a context, because it is the
+   * same journey to the same place and one of them being different would be
+   * the surprising thing. Defaulted to nobody so a caller that has no call to
+   * describe does not have to invent an empty set.
+   */
+  speaking?: ReadonlySet<string>;
   onSelect: (id: string) => void;
 }
 
@@ -232,7 +337,13 @@ interface Props {
  * MSC1772, and filtering preserves it: a channel keeps its place relative to
  * its neighbours even when it moves between the two groups.
  */
-export function ChannelList({ space, selectedId, call, onSelect }: Props) {
+export function ChannelList({
+  space,
+  selectedId,
+  call,
+  speaking = NOBODY,
+  onSelect,
+}: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
 
@@ -253,6 +364,7 @@ export function ChannelList({ space, selectedId, call, onSelect }: Props) {
             channels={text}
             selectedId={selectedId}
             call={call}
+            speaking={speaking}
             onSelect={onSelect}
           />
           <Group
@@ -260,6 +372,7 @@ export function ChannelList({ space, selectedId, call, onSelect }: Props) {
             channels={voice}
             selectedId={selectedId}
             call={call}
+            speaking={speaking}
             onSelect={onSelect}
           />
         </>

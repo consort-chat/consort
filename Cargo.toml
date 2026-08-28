@@ -113,6 +113,19 @@ matrix-rtc-core = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "3
 # than resolving a second copy.
 futures-util = { version = "0.3", default-features = false }
 
+# Named directly only so `consort_call::livekit` can reach `Room::subscribe`
+# and `DataPacket`, which `matrix-rtc-livekit` does not re-export. Deafening
+# has no representation in MatrixRTC or LiveKit, so Consort clients tell each
+# other over the call's own data channel: see `consort_call::notices` for why
+# that rather than a participant attribute or a room event.
+#
+# No features and no default ones, so cargo unifies this with the copy
+# matrix-rtc-livekit already asks for rather than resolving a second one. The
+# version range is deliberately the same `^0.7` that crate uses: the exact
+# build is decided by the hand-pinned Cargo.lock entry above, and restating it
+# here as `=` would put the pin in two places that could disagree.
+livekit = { version = "0.7", default-features = false }
+
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

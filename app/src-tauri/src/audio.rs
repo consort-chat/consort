@@ -19,7 +19,9 @@ use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::thread::JoinHandle;
 
-use consort_audio::{AudioCapture, AudioEvent, AudioPlayback, AudioThread, GateConfig, GatedSink};
+use consort_audio::{
+    AudioCapture, AudioEvent, AudioPlayback, AudioThread, GateConfig, GatedSink, Voices,
+};
 
 use crate::events::{AppEvent, EventSink};
 
@@ -121,6 +123,18 @@ impl AudioBridge {
             thread.stop_tone();
         }
     }
+
+    pub fn play_call(&self, device: Option<String>, voices: Voices) {
+        if let Some(thread) = &self.thread {
+            thread.play_call(device, voices);
+        }
+    }
+
+    pub fn stop_call(&self) {
+        if let Some(thread) = &self.thread {
+            thread.stop_call();
+        }
+    }
 }
 
 impl Drop for AudioBridge {
@@ -194,6 +208,16 @@ mod tests {
             on_end: ToneEnded,
         ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
             self.endings.lock().unwrap().push(on_end);
+            Ok(Box::new(FakeTone {
+                device: device.unwrap_or("Default Out").to_owned(),
+            }))
+        }
+
+        fn play_call(
+            &self,
+            device: Option<&str>,
+            _voices: Voices,
+        ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
             Ok(Box::new(FakeTone {
                 device: device.unwrap_or("Default Out").to_owned(),
             }))

@@ -23,6 +23,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 
 import { AppShell } from "./AppShell";
 import { resetAvatarCache } from "../lib/avatars";
+import { HEARING } from "../lib/api";
 import type {
   AudioDeviceReport,
   AudioSettings,
@@ -30,6 +31,7 @@ import type {
   Channel,
   Profile,
   Rooms,
+  SelfAudio,
 } from "../lib/api";
 
 const profile: Profile = {
@@ -81,15 +83,21 @@ function textChannel(id: string, name: string): Channel {
 function shell({
   rooms = EMPTY_HOME,
   call = { state: "disconnected" } as Call,
+  selfAudio = HEARING,
   onSignedOut = vi.fn(),
   onJoinVoice = vi.fn(),
   onLeaveVoice = vi.fn(),
+  onSetMuted = vi.fn(),
+  onSetDeafened = vi.fn(),
 }: {
   rooms?: Rooms;
   call?: Call;
+  selfAudio?: SelfAudio;
   onSignedOut?: ReturnType<typeof vi.fn>;
   onJoinVoice?: ReturnType<typeof vi.fn>;
   onLeaveVoice?: ReturnType<typeof vi.fn>;
+  onSetMuted?: ReturnType<typeof vi.fn>;
+  onSetDeafened?: ReturnType<typeof vi.fn>;
 } = {}) {
   const { container } = render(
     <AppShell
@@ -97,6 +105,7 @@ function shell({
       rooms={rooms}
       connection={{ state: "live" }}
       call={call}
+      selfAudio={selfAudio}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}
@@ -105,6 +114,8 @@ function shell({
       onDismissFlow={vi.fn()}
       onJoinVoice={onJoinVoice}
       onLeaveVoice={onLeaveVoice}
+      onSetMuted={onSetMuted}
+      onSetDeafened={onSetDeafened}
       onSignedOut={onSignedOut}
     />,
   );

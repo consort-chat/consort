@@ -38,11 +38,12 @@ use std::time::Duration;
 
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::event::CallEvent;
+use crate::event::{CallEvent, SelfAudio};
 use crate::failure::CallFailure;
+use crate::hearing::Ears;
 use crate::microphone::Microphone;
 use crate::publish::pump;
-use crate::transport::{CallSession, CallTransport, Roster};
+use crate::transport::{CallSession, CallTransport, Change, Roster};
 
 /// How long a join may take before it is abandoned.
 ///
@@ -85,10 +86,21 @@ pub const SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the thread accepts.
 enum Message {
-    Connect { room_id: String },
+    Connect {
+        room_id: String,
+    },
     Disconnect,
+    /// Mute or unmute this session's microphone.
+    SetMuted(bool),
+    /// Stop or resume receiving everybody else's audio.
+    SetDeafened(bool),
     Shutdown,
 }
+
+// The loop holds a [`SelfAudio`] rather than [`Joined`] doing it, because it
+// outlives a call. Somebody who muted themselves and then clicked a different
+// voice channel has not asked to be heard again, and a mute button that
+// silently releases itself when you move is a mute button nobody can trust.
 
 /// A handle on the call thread.
 ///
@@ -102,20 +114,22 @@ pub struct CallThread {
 impl CallThread {
     /// Start the thread. It idles until told to [`connect`](Self::connect).
     ///
-    /// `microphone` is where captured audio arrives from. It is taken here
-    /// rather than at each connect because the audio thread has to be able to
-    /// hold the other end of it whether or not a call is up: the two threads
-    /// are started once, and the queue between them outlives any one call.
+    /// `microphone` is where captured audio arrives from, and `ears` is where
+    /// everybody else's audio goes. Both are taken here rather than at each
+    /// connect because the audio thread has to be able to hold the other end of
+    /// them whether or not a call is up: the two threads are started once, and
+    /// what is between them outlives any one call.
     pub fn spawn<T: CallTransport>(
         transport: T,
         events: UnboundedSender<CallEvent>,
         microphone: Microphone,
+        ears: Ears,
     ) -> Self {
         let (commands, inbox) = unbounded_channel::<Message>();
 
         let join = std::thread::Builder::new()
             .name("consort-call".to_owned())
-            .spawn(move || run(transport, inbox, events, microphone))
+            .spawn(move || run(transport, inbox, events, microphone, ears))
             .expect("the operating system refused a thread");
 
         Self {
@@ -132,6 +146,23 @@ impl CallThread {
     /// Leave the current call, if there is one.
     pub fn disconnect(&self) {
         self.send(Message::Disconnect);
+    }
+
+    /// Mute or unmute this session's microphone.
+    ///
+    /// Remembered across calls, so this can be pressed before joining one and
+    /// is still true after switching channels.
+    pub fn set_muted(&self, muted: bool) {
+        self.send(Message::SetMuted(muted));
+    }
+
+    /// Stop or resume receiving the audio of everybody else in the call.
+    ///
+    /// Mutes on the way, and unmuting is not implied on the way back: somebody
+    /// who was muted before they deafened stays muted after, which is what the
+    /// button they did not press means.
+    pub fn set_deafened(&self, deafened: bool) {
+        self.send(Message::SetDeafened(deafened));
     }
 
     /// Post a command, ignoring a thread that has already gone.
@@ -168,6 +199,7 @@ fn run<T: CallTransport>(
     inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
+    ears: Ears,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -185,7 +217,7 @@ fn run<T: CallTransport>(
     };
 
     let local = tokio::task::LocalSet::new();
-    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone)));
+    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone, ears)));
 }
 
 /// A call this session is in, and the task carrying its microphone.
@@ -203,7 +235,11 @@ struct Joined<S> {
 /// The task it holds waits on a queue, so nothing else would ever end it: a
 /// microphone that has been switched off stops filling the queue rather than
 /// closing it. Tying it to a handle means no path out of a call can forget.
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
+///
+/// Shared with [`crate::livekit`], whose per-participant audio pumps have the
+/// same problem in the other direction: they wait on a frame stream that a
+/// participant going quiet does not close.
+pub(crate) struct AbortOnDrop(pub(crate) tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
@@ -217,13 +253,54 @@ async fn serve<T: CallTransport>(
     mut inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
+    ears: Ears,
 ) {
     let mut current: Option<Joined<T::Session>> = None;
+    let mut audio = SelfAudio::default();
 
-    while let Some(message) = inbox.recv().await {
+    // How the roster watcher asks for this session's own audio state to be
+    // pushed at the call again.
+    //
+    // Its own channel rather than another `Message`, because the sender goes to
+    // a task this loop owns and a clone of the command sender would keep the
+    // command channel open forever. `inbox.recv()` returning `None` is how a
+    // dropped handle is noticed, and a loop holding its own sender would never
+    // see it.
+    let (restate, mut restated) = unbounded_channel::<()>();
+
+    loop {
+        let message = tokio::select! {
+            message = inbox.recv() => message,
+            Some(()) = restated.recv() => {
+                // Somebody joined or left. Deafening is per participant all
+                // the way down, so a new arrival hears nothing about a
+                // decision taken before they got here: without this, the one
+                // thing deafen must never do, let somebody through, is exactly
+                // what happens to whoever walks in next.
+                apply(current.as_ref(), audio, &ears).await;
+                continue;
+            }
+        };
+        let Some(message) = message else { break };
+
         match message {
             Message::Connect { room_id } => {
-                current = connect(&transport, current, room_id, &events, &microphone).await;
+                // Whatever the last channel was still saying is not something
+                // to hear in the new one. `connect` leaves the old call on the
+                // way past, and its queued audio goes with it.
+                ears.silence();
+                current =
+                    connect(&transport, current, room_id, &events, &microphone, &restate).await;
+                // Re-applied rather than assumed. A new session starts unmuted
+                // and undeafened however this one was left, so a person who
+                // muted themselves in one channel and clicked another would
+                // otherwise be live in it without touching anything.
+                //
+                // Not announced, because nothing changed. This is one half of a
+                // state whose other half is already drawn, and repeating it as
+                // part of joining would make it look like something a call
+                // decides.
+                apply(current.as_ref(), audio, &ears).await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -236,8 +313,21 @@ async fn serve<T: CallTransport>(
                     // which is exactly how long the homeserver feels like
                     // taking.
                     emit(&events, CallEvent::Disconnected);
+                    // Before the leave, for the same reason the event is. The
+                    // pump tasks stop when the session is dropped, but what
+                    // they already queued would otherwise be played into the
+                    // silence after the call, or into the next one.
+                    ears.silence();
                     leave(Some(joined), LEAVE_TIMEOUT).await;
                 }
+            }
+            Message::SetMuted(muted) => {
+                audio = announce(&events, audio, SelfAudio { muted, ..audio });
+                apply(current.as_ref(), audio, &ears).await;
+            }
+            Message::SetDeafened(deafened) => {
+                audio = announce(&events, audio, SelfAudio { deafened, ..audio });
+                apply(current.as_ref(), audio, &ears).await;
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
@@ -255,6 +345,56 @@ async fn serve<T: CallTransport>(
     leave(current.take(), SHUTDOWN_LEAVE_TIMEOUT).await;
 }
 
+/// Move to `next`, saying so only if it is different.
+///
+/// The interface draws these two, so a repeat is a redraw of what is already on
+/// screen. Pressing mute twice is one thing somebody did twice; pressing it
+/// once and being told twice is a flicker.
+fn announce(events: &UnboundedSender<CallEvent>, current: SelfAudio, next: SelfAudio) -> SelfAudio {
+    if next != current {
+        emit(events, CallEvent::SelfAudio(next));
+    }
+    next
+}
+
+/// Push this session's mute and deafen state at the call it is in.
+///
+/// Nothing to do when there is no call, and that is not a failure: the buttons
+/// work outside one, and what they set is applied at the next join.
+///
+/// A failure here is logged and no more. Both of these are indicators as much
+/// as they are switches, and the honest thing to show is what was asked for:
+/// tearing the call down over a mute that the SFU would not accept, or silently
+/// snapping the button back after somebody pressed it, are both worse than a
+/// line in the log.
+async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ears: &Ears) {
+    let Some(joined) = current else {
+        return;
+    };
+
+    if let Err(error) = joined.session.set_muted(audio.microphone_off()).await {
+        tracing::warn!(%error, muted = audio.microphone_off(), "could not mute the microphone");
+    }
+    if let Err(error) = joined.session.set_deafened(audio.deafened).await {
+        tracing::warn!(%error, deafened = audio.deafened, "could not change what this session hears");
+    }
+
+    // Attached here rather than at the join, because at the join there is
+    // usually nothing to attach to: the memberships are known before their
+    // tracks are subscribed. This runs again on every roster change, which is
+    // exactly when a track appears, and it leaves anybody already playing
+    // alone.
+    joined.session.listen(ears);
+
+    // Last, and after `set_deafened` rather than before it. Pausing the
+    // subscriptions stops more audio arriving but takes a round trip to the
+    // SFU to do it, and whatever is already queued would otherwise play out
+    // underneath somebody who has just asked for quiet.
+    if audio.deafened {
+        ears.silence();
+    }
+}
+
 /// Join `room_id`, having first left whatever call was current.
 ///
 /// Returns the call to hold on to, or `None` when there is none: both a join
@@ -265,6 +405,7 @@ async fn connect<T: CallTransport>(
     room_id: String,
     events: &UnboundedSender<CallEvent>,
     microphone: &Microphone,
+    restate: &UnboundedSender<()>,
 ) -> Option<Joined<T::Session>> {
     // Already there. Re-announced rather than ignored, because the interface
     // may be asking precisely because it has lost track of where it is, and a
@@ -351,6 +492,7 @@ async fn connect<T: CallTransport>(
         room_id.clone(),
         roster,
         events.clone(),
+        restate.clone(),
     )));
 
     Some(Joined {
@@ -375,10 +517,23 @@ async fn watch_roster<R: Roster>(
     room_id: String,
     mut roster: R,
     events: UnboundedSender<CallEvent>,
+    restate: UnboundedSender<()>,
 ) {
-    while roster.changed().await {
-        let said = connected(&room_id, &roster).await;
-        emit(&events, said);
+    while let Some(change) = roster.changed().await {
+        match change {
+            Change::Roster => {
+                // Told before the roster is drawn, because the two are answers
+                // to different questions and this one is the urgent half:
+                // somebody who just walked in is audible until it is answered,
+                // and unheard until their audio is attached.
+                let _ = restate.send(());
+                let said = connected(&room_id, &roster).await;
+                emit(&events, said);
+            }
+            // Nothing is re-read and nothing is restated. This arrives many
+            // times a second and everything it needs is already in it.
+            Change::Speaking(user_ids) => emit(&events, CallEvent::Speaking { user_ids }),
+        }
     }
 }
 
@@ -460,12 +615,13 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use consort_matrix::Participant;
     use tokio::sync::watch;
 
+    use crate::hearing::Heard;
     use crate::publish::PublishedAudio;
 
     /// What the fake transport was asked to do, in order.
@@ -480,6 +636,23 @@ mod tests {
         /// Publications not yet dropped. The task carrying the microphone owns
         /// one, so this falling back to zero is how a test sees that task end.
         live: Arc<AtomicUsize>,
+        /// What the session was last told about its microphone, and how many
+        /// times it was told anything at all.
+        ///
+        /// The count matters as much as the value: mute is applied on joining
+        /// as well as on pressing the button, and a test that only looked at
+        /// the value could not tell a channel switch that carried the state
+        /// over from one that quietly dropped it.
+        muted: Arc<AtomicBool>,
+        mutes: Arc<AtomicUsize>,
+        deafened: Arc<AtomicBool>,
+        /// How many times the session was asked to play the call.
+        ///
+        /// Counted rather than recorded, because what matters is that it is
+        /// asked again on every roster change: the tracks of people already in
+        /// a call are subscribed after their memberships are known, so asking
+        /// once at the join would attach to nobody.
+        listens: Arc<AtomicUsize>,
     }
 
     impl Log {
@@ -497,6 +670,48 @@ mod tests {
 
         fn live(&self) -> usize {
             self.live.load(Ordering::Relaxed)
+        }
+
+        fn muted(&self) -> bool {
+            self.muted.load(Ordering::Relaxed)
+        }
+
+        fn mutes(&self) -> usize {
+            self.mutes.load(Ordering::Relaxed)
+        }
+
+        fn deafened(&self) -> bool {
+            self.deafened.load(Ordering::Relaxed)
+        }
+
+        fn listens(&self) -> usize {
+            self.listens.load(Ordering::Relaxed)
+        }
+    }
+
+    /// Somewhere for a call's audio to go that a test can look inside.
+    ///
+    /// Only the silences are counted. What reaches the far end is `hearing.rs`
+    /// and `ears.rs`; what this is for is the call thread's own decisions about
+    /// when to throw the buffer away.
+    #[derive(Clone, Default)]
+    struct Deaf {
+        silences: Arc<AtomicUsize>,
+    }
+
+    impl Deaf {
+        fn silences(&self) -> usize {
+            self.silences.load(Ordering::Relaxed)
+        }
+    }
+
+    impl Heard for Deaf {
+        fn hear(&self, _who: &str, _samples: &[i16]) {}
+
+        fn forget(&self, _who: &str) {}
+
+        fn silence(&self) {
+            self.silences.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -547,6 +762,11 @@ mod tests {
         /// Held by the transport rather than made per session, so a test can
         /// reach the roster of a call the loop is holding.
         roster: watch::Sender<Standing>,
+        /// Who is talking, on its own channel because that is what it is on
+        /// the real one. A roster read is expensive and a speaker change is
+        /// not, and the whole point of telling them apart is that the second
+        /// must not cost the first.
+        speaking: watch::Sender<Vec<String>>,
     }
 
     /// What a leave does.
@@ -569,6 +789,7 @@ mod tests {
                     leaving: Leaving::Succeeds,
                     publishing: Publishing::Succeeds,
                     roster: watch::channel((Vec::new(), None)).0,
+                    speaking: watch::channel(Vec::new()).0,
                 },
                 log,
             )
@@ -607,6 +828,7 @@ mod tests {
                     leaving: self.leaving,
                     publishing: self.publishing,
                     roster: self.roster.clone(),
+                    speaking: self.speaking.clone(),
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
                 Joining::Hangs => std::future::pending().await,
@@ -622,6 +844,8 @@ mod tests {
         /// The roster every view of this call reads from. A test pushes to the
         /// sender to make somebody arrive or leave.
         roster: watch::Sender<Standing>,
+        /// Who is talking. A test pushes to the sender to make somebody speak.
+        speaking: watch::Sender<Vec<String>>,
     }
 
     /// What a fake call currently is: who is in it, and what is wrong.
@@ -631,28 +855,38 @@ mod tests {
     type Standing = (Vec<Participant>, Option<String>);
 
     /// One view of a fake call.
-    struct FakeRoster(watch::Receiver<Standing>);
+    struct FakeRoster {
+        standing: watch::Receiver<Standing>,
+        speaking: watch::Receiver<Vec<String>>,
+    }
 
     impl Roster for FakeRoster {
         async fn now(&self) -> Vec<Participant> {
-            self.0.borrow().0.clone()
+            self.standing.borrow().0.clone()
         }
 
         fn trouble(&self) -> Option<String> {
-            self.0.borrow().1.clone()
+            self.standing.borrow().1.clone()
         }
 
-        async fn changed(&mut self) -> bool {
-            self.0.changed().await.is_ok()
+        async fn changed(&mut self) -> Option<Change> {
+            tokio::select! {
+                changed = self.standing.changed() => {
+                    changed.ok().map(|()| Change::Roster)
+                }
+                changed = self.speaking.changed() => match changed {
+                    // `borrow_and_update` rather than `borrow`, so a second
+                    // wake-up does not report the same speakers again.
+                    Ok(()) => Some(Change::Speaking(self.speaking.borrow_and_update().clone())),
+                    Err(_) => None,
+                },
+            }
         }
     }
 
     /// Somebody in a call.
     fn person(name: &str) -> Participant {
-        Participant {
-            id: format!("@{}:example.org", name.to_lowercase()),
-            name: name.to_owned(),
-        }
+        Participant::named(format!("@{}:example.org", name.to_lowercase()), name)
     }
 
     impl CallSession for FakeSession {
@@ -660,7 +894,10 @@ mod tests {
         type Roster = FakeRoster;
 
         fn roster(&self) -> Self::Roster {
-            FakeRoster(self.roster.subscribe())
+            FakeRoster {
+                standing: self.roster.subscribe(),
+                speaking: self.speaking.subscribe(),
+            }
         }
 
         async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
@@ -681,6 +918,21 @@ mod tests {
                     "the focus refused the microphone".to_owned(),
                 )),
             }
+        }
+
+        async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
+            self.log.muted.store(muted, Ordering::Relaxed);
+            self.log.mutes.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure> {
+            self.log.deafened.store(deafened, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn listen(&self, _ears: &Ears) {
+            self.log.listens.fetch_add(1, Ordering::Relaxed);
         }
 
         async fn leave(self) -> Result<(), CallFailure> {
@@ -747,7 +999,13 @@ mod tests {
         // microphone into one. The real thread builds its own; here the test's
         // runtime provides it.
         tokio::task::LocalSet::new()
-            .run_until(serve(transport, inbox, events, Microphone::new()))
+            .run_until(serve(
+                transport,
+                inbox,
+                events,
+                Microphone::new(),
+                Arc::new(Deaf::default()),
+            ))
             .await;
 
         let mut transcript = Vec::new();
@@ -988,7 +1246,13 @@ mod tests {
         let (events, _said) = unbounded_channel();
 
         tokio::task::LocalSet::new()
-            .run_until(serve(transport, inbox, events, Microphone::new()))
+            .run_until(serve(
+                transport,
+                inbox,
+                events,
+                Microphone::new(),
+                Arc::new(Deaf::default()),
+            ))
             .await;
 
         assert_eq!(log.left(), vec![GENERAL]);
@@ -1039,8 +1303,16 @@ mod tests {
                     tokio::time::Instant::now()
                 };
 
-                let (_, seen_at) =
-                    tokio::join!(serve(transport, inbox, events, Microphone::new()), watching);
+                let (_, seen_at) = tokio::join!(
+                    serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(Deaf::default()),
+                    ),
+                    watching
+                );
                 seen_at
             })
             .await;
@@ -1092,7 +1364,12 @@ mod tests {
         let (transport, log) = FakeTransport::new(Joining::Succeeds);
         let (events, mut said) = unbounded_channel();
 
-        let thread = CallThread::spawn(transport, events, Microphone::new());
+        let thread = CallThread::spawn(
+            transport,
+            events,
+            Microphone::new(),
+            Arc::new(Deaf::default()),
+        );
         thread.connect(GENERAL.to_owned());
         // Dropping is what ends the thread, and its `Drop` joins, so by the
         // time this returns the loop has finished and every event is queued.
@@ -1113,7 +1390,12 @@ mod tests {
         // click is still in flight through the command layer.
         let (transport, _log) = FakeTransport::new(Joining::Succeeds);
         let (events, _said) = unbounded_channel();
-        let mut thread = CallThread::spawn(transport, events, Microphone::new());
+        let mut thread = CallThread::spawn(
+            transport,
+            events,
+            Microphone::new(),
+            Arc::new(Deaf::default()),
+        );
 
         // Stand the handle down the way `Drop` does, then keep using it.
         let _ = thread.commands.send(Message::Shutdown);
@@ -1206,8 +1488,16 @@ mod tests {
                 let (events, _said) = unbounded_channel();
                 let microphone = Microphone::new();
 
-                let joined =
-                    connect(&transport, None, GENERAL.to_owned(), &events, &microphone).await;
+                let (restate, _restated) = unbounded_channel();
+                let joined = connect(
+                    &transport,
+                    None,
+                    GENERAL.to_owned(),
+                    &events,
+                    &microphone,
+                    &restate,
+                )
+                .await;
                 assert_eq!(log.live(), 1, "nothing was publishing");
 
                 leave(joined, LEAVE_TIMEOUT).await;
@@ -1231,14 +1521,199 @@ mod tests {
                 let (events, _said) = unbounded_channel();
                 let microphone = Microphone::new();
 
-                let joined =
-                    connect(&transport, None, GENERAL.to_owned(), &events, &microphone).await;
+                let (restate, _restated) = unbounded_channel();
+                let joined = connect(
+                    &transport,
+                    None,
+                    GENERAL.to_owned(),
+                    &events,
+                    &microphone,
+                    &restate,
+                )
+                .await;
 
                 assert!(joined.is_none());
                 settle(&log).await;
                 assert_eq!(log.live(), 0);
             })
             .await;
+    }
+
+    /// Muting this session, and deafening it.
+    ///
+    /// Two switches over one piece of state, which is why they are tested
+    /// together: the interesting cases are all about what one does to the
+    /// other, and about what survives a call ending.
+    mod self_audio {
+        use super::*;
+
+        fn muted(muted: bool, deafened: bool) -> CallEvent {
+            CallEvent::SelfAudio(SelfAudio { muted, deafened })
+        }
+
+        /// Run `commands` and report what the session was left holding.
+        async fn ending_with(commands: Vec<Message>) -> (Log, Vec<CallEvent>) {
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let said = transcript(transport, commands).await;
+            (log, said)
+        }
+
+        #[tokio::test]
+        async fn muting_reaches_the_call() {
+            let (log, said) = ending_with(vec![connect_to(GENERAL), Message::SetMuted(true)]).await;
+
+            assert!(log.muted(), "the microphone was never muted");
+            assert!(
+                said.contains(&muted(true, false)),
+                "nothing told the interface what happened: {said:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn deafening_mutes_the_microphone_too() {
+            // Every client with both buttons does this, and it is the only
+            // honest option: carrying on talking into a room you have stopped
+            // listening to is not a state anybody means to be in.
+            let (log, said) =
+                ending_with(vec![connect_to(GENERAL), Message::SetDeafened(true)]).await;
+
+            assert!(log.deafened());
+            assert!(log.muted(), "deafening left the microphone live");
+            assert_eq!(
+                said.last(),
+                Some(&muted(false, true)),
+                "the mute it implies is not a mute the person pressed, and \
+                 saying otherwise would leave the button stuck down after they \
+                 undeafen"
+            );
+        }
+
+        #[tokio::test]
+        async fn undeafening_gives_back_the_microphone() {
+            let (log, _) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetDeafened(true),
+                Message::SetDeafened(false),
+            ])
+            .await;
+
+            assert!(!log.deafened());
+            assert!(!log.muted());
+        }
+
+        #[tokio::test]
+        async fn undeafening_does_not_unmute_somebody_who_was_already_muted() {
+            // The button they did not press. Handing the microphone back to
+            // somebody who muted it before they deafened is putting them on
+            // air without asking.
+            let (log, _) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetMuted(true),
+                Message::SetDeafened(true),
+                Message::SetDeafened(false),
+            ])
+            .await;
+
+            assert!(!log.deafened());
+            assert!(log.muted(), "undeafening unmuted somebody who had muted");
+        }
+
+        #[tokio::test]
+        async fn pressing_a_switch_twice_is_only_said_once() {
+            let (_, said) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetMuted(true),
+                Message::SetMuted(true),
+            ])
+            .await;
+
+            let announcements = said.iter().filter(|event| **event == muted(true, false));
+            assert_eq!(announcements.count(), 1);
+        }
+
+        #[tokio::test]
+        async fn muting_carries_across_a_channel_switch() {
+            // The regression worth guarding. Each call is a new session that
+            // starts unmuted, so somebody who muted themselves and clicked
+            // another channel would arrive in it live.
+            let (log, _) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetMuted(true),
+                connect_to(MUSIC),
+            ])
+            .await;
+
+            assert!(
+                log.muted(),
+                "the second call started with a live microphone"
+            );
+            assert_eq!(log.joined(), vec![GENERAL, MUSIC]);
+            assert_eq!(
+                log.mutes(),
+                3,
+                "once on joining, once on pressing it, once on joining again. \
+                 Anything less means a session was left to work out its own \
+                 mute state, and a new one always decides it is unmuted"
+            );
+        }
+
+        #[tokio::test]
+        async fn muting_before_there_is_a_call_is_remembered_for_one() {
+            // The buttons are drawn whether or not a call is up, and pressing
+            // one with nothing to apply it to is not an error.
+            let (log, _) = ending_with(vec![Message::SetMuted(true), connect_to(GENERAL)]).await;
+
+            assert!(log.muted());
+        }
+
+        #[tokio::test]
+        async fn deafening_is_pushed_again_when_somebody_joins() {
+            // Deafening is per participant all the way down, so a new arrival
+            // knows nothing about a decision taken before they got here.
+            // Without the re-push they are simply audible, which is the one
+            // thing this must never do.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let roster = transport.roster.clone();
+
+            let (to_loop, inbox) = unbounded_channel();
+            to_loop.send(connect_to(GENERAL)).unwrap();
+            to_loop.send(Message::SetDeafened(true)).unwrap();
+
+            let (events, mut said) = unbounded_channel();
+            tokio::task::LocalSet::new()
+                .run_until(async {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(Deaf::default()),
+                    ));
+
+                    // Somebody walks in after the decision. The watcher is
+                    // what notices, and it is a task, so the loop only hears
+                    // about it once both have had the chance to run.
+                    for _ in 0..8 {
+                        tokio::task::yield_now().await;
+                    }
+                    log.deafened.store(false, Ordering::Relaxed);
+                    roster.send((vec![person("Ada")], None)).unwrap();
+                    for _ in 0..8 {
+                        tokio::task::yield_now().await;
+                    }
+
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+                })
+                .await;
+
+            while said.recv().await.is_some() {}
+            assert!(
+                log.deafened(),
+                "the new arrival was audible to somebody who had deafened"
+            );
+        }
     }
 
     /// Who is in the call, and how that reaches the interface.
@@ -1269,6 +1744,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Arc::new(Deaf::default()),
                     ));
 
                     let driver = act(roster, Driver { to_loop, said }).await;
@@ -1485,6 +1961,271 @@ mod tests {
             .await;
 
             assert_eq!(after, vec![connected_with(MUSIC, vec![person("Ada")])]);
+        }
+    }
+
+    /// Who is talking, which is drawn on the roster but does not come with it.
+    mod speaking {
+        use super::*;
+
+        #[tokio::test]
+        async fn who_is_talking_reaches_the_interface() {
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.speaking.subscribe();
+            let speaking = transport.speaking.clone();
+
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, mut said) = unbounded_channel();
+
+            let heard = tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(Deaf::default()),
+                    ));
+
+                    to_loop.send(connect_to(GENERAL)).unwrap();
+                    said.recv().await;
+                    said.recv().await;
+
+                    speaking.send(vec!["@ada:example.org".to_owned()]).unwrap();
+                    let heard = said.recv().await;
+
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+                    heard
+                })
+                .await;
+
+            assert_eq!(
+                heard,
+                Some(CallEvent::Speaking {
+                    user_ids: vec!["@ada:example.org".to_owned()],
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn somebody_starting_to_talk_does_not_redraw_the_roster() {
+            // The reason this is its own event. The SFU revises the speaker
+            // list several times a second, and a `Connected` costs a
+            // member-store read per person to name. Folding the two together
+            // would put a database read behind every syllable.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.speaking.subscribe();
+            let speaking = transport.speaking.clone();
+
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, mut said) = unbounded_channel();
+
+            let after = tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(Deaf::default()),
+                    ));
+
+                    to_loop.send(connect_to(GENERAL)).unwrap();
+                    said.recv().await;
+                    said.recv().await;
+
+                    speaking.send(vec!["@ada:example.org".to_owned()]).unwrap();
+
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+
+                    let mut rest = Vec::new();
+                    while let Some(event) = said.recv().await {
+                        rest.push(event);
+                    }
+                    rest
+                })
+                .await;
+
+            assert!(
+                !after
+                    .iter()
+                    .any(|event| matches!(event, CallEvent::Connected { .. })),
+                "a speaker change redrew the whole roster: {after:?}"
+            );
+        }
+    }
+
+    /// Hearing the other people in the call.
+    ///
+    /// The half that was missing entirely: everything below the call thread
+    /// subscribed to the other participants' tracks and nothing ever pulled a
+    /// frame out of them, so every call was one-way. These are the call
+    /// thread's part of the fix, which is knowing *when* to ask.
+    mod hearing_the_call {
+        use super::*;
+
+        /// Run `commands` and report what the call was asked to play, and where.
+        async fn ending_with(commands: Vec<Message>) -> (Log, Deaf) {
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let ears = Deaf::default();
+
+            let (to_loop, inbox) = unbounded_channel();
+            for command in commands {
+                to_loop.send(command).unwrap();
+            }
+            to_loop.send(Message::Shutdown).unwrap();
+            drop(to_loop);
+
+            let (events, _said) = unbounded_channel();
+            tokio::task::LocalSet::new()
+                .run_until(serve(
+                    transport,
+                    inbox,
+                    events,
+                    Microphone::new(),
+                    Arc::new(ears.clone()),
+                ))
+                .await;
+
+            (log, ears)
+        }
+
+        #[tokio::test]
+        async fn joining_a_call_starts_playing_it() {
+            let (log, _) = ending_with(vec![connect_to(GENERAL)]).await;
+
+            assert!(
+                log.listens() > 0,
+                "the call was joined and nothing was ever asked to play it"
+            );
+        }
+
+        #[tokio::test]
+        async fn nothing_is_played_before_there_is_a_call_to_play() {
+            let (log, _) = ending_with(vec![Message::SetMuted(true)]).await;
+
+            assert_eq!(log.listens(), 0);
+        }
+
+        #[tokio::test]
+        async fn every_roster_change_asks_again() {
+            // The one that makes this work at all. A participant's membership
+            // is known before their track is subscribed, so asking once at the
+            // join attaches to nobody and the call is silent exactly as it was
+            // before any of this existed.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let _watching = transport.roster.subscribe();
+            let roster = transport.roster.clone();
+
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, mut said) = unbounded_channel();
+
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Arc::new(Deaf::default()),
+                    ));
+
+                    to_loop.send(connect_to(GENERAL)).unwrap();
+                    said.recv().await;
+                    said.recv().await;
+                    let joined = log.listens();
+
+                    roster.send((vec![person("Ada")], None)).unwrap();
+                    // Awaiting the roster event this produces is what makes the
+                    // count below deterministic rather than a race with the
+                    // watcher task.
+                    said.recv().await;
+
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+
+                    assert!(
+                        log.listens() > joined,
+                        "somebody arrived and nothing went looking for their audio"
+                    );
+                })
+                .await;
+        }
+
+        #[tokio::test]
+        async fn deafening_drops_what_is_already_queued() {
+            // Pausing the subscriptions stops more arriving, but that is a
+            // round trip to the SFU. Without this, the audio already buffered
+            // plays out underneath somebody who has just asked for quiet.
+            let (_, ears) =
+                ending_with(vec![connect_to(GENERAL), Message::SetDeafened(true)]).await;
+
+            assert!(ears.silences() > 0, "deafening left the buffer playing");
+        }
+
+        #[tokio::test]
+        async fn undeafening_does_not_throw_away_what_has_just_arrived() {
+            let (_, deafening) =
+                ending_with(vec![connect_to(GENERAL), Message::SetDeafened(true)]).await;
+            let (_, undeafening) = ending_with(vec![
+                connect_to(GENERAL),
+                Message::SetDeafened(true),
+                Message::SetDeafened(false),
+            ])
+            .await;
+
+            assert_eq!(
+                deafening.silences(),
+                undeafening.silences(),
+                "undeafening threw away the first audio it was given"
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_a_call_drops_what_it_was_still_saying() {
+            // The pumps stop when the session is dropped, but whatever they
+            // already queued would otherwise play into the silence afterwards.
+            let (_, ears) = ending_with(vec![connect_to(GENERAL), Message::Disconnect]).await;
+
+            assert!(ears.silences() > 0);
+        }
+
+        #[tokio::test]
+        async fn moving_channels_does_not_carry_the_old_one_s_audio_over() {
+            // A word from the channel somebody just left, arriving in the one
+            // they just joined.
+            let (_, ears) = ending_with(vec![connect_to(GENERAL), connect_to(MUSIC)]).await;
+
+            assert!(ears.silences() > 0);
+        }
+
+        #[tokio::test]
+        async fn a_call_that_would_not_start_is_not_played() {
+            let (transport, log) = FakeTransport::new(Joining::Fails(CallFailure::NoTransport(
+                "no SFU".to_owned(),
+            )));
+            let (to_loop, inbox) = unbounded_channel();
+            to_loop.send(connect_to(GENERAL)).unwrap();
+            to_loop.send(Message::Shutdown).unwrap();
+            drop(to_loop);
+
+            let (events, _said) = unbounded_channel();
+            tokio::task::LocalSet::new()
+                .run_until(serve(
+                    transport,
+                    inbox,
+                    events,
+                    Microphone::new(),
+                    Arc::new(Deaf::default()),
+                ))
+                .await;
+
+            assert_eq!(log.listens(), 0);
         }
     }
 }

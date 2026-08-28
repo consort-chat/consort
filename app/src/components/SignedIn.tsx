@@ -4,7 +4,13 @@ import {
   asCommandError,
   callConnect,
   callDisconnect,
+  callSetDeafened,
+  callSetMuted,
+  HEARING,
   onCall,
+  onAudio,
+  onSelfAudio,
+  onSpeaking,
   onConnection,
   onKeyBackup,
   onRooms,
@@ -17,6 +23,7 @@ import {
   type KeyBackup,
   type Profile,
   type Rooms,
+  type SelfAudio,
   type TokenStorage,
   type Verification,
   type VerificationFlow,
@@ -71,6 +78,20 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // reloaded mid-call is corrected by `resendState` below, which is why this
   // channel is one of the ones the Rust side keeps.
   const [call, setCall] = useState<Call>({ state: "disconnected" });
+  // Starts where Rust starts. The two only ever meet through `onSelfAudio`,
+  // which says nothing until something changes, so agreeing on the opening
+  // value is what makes silence mean "neither" rather than "unknown".
+  const [selfAudio, setSelfAudio] = useState<SelfAudio>(HEARING);
+  // Who is talking, by user id. A `Set` rather than an array because the only
+  // question ever asked of it is whether one name is in it, once per person
+  // drawn, several times a second.
+  const [speaking, setSpeaking] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  // Why the call cannot be played, when it cannot. Held here rather than in
+  // the call panel because the panel unmounts between calls and this arrives
+  // as the call is starting, which is exactly when it would be missed.
+  const [audioProblem, setAudioProblem] = useState<string | null>(null);
 
   function dismiss(flowId: string) {
     setFlows((current) => {
@@ -116,6 +137,28 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       }).then(keep),
       onCall((state) => {
         if (!cancelled) setCall(state);
+      }).then(keep),
+      onSelfAudio((audio) => {
+        if (!cancelled) setSelfAudio(audio);
+      }).then(keep),
+      onSpeaking((userIds) => {
+        if (!cancelled) setSpeaking(new Set(userIds));
+      }).then(keep),
+      // Only the call's own output, out of a channel that also carries the
+      // settings screen's microphone test and its level readings. A failed
+      // chime is the settings screen's business and is already drawn there.
+      onAudio((activity) => {
+        if (cancelled) return;
+        if (activity.state === "callAudioFailed") {
+          setAudioProblem(
+            `Consort cannot play this call: ${activity.error}. Nobody in it will be audible until an output device is available.`,
+          );
+        } else if (
+          activity.state === "callAudioStarted" ||
+          activity.state === "callAudioStopped"
+        ) {
+          setAudioProblem(null);
+        }
       }).then(keep),
     ]);
 
@@ -180,6 +223,25 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     });
   }
 
+  /**
+   * Mute, unmute, deafen or undeafen.
+   *
+   * Nothing is set here either, for the reason `joinVoice` sets nothing: the
+   * button reflects what the call thread did. A press that never reached it
+   * leaves the button where it was, which is the truth.
+   */
+  function setMuted(muted: boolean) {
+    callSetMuted(muted).catch((raw: unknown) => {
+      console.error("could not ask to mute", asCommandError(raw).detail);
+    });
+  }
+
+  function setDeafened(deafened: boolean) {
+    callSetDeafened(deafened).catch((raw: unknown) => {
+      console.error("could not ask to deafen", asCommandError(raw).detail);
+    });
+  }
+
   const running = Object.values(flows);
 
   return (
@@ -194,8 +256,13 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       flows={running}
       canStartVerification={!running.some(isRunning)}
       onDismissFlow={dismiss}
+      selfAudio={selfAudio}
+      speaking={speaking}
+      audioProblem={audioProblem}
       onJoinVoice={joinVoice}
       onLeaveVoice={leaveVoice}
+      onSetMuted={setMuted}
+      onSetDeafened={setDeafened}
       onSignedOut={onSignedOut}
     />
   );

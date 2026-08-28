@@ -15,6 +15,7 @@ pub mod devices;
 pub mod frames;
 pub mod gate;
 pub mod meter;
+pub mod mixing;
 pub mod playback;
 pub mod settings;
 pub mod thread;
@@ -28,9 +29,11 @@ pub use devices::{
 };
 pub use frames::Frames;
 pub use gate::{
-    FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, SAMPLE_RATE, VoiceGate,
+    FRAME_MS, FRAME_SAMPLES, GateConfig, GateDecision, Hysteresis, PRE_ROLL_FRAMES, PreRoll,
+    SAMPLE_RATE, VoiceGate,
 };
 pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
+pub use mixing::{JITTER_FRAMES, JITTER_SAMPLES, Mixing, Voices};
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
 pub use thread::{AudioEvent, AudioThread, GatedSink};

@@ -26,6 +26,7 @@
 
 use std::thread::JoinHandle;
 
+use consort_call::hearing::Ears;
 use consort_call::{CallEvent, CallThread, CallTransport, Microphone};
 
 /// A running call thread, with its events wired to the webview.
@@ -39,6 +40,10 @@ pub struct CallBridge {
 impl CallBridge {
     /// Start the call thread and the pump that forwards what it says.
     ///
+    /// `microphone` is where this session's captured audio comes from and
+    /// `ears` is where everybody else's goes. Both are handed in rather than
+    /// built here, because both ends outlive any one call.
+    ///
     /// `report` is called once per event, on the pump thread. It does two jobs
     /// that have to happen in that order: give the microphone back when the
     /// call ends, and tell the webview. Passing a closure rather than an event
@@ -47,10 +52,11 @@ impl CallBridge {
     pub fn spawn<T: CallTransport>(
         transport: T,
         microphone: Microphone,
+        ears: Ears,
         mut report: impl FnMut(CallEvent) + Send + 'static,
     ) -> Self {
         let (events, mut inbox) = tokio::sync::mpsc::unbounded_channel::<CallEvent>();
-        let thread = CallThread::spawn(transport, events, microphone);
+        let thread = CallThread::spawn(transport, events, microphone, ears);
 
         let pump = std::thread::Builder::new()
             .name("consort-call-events".to_owned())
@@ -84,6 +90,20 @@ impl CallBridge {
     pub fn disconnect(&self) {
         if let Some(thread) = &self.thread {
             thread.disconnect();
+        }
+    }
+
+    /// Mute or unmute this session's microphone.
+    pub fn set_muted(&self, muted: bool) {
+        if let Some(thread) = &self.thread {
+            thread.set_muted(muted);
+        }
+    }
+
+    /// Stop or resume receiving the audio of everybody else in the call.
+    pub fn set_deafened(&self, deafened: bool) {
+        if let Some(thread) = &self.thread {
+            thread.set_deafened(deafened);
         }
     }
 }
@@ -142,9 +162,12 @@ mod tests {
     fn bridge(transport: FakeCallTransport) -> (CallBridge, Heard) {
         let heard = Heard::default();
         let recorder = heard.clone();
-        let bridge = CallBridge::spawn(transport, Microphone::new(), move |event| {
-            recorder.0.lock().unwrap().push(event)
-        });
+        let bridge = CallBridge::spawn(
+            transport,
+            Microphone::new(),
+            crate::ears::speakers(consort_audio::Voices::new()),
+            move |event| recorder.0.lock().unwrap().push(event),
+        );
         (bridge, heard)
     }
 
@@ -164,6 +187,48 @@ mod tests {
             }),
             "{seen:?}"
         );
+    }
+
+    #[test]
+    fn muting_and_deafening_reach_the_webview() {
+        // Both, and both as one `SelfAudio`, because they are two switches over
+        // one state: the mute that deafening implies has to arrive with the
+        // deafen rather than as a second event that could be missed on its own.
+        let (bridge, heard) = bridge(FakeCallTransport::joining());
+        bridge.connect(GENERAL.to_owned());
+        heard.wait_for("the call connecting", |seen| {
+            seen.contains(&connected(GENERAL))
+        });
+
+        bridge.set_muted(true);
+        bridge.set_deafened(true);
+
+        let seen = heard.wait_for("both switches", |seen| {
+            seen.contains(&CallEvent::SelfAudio(consort_call::SelfAudio {
+                muted: true,
+                deafened: true,
+            }))
+        });
+        assert!(
+            seen.contains(&CallEvent::SelfAudio(consort_call::SelfAudio {
+                muted: true,
+                deafened: false,
+            })),
+            "the mute on its own never arrived: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_bridge_whose_thread_has_gone_takes_a_press_without_complaint() {
+        // What a stray click on a control that outlived its call is. The
+        // thread is only gone once the handle is on its way out, so there is
+        // nobody left for an error to reach.
+        let (mut bridge, _heard) = bridge(FakeCallTransport::joining());
+        drop(bridge.thread.take());
+
+        bridge.set_muted(true);
+        bridge.set_deafened(true);
+        bridge.disconnect();
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import {
   HOME_ID,
+  NOBODY,
   callRoomId,
   type Call,
   type Channel,
@@ -9,6 +10,7 @@ import {
   type KeyBackup,
   type Profile,
   type Rooms,
+  type SelfAudio,
   type TokenStorage,
   type Verification,
   type VerificationFlow,
@@ -98,6 +100,21 @@ interface Props {
   rooms: Rooms;
   connection: Connection;
   call: Call;
+  /** Whether this session has muted or deafened itself. */
+  selfAudio: SelfAudio;
+  /**
+   * Who in the current call is talking, by Matrix user ID.
+   *
+   * Passed down rather than subscribed to here, so that one subscription
+   * serves the whole screen: this changes several times a second, and a
+   * listener per component would be that many re-renders of everything.
+   *
+   * Optional, and nobody by default. A screen with no call to describe should
+   * not have to invent an empty set to say so.
+   */
+  speaking?: ReadonlySet<string>;
+  /** Why this session cannot play the call, if it cannot. */
+  audioProblem?: string | null;
   verification: Verification;
   keyBackup: KeyBackup;
   storage: TokenStorage | null;
@@ -106,6 +123,8 @@ interface Props {
   onDismissFlow: (flowId: string) => void;
   onJoinVoice: (roomId: string) => void;
   onLeaveVoice: () => void;
+  onSetMuted: (muted: boolean) => void;
+  onSetDeafened: (deafened: boolean) => void;
   onSignedOut: () => void;
 }
 
@@ -129,6 +148,9 @@ export function AppShell({
   rooms,
   connection,
   call,
+  selfAudio,
+  speaking = NOBODY,
+  audioProblem = null,
   verification,
   keyBackup,
   storage,
@@ -137,6 +159,8 @@ export function AppShell({
   onDismissFlow,
   onJoinVoice,
   onLeaveVoice,
+  onSetMuted,
+  onSetDeafened,
   onSignedOut,
 }: Props) {
   const [spaceId, setSpaceId] = useState(HOME_ID);
@@ -209,6 +233,7 @@ export function AppShell({
               space={space}
               selectedId={channel?.id ?? null}
               call={call}
+              speaking={speaking}
               onSelect={selectChannel}
             />
           )}
@@ -221,7 +246,11 @@ export function AppShell({
         <CallPanel
           call={call}
           channelName={nameOfCalledChannel(rooms, call)}
+          selfAudio={selfAudio}
+          audioProblem={audioProblem}
           onDisconnect={onLeaveVoice}
+          onSetMuted={onSetMuted}
+          onSetDeafened={onSetDeafened}
         />
         <UserPanel
           profile={profile}

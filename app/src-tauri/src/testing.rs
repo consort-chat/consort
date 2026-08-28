@@ -47,7 +47,13 @@ impl AudioCapture for FakeCapture {
         device: Option<&str>,
         mut on_frame: FrameSink,
     ) -> Result<Box<dyn CaptureStream>, CaptureError> {
-        on_frame(&vec![9_000i16; FRAME_SAMPLES]);
+        // Enough to clear the gate's pre-roll and leave one over. The
+        // publication runs `PRE_ROLL_FRAMES` behind the microphone, so a fake
+        // that hands over fewer than that publishes nothing at all, and every
+        // test waiting on a frame waits out its whole patience for one.
+        for _ in 0..=consort_audio::PRE_ROLL_FRAMES {
+            on_frame(&vec![9_000i16; FRAME_SAMPLES]);
+        }
         Ok(Box::new(FakeStream {
             device: device.unwrap_or("Default").to_owned(),
         }))
@@ -71,6 +77,14 @@ impl AudioPlayback for FakePlayback {
         _device: Option<&str>,
         _tone: Tone,
         _on_end: ToneEnded,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+        Ok(Box::new(FakeTone))
+    }
+
+    fn play_call(
+        &self,
+        _device: Option<&str>,
+        _voices: consort_audio::Voices,
     ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
         Ok(Box::new(FakeTone))
     }
@@ -116,6 +130,31 @@ impl HeardAudio {
             .unwrap()
             .iter()
             .filter(|event| matches!(event, AudioEvent::Started { .. }))
+            .count()
+    }
+
+    /// How many times the call's own output has been opened.
+    ///
+    /// Counted separately from `opens`, which is the microphone. The two are
+    /// different devices with different lifetimes: a call that cannot capture
+    /// must still be able to play, because a broken microphone is a reason to
+    /// be unable to speak and not a reason to be unable to hear.
+    pub fn call_outputs(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, AudioEvent::CallAudioStarted { .. }))
+            .count()
+    }
+
+    /// How many times the call's own output has been given back.
+    pub fn call_outputs_stopped(&self) -> usize {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| matches!(event, AudioEvent::CallAudioStopped))
             .count()
     }
 
@@ -269,8 +308,12 @@ impl consort_call::Roster for FakeCallRoster {
         self.0.borrow().1.clone()
     }
 
-    async fn changed(&mut self) -> bool {
-        self.0.changed().await.is_ok()
+    async fn changed(&mut self) -> Option<consort_call::Change> {
+        self.0
+            .changed()
+            .await
+            .ok()
+            .map(|()| consort_call::Change::Roster)
     }
 }
 
@@ -282,8 +325,18 @@ impl consort_call::CallSession for FakeCallSession {
         Ok(FakeCallTrack)
     }
 
+    fn listen(&self, _ears: &consort_call::hearing::Ears) {}
+
     fn roster(&self) -> Self::Roster {
         FakeCallRoster(self.roster.subscribe())
+    }
+
+    async fn set_muted(&self, _muted: bool) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn set_deafened(&self, _deafened: bool) -> Result<(), consort_call::CallFailure> {
+        Ok(())
     }
 
     async fn leave(self) -> Result<(), consort_call::CallFailure> {

@@ -24,6 +24,7 @@
 use consort_matrix::Participant;
 
 use crate::failure::CallFailure;
+use crate::hearing::Ears;
 use crate::publish::PublishedAudio;
 
 /// Something that can put this session into a call.
@@ -75,6 +76,47 @@ pub trait CallSession {
     /// the publication it hands to a task.
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure>;
 
+    /// Mute or unmute this session's own microphone at the transport.
+    ///
+    /// Not a description of the audio, and nothing on the frame path may ever
+    /// call this: see the header of [`crate::publish`] for what happened the
+    /// last time something did. This is a person pressing a button, which is
+    /// why it arrives on the command channel with the joins and the leaves
+    /// rather than beside the samples.
+    ///
+    /// Peers are told, by the transport, in the way every other client already
+    /// understands. That is the reason to mute here rather than to stop
+    /// pushing frames: a sender that goes quiet reads as a wedged client, and a
+    /// muted one reads as somebody who muted.
+    async fn set_muted(&self, muted: bool) -> Result<(), CallFailure>;
+
+    /// Stop or resume receiving the audio of everybody else in the call.
+    ///
+    /// The other half of a mute button, and a separate concern from it: mute is
+    /// about what leaves this machine, this is about what arrives. Nothing in
+    /// MatrixRTC or LiveKit has a name for it, so it is built out of per-stream
+    /// subscription state and it is this session's business alone.
+    ///
+    /// Whoever implements this owns keeping it true as people join. A person
+    /// who deafened and then had somebody walk into the channel must not start
+    /// hearing them.
+    async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure>;
+
+    /// Play everybody else in this call into `ears`, and keep doing it as
+    /// people come and go.
+    ///
+    /// Called on every roster change rather than once, so an implementation
+    /// must be idempotent: somebody already being played is left strictly
+    /// alone, because tearing a working audio path down and rebuilding it on
+    /// every membership change is audible. [`crate::hearing::changes`] is the
+    /// difference, as a value.
+    ///
+    /// Not `async` and not fallible. There is no answer a caller could act on:
+    /// audio that cannot be played is not a reason to end a call, and a
+    /// participant whose stream has not arrived yet is the ordinary case rather
+    /// than a failure, because the next roster change asks again.
+    fn listen(&self, ears: &Ears);
+
     /// Start watching who is in the call.
     ///
     /// Each call to this is an independent view of the same roster, so the
@@ -123,10 +165,31 @@ pub trait Roster {
     /// are and why there is only ever one.
     fn trouble(&self) -> Option<String>;
 
-    /// Wait for either of the two above to change.
+    /// Who is talking right now, by Matrix user ID.
     ///
-    /// `false` once neither ever will again, which is a call that has ended
-    /// underneath its watcher. Returning `true` forever in that case would be
-    /// a task spinning on a call nobody is in.
-    async fn changed(&mut self) -> bool;
+    /// Reported separately from [`now`](Self::now) because it changes on a
+    /// completely different timescale. People join a call a few times an hour;
+    /// they start and stop talking several times a second, and answering this
+    /// must not cost the member-store read that naming a roster does.
+    ///
+    /// Delivered by [`changed`](Self::changed) rather than polled, so this has
+    /// no accessor: a value nobody asked for at the right moment is a value
+    /// that is already wrong.
+    async fn changed(&mut self) -> Option<Change>;
+}
+
+/// Why a roster watcher woke up.
+///
+/// Two kinds of change on one seam, because they come from one call and are
+/// drawn in one place, but they are told apart here because they cost wildly
+/// different amounts to act on. Collapsing them into a single "something
+/// changed" would put a member-store read behind every syllable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// Who is in the call, or what is wrong with it, is different now. Worth
+    /// re-reading and re-drawing in full.
+    Roster,
+    /// Who is talking is different now, and nothing else is. Cheap: the user
+    /// IDs are already known and nothing has to be named again.
+    Speaking(Vec<String>),
 }

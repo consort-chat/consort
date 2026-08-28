@@ -7,13 +7,17 @@
 //! the trait is what lets [`crate::thread`] be tested on a machine with no
 //! sound card. The real implementation is in [`crate::cpal_host`].
 //!
-//! Only one sound is ever played through this, the test chime in
-//! [`crate::tone`]. That is deliberate scope. Call audio does not come out
-//! here: it will arrive already mixed from the media layer and will need
-//! sample-accurate timing this has no notion of.
+//! Two things come out of here: the test chime in [`crate::tone`], and the
+//! call itself through [`crate::mixing`].
+//!
+//! Call audio was once expected to arrive already mixed from the media layer,
+//! and this said so. It does not. A native LiveKit subscription hands over one
+//! decoded PCM stream per participant and plays none of them, so mixing them
+//! and finding a sound card for the result is this crate's job after all.
 
 use std::fmt;
 
+use crate::mixing::Voices;
 use crate::tone::Tone;
 
 /// Everything that can go wrong before the first sample is played.
@@ -105,6 +109,25 @@ pub trait AudioPlayback: Send + 'static {
         device: Option<&str>,
         tone: Tone,
         on_end: ToneEnded,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError>;
+
+    /// Play everything in `voices` through `device` until the returned stream
+    /// is dropped.
+    ///
+    /// The call's own output, and the reason this trait has two methods rather
+    /// than one. A chime is a fixed length of samples that ends and says so; a
+    /// call is an open device with an unknown number of people arriving and
+    /// leaving behind it, and nothing to announce. Sharing one entry point
+    /// between them would mean a `Tone` that never ends and an `on_end` that is
+    /// never called.
+    ///
+    /// Both may be open at once. Somebody pressing the test chime during a call
+    /// is testing the device the call is coming out of, and refusing them would
+    /// be refusing the one moment the button is most useful.
+    fn play_call(
+        &self,
+        device: Option<&str>,
+        voices: Voices,
     ) -> Result<Box<dyn PlaybackStream>, PlaybackError>;
 }
 

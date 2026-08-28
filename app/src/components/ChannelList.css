@@ -194,10 +194,34 @@
 
 .channels__person {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  /*
+    A third column that is only there when it is. `auto` collapses to nothing
+    for everybody who is not muted, so the names stay on one line and the
+    column does not appear as an empty gutter down the whole list.
+  */
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: center;
   padding: 2px var(--space-2);
+}
+
+/*
+  Somebody who has muted themselves.
+
+  Dimmed as well as marked. The glyph is the message and carries the label a
+  screen reader reads; this is what makes the row readable at a glance in a
+  list of eight names, without being loud enough to draw the eye away from
+  whoever is actually talking.
+*/
+.channels__person[data-muted="true"] .channels__who,
+.channels__person[data-muted="true"] .channels__muted {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.channels__muted {
+  width: 12px;
+  height: 12px;
 }
 
 /*
@@ -206,6 +230,37 @@
 */
 .channels__face {
   --avatar-size: 20px;
+  /*
+    Only the ring below moves, and only in colour. `box-shadow` is on the
+    compositor, so a list of twenty faces lighting up as a room talks costs
+    nothing in layout.
+  */
+  transition: box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+
+/*
+  The same green as the level meter's bar, and that is the point rather than a
+  coincidence: somebody who has just watched their own bar move is looking for
+  that colour, and a second green would read as a second thing.
+
+  A ring rather than a filled halo, so it reads at 20px. The glow is what makes
+  it visible against both the hovered row and the plain one without needing to
+  know which it is on.
+*/
+.channels__person[data-speaking="true"] .channels__face {
+  box-shadow:
+    0 0 0 2px var(--mint),
+    0 0 6px 1px var(--mint-glow);
+}
+
+/*
+  Somebody talking is not dimmed, whatever else is true of them. The dimming
+  below is for people who are quiet, and leaving it on a live speaker would be
+  the interface contradicting itself.
+*/
+.channels__person[data-speaking="true"] .channels__who {
+  color: var(--text-secondary);
+  opacity: 1;
 }
 
 .channels__who {

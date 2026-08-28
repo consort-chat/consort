@@ -182,3 +182,86 @@ fn retuning_keeps_the_denoiser_warm() {
     );
     assert_eq!(gate.config().hold_ms, 500);
 }
+
+#[test]
+fn processing_ungated_hands_back_the_audio_the_gate_would_have_dropped() {
+    // What the pre-roll is built on. A frame the gate has shut on still has to
+    // come back carrying what was captured, because the gate may yet change
+    // its mind about it.
+    let voiced = vowel::voiced_frames(1);
+    let mut gate = VoiceGate::new(GateConfig::default());
+    let mut warm = vec![0i16; FRAME_SAMPLES];
+    gate.process_ungated(&voiced, &mut warm);
+
+    let mut output = vec![0i16; FRAME_SAMPLES];
+    let decision = gate.process_ungated(&voiced, &mut output);
+
+    assert!(!decision.open, "the attack has not been satisfied yet");
+    assert!(
+        output.iter().any(|sample| *sample != 0),
+        "a frame the gate has not opened for is still audio, and dropping it \
+         here is exactly what clips the front of a word"
+    );
+}
+
+#[test]
+fn the_pre_roll_recovers_the_frames_the_attack_spent() {
+    // The complaint this was built for: with a two frame attack, saying "pop"
+    // arrives as "op", because the plosive is what convinces the gate and it
+    // is gone by the time the gate agrees.
+    use consort_audio::{PRE_ROLL_FRAMES, PreRoll};
+
+    let quiet = vec![0i16; FRAME_SAMPLES * 8];
+    let capture: Vec<i16> = quiet.into_iter().chain(vowel::voiced_frames(24)).collect();
+    let (frames, _) = capture.as_chunks::<FRAME_SAMPLES>();
+
+    let mut gate = VoiceGate::new(GateConfig::default());
+    let mut line = PreRoll::new(PRE_ROLL_FRAMES);
+    let mut processed = vec![0i16; FRAME_SAMPLES];
+
+    // What the gate decided about each frame, and what the pre-roll published
+    // for it, both indexed by where the frame sat in the capture.
+    let mut gate_opened_at = None;
+    let mut published_open_at = None;
+    let mut ungated: Vec<Vec<i16>> = Vec::new();
+    let mut published: Vec<Vec<i16>> = Vec::new();
+
+    for (index, frame) in frames.iter().enumerate() {
+        let decision = gate.process_ungated(frame, &mut processed);
+        if decision.open && gate_opened_at.is_none() {
+            gate_opened_at = Some(index);
+        }
+        ungated.push(processed.clone());
+
+        if let Some((samples, open)) = line.step(&processed, decision) {
+            published.push(samples.to_vec());
+            if open && published_open_at.is_none() {
+                published_open_at = Some(published.len() - 1);
+            }
+        }
+    }
+
+    let opened = gate_opened_at.expect("the model has to react to a vowel at all");
+    let published_at = published_open_at.expect("and the line has to pass it on");
+
+    assert_eq!(
+        published_at,
+        opened - PRE_ROLL_FRAMES,
+        "the first frame sent has to be the one captured {PRE_ROLL_FRAMES} \
+         frames before the gate opened, which is where the consonant is"
+    );
+    for offset in 0..PRE_ROLL_FRAMES {
+        let index = opened - PRE_ROLL_FRAMES + offset;
+        assert_eq!(
+            published[index], ungated[index],
+            "the recovered frame has to be what was captured rather than \
+             something reconstructed"
+        );
+    }
+    assert!(
+        published[published_at..published_at + PRE_ROLL_FRAMES]
+            .iter()
+            .any(|frame| frame.iter().any(|sample| *sample != 0)),
+        "the recovered frames are silence, so nothing was recovered"
+    );
+}

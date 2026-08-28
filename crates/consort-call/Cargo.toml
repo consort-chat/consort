@@ -39,6 +39,16 @@ consort-matrix = { path = "../consort-matrix" }
 
 serde = { workspace = true }
 
+# `StreamExt::next`, to pull the decoded audio of one participant out of the
+# stream `RemoteTrackHandle` hands over. Confined to `livekit.rs`.
+futures-util = { workspace = true }
+
+# `Room::subscribe` and `DataPacket`, neither of which matrix-rtc-livekit
+# re-exports. Confined to `livekit.rs`, and adds nothing to the build: this
+# crate already links libwebrtc through the transport above. See the workspace
+# manifest for why the features are left alone.
+livekit = { workspace = true }
+
 # For reading a homeserver's discovery document. `consort_call::discovery`
 # parses `.well-known/matrix/client` by hand rather than through ruma's typed
 # response, because that response is reached over the homeserver's API base

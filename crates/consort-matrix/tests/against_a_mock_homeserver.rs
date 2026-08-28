@@ -2377,13 +2377,7 @@ mod room_list {
             let people =
                 participants(vec![member(ADA, Some("Ada")), connected(ADA, "LAPTOP")]).await;
 
-            assert_eq!(
-                people,
-                [Participant {
-                    id: ADA.to_owned(),
-                    name: "Ada".to_owned(),
-                }]
-            );
+            assert_eq!(people, [Participant::named(ADA, "Ada")]);
         }
 
         #[tokio::test]

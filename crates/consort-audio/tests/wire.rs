@@ -39,6 +39,13 @@ fn every_variant_is_tagged_by_a_state_field() {
         AudioEvent::ToneFailed {
             error: "no".to_owned(),
         },
+        AudioEvent::CallAudioStarted {
+            device: "Headphones".to_owned(),
+        },
+        AudioEvent::CallAudioStopped,
+        AudioEvent::CallAudioFailed {
+            error: "no".to_owned(),
+        },
     ];
 
     for event in events {
@@ -88,6 +95,22 @@ fn the_states_are_named_the_way_the_frontend_reads_them() {
             error: "no".to_owned()
         })["state"],
         "toneFailed"
+    );
+    assert_eq!(
+        json(&AudioEvent::CallAudioStarted {
+            device: "Headphones".to_owned()
+        })["state"],
+        "callAudioStarted"
+    );
+    assert_eq!(
+        json(&AudioEvent::CallAudioStopped)["state"],
+        "callAudioStopped"
+    );
+    assert_eq!(
+        json(&AudioEvent::CallAudioFailed {
+            error: "no".to_owned()
+        })["state"],
+        "callAudioFailed"
     );
 }
 

@@ -12,6 +12,7 @@ import {
   setAudioSettings,
   type AudioDeviceList,
   type AudioSettings,
+  type GateConfig,
 } from "../lib/api";
 import { LevelMeter } from "./LevelMeter";
 import "./VoiceVideoSection.css";
@@ -281,20 +282,23 @@ export function VoiceVideoSection() {
   }
 
   /**
-   * Turn voice activity detection on or off.
+   * Change one part of the gate.
    *
    * No reopening and no re-reading of the device list. The Rust side retunes
    * the gate that is already running, so the bar in front of somebody keeps
    * moving and simply starts behaving differently, which is the clearest
-   * possible demonstration of what the switch does.
+   * possible demonstration of what a switch does.
+   *
+   * Both switches come through here for the rollback below, which is the part
+   * worth getting right once rather than twice.
    */
-  async function setVoiceActivity(on: boolean) {
+  async function retune(patch: Partial<GateConfig>) {
     const current = saved.current;
     if (current === null) return;
 
     const next: AudioSettings = {
       ...current,
-      gate: { ...current.gate, voiceActivity: on },
+      gate: { ...current.gate, ...patch },
     };
     setSettings(next);
     saved.current = next;
@@ -387,7 +391,9 @@ export function VoiceVideoSection() {
               role="switch"
               aria-describedby="voice-activity-note"
               checked={settings.gate.voiceActivity}
-              onChange={(event) => void setVoiceActivity(event.target.checked)}
+              onChange={(event) =>
+                void retune({ voiceActivity: event.target.checked })
+              }
             />
             <label className="voice-toggle__label" htmlFor="voice-activity">
               Voice activity detection
@@ -396,6 +402,32 @@ export function VoiceVideoSection() {
           <p className="voice-field__note" id="voice-activity-note">
             Send audio only while you are speaking. Turn it off to transmit
             continuously, background noise included.
+          </p>
+        </div>
+      )}
+
+      {settings !== null && (
+        <div className="voice-field">
+          <span className="voice-field__label">Noise suppression</span>
+          <div className="voice-toggle">
+            <input
+              id="voice-denoise"
+              className="voice-toggle__switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="voice-denoise-note"
+              checked={settings.gate.denoise}
+              onChange={(event) => void retune({ denoise: event.target.checked })}
+            />
+            <label className="voice-toggle__label" htmlFor="voice-denoise">
+              Remove background noise
+            </label>
+          </div>
+          <p className="voice-field__note" id="voice-denoise-note">
+            Strips fans, keyboards and room tone out of what you send. Separate
+            from the switch above: turning voice activity detection off still
+            leaves this running, and this is the one to turn off to hear your
+            microphone untouched.
           </p>
         </div>
       )}

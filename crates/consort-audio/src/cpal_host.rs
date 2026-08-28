@@ -19,6 +19,7 @@ use crate::capture::{AudioCapture, CaptureError, CaptureStream, FrameSink};
 use crate::devices::{Answer, AudioDevices, Device, Direction, catalogue};
 use crate::frames::Frames;
 use crate::gate::SAMPLE_RATE;
+use crate::mixing::{Mixing, Voices};
 use crate::playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 use crate::tone::Tone;
 
@@ -193,6 +194,74 @@ impl PlaybackStream for PlayingStream {
     }
 }
 
+/// An output device that has agreed to a format, ready to be built on.
+struct Output {
+    device: cpal::Device,
+    name: String,
+    format: SampleFormat,
+    config: StreamConfig,
+}
+
+/// Find `device`, or the host's default, and settle on a format.
+///
+/// Shared by the chime and the call so that the two cannot disagree about
+/// which device "default" means or which sample format to prefer. Somebody who
+/// tests their speakers and hears the chime has tested the thing the call will
+/// come out of, which is the entire point of the button.
+fn choose_output(wanted: Option<&str>) -> Result<Output, PlaybackError> {
+    let host = cpal::default_host();
+    let device = match wanted {
+        None => host
+            .default_output_device()
+            .ok_or(PlaybackError::NoDevice)?,
+        Some(wanted) => host
+            .output_devices()
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?
+            .find(|candidate| candidate.to_string() == wanted)
+            .ok_or_else(|| PlaybackError::UnknownDevice {
+                requested: wanted.to_owned(),
+                available: catalogue(&CpalHost, Direction::Output)
+                    .into_iter()
+                    .map(|device| device.name)
+                    .collect(),
+            })?,
+    };
+    let name = device.to_string();
+
+    // The same bargain the capture path makes: everything this crate produces
+    // is at 48 kHz and nothing resamples, so a device that cannot do 48 kHz is
+    // refused rather than played to at the wrong pitch. The picker already
+    // filters on this, so reaching it means the device changed underneath
+    // somebody between the list being drawn and the button being pressed.
+    let mut ranges: Vec<_> = device
+        .supported_output_configs()
+        .map_err(|error| PlaybackError::Backend(error.to_string()))?
+        .filter(|range| {
+            range.min_sample_rate() <= SAMPLE_RATE && range.max_sample_rate() >= SAMPLE_RATE
+        })
+        .collect();
+    if ranges.is_empty() {
+        return Err(PlaybackError::NoFortyEightKilohertz { device: name });
+    }
+    ranges.sort_by_key(|range| match range.sample_format() {
+        SampleFormat::F32 => 0,
+        SampleFormat::I16 => 1,
+        _ => 2,
+    });
+    let chosen = ranges.remove(0);
+
+    Ok(Output {
+        device,
+        name,
+        format: chosen.sample_format(),
+        config: StreamConfig {
+            channels: chosen.channels(),
+            sample_rate: SAMPLE_RATE,
+            buffer_size: BufferSize::Default,
+        },
+    })
+}
+
 impl AudioPlayback for CpalHost {
     fn play(
         &self,
@@ -200,55 +269,19 @@ impl AudioPlayback for CpalHost {
         tone: Tone,
         on_end: ToneEnded,
     ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
-        let host = cpal::default_host();
-        let device = match device {
-            None => host.default_output_device().ok_or(PlaybackError::NoDevice)?,
-            Some(wanted) => host
-                .output_devices()
-                .map_err(|error| PlaybackError::Backend(error.to_string()))?
-                .find(|candidate| candidate.to_string() == wanted)
-                .ok_or_else(|| PlaybackError::UnknownDevice {
-                    requested: wanted.to_owned(),
-                    available: catalogue(self, Direction::Output)
-                        .into_iter()
-                        .map(|device| device.name)
-                        .collect(),
-                })?,
-        };
-        let name = device.to_string();
+        let Output {
+            device,
+            name,
+            format,
+            config,
+        } = choose_output(device)?;
+        let channels = config.channels;
+        let chosen = format;
 
-        // The same bargain the capture path makes: the chime is generated at
-        // 48 kHz, nothing resamples, so a device that cannot do 48 kHz is
-        // refused rather than played to at the wrong pitch. The picker already
-        // filters on this, so reaching it means the device changed underneath
-        // somebody between the list being drawn and the button being pressed.
-        let mut ranges: Vec<_> = device
-            .supported_output_configs()
-            .map_err(|error| PlaybackError::Backend(error.to_string()))?
-            .filter(|range| {
-                range.min_sample_rate() <= SAMPLE_RATE && range.max_sample_rate() >= SAMPLE_RATE
-            })
-            .collect();
-        if ranges.is_empty() {
-            return Err(PlaybackError::NoFortyEightKilohertz { device: name });
-        }
-        ranges.sort_by_key(|range| match range.sample_format() {
-            SampleFormat::F32 => 0,
-            SampleFormat::I16 => 1,
-            _ => 2,
-        });
-        let chosen = ranges.remove(0);
-        let channels = chosen.channels();
-
-        let config = StreamConfig {
-            channels,
-            sample_rate: SAMPLE_RATE,
-            buffer_size: BufferSize::Default,
-        };
         let mut playing = Playing::new(tone, channels, on_end);
         let on_error = |error| tracing::error!(%error, "audio output stream error");
 
-        let stream = match chosen.sample_format() {
+        let stream = match chosen {
             SampleFormat::F32 => device.build_output_stream(
                 config,
                 move |data: &mut [f32], _| playing.fill_f32(data),
@@ -274,8 +307,58 @@ impl AudioPlayback for CpalHost {
             .play()
             .map_err(|error| PlaybackError::Backend(error.to_string()))?;
 
-        tracing::info!(device = %name, channels, format = ?chosen.sample_format(),
+        tracing::info!(device = %name, channels, format = ?chosen,
             "playing the test tone");
+        Ok(Box::new(PlayingStream {
+            _stream: stream,
+            device: name,
+        }))
+    }
+
+    fn play_call(
+        &self,
+        device: Option<&str>,
+        voices: Voices,
+    ) -> Result<Box<dyn PlaybackStream>, PlaybackError> {
+        let Output {
+            device,
+            name,
+            format,
+            config,
+        } = choose_output(device)?;
+        let channels = config.channels;
+
+        let mut mixing = Mixing::new(voices, channels);
+        let on_error = |error| tracing::error!(%error, "call audio output stream error");
+
+        let stream = match format {
+            SampleFormat::F32 => device.build_output_stream(
+                config,
+                move |data: &mut [f32], _| mixing.fill_f32(data),
+                on_error,
+                None,
+            ),
+            SampleFormat::I16 => device.build_output_stream(
+                config,
+                move |data: &mut [i16], _| mixing.fill_i16(data),
+                on_error,
+                None,
+            ),
+            other => {
+                return Err(PlaybackError::UnsupportedFormat {
+                    device: name,
+                    format: format!("{other:?}"),
+                });
+            }
+        }
+        .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+
+        stream
+            .play()
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+
+        tracing::info!(device = %name, channels, format = ?format,
+            "playing the call");
         Ok(Box::new(PlayingStream {
             _stream: stream,
             device: name,
@@ -395,10 +478,14 @@ mod tests {
                 AudioEvent::Started { device } => println!("capturing from {device}"),
                 AudioEvent::Failed { error } => panic!("could not capture: {error}"),
                 AudioEvent::Stopped => break,
-                // Nothing here plays a tone, so these cannot arrive.
+                // Nothing here plays a tone or joins a call, so none of
+                // these can arrive.
                 AudioEvent::ToneStarted { .. }
                 | AudioEvent::ToneStopped
-                | AudioEvent::ToneFailed { .. } => {}
+                | AudioEvent::ToneFailed { .. }
+                | AudioEvent::CallAudioStarted { .. }
+                | AudioEvent::CallAudioFailed { .. }
+                | AudioEvent::CallAudioStopped => {}
                 AudioEvent::Level(reading) => {
                     readings += 1;
                     let bar = "#".repeat((reading.level * 40.0) as usize);

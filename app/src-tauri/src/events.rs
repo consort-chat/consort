@@ -17,7 +17,7 @@
 use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
-use consort_call::CallEvent;
+use consort_call::{CallEvent, SelfAudio};
 use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
@@ -40,6 +40,22 @@ pub enum AppEvent {
     Audio(AudioEvent),
     /// This session's voice call started, ended, or would not start.
     Call(CallEvent),
+    /// This session muted itself, or deafened itself, or stopped.
+    ///
+    /// A channel of its own rather than another value on [`Call`](Self::Call),
+    /// because only one event per channel is kept for a late subscriber. Sent
+    /// as a call state, a mute would evict the call it was pressed during, and
+    /// a webview that reloaded would come back believing it was in no channel
+    /// while this process is very much publishing one.
+    SelfAudio(SelfAudio),
+    /// Who in the current call is talking right now, by Matrix user ID.
+    ///
+    /// Its own channel for two reasons, and they pull in opposite directions
+    /// from [`SelfAudio`](Self::SelfAudio)'s. This one arrives several times a
+    /// second, so it must not sit on the call channel where it would evict the
+    /// call state constantly. And unlike a mute it is never replayed: see
+    /// [`is_worth_keeping`](Self::is_worth_keeping).
+    Speaking(Vec<String>),
 }
 
 impl AppEvent {
@@ -57,6 +73,10 @@ impl AppEvent {
     pub const AUDIO: &'static str = "audio";
     /// The channel carrying this session's voice call.
     pub const CALL: &'static str = "call";
+    /// The channel carrying whether this session is muted or deafened.
+    pub const SELF_AUDIO: &'static str = "self-audio";
+    /// The channel carrying who in the call is talking.
+    pub const SPEAKING: &'static str = "speaking";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -68,6 +88,8 @@ impl AppEvent {
             Self::Rooms(_) => Self::ROOMS,
             Self::Audio(_) => Self::AUDIO,
             Self::Call(_) => Self::CALL,
+            Self::SelfAudio(_) => Self::SELF_AUDIO,
+            Self::Speaking(_) => Self::SPEAKING,
         }
     }
 
@@ -94,6 +116,12 @@ impl AppEvent {
     /// that reopens starts the test again rather than needing to be told what
     /// happened last time.
     ///
+    /// Who is talking is never kept, for the reason a level reading is not. It
+    /// describes a moment that has passed by the time anybody reloads, and
+    /// replaying it would leave a ring drawn around somebody who stopped
+    /// talking before the webview restarted, with nothing to take it off
+    /// again if they have since left the call.
+    ///
     /// A call is state, all four of it. There is always a current answer to
     /// "am I in a voice channel", and a webview that reloaded mid-call and was
     /// not told would draw a client sitting in no channel while this process
@@ -107,9 +135,10 @@ impl AppEvent {
             | Self::Verification(_)
             | Self::KeyBackup(_)
             | Self::Rooms(_)
-            | Self::Call(_) => true,
+            | Self::Call(_)
+            | Self::SelfAudio(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
-            Self::Audio(_) => false,
+            Self::Audio(_) | Self::Speaking(_) => false,
         }
     }
 
@@ -127,6 +156,8 @@ impl AppEvent {
             Self::Rooms(rooms) => serde_json::to_value(rooms),
             Self::Audio(event) => serde_json::to_value(event),
             Self::Call(event) => serde_json::to_value(event),
+            Self::SelfAudio(audio) => serde_json::to_value(audio),
+            Self::Speaking(user_ids) => serde_json::to_value(user_ids),
         }
     }
 }
@@ -511,10 +542,7 @@ mod tests {
                         kind: ChannelKind::Voice,
                         avatar: None,
                         joined: true,
-                        participants: vec![Participant {
-                            id: "@ada:example.org".to_owned(),
-                            name: "Ada".to_owned(),
-                        }],
+                        participants: vec![Participant::named("@ada:example.org", "Ada")],
                     }],
                 },
             ],
@@ -734,12 +762,89 @@ mod tests {
         fn in_general() -> CallEvent {
             CallEvent::Connected {
                 room_id: "!general:example.org".to_owned(),
-                participants: vec![consort_matrix::Participant {
-                    id: "@bob:example.org".to_owned(),
-                    name: "Bob".to_owned(),
-                }],
+                participants: vec![consort_matrix::Participant::named(
+                    "@bob:example.org",
+                    "Bob",
+                )],
                 trouble: Some("nobody can hear you".to_owned()),
             }
+        }
+
+        #[test]
+        fn who_is_talking_does_not_travel_on_the_channel_the_call_is_on() {
+            // The same reason a mute does not, only more so: this arrives
+            // several times a second, so on the call channel it would evict
+            // the call state constantly rather than occasionally.
+            let talking = AppEvent::Speaking(vec!["@ada:example.org".to_owned()]);
+
+            assert_eq!(talking.channel(), AppEvent::SPEAKING);
+            assert_ne!(AppEvent::SPEAKING, AppEvent::CALL);
+            assert_ne!(AppEvent::SPEAKING, AppEvent::SELF_AUDIO);
+        }
+
+        #[test]
+        fn who_is_talking_is_not_kept_for_a_late_subscriber() {
+            // Unlike a mute, which is state. This describes a moment that has
+            // passed by the time anybody reloads, and replaying it would draw
+            // a ring around somebody who stopped talking before the webview
+            // restarted, with nothing to take it off again.
+            assert!(!AppEvent::Speaking(vec!["@ada:example.org".to_owned()]).is_worth_keeping());
+        }
+
+        #[test]
+        fn the_speaking_payload_is_the_bare_list_of_people() {
+            let payload = AppEvent::Speaking(vec!["@ada:example.org".to_owned()])
+                .payload()
+                .unwrap();
+
+            assert_eq!(payload, serde_json::json!(["@ada:example.org"]));
+        }
+
+        #[test]
+        fn a_mute_does_not_travel_on_the_channel_the_call_is_on() {
+            // Only the last event per channel is replayed to a webview that
+            // reloaded. Sharing would mean a mute evicting the call it was
+            // pressed during, and a client coming back believing it is in no
+            // channel while this process is publishing one.
+            let muted = AppEvent::SelfAudio(SelfAudio {
+                muted: true,
+                deafened: false,
+            });
+
+            assert_eq!(muted.channel(), AppEvent::SELF_AUDIO);
+            assert_ne!(AppEvent::SELF_AUDIO, AppEvent::CALL);
+        }
+
+        #[test]
+        fn a_mute_is_kept_for_a_late_subscriber() {
+            // It is state, like the call it accompanies. A webview that
+            // reloaded while muted and was not told would draw a live
+            // microphone for a session that is not sending anything.
+            assert!(
+                AppEvent::SelfAudio(SelfAudio {
+                    muted: true,
+                    deafened: false,
+                })
+                .is_worth_keeping()
+            );
+        }
+
+        #[test]
+        fn the_mute_payload_is_the_two_flags_and_nothing_around_them() {
+            let payload = AppEvent::SelfAudio(SelfAudio {
+                muted: false,
+                deafened: true,
+            })
+            .payload()
+            .unwrap();
+
+            assert_eq!(payload["muted"], false);
+            assert_eq!(payload["deafened"], true);
+            assert!(
+                payload.get("state").is_none(),
+                "the channel already picked the variant, so a tag inside it is \
+                 a wrapper the frontend has to unpick for no information"
+            );
         }
 
         #[test]

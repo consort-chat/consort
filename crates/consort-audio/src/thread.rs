@@ -26,8 +26,9 @@ use std::thread::JoinHandle;
 use serde::{Deserialize, Serialize};
 
 use crate::capture::{AudioCapture, CaptureStream};
-use crate::gate::{FRAME_SAMPLES, GateConfig, VoiceGate};
+use crate::gate::{FRAME_SAMPLES, GateConfig, PreRoll, VoiceGate};
 use crate::meter::{Meter, Reading};
+use crate::mixing::Voices;
 use crate::playback::{AudioPlayback, PlaybackStream};
 use crate::tone::Tone;
 
@@ -57,6 +58,15 @@ pub enum AudioEvent {
     ToneStopped,
     /// The chime could not begin.
     ToneFailed { error: String },
+    /// The call is being played out of this output, which is not always the
+    /// one asked for.
+    CallAudioStarted { device: String },
+    /// The call cannot be played. Reported rather than swallowed: a call that
+    /// cannot be heard looks exactly like a call nobody is speaking in, and
+    /// somebody would spend an evening blaming the microphone.
+    CallAudioFailed { error: String },
+    /// The call is no longer being played.
+    CallAudioStopped,
 }
 
 /// Where gated audio goes while a call is running.
@@ -105,6 +115,16 @@ enum Message {
         device: Option<String>,
     },
     StopTone,
+    /// Open an output and play everybody else in the call through it.
+    ///
+    /// Its own message rather than a flag on `Start`, because the two ends are
+    /// independent: the microphone can be reopened mid-call without the call
+    /// going quiet, and a device change on one side must not disturb the other.
+    PlayCall {
+        device: Option<String>,
+        voices: Voices,
+    },
+    StopCall,
     /// The chime handed its last sample to the device, posted by the backend's
     /// realtime callback.
     ///
@@ -197,6 +217,21 @@ impl AudioThread {
         self.send(Message::StopTone);
     }
 
+    /// Start playing `voices` out of `device`, or out of the host's default.
+    ///
+    /// Replaces whatever was playing. Answered with `CallAudioStarted` or
+    /// `CallAudioFailed`.
+    pub fn play_call(&self, device: Option<String>, voices: Voices) {
+        self.send(Message::PlayCall { device, voices });
+    }
+
+    /// Stop playing the call and give the output back.
+    ///
+    /// Answered with `CallAudioStopped` whether or not anything was playing.
+    pub fn stop_call(&self) {
+        self.send(Message::StopCall);
+    }
+
     fn send(&self, message: Message) {
         // A closed channel means the thread is already gone, which is only
         // reachable if it panicked. Nothing useful can be done about it from
@@ -225,6 +260,13 @@ struct Running {
     meter: Meter,
     /// The gate's output buffer, reused rather than allocated per frame.
     gated: Vec<i16>,
+    /// Holds the gate's output back far enough for an opening edge to reach
+    /// the frames that caused it.
+    ///
+    /// Inside `Running` rather than beside `publishing`, so that changing the
+    /// microphone starts a new line. The alternative is publishing 30 ms
+    /// captured from a device somebody has just switched away from.
+    pre_roll: PreRoll,
 }
 
 fn run(
@@ -241,6 +283,10 @@ fn run(
     let mut publishing: Option<GatedSink> = None;
     // Held only to keep the output open; dropping it silences the chime.
     let mut tone: Option<Box<dyn PlaybackStream>> = None;
+    // The same, for the call. A second stream on (usually) the same device, so
+    // that testing the speakers during a call neither interrupts it nor is
+    // interrupted by it.
+    let mut call: Option<Box<dyn PlaybackStream>> = None;
     // Which chime is playing. Bumped on every start and every stop, so an
     // ending reported by a chime that has already been replaced or cancelled
     // arrives carrying a number nothing matches any more and is dropped.
@@ -275,6 +321,7 @@ fn run(
                             gate: VoiceGate::new(gate),
                             meter: Meter::new(),
                             gated: vec![0; FRAME_SAMPLES],
+                            pre_roll: PreRoll::default(),
                         });
                         if events.send(event).is_err() {
                             break;
@@ -302,6 +349,44 @@ fn run(
 
             Message::Publish(sink) => {
                 publishing = sink;
+            }
+
+            Message::PlayCall { device, voices } => {
+                // Dropped before the new one is opened, for the reason `Start`
+                // gives: two claims on one device is a failure nothing
+                // explains.
+                call = None;
+
+                match playback.play_call(device.as_deref(), voices) {
+                    Ok(stream) => {
+                        let event = AudioEvent::CallAudioStarted {
+                            device: stream.device_name().to_owned(),
+                        };
+                        call = Some(stream);
+                        if events.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if events
+                            .send(AudioEvent::CallAudioFailed {
+                                error: error.to_string(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Message::StopCall => {
+                if let Some(stream) = call.take() {
+                    tracing::info!(device = %stream.device_name(), "gave the call output back");
+                }
+                if events.send(AudioEvent::CallAudioStopped).is_err() {
+                    break;
+                }
             }
 
             Message::Retune { gate } => {
@@ -389,14 +474,26 @@ fn run(
                     continue;
                 }
 
-                let decision = state.gate.process(&frame, &mut state.gated);
+                // Ungated, because the pre-roll decides what to silence. It
+                // is holding frames the gate has not opened for yet and may
+                // still change its mind about, and it cannot reopen what it
+                // was handed as zeroes.
+                let decision = state.gate.process_ungated(&frame, &mut state.gated);
 
                 // Before the meter, because this is the frame's reason for
                 // existing and the meter is a picture of it. A send failure on
                 // the event channel below ends the loop, and ending it after
                 // the audio has gone out costs a caller nothing.
-                if let Some(sink) = publishing.as_mut() {
-                    sink(&state.gated, decision.open);
+                //
+                // What goes out is 30 ms behind what was just captured. The
+                // meter below is not, and deliberately: it draws what the model
+                // thinks of the frame in front of it, and a bar lagging a
+                // person's own voice is the one thing on this screen somebody
+                // would notice.
+                if let Some((published, open)) = state.pre_roll.step(&state.gated, decision)
+                    && let Some(sink) = publishing.as_mut()
+                {
+                    sink(published, open);
                 }
 
                 // Metered on the captured frame, not on the gate's output. A

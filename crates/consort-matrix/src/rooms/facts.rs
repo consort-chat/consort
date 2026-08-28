@@ -202,10 +202,7 @@ pub(crate) async fn name_all<'a>(
             }
         };
 
-        participants.push(Participant {
-            id: user_id.to_owned(),
-            name,
-        });
+        participants.push(Participant::named(user_id, name));
     }
 
     participants

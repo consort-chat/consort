@@ -291,10 +291,7 @@ mod tests {
     }
 
     fn ada() -> Participant {
-        Participant {
-            id: "@ada:example.org".to_owned(),
-            name: "Ada".to_owned(),
-        }
+        Participant::named("@ada:example.org", "Ada")
     }
 
     fn rooms(channels: Vec<Channel>) -> Rooms {

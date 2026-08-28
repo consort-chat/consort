@@ -12,10 +12,11 @@ use consort_matrix::{
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
-use consort_audio::GateConfig;
+use consort_audio::{GateConfig, Voices};
 
 use crate::audio::Backends;
 use crate::call::CallBridge;
+use crate::ears::speakers;
 use crate::events::{AppEvent, EventSink, LatestSink};
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
@@ -66,6 +67,12 @@ async fn stop_task(slot: &TaskSlot) -> bool {
 pub struct CallAudio {
     /// The device to open, or `None` for whatever the host calls its default.
     pub device: Option<String>,
+    /// The output to play the call out of, or `None` for the host's default.
+    ///
+    /// Resolved with the input at the same moment and from the same saved
+    /// settings, so a call cannot end up listening to one screen's answer and
+    /// speaking out of another's.
+    pub output: Option<String>,
     pub gate: GateConfig,
     /// The sound card. A closure because the audio thread is built at most
     /// once per process and almost every call finds it already there.
@@ -175,6 +182,13 @@ pub struct AppState {
     /// audio thread fills it whenever a call is up, and the call thread drains
     /// it. Empty and harmless the rest of the time.
     microphone: Microphone,
+    /// The mixer carrying everybody else's audio from the call to the audio
+    /// thread.
+    ///
+    /// The microphone queue's opposite number, built once and cloned for the
+    /// same reason: both ends outlive any one call. The call thread fills it
+    /// and the sound card drains it, and it is empty and harmless in between.
+    voices: Voices,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -208,6 +222,7 @@ impl AppState {
             events,
             settings,
             microphone: Microphone::new(),
+            voices: Voices::new(),
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -276,7 +291,12 @@ impl AppState {
 
         let mut slot = self.locked_call();
         let bridge = slot.get_or_insert_with(|| {
-            CallBridge::spawn(transport(), self.microphone.clone(), self.call_reporter())
+            CallBridge::spawn(
+                transport(),
+                self.microphone.clone(),
+                speakers(self.voices.clone()),
+                self.call_reporter(),
+            )
         });
         bridge.connect(room_id);
     }
@@ -296,6 +316,25 @@ impl AppState {
         }
     }
 
+    /// Mute or unmute this session's microphone.
+    ///
+    /// A no-op before the first call of the session, when there is no thread to
+    /// remember it. That is not a gap: the controls are drawn inside the call
+    /// panel, so there is nothing to press until a call exists. Once one has,
+    /// the thread outlives it and carries the state across channel switches.
+    pub fn set_call_muted(&self, muted: bool) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_muted(muted);
+        }
+    }
+
+    /// Stop or resume receiving the audio of everybody else in the call.
+    pub fn set_call_deafened(&self, deafened: bool) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_deafened(deafened);
+        }
+    }
+
     /// What to do with everything the call thread says.
     ///
     /// Two jobs in one closure, and the order inside it is the point. The
@@ -311,6 +350,7 @@ impl AppState {
         let sound = self.sound.clone();
         let events = self.events.clone();
         let microphone = self.microphone.clone();
+        let voices = self.voices.clone();
         let call_audio = self.call_audio.clone();
 
         move |event| {
@@ -327,11 +367,28 @@ impl AppState {
                             audio.device.clone(),
                             audio.gate,
                             Box::new(move |samples, open| queue.offer(samples, open)),
+                            audio.output.clone(),
+                            voices.clone(),
                         );
                     }
                 }
                 CallEvent::Connected { .. } => {}
                 CallEvent::Disconnected | CallEvent::Failed { .. } => sound.stop_call(),
+                // Split onto its own channel here rather than being given one
+                // by the call thread, which has one way out and no reason to
+                // know how the webview is wired. See `AppEvent::SelfAudio` for
+                // why it cannot travel with the call.
+                CallEvent::SelfAudio(audio) => {
+                    events.emit(AppEvent::SelfAudio(*audio));
+                    return;
+                }
+                // Split off for the same reason, and more urgently: this
+                // arrives several times a second, and on the call channel it
+                // would evict the call state constantly.
+                CallEvent::Speaking { user_ids } => {
+                    events.emit(AppEvent::Speaking(user_ids.clone()));
+                    return;
+                }
             }
 
             events.emit(AppEvent::Call(event));
@@ -653,6 +710,7 @@ mod tests {
     fn call_audio() -> CallAudio {
         CallAudio {
             device: Some("Yeti".to_owned()),
+            output: Some("Headphones".to_owned()),
             gate: GateConfig::default(),
             backends: Box::new(fake_backends),
         }
@@ -1095,10 +1153,10 @@ mod tests {
             // whether it is in a call.
             let (_dir, state, sink) = state();
             let transport = FakeCallTransport::joining();
-            transport.set_roster(vec![consort_matrix::Participant {
-                id: "@ada:example.org".to_owned(),
-                name: "Ada".to_owned(),
-            }]);
+            transport.set_roster(vec![consort_matrix::Participant::named(
+                "@ada:example.org",
+                "Ada",
+            )]);
 
             state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
 

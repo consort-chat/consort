@@ -1,0 +1,413 @@
+// Copyright 2026 The Consort contributors
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! Turning memberships into people.
+//!
+//! A MatrixRTC roster is per membership, which is per device. What an interface
+//! draws is per person. Collapsing the two is arithmetic over a list, with no
+//! `Client` and no SFU behind it, so it lives here where a test can reach it
+//! rather than in [`crate::livekit`] where nothing can.
+
+use consort_matrix::Participant;
+// `SpeakingMember` is not re-exported from the crate root; the module is
+// public, so this is the path rather than a private reach-in.
+use matrix_rtc_media::event::SpeakingMember;
+use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
+
+/// Whether this membership has muted its microphone.
+///
+/// False for a membership publishing no microphone at all, which is not the
+/// same event: it is somebody still connecting, or a client that publishes
+/// nothing. Saying "muted" for that would put an icon on a person who has not
+/// touched anything, describing a state they are on their way out of.
+pub fn microphone_muted(member: &MediaParticipant) -> bool {
+    member
+        .streams
+        .iter()
+        .find(|stream| stream.kind == MediaStreamKind::Microphone)
+        .is_some_and(|stream| stream.muted)
+}
+
+/// Attach each named person's mute state, given one entry per membership.
+///
+/// `memberships` is `(user_id, muted)` in roster order, and `people` is the
+/// deduplicated, named result of resolving those user IDs.
+///
+/// Muted only if every one of their memberships is. Somebody on a laptop and a
+/// phone is one person here, and drawing a mute for a person still speaking
+/// from the other device is worse than drawing nothing: it says the room cannot
+/// hear them when it can.
+pub fn with_mutes(people: Vec<Participant>, memberships: &[(String, bool)]) -> Vec<Participant> {
+    people
+        .into_iter()
+        .map(|person| {
+            let mut theirs = memberships
+                .iter()
+                .filter(|(user_id, _)| *user_id == person.id)
+                .peekable();
+            // `all` is true of nothing, so the emptiness has to be asked about
+            // separately. A person nothing in the roster matches is not
+            // somebody who has muted every device they own.
+            let muted = theirs.peek().is_some() && theirs.all(|(_, muted)| *muted);
+            person.with_muted(muted)
+        })
+        .collect()
+}
+
+/// Mark the people every one of whose memberships has deafened itself.
+///
+/// Every one, matching [`with_mutes`] and for the same reason: somebody
+/// deafened on their laptop who is still listening on their phone can hear
+/// you, and telling you otherwise would be worse than saying nothing.
+///
+/// `memberships` pairs each membership with the person it belongs to;
+/// `deafened` is the membership IDs that have said so. A membership nobody has
+/// heard from is not deafened, which is what makes this correct in a call with
+/// Element Call or an older Consort in it.
+pub fn with_deafened(
+    people: Vec<Participant>,
+    memberships: &[(String, String)],
+    deafened: &[String],
+) -> Vec<Participant> {
+    people
+        .into_iter()
+        .map(|person| {
+            let mut theirs = memberships
+                .iter()
+                .filter(|(_, user_id)| *user_id == person.id)
+                .peekable();
+
+            // `all` is true of nothing, so the emptiness has to be asked about
+            // separately. Same trap as `with_mutes`.
+            let quiet = theirs.peek().is_some()
+                && theirs.all(|(member_id, _)| deafened.contains(member_id));
+
+            person.with_deafened(quiet)
+        })
+        .collect()
+}
+
+/// The people behind `speakers`, by Matrix user ID and without repeats.
+///
+/// The SFU answers in memberships, because that is what it has; a roster is
+/// drawn per person. Somebody talking on their laptop with their phone also in
+/// the call is one person talking, and saying their name twice would light two
+/// entries that are the same human.
+///
+/// Speakers whose membership is not in the roster are dropped. That is the
+/// window between a membership being signalled and this session having caught
+/// up with it, and inventing a user ID for it would be worse than briefly
+/// missing a green ring.
+pub fn speaking_users(
+    speakers: &[SpeakingMember],
+    memberships: &[MediaParticipant],
+) -> Vec<String> {
+    let mut talking = Vec::new();
+
+    for speaker in speakers {
+        let Some(member) = memberships
+            .iter()
+            .find(|member| member.member_id == speaker.member_id)
+        else {
+            continue;
+        };
+        if !talking.contains(&member.user_id) {
+            talking.push(member.user_id.clone());
+        }
+    }
+
+    talking
+}
+
+#[cfg(test)]
+mod deafening {
+    use super::*;
+
+    fn person(user_id: &str) -> Participant {
+        Participant::named(user_id, "Somebody")
+    }
+
+    fn membership(member_id: &str, user_id: &str) -> (String, String) {
+        (member_id.to_owned(), user_id.to_owned())
+    }
+
+    fn ids(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn somebody_whose_only_device_deafened_is_deafened() {
+        let people = with_deafened(
+            vec![person("@ada:example.org")],
+            &[membership("ada-laptop", "@ada:example.org")],
+            &ids(&["ada-laptop"]),
+        );
+
+        assert!(people[0].deafened);
+    }
+
+    #[test]
+    fn somebody_nobody_has_heard_from_is_not_deafened() {
+        // Element Call, or a Consort too old to say. Guessing would put a
+        // headphone icon beside somebody who can hear perfectly well.
+        let people = with_deafened(
+            vec![person("@ada:example.org")],
+            &[membership("ada-laptop", "@ada:example.org")],
+            &[],
+        );
+
+        assert!(!people[0].deafened);
+    }
+
+    #[test]
+    fn somebody_still_listening_on_another_device_is_not_deafened() {
+        let people = with_deafened(
+            vec![person("@ada:example.org")],
+            &[
+                membership("ada-laptop", "@ada:example.org"),
+                membership("ada-phone", "@ada:example.org"),
+            ],
+            &ids(&["ada-laptop"]),
+        );
+
+        assert!(!people[0].deafened);
+    }
+
+    #[test]
+    fn somebody_deafened_on_every_device_is_deafened() {
+        let people = with_deafened(
+            vec![person("@ada:example.org")],
+            &[
+                membership("ada-laptop", "@ada:example.org"),
+                membership("ada-phone", "@ada:example.org"),
+            ],
+            &ids(&["ada-laptop", "ada-phone"]),
+        );
+
+        assert!(people[0].deafened);
+    }
+
+    #[test]
+    fn somebody_with_no_membership_at_all_is_not_deafened() {
+        // `all` is true of nothing, so without the emptiness check this is the
+        // case that would mark a person with no memberships as deafened.
+        let people = with_deafened(vec![person("@ada:example.org")], &[], &ids(&["ada-laptop"]));
+
+        assert!(!people[0].deafened);
+    }
+
+    #[test]
+    fn one_person_deafening_does_not_deafen_anybody_else() {
+        let people = with_deafened(
+            vec![person("@ada:example.org"), person("@bob:example.org")],
+            &[
+                membership("ada-laptop", "@ada:example.org"),
+                membership("bob-phone", "@bob:example.org"),
+            ],
+            &ids(&["ada-laptop"]),
+        );
+
+        assert!(people[0].deafened);
+        assert!(!people[1].deafened);
+    }
+}
+
+#[cfg(test)]
+mod speaking {
+    use super::*;
+
+    fn membership(member_id: &str, user_id: &str) -> MediaParticipant {
+        MediaParticipant {
+            member_id: member_id.to_owned(),
+            user_id: user_id.to_owned(),
+            device_id: None,
+            is_local: false,
+            reachable: true,
+            streams: Vec::new(),
+        }
+    }
+
+    fn talking(member_id: &str) -> SpeakingMember {
+        SpeakingMember {
+            member_id: member_id.to_owned(),
+            level: 0.8,
+        }
+    }
+
+    #[test]
+    fn a_speaking_membership_names_its_person() {
+        let people = speaking_users(
+            &[talking("ada-laptop")],
+            &[membership("ada-laptop", "@ada:example.org")],
+        );
+
+        assert_eq!(people, vec!["@ada:example.org".to_owned()]);
+    }
+
+    #[test]
+    fn one_person_on_two_devices_is_named_once() {
+        // The roster is per person, so naming them twice would light two
+        // entries that are the same human.
+        let people = speaking_users(
+            &[talking("ada-laptop"), talking("ada-phone")],
+            &[
+                membership("ada-laptop", "@ada:example.org"),
+                membership("ada-phone", "@ada:example.org"),
+            ],
+        );
+
+        assert_eq!(people, vec!["@ada:example.org".to_owned()]);
+    }
+
+    #[test]
+    fn a_speaker_this_session_has_not_heard_of_is_dropped() {
+        // The window between a membership being signalled and this session
+        // catching up. Inventing a user ID would be worse than a missing ring.
+        let people = speaking_users(
+            &[talking("a-stranger")],
+            &[membership("ada-laptop", "@ada:example.org")],
+        );
+
+        assert!(people.is_empty());
+    }
+
+    #[test]
+    fn nobody_talking_is_nobody_named() {
+        assert!(speaking_users(&[], &[membership("ada-laptop", "@ada:example.org")]).is_empty());
+    }
+
+    #[test]
+    fn everybody_talking_at_once_is_named_in_the_order_the_sfu_gave() {
+        // Loudest first where the transport orders them, which is what makes
+        // an interface that only has room for a few names show the right ones.
+        let people = speaking_users(
+            &[talking("bob-laptop"), talking("ada-laptop")],
+            &[
+                membership("ada-laptop", "@ada:example.org"),
+                membership("bob-laptop", "@bob:example.org"),
+            ],
+        );
+
+        assert_eq!(
+            people,
+            vec!["@bob:example.org".to_owned(), "@ada:example.org".to_owned()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_rtc_media::StreamState;
+
+    fn membership(user_id: &str, streams: Vec<StreamState>) -> MediaParticipant {
+        MediaParticipant {
+            member_id: format!("{user_id}:AAAA"),
+            user_id: user_id.to_owned(),
+            device_id: None,
+            is_local: false,
+            reachable: true,
+            streams,
+        }
+    }
+
+    fn microphone(muted: bool) -> StreamState {
+        StreamState {
+            kind: MediaStreamKind::Microphone,
+            muted,
+        }
+    }
+
+    fn ada() -> Participant {
+        Participant::named("@ada:example.org", "Ada")
+    }
+
+    #[test]
+    fn a_muted_microphone_is_a_muted_membership() {
+        assert!(microphone_muted(&membership(
+            "@ada:example.org",
+            vec![microphone(true)]
+        )));
+    }
+
+    #[test]
+    fn a_live_microphone_is_not() {
+        assert!(!microphone_muted(&membership(
+            "@ada:example.org",
+            vec![microphone(false)]
+        )));
+    }
+
+    #[test]
+    fn publishing_no_microphone_at_all_is_not_a_mute() {
+        // Somebody still connecting, or a client that publishes nothing. They
+        // have not touched a button, and an icon saying they have describes a
+        // state they are on their way out of.
+        assert!(!microphone_muted(&membership("@ada:example.org", vec![])));
+    }
+
+    #[test]
+    fn a_camera_says_nothing_about_the_microphone() {
+        let member = membership(
+            "@ada:example.org",
+            vec![
+                StreamState {
+                    kind: MediaStreamKind::Camera,
+                    muted: true,
+                },
+                microphone(false),
+            ],
+        );
+
+        assert!(!microphone_muted(&member));
+    }
+
+    #[test]
+    fn one_membership_carries_straight_through() {
+        let people = with_mutes(vec![ada()], &[("@ada:example.org".to_owned(), true)]);
+
+        assert!(people[0].muted);
+    }
+
+    #[test]
+    fn somebody_on_two_devices_is_muted_only_when_both_are() {
+        // The case this fold exists for. A laptop muted and a phone live is a
+        // person the room can hear, and saying otherwise is the one wrong
+        // answer worth avoiding here.
+        let both = [
+            ("@ada:example.org".to_owned(), true),
+            ("@ada:example.org".to_owned(), true),
+        ];
+        let one = [
+            ("@ada:example.org".to_owned(), true),
+            ("@ada:example.org".to_owned(), false),
+        ];
+
+        assert!(with_mutes(vec![ada()], &both)[0].muted);
+        assert!(!with_mutes(vec![ada()], &one)[0].muted);
+    }
+
+    #[test]
+    fn somebody_no_membership_matches_is_not_muted() {
+        // `all` is true of nothing, so this is the answer the obvious fold
+        // gets wrong: a name with no membership behind it would come back
+        // muted.
+        let people = with_mutes(vec![ada()], &[("@bob:example.org".to_owned(), true)]);
+
+        assert!(!people[0].muted);
+    }
+
+    #[test]
+    fn each_person_gets_their_own_answer() {
+        let people = with_mutes(
+            vec![ada(), Participant::named("@bob:example.org", "Bob")],
+            &[
+                ("@ada:example.org".to_owned(), true),
+                ("@bob:example.org".to_owned(), false),
+            ],
+        );
+
+        assert!(people[0].muted);
+        assert!(!people[1].muted);
+    }
+}
