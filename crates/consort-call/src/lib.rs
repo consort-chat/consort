@@ -41,6 +41,7 @@
 //! See `consort_matrix::install_crypto_provider`.
 
 pub mod dialect;
+pub mod discovery;
 pub mod event;
 pub mod failure;
 pub mod livekit;
@@ -56,6 +57,6 @@ pub use failure::CallFailure;
 pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use publish::PublishedAudio;
-pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT};
+pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT, SHUTDOWN_LEAVE_TIMEOUT};
 pub use transport::{CallSession, CallTransport, Roster};
 pub use trouble::{Fault, Faults};

@@ -58,13 +58,17 @@ pub struct CallSettings {
     /// pre-MSC4354 room state; see that function for what it can and cannot
     /// tell apart.
     pub fallback_dialect: Dialect,
-    /// Where to ask for an SFU token when the homeserver advertises no voice
-    /// transport of its own.
+    /// Where to ask for an SFU token, overruling whatever was discovered.
     ///
-    /// MSC4143 discovery is tried first, so a homeserver that does advertise
-    /// one wins and this is never read. A deployment whose homeserver does
-    /// not, and which leaves this empty, cannot join a call at all: there is
-    /// nowhere to ask.
+    /// Normally empty, and normally it should stay that way. A call looks for
+    /// an SFU twice before reading this: at the MSC4143 transports endpoint,
+    /// and then at `org.matrix.msc4143.rtc_foci` in the server's own
+    /// `.well-known/matrix/client`, which is where Element Call has always
+    /// looked. Between them those cover both generations of deployment.
+    ///
+    /// What is left is the deployment whose discovery is wrong rather than
+    /// missing, and which needs to be able to say so without waiting for a
+    /// release. A value here wins over both.
     pub service_url_fallback: Option<String>,
 }
 

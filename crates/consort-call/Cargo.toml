@@ -38,6 +38,13 @@ matrix-sdk = { workspace = true }
 consort-matrix = { path = "../consort-matrix" }
 
 serde = { workspace = true }
+
+# For reading a homeserver's discovery document. `consort_call::discovery`
+# parses `.well-known/matrix/client` by hand rather than through ruma's typed
+# response, because that response is reached over the homeserver's API base
+# URL and the document lives on the server name, which are different hosts the
+# moment a deployment delegates.
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -54,10 +61,6 @@ consort-audio = { path = "../consort-audio" }
 # key was refused. See the workspace manifest for why it is not reachable
 # through `matrix-rtc-media`.
 matrix-rtc-core = { workspace = true }
-
-# Only the tests need to see the wire format. The crate hands events to its
-# caller as a type and never chooses a serialisation.
-serde_json = { workspace = true }
 
 # `start_paused` runtimes, so the join timeout can be proven without a test
 # that takes thirty seconds to run.

@@ -58,13 +58,30 @@ pub const JOIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a leave may take before it is abandoned.
 ///
-/// Shorter than a join, and for a different reason. Leaving is best effort
-/// already: the membership carries a dead man's switch, so the worst a
-/// half-finished leave costs is a ghost that clears itself. What it must not
-/// cost is the application refusing to close, and it would, because dropping
-/// the handle waits for this thread and this thread would be waiting on a
-/// homeserver that is not answering.
-pub const LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longer than one attempt at the request it is waiting for, which is the
+/// whole of the constraint. The bridge gives a membership send fifteen seconds
+/// before it calls the attempt dead, so a budget under that does not bound a
+/// hang: it abandons requests that were going to succeed, on any homeserver
+/// slower than the budget. What that costs is not abstract. The leave is
+/// cancelled in flight, the membership is never retracted, and the person is
+/// still sitting in the voice channel to everybody else in the space.
+///
+/// Waiting this long is free, because nobody is waiting on it. `Disconnected`
+/// goes out before the leave is awaited, so the interface has already closed
+/// the call by the time any of this runs.
+///
+/// Still bounded, and bounded below the dead man's switch that backs it up: a
+/// leave that has not landed within the membership's own keep-alive window has
+/// been overtaken by it.
+pub const LEAVE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long a leave may take when the application is closing.
+///
+/// The one case where the membership really is the expendable half. Dropping
+/// the handle waits for this thread, so a leave with no short bound on it is
+/// an application that will not close, and a person who cannot quit is a worse
+/// outcome than a ghost in a channel that the dead man's switch will clear.
+pub const SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the thread accepts.
 enum Message {
@@ -209,23 +226,33 @@ async fn serve<T: CallTransport>(
                 current = connect(&transport, current, room_id, &events, &microphone).await;
             }
             Message::Disconnect => {
-                if leave(current.take()).await {
+                if let Some(joined) = current.take() {
+                    // Said before the leave rather than after it. The decision
+                    // to leave is this client's own and is already final by the
+                    // time it gets here; what follows is telling the homeserver
+                    // about it, and there is no answer it could give that would
+                    // put anybody back in the call. Waiting for one would be a
+                    // disconnect button that does nothing for several seconds,
+                    // which is exactly how long the homeserver feels like
+                    // taking.
                     emit(&events, CallEvent::Disconnected);
+                    leave(Some(joined), LEAVE_TIMEOUT).await;
                 }
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
                 // already gone, and an event nobody is left to receive is not
                 // worth the risk of the receiver having been dropped first.
-                leave(current.take()).await;
+                leave(current.take(), SHUTDOWN_LEAVE_TIMEOUT).await;
                 return;
             }
         }
     }
 
     // The handle was dropped without a `Shutdown`, which `Drop` does not do
-    // but a panicking caller can. Unwind anyway.
-    leave(current.take()).await;
+    // but a panicking caller can. Unwind anyway, and on the closing budget:
+    // this is the same teardown, reached the untidy way.
+    leave(current.take(), SHUTDOWN_LEAVE_TIMEOUT).await;
 }
 
 /// Join `room_id`, having first left whatever call was current.
@@ -271,7 +298,10 @@ async fn connect<T: CallTransport>(
         },
     );
 
-    leave(current).await;
+    // On the full budget, not a short one. An abandoned leave here is a
+    // membership still published in the channel just left, which is the same
+    // person in two voice channels at once to everybody else in the space.
+    leave(current, LEAVE_TIMEOUT).await;
 
     let session = match tokio::time::timeout(JOIN_TIMEOUT, transport.join(&room_id)).await {
         Ok(Ok(session)) => session,
@@ -295,7 +325,7 @@ async fn connect<T: CallTransport>(
             // Unwound rather than kept. A membership left published for a call
             // this session cannot speak in is a name sitting in the channel
             // that nobody can reach.
-            leave_session(&room_id, session).await;
+            leave_session(&room_id, session, LEAVE_TIMEOUT).await;
             fail(events, room_id, failure);
             return None;
         }
@@ -372,7 +402,7 @@ async fn connected<R: Roster>(room_id: &str, roster: &R) -> CallEvent {
 /// nothing a person can do about it and nothing useful to retry: the
 /// membership carries a dead man's switch, so the worst case is a ghost that
 /// clears itself.
-async fn leave<S: CallSession>(current: Option<Joined<S>>) -> bool {
+async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> bool {
     let Some(Joined {
         room_id,
         session,
@@ -389,14 +419,14 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>) -> bool {
     drop(publishing);
     drop(watching);
 
-    leave_session(&room_id, session).await;
+    leave_session(&room_id, session, budget).await;
     true
 }
 
 /// Leave one call. Separate from [`leave`] because a join that got as far as
 /// the membership and no further has a session to unwind and no task to stop.
-async fn leave_session<S: CallSession>(room_id: &str, session: S) {
-    match tokio::time::timeout(LEAVE_TIMEOUT, session.leave()).await {
+async fn leave_session<S: CallSession>(room_id: &str, session: S, budget: Duration) {
+    match tokio::time::timeout(budget, session.leave()).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             tracing::warn!(%room_id, %error, "leaving the call failed; treating it as left anyway")
@@ -485,10 +515,6 @@ mod tests {
     }
 
     impl PublishedAudio for FakeTrack {
-        fn set_muted(&self, _muted: bool) -> Result<(), CallFailure> {
-            Ok(())
-        }
-
         async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
             Ok(())
         }
@@ -983,6 +1009,69 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn a_disconnect_is_announced_without_waiting_for_the_homeserver() {
+        // The bug this exists for: a homeserver that takes six seconds to
+        // write a membership, against a budget of five, produced a disconnect
+        // button that sat there doing nothing and then a person still shown in
+        // the channel they had left. Half of that is the budget below. This
+        // half is not making anybody watch it.
+        let (transport, _log) = FakeTransport::whose_leaves(Leaving::Hangs);
+        let (events, mut said) = unbounded_channel();
+        let (post, inbox) = unbounded_channel();
+
+        post.send(connect_to(GENERAL)).unwrap();
+        post.send(Message::Disconnect).unwrap();
+        drop(post);
+
+        let started = tokio::time::Instant::now();
+        let seen_at = tokio::task::LocalSet::new()
+            .run_until(async {
+                // Concurrently, because that is the only way the difference is
+                // visible: reading the channel after the loop has finished
+                // sees the same order either way. What changed is when the
+                // reader could have known, and the reader here is a webview.
+                let watching = async {
+                    while let Some(event) = said.recv().await {
+                        if event == CallEvent::Disconnected {
+                            break;
+                        }
+                    }
+                    tokio::time::Instant::now()
+                };
+
+                let (_, seen_at) =
+                    tokio::join!(serve(transport, inbox, events, Microphone::new()), watching);
+                seen_at
+            })
+            .await;
+
+        assert!(
+            seen_at.duration_since(started) < LEAVE_TIMEOUT,
+            "the disconnect waited on the leave before admitting it had happened"
+        );
+    }
+
+    #[test]
+    fn a_leave_outlasts_one_attempt_at_the_request_it_is_waiting_for() {
+        // The bridge gives a membership send fifteen seconds per attempt. A
+        // budget under that does not bound a hang, it abandons requests that
+        // were going to succeed, and an abandoned leave is a person left
+        // sitting in a channel they are not in.
+        assert!(
+            LEAVE_TIMEOUT > Duration::from_secs(15),
+            "a leave cannot land if it is given less than one attempt"
+        );
+    }
+
+    #[test]
+    fn closing_the_application_is_not_made_to_wait_that_long() {
+        // The one place the membership really is the expendable half: dropping
+        // the handle waits for the loop, so this budget is how long quitting
+        // can take on a homeserver that has stopped answering.
+        assert!(SHUTDOWN_LEAVE_TIMEOUT < LEAVE_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_hanging_leave_does_not_stop_the_next_call_from_starting() {
         let (transport, log) = FakeTransport::whose_leaves(Leaving::Hangs);
 
@@ -1121,7 +1210,7 @@ mod tests {
                     connect(&transport, None, GENERAL.to_owned(), &events, &microphone).await;
                 assert_eq!(log.live(), 1, "nothing was publishing");
 
-                leave(joined).await;
+                leave(joined, LEAVE_TIMEOUT).await;
                 settle(&log).await;
 
                 assert_eq!(

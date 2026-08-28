@@ -253,10 +253,6 @@ pub struct FakeCallSession {
 pub struct FakeCallTrack;
 
 impl consort_call::PublishedAudio for FakeCallTrack {
-    fn set_muted(&self, _muted: bool) -> Result<(), consort_call::CallFailure> {
-        Ok(())
-    }
-
     async fn send(&self, _samples: Vec<i16>) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }
