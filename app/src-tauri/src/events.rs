@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
-use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
+use consort_matrix::{CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification};
 
 /// Something the frontend needs to be told about without having asked.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +27,16 @@ pub enum AppEvent {
     Connection(Connection),
     /// Whether this session is verified changed.
     Verification(SessionVerification),
+    /// Whether this session could be heard in an encrypted call changed.
+    ///
+    /// Its own channel rather than a reading of
+    /// [`Verification`](Self::Verification), because the two answer different
+    /// questions and one of them cannot be derived from the other. A session
+    /// on an account with no cross-signing identity at all is `Unverified` on
+    /// that channel and `NoIdentity` here, and those send a person to two
+    /// different places: one is fixed on this device, the other on the
+    /// account.
+    CallReadiness(CallReadiness),
     /// A verification flow started, moved on, or ended.
     VerificationFlow(Flow),
     /// What is happening to this session's room keys changed.
@@ -63,6 +73,8 @@ impl AppEvent {
     pub const CONNECTION: &'static str = "connection";
     /// The channel carrying this session's verification state.
     pub const VERIFICATION: &'static str = "verification";
+    /// The channel carrying whether a call from this session could be heard.
+    pub const CALL_READINESS: &'static str = "call-readiness";
     /// The channel carrying the progress of one verification flow.
     pub const VERIFICATION_FLOW: &'static str = "verification-flow";
     /// The channel carrying whether room keys are being backed up.
@@ -83,6 +95,7 @@ impl AppEvent {
         match self {
             Self::Connection(_) => Self::CONNECTION,
             Self::Verification(_) => Self::VERIFICATION,
+            Self::CallReadiness(_) => Self::CALL_READINESS,
             Self::VerificationFlow(_) => Self::VERIFICATION_FLOW,
             Self::KeyBackup(_) => Self::KEY_BACKUP,
             Self::Rooms(_) => Self::ROOMS,
@@ -133,6 +146,7 @@ impl AppEvent {
         match self {
             Self::Connection(_)
             | Self::Verification(_)
+            | Self::CallReadiness(_)
             | Self::KeyBackup(_)
             | Self::Rooms(_)
             | Self::Call(_)
@@ -151,6 +165,7 @@ impl AppEvent {
         match self {
             Self::Connection(state) => serde_json::to_value(state),
             Self::Verification(state) => serde_json::to_value(state),
+            Self::CallReadiness(state) => serde_json::to_value(state),
             Self::VerificationFlow(flow) => serde_json::to_value(flow),
             Self::KeyBackup(state) => serde_json::to_value(state),
             Self::Rooms(rooms) => serde_json::to_value(rooms),

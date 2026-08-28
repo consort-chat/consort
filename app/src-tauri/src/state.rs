@@ -126,6 +126,14 @@ pub struct AppState {
     /// verification state is read from the crypto store and is known before
     /// the first sync response arrives.
     verification_task: TaskSlot,
+    /// The watcher reporting whether a call from this session could be heard.
+    ///
+    /// A fifth task rather than a reading taken off `verification_task`,
+    /// because `CallReadiness` draws a distinction `SessionVerification`
+    /// cannot: an account with no cross-signing identity at all is fixed
+    /// somewhere else entirely from a session that merely has not been
+    /// verified yet, and the interface has to say which.
+    readiness_task: TaskSlot,
     /// The watcher for incoming verification requests.
     ///
     /// The one whose abort does more than stop a loop: it owns a task per
@@ -214,6 +222,7 @@ impl AppState {
             refresh_task: Mutex::new(None),
             sync_task: Mutex::new(None),
             verification_task: Mutex::new(None),
+            readiness_task: Mutex::new(None),
             flow_task: Mutex::new(None),
             backup_task: Mutex::new(None),
             rooms_task: Mutex::new(None),
@@ -496,25 +505,23 @@ impl AppState {
         )
         .await;
 
-        // Say once, out loud, whether this session could be heard in a call.
+        // Whether this session could be heard in an encrypted call, for as
+        // long as the session lasts rather than once at startup.
         //
-        // Not tracked with the rest. It answers a question and ends, within a
-        // request at the very worst, so there is nothing later to abort and a
-        // slot to hold it in would only ever hold a finished task.
-        //
-        // Worth having in the log permanently rather than only while the call
-        // layer is being built: an unverified session is the one fault that
-        // looks exactly like a working call until somebody says something and
-        // nobody hears it.
-        let readiness_client = client.clone();
-        tokio::spawn(async move {
-            match calls::readiness(&readiness_client).await {
-                Ok(readiness) => {
-                    tracing::info!(?readiness, "whether this session can be heard in a call")
-                }
-                Err(error) => tracing::warn!(%error, "could not work out call readiness"),
-            }
-        });
+        // Once was wrong in the direction that matters. Every session begins
+        // unverified and the whole point of verifying one is that calls start
+        // working afterwards, so an answer taken at startup and kept would
+        // lock somebody out of every call until they restarted the
+        // application, which is worse than the failure the answer exists to
+        // prevent.
+        let events = self.events.clone();
+        replace_task(
+            &self.readiness_task,
+            calls::watch_readiness(client.clone(), move |state| {
+                events.emit(AppEvent::CallReadiness(state));
+            }),
+        )
+        .await;
 
         let events = self.events.clone();
         let (flow_task, initiator) = verification::supervise(client, move |flow| {
@@ -573,6 +580,7 @@ impl AppState {
         // announcing a cancellation nobody performed would be a lie about
         // whose decision it was.
         stop_task(&self.verification_task).await;
+        stop_task(&self.readiness_task).await;
         stop_task(&self.flow_task).await;
         stop_task(&self.backup_task).await;
         *self.initiator.lock().await = None;

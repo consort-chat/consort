@@ -13,4 +13,4 @@
 
 pub mod readiness;
 
-pub use readiness::{CallReadiness, readiness};
+pub use readiness::{CallReadiness, readiness, watch as watch_readiness};

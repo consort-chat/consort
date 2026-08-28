@@ -55,6 +55,28 @@ export type Verification =
   | { state: "unverified" };
 
 /**
+ * Whether an encrypted call joined right now would be audible, mirrored from
+ * `consort_matrix::calls::CallReadiness`.
+ *
+ * Not a rewording of `Verification`, and the difference is the whole reason
+ * this exists. Media keys travel to-device under the SDK's identity-based
+ * sharing strategy, which refuses in two distinct shapes, and each sends a
+ * person somewhere different. `noIdentity` means the *account* has no
+ * cross-signing identity, fixed by setting up recovery on any client.
+ * `sessionUnverified` means the account has one and this device is not trusted
+ * against it, fixed here. Collapsing them tells somebody who has already done
+ * the first thing to go and do it again.
+ *
+ * There is no "not known yet". `Verification` needs one because it republishes
+ * a state it watches; this is a question with an answer, and the watcher does
+ * not report until it has one.
+ */
+export type CallReadiness =
+  | { state: "ready" }
+  | { state: "noIdentity" }
+  | { state: "sessionUnverified" };
+
+/**
  * What is happening to this session's room keys, mirrored from
  * `consort_matrix::backup`.
  *
@@ -332,6 +354,25 @@ export function onVerification(
   handler: (state: Verification) => void,
 ): Promise<UnlistenFn> {
   return listen<Verification>("verification", (event) =>
+    handler(event.payload),
+  );
+}
+
+/**
+ * Listen for changes in whether a call from this session could be heard.
+ *
+ * Same contract as `onVerification`: the channel name matches
+ * `AppEvent::CALL_READINESS`, and the returned function stops listening.
+ *
+ * Watched rather than asked once because the answer moves in the direction
+ * that matters. Every session starts unable to distribute media keys, and
+ * verifying it is precisely what changes that, so a value read at startup
+ * would say "no" for the rest of a session in which somebody fixed it.
+ */
+export function onCallReadiness(
+  handler: (state: CallReadiness) => void,
+): Promise<UnlistenFn> {
+  return listen<CallReadiness>("call-readiness", (event) =>
     handler(event.payload),
   );
 }
