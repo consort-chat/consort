@@ -167,6 +167,22 @@ Rust crates and the Tauri app share one cargo workspace.
 The first build compiles the Matrix SDK from source and takes a while. Later
 builds are incremental and fast.
 
+### Two accounts at once
+
+There is normally one Consort per machine: two copies would share one SQLite
+crypto store and one session file, and racing on a crypto store is how device
+keys get lost. Testing a call needs two accounts, though, so a named profile
+gets its own data directory and is allowed to run beside the ordinary one.
+
+```sh
+CONSORT_PROFILE=second pnpm tauri dev
+```
+
+Its data lives under `profiles/second/` inside the usual application data
+directory, and it signs in separately. Give each one a different name. Two
+processes on the *same* profile would fight over one store, which is the thing
+the single-instance guard exists to prevent.
+
 ### Rust only
 
 The Matrix layer has no dependency on Tauri and builds on its own:
@@ -182,20 +198,27 @@ cargo fmt --all --check
 Both halves have to stay above 90% line coverage, and CI enforces it.
 
 ```sh
-cargo test --workspace          # 281 tests
-cd app && pnpm test             # 117 tests
+cargo test --workspace          # 918 tests
+cd app && pnpm test             # 365 tests
 cd app && pnpm test:coverage    # thresholds enforced from vitest.config.ts
 ```
 
-Twelve Rust tests are marked `#[ignore]` because they need something a CI
+Twenty-seven Rust tests are marked `#[ignore]` because they need something a CI
 container does not have. Four want a live platform keyring:
 
 ```sh
 cargo test -p consort-matrix -- --ignored keyring
 ```
 
-The other ten want a homeserver, because a SAS verification handshake is real
-cryptography between two real devices and no mock produces one. They drive both
+Three want a real sound card, and are how the cpal layer is checked against
+hardware rather than against a fake:
+
+```sh
+cargo test -p consort-audio -- --ignored
+```
+
+The other twenty want a homeserver, because a SAS verification handshake is
+real cryptography between two real devices and no mock produces one. They drive both
 sides of the emoji exchange unattended, in both directions, so asking,
 accepting, confirming, declining and reporting a mismatch are all exercised end
 to end. There is a throwaway Synapse for that:

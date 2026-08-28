@@ -11,6 +11,7 @@
 mod audio;
 mod call;
 mod commands;
+mod ears;
 mod events;
 mod settings;
 mod sound;
@@ -34,30 +35,36 @@ pub fn run() {
         tracing::debug!("a rustls crypto provider was already installed");
     }
 
-    tauri::Builder::default()
-        // Must be registered first, before anything touches the data
-        // directory.
-        //
-        // Two copies of Consort would share one SQLite crypto store and one
-        // session file. The store has a cross-process lock, so the second copy
-        // fails to open it, and both processes then disagree about who is
-        // signed in. It gets worse rather than better once verification lands:
-        // two processes racing on one crypto store is how device keys get
-        // dropped.
-        //
-        // Rather than make the storage layer safe for concurrent processes,
-        // which is a large amount of work for a case nobody wants, there is
-        // simply one Consort. A second launch hands its arguments to the first
-        // and exits, and the first raises its window, which is also what a user
-        // clicking the launcher icon twice actually expects.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // Registered before anything touches the data directory.
+    //
+    // Two copies of Consort would share one SQLite crypto store and one
+    // session file. The store has a cross-process lock, so the second copy
+    // fails to open it, and both processes then disagree about who is signed
+    // in. It gets worse rather than better once verification lands: two
+    // processes racing on one crypto store is how device keys get dropped.
+    //
+    // Rather than make the storage layer safe for concurrent processes, which
+    // is a large amount of work for a case nobody wants, there is simply one
+    // Consort. A second launch hands its arguments to the first and exits, and
+    // the first raises its window, which is also what a user clicking the
+    // launcher icon twice actually expects.
+    //
+    // A profile is the deliberate exception. It moves the data directory, so
+    // the thing this protects is no longer shared, and running two accounts
+    // against each other is the whole point of having one. See `profile`.
+    let mut builder = tauri::Builder::default();
+    if profile().is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tracing::info!("a second instance was launched; focusing the existing window");
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    }
+
+    builder
         .setup(|app| {
             let data_dir = resolve_data_dir(app.handle())?;
             let store = SessionStore::new(&data_dir);
@@ -100,6 +107,8 @@ pub fn run() {
             commands::audio_tone_stop,
             commands::call_connect,
             commands::call_disconnect,
+            commands::call_set_muted,
+            commands::call_set_deafened,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,
@@ -120,9 +129,59 @@ pub fn run() {
 /// surfaces at startup with a clear path in the message, instead of during a
 /// login as a confusing failure to save the session.
 fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let dir = app.path().app_data_dir()?;
+    let dir = under_profile(app.path().app_data_dir()?, profile().as_deref());
     consort_matrix::atomic::create_dir_private(&dir)?;
     Ok(dir)
+}
+
+/// A second Consort on one machine, for testing two accounts against each
+/// other.
+///
+/// Set `CONSORT_PROFILE` to any name and that process gets its own data
+/// directory and drops the single-instance guard, so it runs beside the
+/// ordinary one. Unset, which is every real user, nothing about the
+/// application changes.
+///
+/// The guard is dropped rather than made per profile because it is a bundle
+/// identifier lock on Windows and macOS with nowhere to put a profile name.
+/// Two processes sharing *one* profile would still fight over one SQLite
+/// store, which is the thing the guard exists to prevent, so give each its own
+/// name.
+///
+/// Not a command-line flag because Tauri owns argument parsing and a webview
+/// process re-execs itself; an environment variable is inherited and a flag is
+/// not.
+fn profile() -> Option<String> {
+    std::env::var("CONSORT_PROFILE")
+        .ok()
+        .filter(|name| !name.is_empty())
+}
+
+/// Where a named profile keeps its data.
+///
+/// Under the ordinary directory rather than beside it, so that a machine with
+/// half a dozen abandoned test profiles still has one directory to delete.
+///
+/// The name is reduced to characters that are safe in a path component. It
+/// comes from the environment, and a profile called `../..` would otherwise
+/// point the crypto store somewhere nobody asked for.
+fn under_profile(base: PathBuf, profile: Option<&str>) -> PathBuf {
+    let Some(name) = profile else {
+        return base;
+    };
+
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    base.join("profiles").join(safe)
 }
 
 /// Logging to stderr, filtered by `RUST_LOG`.
@@ -187,5 +246,35 @@ mod tests {
     fn init_tracing_can_be_called_more_than_once() {
         init_tracing();
         init_tracing();
+    }
+
+    #[test]
+    fn no_profile_leaves_the_ordinary_directory_alone() {
+        let base = PathBuf::from("/home/ada/.local/share/chat.consort.desktop");
+
+        assert_eq!(under_profile(base.clone(), None), base);
+    }
+
+    #[test]
+    fn a_profile_gets_its_own_directory_under_the_ordinary_one() {
+        let base = PathBuf::from("/home/ada/.local/share/chat.consort.desktop");
+
+        assert_eq!(
+            under_profile(base, Some("second")),
+            PathBuf::from("/home/ada/.local/share/chat.consort.desktop/profiles/second")
+        );
+    }
+
+    #[test]
+    fn a_profile_name_cannot_climb_out_of_the_data_directory() {
+        // It comes from the environment. Anything but the characters a path
+        // component is allowed is flattened, so the worst a hostile name can
+        // do is collide with another profile.
+        let base = PathBuf::from("/home/ada/.local/share/chat.consort.desktop");
+
+        assert_eq!(
+            under_profile(base, Some("../../etc")),
+            PathBuf::from("/home/ada/.local/share/chat.consort.desktop/profiles/______etc")
+        );
     }
 }
