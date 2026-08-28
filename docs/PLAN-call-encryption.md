@@ -1,7 +1,8 @@
 # Plan: make an encrypted call audible
 
-Status: **not started.** Every API named here was read at the pinned rev rather
-than recalled, and the file and line references are the ones to change.
+Status: **Phases 0 to 2 and 4 done. Phase 3 is written and waiting on a push.
+Phase 5 is the live half and is next.** Every API named here was read at the
+pinned rev rather than recalled.
 
 This is Phase 6 of [PLAN-verification.md](PLAN-verification.md) and it turned
 out to be larger than the sentence there. That phase says "refuse to join an
@@ -65,7 +66,7 @@ Phase 0.
 
 ## Phases
 
-### Phase 0: fix the verification stall
+### Phase 0: fix the verification stall (done)
 
 Hard prerequisite. Gating calls on a flow that never completes converts "calls
 are silently broken" into "calls are loudly impossible", which is more honest
@@ -125,7 +126,7 @@ Done when the running application completes an emoji verification against
 Element, which is the interop claim Phase 2 of the verification plan explicitly
 deferred.
 
-### Phase 1: make readiness live
+### Phase 1: make readiness live (done)
 
 - `calls::watch_readiness(client, on_change) -> JoinHandle<()>`, shaped like
   `verification::watch`. The trigger already exists:
@@ -138,7 +139,7 @@ deferred.
 
 `classify` and its tests do not change. They are already right.
 
-### Phase 2: the gate
+### Phase 2: the gate (done)
 
 - `consort-matrix`: `calls::can_join(client, room_id) -> Result<JoinVerdict>`.
   Two questions in one place. Is this room encrypted, and if so is readiness
@@ -156,7 +157,7 @@ deferred.
   answer can change between the click and the connect. It is a crypto-store
   read, so it is nearly free.
 
-### Phase 3: make the failure visible when it happens anyway
+### Phase 3: make the failure visible when it happens anyway (half done)
 
 The gate is prevention. This is what makes the thing honest rather than merely
 defensive, and it is the phase not to skip.
@@ -174,7 +175,7 @@ road:
   ranked above `NothingSent`, naming cross-signing when the reason does.
   `what_it_says` grows one arm.
 
-### Phase 4: the interface
+### Phase 4: the interface (done)
 
 - Voice channels render as unavailable when the room is encrypted and readiness
   is not `Ready`, with the reason on hover, rather than accepting a click that
@@ -184,7 +185,7 @@ road:
   and `SessionUnverified` get different sentences and different actions, which
   is why `readiness.rs` kept them apart to begin with.
 
-### Phase 5: prove it
+### Phase 5: prove it (next)
 
 - **Unit:** `can_join`'s truth table. Encrypted times ready, encrypted times
   unverified, unencrypted times unverified, unknown times unverified. The
@@ -219,3 +220,63 @@ Medium, unevenly split. Phase 0 is a small diff now that the cause is known.
 Phases 1, 2 and 4 each follow a pattern this codebase already runs four times
 over. Phase 3 is small and crosses a repo boundary. Phase 5 is where the real
 answer comes from.
+
+## What actually happened
+
+Six things the plan above did not have.
+
+**The stall was a lost update, and it was provable from the source rather than
+by reproducing it.** `changes()` is eyeball's `SharedObservable::subscribe`,
+whose own documentation says it resolves "only once the inner value has been
+updated again after the call to `subscribe`", and there is a `subscribe_reset`
+that replays which the SDK does not use. `VerificationRequest::start_sas` sets
+the observable to `Transitioned` *before* it sends anything, so sending the
+start and then subscribing meant the transition that moves a flow onto the SAS
+stream had already happened with nobody listening. Both drivers now subscribe
+before acting, and `start_the_comparison` returns the `SasVerification` it
+created rather than waiting to observe a transition it caused itself.
+
+**A refusal cannot travel on the call channel.** The plan said
+`CallEvent::Refused`, and that would have been a bug: the call channel carries
+state, so somebody sitting in one voice channel who clicks a second one and is
+refused would have had the call they are in evicted, drawing a client connected
+to nothing while this process was still publishing a membership. It is
+`AppEvent::CallRefused` on a channel of its own, and it is not replayed to a
+webview that reloaded, because the standing answer is already on
+`call-readiness` and this only adds which click failed.
+
+**The SDK collapses "unknown" into "not encrypted".**
+`EncryptionState::is_encrypted` returns false for `Unknown`, which is the wrong
+direction for a gate. `encrypts` matches `NotEncrypted` positively instead, so
+a room whose state could not be fetched, or that this account is not in, is
+gated. `matrix-rtc-livekit/src/call.rs:437` has the same shape with the same
+comment and the opposite behaviour: its `unwrap_or(true)` covers only the `Err`
+case, so its stated rule that "unknown counts as encrypted" is not what its
+code does. Worth fixing upstream separately.
+
+**A gate that cannot reach an answer lets the join through.** Not in the plan
+and it should have been. The error is about not being able to ask rather than
+about the answer, `CallReadiness` has no "not known" variant on purpose, and
+there is no honest refusal to draw from a request that timed out. The network
+that stopped the question will stop the join a moment later and say so in the
+vocabulary of the thing that actually failed.
+
+**Phase 3 crosses a repo boundary and is only half landable from here.** The
+upstream work is done and committed in the `matrix-rust-rtc` checkout on
+`feature/report-key-distribution-failure`: an `on_key_distribution_failed`
+handler method beside `on_key_discarded`, a `MediaKeyBridge` listener beside
+the discard one, and `CallEvent::KeyDistributionFailed` out of the engine,
+wired in `Call::join` and tested at both ends. `DistributionFailure` carries
+`at_join`, because the join's own distribution failing means nobody has ever
+held this session's key while a later one failing leaves everybody already
+there with the last one that worked.
+
+Consort pins that fork by rev, so its half (`Fault::NotDistributed` in
+`trouble.rs`) cannot compile until the branch is pushed and the rev in the
+workspace manifest moves. That is the only thing standing between this and a
+call that says out loud when nobody can hear you.
+
+**Phase 5 is the only phase that can still fail interestingly.** Everything
+above is tested against fakes and mocks that this plan wrote. The claim nothing
+in this repository has ever tested is that two verified sessions in an
+encrypted room can hear each other.

@@ -1,6 +1,6 @@
 # Plan: what a call sounds like and who is in it
 
-Status: **not started.**
+Status: **sounds and away are done. Remote deafen is still built-but-unconfirmed.**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -181,3 +181,37 @@ rather than an assumption.
 **The sound queue outliving the call.** `Voices::silence` already exists for
 deafening and must clear the sound queue too, or undeafening replays whatever
 chimed while nobody was listening.
+
+## What actually happened
+
+Four things worth recording.
+
+**The away flag needed no version bump, which is what the version field was
+for.** `Notice` does not deny unknown fields, so the new one is
+`#[serde(default)]` at `v: 1`: a build that predates it reads a notice carrying
+it and still gets `deafened` right, and this build reads an older notice as not
+away. Bumping to `v: 2` would have made the two builds invisible to each other,
+which is the opposite of the intent. Both directions are tested.
+
+**The announcement had to move out of `set_deafened`.** It was folded into that
+setter, which meant a second thing worth announcing had nowhere to go.
+`CallSession::announce_self` takes the whole `SelfAudio`, and mute stays out of
+it: the SFU already broadcasts a track mute, and a second source for one fact
+is a disagreement waiting to happen.
+
+**The roster diff needed to know which participant is us, and nothing could
+tell it.** The plan assumed absorbing the first roster would cover our own
+arrival. It does not: a join reports an empty roster for the moment between
+publishing a membership and it coming back round, so our own entry routinely
+lands in the *second* reading, which is the first one that gets diffed. A rule
+that absorbed anything empty fixed that and broke something worse, because it
+also swallowed the first person to walk into an empty channel. `Roster::me` is
+the new trait method, "nobody has looked" and "the channel was empty" are
+different states, and both cases are tested.
+
+**The setting is the reason `AudioSettings` writes its own `Default`.** A
+derived `bool` is false, and the whole point of these is that somebody who has
+never opened the settings screen still hears that company arrived. It is read
+through an atomic rather than the settings file, because the question is asked
+on the call thread at the moment a roster changes and a file read there would
+be a disk touch in the middle of a call for one boolean.
