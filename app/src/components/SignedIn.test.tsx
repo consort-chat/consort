@@ -10,6 +10,7 @@ const onVerificationFlow = vi.hoisted(() => vi.fn());
 const onKeyBackup = vi.hoisted(() => vi.fn());
 const onRooms = vi.hoisted(() => vi.fn());
 const onCall = vi.hoisted(() => vi.fn());
+const onCallRefused = vi.hoisted(() => vi.fn());
 const onSelfAudio = vi.hoisted(() => vi.fn());
 const onSpeaking = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
@@ -38,6 +39,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onKeyBackup,
   onRooms,
   onCall,
+  onCallRefused,
   onSelfAudio,
   onSpeaking,
   onAudio,
@@ -154,6 +156,7 @@ function resetApiMocks() {
   onKeyBackup.mockReset().mockResolvedValue(() => {});
   onRooms.mockReset().mockResolvedValue(() => {});
   onCall.mockReset().mockResolvedValue(() => {});
+  onCallRefused.mockReset().mockResolvedValue(() => {});
   onSelfAudio.mockReset().mockResolvedValue(() => {});
   onSpeaking.mockReset().mockResolvedValue(() => {});
   onAudio.mockReset().mockResolvedValue(() => {});

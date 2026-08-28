@@ -1,0 +1,29 @@
+/*
+  Amber rather than red, matching the verification banner it sits above and for
+  the same reason: nothing has broken and nothing was lost. A join was declined
+  because it would not have worked, which is the application doing its job.
+*/
+.refusal {
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--warning-border, #7a5c1f);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: var(--warning-surface, #2b2415);
+}
+
+.refusal__headline {
+  margin: 0;
+  font-weight: 600;
+  color: var(--warning-text, #e8c46a);
+}
+
+.refusal__detail {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--text-muted, #b6b6bd);
+}
+
+.refusal__actions {
+  margin-top: 0.6rem;
+}

@@ -9,6 +9,7 @@ import {
   callSetMuted,
   HEARING,
   onCall,
+  onCallRefused,
   onAudio,
   onSelfAudio,
   onSpeaking,
@@ -20,6 +21,7 @@ import {
   resendState,
   tokenStorage,
   type Call,
+  type CallRefused,
   type Connection,
   type KeyBackup,
   type Profile,
@@ -83,6 +85,14 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // which says nothing until something changes, so agreeing on the opening
   // value is what makes silence mean "neither" rather than "unknown".
   const [selfAudio, setSelfAudio] = useState<SelfAudio>(HEARING);
+  // A join that was declined before it was attempted, until somebody dismisses
+  // it. Kept here rather than in the shell because it is dismissed rather than
+  // superseded: state owned lower down would be cleared by any re-render.
+  //
+  // Never replayed by `resendState`, on purpose. It is an incident, and a
+  // complaint about a click from twenty minutes ago is not news to somebody
+  // who has since verified.
+  const [callRefused, setCallRefused] = useState<CallRefused | null>(null);
   // Who is talking, by user id. A `Set` rather than an array because the only
   // question ever asked of it is whether one name is in it, once per person
   // drawn, several times a second.
@@ -138,6 +148,9 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       }).then(keep),
       onCall((state) => {
         if (!cancelled) setCall(state);
+      }).then(keep),
+      onCallRefused((refusal) => {
+        if (!cancelled) setCallRefused(refusal);
       }).then(keep),
       onSelfAudio((audio) => {
         if (!cancelled) setSelfAudio(audio);
@@ -213,6 +226,11 @@ export function SignedIn({ profile, onSignedOut }: Props) {
    * screen and is logged rather than drawn.
    */
   function joinVoice(roomId: string) {
+    // Cleared on the way in, so a second attempt at the same channel does not
+    // look like it was declined again before it has been answered, and so a
+    // successful join to somewhere else does not leave a stale complaint on
+    // screen underneath it.
+    setCallRefused(null);
     callConnect(roomId).catch((raw: unknown) => {
       console.error("could not ask to join the call", asCommandError(raw).detail);
     });
@@ -271,6 +289,8 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onSetMuted={setMuted}
       onSetDeafened={setDeafened}
       onSetAway={setAway}
+      callRefused={callRefused}
+      onDismissRefusal={() => setCallRefused(null)}
       onSignedOut={onSignedOut}
     />
   );
