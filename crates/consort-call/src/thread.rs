@@ -808,6 +808,8 @@ mod tests {
         fn cue(&self, cue: Cue) {
             self.cues.lock().unwrap().push(cue);
         }
+
+        fn attribute(&self, _whose: &[(String, String)]) {}
     }
 
     /// A publication that does nothing but count itself alive.

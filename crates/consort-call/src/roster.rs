@@ -28,6 +28,25 @@ pub fn microphone_muted(member: &MediaParticipant) -> bool {
         .is_some_and(|stream| stream.muted)
 }
 
+/// Whether this membership has a camera the call can see.
+///
+/// The microphone test with the other stream in it, and one deliberate
+/// difference: a membership publishing no camera at all is not on camera,
+/// where a membership publishing no microphone is not muted. That is not an
+/// inconsistency, it is the same principle applied to two questions whose
+/// honest default differs. "Muted" is a claim about somebody having chosen
+/// something, and nothing published is not a choice. "On camera" is a claim
+/// about what the call can see, and nothing published means it cannot see
+/// them. Which is also how every client that predates video here behaves,
+/// including Element Call, which publishes no camera track until somebody
+/// turns one on.
+pub fn camera_live(member: &MediaParticipant) -> bool {
+    member
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::Camera && !stream.muted)
+}
+
 /// Attach each named person's mute state, given one entry per membership.
 ///
 /// `memberships` is `(user_id, muted)` in roster order, and `people` is the
@@ -50,6 +69,28 @@ pub fn with_mutes(people: Vec<Participant>, memberships: &[(String, bool)]) -> V
             // somebody who has muted every device they own.
             let muted = theirs.peek().is_some() && theirs.all(|(_, muted)| *muted);
             person.with_muted(muted)
+        })
+        .collect()
+}
+
+/// Attach each named person's camera, given one entry per membership.
+///
+/// `memberships` is `(user_id, camera_live)` in roster order, matching
+/// [`with_mutes`].
+///
+/// On camera if *any* of their memberships is, which is the opposite of the
+/// mute rule above and right for the same reason. Somebody sitting in front of
+/// a laptop camera with a phone in their pocket is on camera: drawing them as
+/// off would say the call cannot see them when it can, and both rules are
+/// chosen so the icon never claims less exposure than there is.
+pub fn with_cameras(people: Vec<Participant>, memberships: &[(String, bool)]) -> Vec<Participant> {
+    people
+        .into_iter()
+        .map(|person| {
+            let live = memberships
+                .iter()
+                .any(|(user_id, live)| *user_id == person.id && *live);
+            person.with_camera(live)
         })
         .collect()
 }
@@ -438,5 +479,110 @@ mod tests {
 
         assert!(people[0].muted);
         assert!(!people[1].muted);
+    }
+}
+
+#[cfg(test)]
+mod cameras {
+    use super::*;
+    use matrix_rtc_media::{MediaStreamKind, StreamState};
+
+    fn ada() -> Participant {
+        Participant::named("@ada:example.org", "Ada")
+    }
+
+    fn seen(user_id: &str, streams: Vec<StreamState>) -> MediaParticipant {
+        MediaParticipant {
+            member_id: format!("{user_id}:AAAA"),
+            user_id: user_id.to_owned(),
+            device_id: None,
+            is_local: false,
+            reachable: true,
+            streams,
+        }
+    }
+
+    fn lens(muted: bool) -> StreamState {
+        StreamState {
+            kind: MediaStreamKind::Camera,
+            muted,
+        }
+    }
+
+    #[test]
+    fn a_live_camera_is_a_camera() {
+        assert!(camera_live(&seen("@ada:example.org", vec![lens(false)])));
+    }
+
+    #[test]
+    fn a_muted_camera_is_not() {
+        // Element Call and Consort both publish the track and mute it rather
+        // than tearing it down, so this is the state anybody who turns their
+        // camera off mid-call is actually in.
+        assert!(!camera_live(&seen("@ada:example.org", vec![lens(true)])));
+    }
+
+    #[test]
+    fn publishing_no_camera_at_all_is_not_a_camera() {
+        // The difference from the mute rule, and the one place these two
+        // questions part company. Nothing published means the call cannot see
+        // them, which is exactly what the crossed-out icon says. It is also the
+        // state somebody who joins with their camera off is in, because no
+        // client publishes a camera track before there is a camera to publish.
+        assert!(!camera_live(&seen("@ada:example.org", vec![])));
+        assert!(!camera_live(&seen(
+            "@ada:example.org",
+            vec![StreamState {
+                kind: MediaStreamKind::Microphone,
+                muted: false,
+            }]
+        )));
+    }
+
+    #[test]
+    fn somebody_on_two_devices_is_on_camera_if_either_is() {
+        // The opposite fold to the mute rule above, and right for the reason
+        // behind that one rather than in spite of it: both are chosen so the
+        // icon never claims less exposure than there is. A laptop camera live
+        // and a phone in a pocket is somebody the call can see.
+        let both = vec![
+            ("@ada:example.org".to_owned(), false),
+            ("@ada:example.org".to_owned(), true),
+        ];
+        let neither = vec![
+            ("@ada:example.org".to_owned(), false),
+            ("@ada:example.org".to_owned(), false),
+        ];
+
+        assert!(with_cameras(vec![ada()], &both)[0].camera);
+        assert!(!with_cameras(vec![ada()], &neither)[0].camera);
+    }
+
+    #[test]
+    fn somebody_no_membership_matches_has_no_camera() {
+        // Room state lists who is in a channel and says nothing else about
+        // them. Reporting a camera there would be an invention.
+        let people = with_cameras(vec![ada()], &[("@bob:example.org".to_owned(), true)]);
+
+        assert!(!people[0].camera);
+    }
+
+    #[test]
+    fn a_camera_and_a_mute_are_asked_separately() {
+        // Somebody muted with their camera on is ordinary, and so is the
+        // reverse. Neither answer may be derived from the other.
+        let member = seen(
+            "@ada:example.org",
+            vec![
+                StreamState {
+                    kind: MediaStreamKind::Microphone,
+                    muted: true,
+                },
+                lens(false),
+            ],
+        );
+
+        assert!(microphone_muted(&member));
+        assert!(camera_live(&member));
     }
 }

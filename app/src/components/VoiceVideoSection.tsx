@@ -115,6 +115,58 @@ function DevicePicker({
 }
 
 /**
+ * One volume slider.
+ *
+ * A native `range` rather than a drawn track, for the same reason the pickers
+ * above are native `select`s: keyboard handling, the arrow-key step, and the
+ * drag behaviour are all already correct, and a screen somebody opens once has
+ * no business reimplementing them.
+ *
+ * The percentage is drawn beside it because a slider with no number on it
+ * cannot be described. "About two thirds" is not something somebody can write
+ * down, come back to, or tell anybody else.
+ */
+function VolumeSlider({
+  id,
+  label,
+  percent,
+  onChange,
+  describedBy,
+}: {
+  id: string;
+  label: string;
+  percent: number;
+  onChange: (percent: number) => void;
+  describedBy?: string;
+}) {
+  return (
+    <div className="voice-volume">
+      <label className="voice-volume__label" htmlFor={id}>
+        {label}
+      </label>
+      <input
+        id={id}
+        className="voice-volume__slider"
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={percent}
+        aria-describedby={describedBy}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      {/*
+        `aria-hidden`, because the range input already announces its own value
+        and a second reading of the same number is noise. This is for the eye.
+      */}
+      <output className="voice-volume__value" htmlFor={id} aria-hidden="true">
+        {percent}%
+      </output>
+    </div>
+  );
+}
+
+/**
  * Input, output, and proof that the microphone works.
  *
  * The microphone opens when this appears and closes when it goes, with no
@@ -153,6 +205,11 @@ export function VoiceVideoSection() {
   // and is not re-created per render. Reading it from state there would close
   // over whichever value existed when the handler was made.
   const saved = useRef<AudioSettings | null>(null);
+  // A slider's last value, and the timer that will write it. Refs rather than
+  // state, because nothing renders differently while a write is pending and a
+  // re-render per pixel of drag is exactly what this is here to avoid.
+  const pending = useRef<AudioSettings | null>(null);
+  const writing = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const reload = useCallback(async () => {
     const [report, current] = await Promise.all([
@@ -163,6 +220,22 @@ export function VoiceVideoSection() {
     setSettings(current);
     saved.current = current;
   }, []);
+
+  // Somebody who drags a slider and immediately closes the settings screen has
+  // still made the change. Without this the timer is torn down with the
+  // component and the last hundred and fifty milliseconds of intent is lost,
+  // which reads as a setting that does not stick.
+  useEffect(
+    () => () => {
+      if (writing.current === null) return;
+      clearTimeout(writing.current);
+      writing.current = null;
+      const last = pending.current;
+      pending.current = null;
+      if (last !== null) void setAudioSettings(last);
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -293,6 +366,26 @@ export function VoiceVideoSection() {
    * worth getting right once rather than twice.
    */
   /**
+   * Write out whatever a slider last left behind.
+   *
+   * No rollback, unlike the two below. There is nothing sensible to roll back
+   * to: by the time a write fails somebody has moved the slider several more
+   * times, and putting the control back where it was a second ago would fight
+   * the hand still on it. The message says what happened instead.
+   */
+  async function flush() {
+    const next = pending.current;
+    if (next === null) return;
+    pending.current = null;
+
+    try {
+      await setAudioSettings(next);
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
+  /**
    * Change a setting that is not part of the gate.
    *
    * Same shape as `retune` and the same rollback, split out because a gate
@@ -314,6 +407,33 @@ export function VoiceVideoSection() {
       saved.current = current;
       setProblem(asCommandError(raw).message);
     }
+  }
+
+  /**
+   * The same as [`reset`], for a control that fires while it is being dragged.
+   *
+   * A slider produces an event per pixel, and every one of them is a settings
+   * file rewritten. So the picture and the mixer move immediately, and the
+   * write waits for somebody to stop moving.
+   *
+   * The delay is short enough not to be a delay. What it must not do is
+   * outlast the settings screen being closed, which is why the timer is
+   * cancelled on unmount and the pending value written out.
+   */
+  function slide(patch: Partial<AudioSettings>) {
+    const current = saved.current;
+    if (current === null) return;
+
+    const next: AudioSettings = { ...current, ...patch };
+    setSettings(next);
+    saved.current = next;
+    pending.current = next;
+
+    if (writing.current !== null) clearTimeout(writing.current);
+    writing.current = setTimeout(() => {
+      writing.current = null;
+      void flush();
+    }, 150);
   }
 
   async function retune(patch: Partial<GateConfig>) {
@@ -458,6 +578,23 @@ export function VoiceVideoSection() {
 
       {settings !== null && (
         <div className="voice-field">
+          <span className="voice-field__label">Call volume</span>
+          <VolumeSlider
+            id="voice-output-volume"
+            label="Everybody in a call"
+            percent={settings.outputVolume ?? 100}
+            describedBy="voice-output-volume-note"
+            onChange={(percent) => slide({ outputVolume: percent })}
+          />
+          <p className="voice-field__note" id="voice-output-volume-note">
+            Everybody in the call and the announcements below them. To change
+            one person on their own, right-click their name in the channel.
+          </p>
+        </div>
+      )}
+
+      {settings !== null && (
+        <div className="voice-field">
           <span className="voice-field__label">Call sounds</span>
           <div className="voice-toggle">
             <input
@@ -466,19 +603,20 @@ export function VoiceVideoSection() {
               type="checkbox"
               role="switch"
               aria-describedby="voice-call-sounds-note"
-              checked={settings.callSounds !== false}
+              checked={settings.callSounds === true}
               onChange={(event) =>
                 void reset({ callSounds: event.target.checked })
               }
             />
             <label className="voice-toggle__label" htmlFor="voice-call-sounds">
-              Play a sound when somebody joins or leaves
+              Chime as well, before the announcement
             </label>
           </div>
           <p className="voice-field__note" id="voice-call-sounds-note">
-            Only for the voice channel you are in, and only for people other
-            than you. Worth turning off in a channel with a lot of coming and
-            going, where they stop being information and become a noise.
+            Off to begin with, because the announcement below already says
+            somebody arrived and a chime in front of it is a doorbell before
+            somebody who is already talking. Turn it on for a two-part sound,
+            or turn the announcement off to have the chime on its own.
           </p>
         </div>
       )}
@@ -499,14 +637,27 @@ export function VoiceVideoSection() {
               }
             />
             <label className="voice-toggle__label" htmlFor="voice-call-voices">
-              Say who came and went, as well as chiming
+              Say out loud when somebody joins or leaves
             </label>
           </div>
           <p className="voice-field__note" id="voice-call-voices-note">
-            A chime tells you something happened; this tells you what. Separate
-            from the switch above, so you can have either on its own. Arriving
-            and leaving are recorded; coming back from away is not, so that one
-            stays silent for now.
+            Only for the voice channel you are in, and only for people other
+            than you. Arriving and leaving are recorded; coming back from away
+            is not, so that one stays silent for now.
+          </p>
+          <VolumeSlider
+            id="voice-notification-volume"
+            label="Announcement volume"
+            percent={settings.notificationVolume ?? 60}
+            describedBy="voice-notification-volume-note"
+            onChange={(percent) => slide({ notificationVolume: percent })}
+          />
+          <p className="voice-field__note" id="voice-notification-volume-note">
+            The chime and the announcement together, measured against the call
+            volume above rather than separately, so turning a call down turns
+            these down with it. Lower than everything else to begin with: an
+            announcement is recorded to be heard on its own, and a call is
+            somebody talking three feet from a microphone.
           </p>
         </div>
       )}

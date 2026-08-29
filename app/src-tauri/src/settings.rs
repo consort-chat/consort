@@ -193,6 +193,7 @@ mod tests {
                 },
                 call_sounds: false,
                 call_voices: false,
+                ..AudioSettings::default()
             },
             calls: CallSettings::default(),
         }

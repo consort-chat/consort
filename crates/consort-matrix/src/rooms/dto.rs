@@ -154,6 +154,20 @@ pub struct Participant {
     /// difference between walking away and leaving.
     #[serde(default)]
     pub away: bool,
+    /// Whether a camera of theirs is live.
+    ///
+    /// True only for somebody publishing a camera that is not muted, which on
+    /// the wire is the same test the microphone gets, applied to the other
+    /// stream. Somebody on two devices is on camera if either of them is: the
+    /// opposite of the [`muted`](Self::muted) rule, and for the same reason
+    /// behind it, which is that the answer should describe what the call can
+    /// actually see and hear rather than what one device happens to be doing.
+    ///
+    /// False where nothing knows, exactly like `muted`, and with the same
+    /// caveat: somebody listed from room state alone is reported without a
+    /// camera because room state carries nothing that could say otherwise.
+    #[serde(default)]
+    pub camera: bool,
 }
 
 impl Participant {
@@ -169,6 +183,7 @@ impl Participant {
             muted: false,
             deafened: false,
             away: false,
+            camera: false,
         }
     }
 
@@ -185,6 +200,11 @@ impl Participant {
     /// The same person, with whether their own client says they are there.
     pub fn with_away(self, away: bool) -> Self {
         Self { away, ..self }
+    }
+
+    /// The same person, with whether the call can see them.
+    pub fn with_camera(self, camera: bool) -> Self {
+        Self { camera, ..self }
     }
 }
 

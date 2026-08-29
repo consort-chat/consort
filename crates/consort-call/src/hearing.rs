@@ -69,6 +69,23 @@ pub trait Heard: Send + Sync + 'static {
     /// Must not block, like everything else here. It is called from the call
     /// thread while it is servicing the SFU.
     fn cue(&self, cue: Cue);
+
+    /// Say which person each membership currently in the call belongs to, as
+    /// `(member_id, user_id)`.
+    ///
+    /// The one thing the other side of this seam cannot work out for itself.
+    /// Everything above is keyed by membership, because that is what a queue of
+    /// audio belongs to: one person on a laptop and a phone is two streams and
+    /// mixing them into one queue would interleave them into noise. A person's
+    /// settings are keyed by *them*, because "this one is too loud" is not a
+    /// fact about a device. This is the only place both are known at once.
+    ///
+    /// Called on every roster change, and idempotent: it is a statement of who
+    /// is in the call now rather than a delta. Memberships absent from it have
+    /// gone, and whatever was hung on them should go too.
+    ///
+    /// Must not block, like everything else here.
+    fn attribute(&self, whose: &[(String, String)]);
 }
 
 /// Something in a call worth making a sound about.

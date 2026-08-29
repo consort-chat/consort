@@ -169,13 +169,15 @@ mod tests {
     fn bridge(transport: FakeCallTransport) -> (CallBridge, Heard) {
         let heard = Heard::default();
         let recorder = heard.clone();
+        let voices = consort_audio::Voices::new();
         let bridge = CallBridge::spawn(
             transport,
             Microphone::new(),
             crate::ears::speakers(
-                consort_audio::Voices::new(),
+                voices.clone(),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                crate::ears::Levels::new(voices, std::collections::BTreeMap::new()),
             ),
             move |event| recorder.0.lock().unwrap().push(event),
         );

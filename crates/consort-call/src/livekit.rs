@@ -509,7 +509,19 @@ impl CallSession for LiveKitSession {
         // a statement of what should currently be true rather than a tally that
         // can drift. It is called on every roster change and has to be
         // idempotent anyway; see `CallSession::listen`.
-        let audible = hearing::audible(&self.call.engine().participants());
+        let participants = self.call.engine().participants();
+
+        // Before the pumps are started, so that a person somebody has turned
+        // down is already turned down on their first frame rather than for the
+        // second half of their first word.
+        ears.attribute(
+            &participants
+                .iter()
+                .map(|member| (member.member_id.clone(), member.user_id.clone()))
+                .collect::<Vec<_>>(),
+        );
+
+        let audible = hearing::audible(&participants);
 
         let mut playing = self.playing.borrow_mut();
         let attached: BTreeSet<String> = playing.keys().cloned().collect();
@@ -603,6 +615,7 @@ struct Seen {
     member_id: String,
     user_id: String,
     muted: bool,
+    camera: bool,
 }
 
 /// One view of a call: who is in it, and what is wrong with it.
@@ -660,6 +673,7 @@ impl Roster for LiveKitRoster {
                 member_id: member.member_id.clone(),
                 user_id: member.user_id.clone(),
                 muted: roster::microphone_muted(member),
+                camera: roster::camera_live(member),
             })
             .collect();
 
@@ -669,6 +683,10 @@ impl Roster for LiveKitRoster {
         let mutes: Vec<(String, bool)> = seen
             .iter()
             .map(|one| (one.user_id.clone(), one.muted))
+            .collect();
+        let cameras: Vec<(String, bool)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.camera))
             .collect();
         let whose: Vec<(String, String)> = seen
             .into_iter()
@@ -681,6 +699,7 @@ impl Roster for LiveKitRoster {
         let named = rooms::name_participants(&self.client, &self.room_id, &user_ids).await;
 
         let named = roster::with_mutes(named, &mutes);
+        let named = roster::with_cameras(named, &cameras);
         let named = roster::with_deafened(named, &whose, &flags.deafened);
         roster::with_away(named, &whose, &flags.away)
     }

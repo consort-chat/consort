@@ -1,9 +1,12 @@
 # Plan: what a call sounds like and who is in it
 
-Status: **sounds and away are done, and two of the three sentences are
-recorded and audible. Remote deafen is still built-but-unconfirmed. What is
-left is phase 7's live confirmation, phase 8's chimes, and the one recording
-for "welcome back".**
+Status: **sounds and away are done, two of the three sentences are recorded and
+audible, and all of it now has volume controls: a master for the call, one for
+the announcements underneath it, and one per person from a menu on their name.
+The chime ships off by default, because the sentence says what it used to
+announce. Remote deafen is still built-but-unconfirmed. What is left is phase
+7's live confirmation, phase 8's chimes, and the one recording for "welcome
+back".**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -225,13 +228,46 @@ in them, matching what TeamSpeak's default sound pack actually did, and
 7. Confirm all three against a second live client, which is the only thing that
    can actually fail in an interesting way.
 8. Swap in join and leave chimes to replace the generated fifths, with their
-   provenance beside them in `crates/consort-audio/assets/PROVENANCE.md`.
+   provenance beside them in `crates/consort-audio/assets/PROVENANCE.md`. Less
+   urgent than it was: phase 12 turned the chime off by default, so the
+   generated fifth is no longer what anybody hears on a fresh install.
 9. The spoken notifications' mechanism: `Arrivals` returning names, the second
    setting, `Cue::Returned`, and the queue that holds a sentence.
 10. The recordings themselves, which is the same drop-in as phase 8. Arriving
     and leaving are done: ElevenLabs recreations of TeamSpeak's spoken
     notifications, dropped in on 2026-08-29. "Welcome back" is still silent,
     and its test fails the moment that changes.
+11. How loud all of it is, which the recordings turned from a nicety into a
+    defect. A synthesised chime was quiet because it was synthesised quiet; a
+    real sentence is mastered to be heard on its own, and played at the level
+    of somebody talking three feet from a microphone it is the loud thing in
+    the room. Three controls rather than one, because there are three
+    questions:
+
+    - the **call**, which is the master and covers everybody in it;
+    - the **announcements**, as a percentage of that rather than beside it, so
+      turning a call down turns them down with it. Sixty by default, which is
+      the number the recordings asked for;
+    - **one person**, from a menu on their name, remembered by user ID in the
+      settings file. There is no account data for "that one is too loud in my
+      headphones" and there should not be: it is a fact about the room somebody
+      is sitting in.
+
+    The last of those is why `Heard` grew `attribute`. Everything that plays is
+    keyed by membership, because that is what a queue of audio belongs to, and
+    a person on two devices is two queues. A person's settings are keyed by the
+    person. Nothing but the call knows both at once.
+
+    The curve is squared rather than proportional, and attenuation only. Half a
+    slider is not half an amplitude, and the mixer clips rather than ducking, so
+    a control that could go above unity would distort the whole call to make one
+    part of it louder.
+12. The chime's default, which is the same decision seen from the other end.
+    Two announcements of one arrival is not twice the information: the chime
+    existed to get somebody's attention for a notification that used to be
+    nothing but the chime, and in front of a sentence it is a doorbell before
+    somebody who is already talking. So the pair ships as one sound, the chime
+    is the optional half, and either one alone is a single click.
 
 ## Risks
 

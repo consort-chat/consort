@@ -316,23 +316,65 @@ fn audio_settings_for(state: &AppState) -> AudioSettings {
 /// lose a concurrent change for no benefit.
 fn set_audio_settings_for(
     state: &AppState,
-    audio: AudioSettings,
+    mut audio: AudioSettings,
 ) -> Result<(), crate::settings::SettingsError> {
     let gate = audio.gate;
     let call_sounds = audio.call_sounds;
     let call_voices = audio.call_voices;
+    let output_volume = audio.output_volume;
+    let notification_volume = audio.notification_volume;
     let mut settings = state.settings().load();
+    // The one field this does not take the caller's word for. The settings
+    // screen holds every other part of the audio section, so writing the whole
+    // thing is honest; it does not hold the per-person levels, which are set
+    // from a menu beside a person's name in a call. Taking its word for them
+    // would erase every one of them the first time somebody changed a device.
+    audio.person_volumes = std::mem::take(&mut settings.audio.person_volumes);
     settings.audio = audio;
     state.settings().save(&settings)?;
     // Same reasoning as the retune below, and the same ordering: after the
     // save, so a call already in progress and the file can never disagree.
     state.set_call_sounds(call_sounds);
     state.set_call_voices(call_voices);
+    state.set_volumes(output_volume, notification_volume);
     // After the save rather than instead of it, so what the meter is doing and
     // what the file says can never disagree. A microphone that is open right
     // now was started with the old tuning, and nothing else would tell it.
     // Cheap and idempotent when only a device name changed.
     state.retune_gate(gate);
+    Ok(())
+}
+
+/// Set how loud one person should be, as a percentage, and remember it.
+///
+/// Its own command rather than part of the audio section above, because it is
+/// set from somewhere else entirely: a menu beside a person's name in a call,
+/// which knows one user ID and nothing about devices or gates. A caller that
+/// had to send the whole audio section to change one person's volume would be
+/// sending back settings it never read.
+///
+/// A read-modify-write of the map, which is safe here for the same reason the
+/// whole-section write above is: everything that touches this file goes through
+/// `SettingsStore`, on the main thread, one command at a time.
+fn set_person_volume_for(
+    state: &AppState,
+    user_id: String,
+    percent: u8,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    if percent >= consort_audio::FULL_VOLUME {
+        // Full volume is the absence of a choice, not a choice of 100. Storing
+        // it would grow the file by a line for every person somebody ever
+        // nudged and put back, and the mixer would pay a multiply by one for
+        // each of them.
+        settings.audio.person_volumes.remove(&user_id);
+    } else {
+        settings.audio.person_volumes.insert(user_id, percent);
+    }
+    state.settings().save(&settings)?;
+    // After the save, like everything else here, so a call in progress and the
+    // file cannot disagree.
+    state.levels().choose(settings.audio.person_volumes.clone());
     Ok(())
 }
 
@@ -538,6 +580,15 @@ pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
 #[tauri::command]
 pub fn audio_settings(state: State<'_, AppState>) -> AudioSettings {
     audio_settings_for(&state)
+}
+
+#[tauri::command]
+pub fn set_person_volume(
+    state: State<'_, AppState>,
+    user_id: String,
+    percent: u8,
+) -> Result<(), CommandError> {
+    set_person_volume_for(&state, user_id, percent).map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -938,8 +989,11 @@ mod tests {
                     open_at: 0.8,
                     ..GateConfig::default()
                 },
-                call_sounds: false,
+                call_sounds: true,
                 call_voices: false,
+                output_volume: 70,
+                notification_volume: 25,
+                ..AudioSettings::default()
             };
 
             set_audio_settings_for(&state, chosen.clone()).expect("save");
@@ -996,6 +1050,86 @@ mod tests {
 
             assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
             assert_eq!(report.output.selected.as_deref(), Some("Headphones"));
+        }
+
+        #[test]
+        fn a_persons_volume_is_remembered() {
+            // There is nowhere else it could be. No account data says "that one
+            // is too loud in my headphones", so this file is the only thing
+            // between somebody setting it and setting it again next week.
+            let (_dir, state, _) = state();
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&55),
+            );
+        }
+
+        #[test]
+        fn putting_somebody_back_to_full_forgets_them_rather_than_writing_it_down() {
+            // Full volume is the absence of a choice. Written down, the file
+            // would grow a line for every person anybody ever nudged and put
+            // back, and the mixer would multiply each of them by one.
+            let (_dir, state, _) = state();
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 100).expect("save");
+
+            assert!(audio_settings_for(&state).person_volumes.is_empty());
+        }
+
+        #[test]
+        fn changing_a_device_does_not_erase_everybodys_volume() {
+            // The one field the settings screen does not hold and must not be
+            // trusted to send back. It writes the whole audio section, so
+            // taking its word for this would wipe every per-person level the
+            // first time somebody picked a different microphone.
+            let (_dir, state, _) = state();
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&55),
+                "the settings screen wrote over a level it never drew"
+            );
+        }
+
+        #[test]
+        fn the_volumes_are_saved_before_anything_is_told_about_them() {
+            // The ordering every setter here shares, and the reason it is
+            // worth a test: a mixer turned down against a file that failed to
+            // save is a call that is quiet now and loud again on the next
+            // launch, with nothing to explain either.
+            let (_dir, state, _) = state();
+
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    output_volume: 40,
+                    notification_volume: 20,
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            let saved = audio_settings_for(&state);
+            assert_eq!(saved.output_volume, 40);
+            assert_eq!(saved.notification_volume, 20);
         }
 
         #[test]

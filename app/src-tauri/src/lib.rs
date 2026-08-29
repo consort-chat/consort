@@ -101,6 +101,7 @@ pub fn run() {
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,
+            commands::set_person_volume,
             commands::audio_test_start,
             commands::audio_test_stop,
             commands::audio_tone_play,
