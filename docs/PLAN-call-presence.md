@@ -1,7 +1,9 @@
 # Plan: what a call sounds like and who is in it
 
 Status: **sounds and away are done. Remote deafen is still
-built-but-unconfirmed. Sections 4 and 5 are asked for and not started.**
+built-but-unconfirmed. Section 5's mechanism is done and switchable and has
+nothing to say yet: what is left of both section 4 and section 5 is audio that
+has to come from outside this repository.**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -223,8 +225,10 @@ in them, matching what TeamSpeak's default sound pack actually did, and
 7. Confirm all three against a second live client, which is the only thing that
    can actually fail in an interesting way.
 8. Swap in Element's join and leave sounds, with their provenance beside them.
-9. The spoken notifications: `Arrivals` returning names, the second setting,
-   the phrases, and "welcome back" on the way out of away.
+9. The spoken notifications' mechanism: `Arrivals` returning names, the second
+   setting, `Cue::Returned`, and the queue that holds a sentence.
+10. The recordings themselves, which is the same drop-in as phase 8 and the
+    only thing standing between phase 9 and somebody hearing it.
 
 ## Risks
 
@@ -275,3 +279,39 @@ never opened the settings screen still hears that company arrived. It is read
 through an atomic rather than the settings file, because the question is asked
 on the call thread at the moment a roster changes and a file read there would
 be a disk touch in the middle of a call for one boolean.
+
+**The sound queue was two seconds, which was exactly long enough for the
+feature that existed.** Nothing was wrong with it while a chime was the only
+thing that could be queued. A chime and its sentence are over two seconds
+together, and they queue rather than overlap, so a single person walking in
+would have had the end of their sentence cut off by a cap that was there to
+stop a backlog of several. Six seconds now, and the test that says so builds
+the two lengths by hand rather than trusting the assets, because the assets are
+the part that is going to change.
+
+**`Chime` was the wrong name for the seam the moment a third thing could
+happen.** "Welcome back" has no chime behind it: there are two chimes and they
+already mean arriving and leaving, so giving one of them a third meaning would
+have made both ambiguous. The type is `Cue` now, meaning what happened rather
+than what to play, which is also what the two settings need it to be, since a
+cue may become a chime, a sentence, both or neither and this crate must not
+know which. It settled a second confusion for free: `chime` was already the
+name of the settings screen's test tone, and one word was doing two unrelated
+jobs.
+
+**Coming back from away does not come from the roster, and that is not an
+accident of where it was easy to put.** Nobody else's roster changes when this
+session puts its own flag down, so the cue is raised from the message that
+lowers the flag, and only when it was actually up. A client that restates a
+flag it already had is not somebody returning, and "welcome back" said to a
+person who never left is the kind of small wrongness that makes a whole feature
+feel broken.
+
+**The phrases ship silent, which is the only honest placeholder for a
+sentence.** A recorded phrase has to be recorded. A beep standing in for one
+would leave a listener with two chimes and less information than one, so the
+files are silence and everything around them is finished: the mechanism, both
+switches, the ordering, and the tests. What is asserted about them is what is
+true (they decode, they are the length of the sentence they will be, they do
+not swallow the chime queued in front of them) plus one test whose only job is
+to fail the day a recording lands, so the swap cannot happen quietly.
