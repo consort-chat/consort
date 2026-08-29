@@ -18,26 +18,26 @@
 //!
 //! The files are `include_bytes!`d rather than read from disk. A sound that
 //! depends on an install path is a sound that is missing on somebody else's
-//! machine, and these are four kilobytes each.
+//! machine, and the five of them come to about a hundred kilobytes.
 //!
 //! Decoding happens on first use and the result is kept. Somebody who never
 //! joins a call pays nothing, and somebody in a busy channel pays once rather
 //! than once per arrival.
 //!
-//! ## The spoken half is wired and has nothing to say yet
+//! ## The spoken half, two sentences of three
 //!
 //! [`Phrase`] is the TeamSpeak half: a chime says something happened, a voice
-//! says what. The mechanism is finished, switchable and tested. The three
-//! files behind it are silence, because a recorded sentence has to be recorded
-//! and a beep standing in for one would be worse than nothing: the listener
-//! would hear two chimes and learn less than from one.
+//! says what. Arriving and leaving are recorded and audible, and where they
+//! came from is in `assets/PROVENANCE.md`.
 //!
-//! Silence is therefore deliberate rather than a bug, and it is the one
-//! placeholder that cannot mislead. Everything else about a phrase is already
-//! true: it decodes, it is the length of the sentence it will be, it queues
-//! behind the chime rather than over it, and its setting switches it. Dropping
-//! three recordings into `assets/voice` is the whole of what is left, and the
-//! test that says a sound is audible arrives with them.
+//! "Welcome back" is still silence, because it is the one sentence with no
+//! recording behind it. That is deliberate rather than a bug, and it is the
+//! placeholder that cannot mislead: the setting turns on two sentences that
+//! work, and the third says nothing rather than something wrong. Everything
+//! else about it is already true. It decodes, it is the length of the sentence
+//! it will be, it queues behind the chime rather than over it, and its setting
+//! switches it. One recording dropped into `assets/voice/welcome-back.mp3` is
+//! the whole of what is left.
 
 use std::sync::OnceLock;
 
@@ -55,13 +55,14 @@ const JOINED: &[u8] = include_bytes!("../assets/join.mp3");
 /// Somebody left it.
 const LEFT: &[u8] = include_bytes!("../assets/leave.mp3");
 
-/// "Somebody has entered your channel." Silence, for now. See the header.
+/// The sentence played when somebody arrives. See `assets/PROVENANCE.md`.
 const SAYS_ENTERED: &[u8] = include_bytes!("../assets/voice/entered.mp3");
 
-/// "Somebody has left your channel." Silence, for now.
+/// The sentence played when somebody goes.
 const SAYS_LEFT: &[u8] = include_bytes!("../assets/voice/left.mp3");
 
-/// "Welcome back." Silence, for now.
+/// "Welcome back." Still silence: the one sentence nobody has recorded. See
+/// the module header.
 const SAYS_WELCOME_BACK: &[u8] = include_bytes!("../assets/voice/welcome-back.mp3");
 
 /// Which sound.
@@ -112,14 +113,16 @@ pub enum Phrase {
     Entered,
     /// "Somebody has left your channel."
     Left,
-    /// "Welcome back", to the person who was away and is not any more.
+    /// "Welcome back", to the person who was away and is not any more. The
+    /// one phrase with no recording behind it, so it plays as silence.
     WelcomeBack,
 }
 
 impl Phrase {
     /// The samples to play: mono PCM at [`SAMPLE_RATE`].
     ///
-    /// Currently silence for all three, on purpose. See the module header.
+    /// [`Phrase::WelcomeBack`] is still silence, on purpose. See the module
+    /// header.
     pub fn samples(self) -> &'static [i16] {
         static DECODED: [OnceLock<Vec<i16>>; 3] =
             [OnceLock::new(), OnceLock::new(), OnceLock::new()];
@@ -326,6 +329,15 @@ mod tests {
     mod phrases {
         use super::*;
 
+        /// What the ear integrates, as opposed to what a peak meter shows.
+        fn rms(samples: &[i16]) -> f64 {
+            if samples.is_empty() {
+                return 0.0;
+            }
+            let total: f64 = samples.iter().map(|s| f64::from(*s).powi(2)).sum();
+            (total / samples.len() as f64).sqrt()
+        }
+
         #[test]
         fn every_phrase_decodes() {
             // The one thing `include_bytes!` cannot check. It will happily
@@ -356,23 +368,59 @@ mod tests {
         }
 
         #[test]
-        fn the_phrases_are_placeholders_until_somebody_records_them() {
-            // Here so the swap cannot happen quietly. Silence is the honest
-            // stand-in for a sentence, and it is also the state in which every
-            // other test in this file would pass while the feature said
-            // nothing at all.
-            //
-            // When this fails, a recording has landed. Replace it with the two
-            // assertions the chimes have and this one was standing in for:
-            // that a phrase is audible, and that entering and leaving do not
-            // sound the same.
-            for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
+        fn a_recorded_phrase_is_actually_audible() {
+            // A file that decodes to the right number of zeroes passes every
+            // other test here and plays nothing. One of the two assertions the
+            // placeholder test was standing in for until the recordings landed.
+            for phrase in [Phrase::Entered, Phrase::Left] {
                 let loudest = phrase.samples().iter().map(|s| s.abs()).max().unwrap_or(0);
-                assert_eq!(
-                    loudest, 0,
-                    "{phrase:?} has audio in it now, so this test has done its job"
+                assert!(loudest > 1000, "{phrase:?} peaks at {loudest}");
+            }
+        }
+
+        #[test]
+        fn entering_and_leaving_do_not_sound_the_same() {
+            // The other one. Two sentences a person cannot tell apart are one
+            // sentence that fires twice as often, which is the chimes' problem
+            // rather than the fix for it.
+            assert_ne!(Phrase::Entered.samples(), Phrase::Left.samples());
+        }
+
+        #[test]
+        fn a_phrase_is_no_louder_than_the_chime_it_follows() {
+            // The chimes bound their peak. Speech cannot be measured that way:
+            // a sentence is mostly quiet, with consonants several times its own
+            // average, so a peak that would be alarming from a tone is ordinary
+            // from a voice. Compare what the ear integrates instead, or a
+            // sentence mastered hot lands right behind a chime that was
+            // deliberately kept gentle.
+            let chime = rms(Sound::Joined.samples());
+            for phrase in [Phrase::Entered, Phrase::Left] {
+                let level = rms(phrase.samples());
+                assert!(
+                    level < chime * 2.0,
+                    "{phrase:?} sits at {level:.0} against a chime at {chime:.0}"
                 );
             }
+        }
+
+        #[test]
+        fn welcome_back_is_a_placeholder_until_somebody_records_it() {
+            // The last of the three, kept back from the test that covered all
+            // of them and for the same reason: so the swap cannot happen
+            // quietly. When this fails the recording has landed, and the two
+            // tests above should gain a third phrase rather than this one
+            // being deleted on its own.
+            let loudest = Phrase::WelcomeBack
+                .samples()
+                .iter()
+                .map(|s| s.abs())
+                .max()
+                .unwrap_or(0);
+            assert_eq!(
+                loudest, 0,
+                "WelcomeBack has audio in it now, so this test has done its job"
+            );
         }
 
         #[test]

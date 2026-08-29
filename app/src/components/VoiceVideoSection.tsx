@@ -504,9 +504,9 @@ export function VoiceVideoSection() {
           </div>
           <p className="voice-field__note" id="voice-call-voices-note">
             A chime tells you something happened; this tells you what. Separate
-            from the switch above, so you can have either on its own. The
-            recordings are not in this build yet, so nothing is said until they
-            are.
+            from the switch above, so you can have either on its own. Arriving
+            and leaving are recorded; coming back from away is not, so that one
+            stays silent for now.
           </p>
         </div>
       )}

@@ -1,9 +1,9 @@
 # Plan: what a call sounds like and who is in it
 
-Status: **sounds and away are done. Remote deafen is still
-built-but-unconfirmed. Section 5's mechanism is done and switchable and has
-nothing to say yet: what is left of both section 4 and section 5 is audio that
-has to come from outside this repository.**
+Status: **sounds and away are done, and two of the three sentences are
+recorded and audible. Remote deafen is still built-but-unconfirmed. What is
+left is phase 7's live confirmation, phase 8's chimes, and the one recording
+for "welcome back".**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -224,11 +224,14 @@ in them, matching what TeamSpeak's default sound pack actually did, and
 6. `Participant::away`, the icon, the button, the precedence.
 7. Confirm all three against a second live client, which is the only thing that
    can actually fail in an interesting way.
-8. Swap in Element's join and leave sounds, with their provenance beside them.
+8. Swap in join and leave chimes to replace the generated fifths, with their
+   provenance beside them in `crates/consort-audio/assets/PROVENANCE.md`.
 9. The spoken notifications' mechanism: `Arrivals` returning names, the second
    setting, `Cue::Returned`, and the queue that holds a sentence.
-10. The recordings themselves, which is the same drop-in as phase 8 and the
-    only thing standing between phase 9 and somebody hearing it.
+10. The recordings themselves, which is the same drop-in as phase 8. Arriving
+    and leaving are done: ElevenLabs recreations of TeamSpeak's spoken
+    notifications, dropped in on 2026-08-29. "Welcome back" is still silent,
+    and its test fails the moment that changes.
 
 ## Risks
 
