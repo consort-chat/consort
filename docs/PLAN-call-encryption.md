@@ -1,8 +1,8 @@
 # Plan: make an encrypted call audible
 
-Status: **Phases 0 to 2 and 4 done. Phase 3 is written and waiting on a push.
-Phase 5 is the live half and is next.** Every API named here was read at the
-pinned rev rather than recalled.
+Status: **All six phases done and proved live.** Every API named here was read
+at the pinned rev rather than recalled, and every claim below was measured
+rather than reasoned about.
 
 This is Phase 6 of [PLAN-verification.md](PLAN-verification.md) and it turned
 out to be larger than the sentence there. That phase says "refuse to join an
@@ -261,22 +261,54 @@ there is no honest refusal to draw from a request that timed out. The network
 that stopped the question will stop the join a moment later and say so in the
 vocabulary of the thing that actually failed.
 
-**Phase 3 crosses a repo boundary and is only half landable from here.** The
-upstream work is done and committed in the `matrix-rust-rtc` checkout on
-`feature/report-key-distribution-failure`: an `on_key_distribution_failed`
-handler method beside `on_key_discarded`, a `MediaKeyBridge` listener beside
-the discard one, and `CallEvent::KeyDistributionFailed` out of the engine,
-wired in `Call::join` and tested at both ends. `DistributionFailure` carries
-`at_join`, because the join's own distribution failing means nobody has ever
-held this session's key while a later one failing leaves everybody already
+**Phase 3 crosses a repo boundary, and the upstream half shipped broken the
+first time.** The work is on `feature/report-key-distribution-failure` in the
+`matrix-rust-rtc` fork: an `on_key_distribution_failed` handler method beside
+`on_key_discarded`, a `MediaKeyBridge` listener beside the discard one, and
+`CallEvent::KeyDistributionFailed` out of the engine. `DistributionFailure`
+carries `at_join`, because the join's own distribution failing means nobody has
+ever held this session's key while a later one failing leaves everybody already
 there with the last one that worked.
 
-Consort pins that fork by rev, so its half (`Fault::NotDistributed` in
-`trouble.rs`) cannot compile until the branch is pushed and the rev in the
-workspace manifest moves. That is the only thing standing between this and a
-call that says out loud when nobody can hear you.
+The first commit added all of that and the event could never fire. Both signal
+sites hung off a `Result`, and neither of the functions they watched has a
+fallible path: `rollout_outbound_key` returns `Ok(())` from every exit and
+`on_memberships_update` only forwards it. The failure they were written for
+takes a different route entirely, because a refused `send_to_device_message` is
+caught inside `send_key_to_participants`, logged, and turned into an empty list
+of served recipients. That is exactly the branch an account with no
+cross-signing takes, so the one case the whole path existed for was the one
+case it could not see.
 
-**Phase 5 is the only phase that can still fail interestingly.** Everything
-above is tested against fakes and mocks that this plan wrote. The claim nothing
-in this repository has ever tested is that two verified sessions in an
-encrypted room can hear each other.
+The tell was that its test called the reporting function directly. That proves
+a handler is wired and not that anything ever calls it. Two tests now drive it
+through a command sender that refuses every to-device message, and the report
+fires from inside the rollout, in the branch that already knows which members
+went unreached. `send_key_to_participants` returns a `Distribution` rather than
+a bare recipient list, because the list alone cannot tell "there was nobody to
+send to" from "the send was refused for all of them": both are an empty vector
+and they mean opposite things.
+
+**Phase 5 was the only phase that could still fail interestingly, and it did
+not.** Two claims, both measured.
+
+The gate half runs against the throwaway Synapse in `testing/synapse`, in
+`against_a_real_homeserver.rs`'s `gate` module: an unverified session is
+refused an encrypted room's call, is still allowed an unencrypted one, and goes
+from refused to allowed on the same client with no restart once an emoji
+handshake finishes underneath it. The watcher gets its own test rather than
+riding on that one, because it is driven by a different SDK observable, so one
+working says nothing about the other. Twenty-four live tests pass.
+
+The audio half needed the SFU, and `demo/backend` in the sibling checkout is
+that stack: Synapse, lk-jwt-service and LiveKit on loopback. Its `e2e_call`
+test already makes the exact claim, which is a nicer outcome than writing it
+again: two clients, a fresh encrypted room, per-participant frame E2EE, and a
+440 Hz tone recorded off the far end and frequency-checked in both directions.
+All four scenarios pass at the rev Consort now pins.
+
+That run also answers the question the change above raises. A report that fires
+whenever a recipient goes unreached could put a notice on every healthy call.
+Across four full call scenarios and eleven rollouts it fired zero times, and
+the one rollout with no recipients at all took the quiet branch, which is
+correct: having nobody to send to is not a failure to send.

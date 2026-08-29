@@ -1,6 +1,7 @@
 # Plan: what a call sounds like and who is in it
 
-Status: **sounds and away are done. Remote deafen is still built-but-unconfirmed.**
+Status: **sounds and away are done. Remote deafen is still
+built-but-unconfirmed. Sections 4 and 5 are asked for and not started.**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -155,6 +156,62 @@ the stronger claim about whether talking to them will work.
 `CallPanel` gets a fourth button between deafen and hang up. Same shape, same
 `aria-pressed`, same fixed-width label so the row does not jump.
 
+## 4. The sounds themselves come from Element
+
+The two MP3s in `crates/consort-audio/assets` are synthesised: a raised-cosine
+envelope over a rising C5 to G5 for join and a falling G5 to C5 for leave, 48
+kHz mono, encoded at 96k. They exist so the mechanism could be built and tested
+against real bytes rather than against a stub.
+
+They are placeholders. Element Desktop's own join and leave sounds are the ones
+people already recognise, and matching them is the point: a sound nobody has to
+learn is doing its whole job the first time it plays.
+
+Nothing in the code cares which bytes are in those files. `sound.rs` decodes
+whatever is there, resamples from whatever rate it is at, and the tests assert
+properties (audible, not clipping, the right rough length, the two
+distinguishable from each other) rather than a checksum. So this is a file swap
+and a test re-run, not a change.
+
+Worth keeping when the swap happens: the licence. Element Desktop is AGPL like
+Consort, so the sounds can come across, but where they came from belongs in a
+comment beside them rather than in a commit message nobody reads twice.
+
+## 5. TeamSpeak's spoken notifications
+
+Separate from section 1 and not a replacement for it. TeamSpeak said "user has
+entered your channel", "user has left your channel" and "welcome back" out
+loud, and that is a different thing from a chime: a chime tells you something
+happened, a voice tells you what.
+
+### Rules
+
+**On by default, and separately switchable.** Two settings, not one. Somebody
+who wants the chimes and not the voice must be able to have that, and so must
+the reverse. `AudioSettings` grows a second `bool` with the same hand-written
+`Default` treatment section 1's needed, and for the same reason: a derived
+`false` would mean nobody hears them until they go looking.
+
+**They ride the same seam.** `Chime` becomes a larger enum, or gains a
+companion, and `Heard::chime` keeps being the only thing `consort-call` knows
+about sound. The roster diff in `arrivals.rs` already produces exactly the
+events these need. What it does not produce yet is *who*, because today it
+answers "did anybody arrive" rather than "who arrived", which is all a chime
+needs. That is the one real change: `Arrivals::settle` returns the names, and
+the caller decides whether it wants them.
+
+**"Welcome back" is ours, not theirs.** It is the sound of coming back from
+away, which TeamSpeak had and which Consort now has the flag for. It plays for
+the person who was away, on their own return, and not for everybody else.
+
+**Where the audio comes from is undecided and matters.** Shipping recorded
+phrases means one voice and one language and a name that can never be spoken.
+Speaking a name means a speech synthesiser, which is a dependency, a licence,
+and a startup cost. The honest first version is recorded phrases with no name
+in them, matching what TeamSpeak's default sound pack actually did, and
+"somebody" is a word this codebase has already decided is enough (see
+`trouble.rs`, which says it for the same reason).
+
 ## Phases
 
 1. `Voices::play` and the second queue, with the cap. Pure, testable, no device.
@@ -165,6 +222,9 @@ the stronger claim about whether talking to them will work.
 6. `Participant::away`, the icon, the button, the precedence.
 7. Confirm all three against a second live client, which is the only thing that
    can actually fail in an interesting way.
+8. Swap in Element's join and leave sounds, with their provenance beside them.
+9. The spoken notifications: `Arrivals` returning names, the second setting,
+   the phrases, and "welcome back" on the way out of away.
 
 ## Risks
 
