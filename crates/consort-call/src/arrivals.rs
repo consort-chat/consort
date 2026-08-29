@@ -15,7 +15,28 @@ use std::collections::BTreeSet;
 
 use consort_matrix::Participant;
 
-use crate::hearing::Chime;
+use crate::hearing::Cue;
+
+/// A change in who is in the call, and who it was about.
+///
+/// The names are here and not on the [`Cue`] because the sound does not use
+/// them: what plays says "somebody", so the seam that reaches the audio layer
+/// carries no names and this does. Two things want them regardless. A chime
+/// that fired when nobody moved is diagnosed from who this thought moved, and
+/// a test can assert that somebody's second device was not counted as a second
+/// person rather than merely that it made no noise.
+///
+/// User ids rather than display names, because those are what was compared. A
+/// spoken notification that one day says a name should look it up in the
+/// roster it is already holding rather than trust a copy taken here, since a
+/// display name is neither stable nor unique and this set has to be both.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Movement {
+    /// What to make a sound about.
+    pub cue: Cue,
+    /// Whose arrival or departure it was, in the order a sorted set gives.
+    pub who: Vec<String>,
+}
 
 /// Who was in the call last time anybody looked.
 ///
@@ -42,7 +63,7 @@ impl Arrivals {
         Self { known: None, me }
     }
 
-    /// Take in the roster as it now is, and say what to play.
+    /// Take in the roster as it now is, and say what to play about it.
     ///
     /// # Joining is silent
     ///
@@ -67,14 +88,16 @@ impl Arrivals {
     ///
     /// # At most one of each
     ///
-    /// Three people arriving in one change is one `Arrived`. The sound says
-    /// somebody came in; playing it three times says the same thing three
-    /// times, and it says it as a chord, because they overlap.
+    /// Three people arriving in one change is one [`Cue::Arrived`] naming all
+    /// three. The sound says somebody came in; playing it three times says the
+    /// same thing three times, and it says it as a chord, because they
+    /// overlap. The names are all kept because counting them is the caller's
+    /// business and throwing two of them away here would not be recoverable.
     ///
     /// Arrivals before departures, for the case where the roster changed in
     /// both directions at once. It is the more useful half: somebody who just
     /// walked in may be about to speak.
-    pub fn settle(&mut self, now: &[Participant]) -> Vec<Chime> {
+    pub fn settle(&mut self, now: &[Participant]) -> Vec<Movement> {
         let now: BTreeSet<String> = now
             .iter()
             .map(|person| person.id.clone())
@@ -85,14 +108,16 @@ impl Arrivals {
             return Vec::new();
         };
 
-        let mut chimes = Vec::new();
-        if now.difference(&known).next().is_some() {
-            chimes.push(Chime::Arrived);
-        }
-        if known.difference(&now).next().is_some() {
-            chimes.push(Chime::Departed);
-        }
-        chimes
+        [
+            (Cue::Arrived, now.difference(&known)),
+            (Cue::Departed, known.difference(&now)),
+        ]
+        .into_iter()
+        .filter_map(|(cue, who)| {
+            let who: Vec<String> = who.cloned().collect();
+            (!who.is_empty()).then_some(Movement { cue, who })
+        })
+        .collect()
     }
 }
 
@@ -106,15 +131,23 @@ mod tests {
             .collect()
     }
 
+    /// What would be played, with the names dropped.
+    ///
+    /// Most of these are about which sound, not about whom, and spelling out a
+    /// `Movement` in each would bury the rule being tested in punctuation.
+    fn cues(movements: &[Movement]) -> Vec<Cue> {
+        movements.iter().map(|movement| movement.cue).collect()
+    }
+
     #[test]
     fn joining_an_occupied_channel_is_silent() {
         // Four people already in it is not four people arriving. This is the
         // rule most easily left out and the one whose absence is loudest.
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
 
-        let chimes = arrivals.settle(&people(&["@a:example.org", "@b:example.org"]));
+        let played = arrivals.settle(&people(&["@a:example.org", "@b:example.org"]));
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(played.is_empty(), "{played:?}");
     }
 
     #[test]
@@ -127,9 +160,9 @@ mod tests {
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&[]);
 
-        let chimes = arrivals.settle(&people(&["@me:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org"]));
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(played.is_empty(), "{played:?}");
     }
 
     #[test]
@@ -137,9 +170,15 @@ mod tests {
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Arrived]);
+        assert_eq!(
+            played,
+            vec![Movement {
+                cue: Cue::Arrived,
+                who: vec!["@ada:example.org".to_owned()],
+            }]
+        );
     }
 
     #[test]
@@ -147,9 +186,15 @@ mod tests {
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Departed]);
+        assert_eq!(
+            played,
+            vec![Movement {
+                cue: Cue::Departed,
+                who: vec!["@ada:example.org".to_owned()],
+            }]
+        );
     }
 
     #[test]
@@ -160,26 +205,37 @@ mod tests {
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@ada:example.org", "@me:example.org"]));
+        let played = arrivals.settle(&people(&["@ada:example.org", "@me:example.org"]));
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(played.is_empty(), "{played:?}");
     }
 
     #[test]
-    fn three_people_arriving_at_once_is_one_sound() {
+    fn three_people_arriving_at_once_is_one_sound_about_three_people() {
         // Three copies of one sound played together is a chord, not three
-        // pieces of news.
+        // pieces of news. All three names survive it, because whether to use
+        // them is the caller's decision and this is the only place they exist.
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org"]));
 
-        let chimes = arrivals.settle(&people(&[
+        let played = arrivals.settle(&people(&[
             "@me:example.org",
             "@a:example.org",
             "@b:example.org",
             "@c:example.org",
         ]));
 
-        assert_eq!(chimes, vec![Chime::Arrived]);
+        assert_eq!(
+            played,
+            vec![Movement {
+                cue: Cue::Arrived,
+                who: vec![
+                    "@a:example.org".to_owned(),
+                    "@b:example.org".to_owned(),
+                    "@c:example.org".to_owned(),
+                ],
+            }]
+        );
     }
 
     #[test]
@@ -189,24 +245,29 @@ mod tests {
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org", "@bob:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org", "@bob:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Arrived, Chime::Departed]);
+        assert_eq!(cues(&played), vec![Cue::Arrived, Cue::Departed]);
+        assert_eq!(played[0].who, vec!["@bob:example.org".to_owned()]);
+        assert_eq!(played[1].who, vec!["@ada:example.org".to_owned()]);
     }
 
     #[test]
     fn a_second_device_is_not_a_second_person() {
         // A roster is per person and arrives deduplicated, so this is really a
         // statement about what is compared: user ids, never membership ids.
+        // Worth asserting on the names rather than only on the silence, since
+        // a diff that counted devices would be silent here too whenever the
+        // count happened to come out the same.
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        let chimes = arrivals.settle(&[
+        let played = arrivals.settle(&[
             Participant::named("@me:example.org", "Me"),
             Participant::named("@ada:example.org", "Ada on her laptop"),
         ]);
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(played.is_empty(), "{played:?}");
     }
 
     #[test]
@@ -218,24 +279,27 @@ mod tests {
             "@b:example.org",
         ]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Departed]);
+        assert_eq!(cues(&played), vec![Cue::Departed]);
+        assert_eq!(played[0].who.len(), 2, "{:?}", played[0].who);
     }
 
     #[test]
-    fn this_session_appearing_in_its_own_roster_is_not_an_arrival() {
-        // A join reports an empty roster for the moment between publishing a
-        // membership and it coming back round, so our own entry routinely
-        // lands as the second reading, which is the first one that is diffed.
-        // Without filtering it out, every call would begin by chiming at the
-        // person who started it.
+    fn this_session_never_appears_in_what_moved() {
+        // The filter is what keeps our own membership out, and a name leaking
+        // through it would be a "welcome back" for somebody else or a chime
+        // for ourselves once these are spoken rather than merely counted.
         let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
         arrivals.settle(&[]);
+        arrivals.settle(&people(&["@ada:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(
+            played.is_empty(),
+            "our own arrival was announced: {played:?}"
+        );
     }
 
     #[test]
@@ -248,9 +312,9 @@ mod tests {
         arrivals.settle(&[]);
         arrivals.settle(&people(&["@me:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Arrived]);
+        assert_eq!(cues(&played), vec![Cue::Arrived]);
     }
 
     #[test]
@@ -261,9 +325,9 @@ mod tests {
         let mut arrivals = Arrivals::new(None);
         arrivals.settle(&people(&["@me:example.org"]));
 
-        let chimes = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
+        let played = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
 
-        assert_eq!(chimes, vec![Chime::Arrived]);
+        assert_eq!(cues(&played), vec![Cue::Arrived]);
     }
 
     #[test]
@@ -277,8 +341,24 @@ mod tests {
         lounge.settle(&people(&["@a:example.org", "@b:example.org"]));
 
         let mut general = Arrivals::new(Some("@me:example.org".to_owned()));
-        let chimes = general.settle(&people(&["@c:example.org"]));
+        let played = general.settle(&people(&["@c:example.org"]));
 
-        assert!(chimes.is_empty(), "{chimes:?}");
+        assert!(played.is_empty(), "{played:?}");
+    }
+
+    #[test]
+    fn coming_back_from_away_is_not_something_a_roster_can_say() {
+        // `Cue::Returned` is about this session putting its own flag down, and
+        // that changes nothing about who is in the call. If it ever came out
+        // of here it would be a "welcome back" played at somebody arriving.
+        let mut arrivals = Arrivals::new(Some("@me:example.org".to_owned()));
+        arrivals.settle(&people(&["@me:example.org"]));
+
+        let played = arrivals.settle(&people(&["@me:example.org", "@ada:example.org"]));
+
+        assert!(
+            played.iter().all(|movement| movement.cue != Cue::Returned),
+            "{played:?}"
+        );
     }
 }

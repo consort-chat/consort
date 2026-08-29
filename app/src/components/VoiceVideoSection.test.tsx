@@ -38,6 +38,7 @@ const defaults: AudioSettings = {
     voiceActivity: true,
   },
   callSounds: true,
+  callVoices: true,
 };
 
 const report: AudioDeviceReport = {
@@ -395,6 +396,64 @@ describe("VoiceVideoSection", () => {
         callSounds: false,
       }),
     );
+  });
+
+  it("offers spoken notifications as a switch, on by default", async () => {
+    // On is the default in Rust too, and this is where the two would drift. A
+    // missing field on the wire has to render as on, not as off.
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", {
+      name: /say who came and went/i,
+    });
+    expect(toggle).toBeChecked();
+  });
+
+  it("saves spoken notifications being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /say who came and went/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        callVoices: false,
+      }),
+    );
+  });
+
+  it("leaves the chimes alone when the spoken notifications go off", async () => {
+    // The whole reason there are two switches. One patch that reached the
+    // other field would make the second setting decoration, and the symptom
+    // would be somebody losing their chimes by turning off the sentences.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /say who came and went/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.callSounds).toBe(true);
+  });
+
+  it("leaves the spoken notifications alone when the chimes go off", async () => {
+    // The same claim in the other direction, which is the one an
+    // implementation that shares a field would still pass without.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /joins or leaves/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.callVoices).toBe(true);
   });
 
   it("leaves the gate alone when call sounds change", async () => {

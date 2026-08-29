@@ -254,7 +254,7 @@ fn every_clone_is_the_same_set_of_queues() {
 /// its own last fragment.
 mod sounds {
     use super::*;
-    use consort_audio::SOUND_SAMPLES;
+    use consort_audio::{SAMPLE_RATE, SOUND_SAMPLES};
 
     #[test]
     fn a_sound_plays_out_of_the_call_s_own_output() {
@@ -323,6 +323,28 @@ mod sounds {
         }
 
         assert_eq!(voices.sound_waiting(), SOUND_SAMPLES);
+    }
+
+    #[test]
+    fn one_arrival_fits_its_chime_and_its_sentence() {
+        // The reason the cap moved from two seconds to six. A chime is about a
+        // third of a second and a spoken notification is about a second and a
+        // half, and they queue rather than overlap, so the old cap cut the end
+        // off the sentence for a single person walking in. The failure would
+        // have been a voice that stops mid-word, which reads as a broken
+        // recording rather than as a queue that is too short.
+        let voices = Voices::new();
+        let chime = vec![1i16; SAMPLE_RATE as usize / 3];
+        let sentence = vec![2i16; SAMPLE_RATE as usize * 3 / 2];
+
+        voices.play(&chime);
+        voices.play(&sentence);
+
+        assert_eq!(
+            voices.sound_waiting(),
+            chime.len() + sentence.len(),
+            "the sentence was truncated by the cap"
+        );
     }
 
     #[test]

@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::gate::GateConfig;
 
-/// Which devices to use, how eager the voice gate should be, and whether a
-/// call makes a noise when somebody walks into it.
+/// Which devices to use, how eager the voice gate should be, and what noise a
+/// call makes about the people coming and going in it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioSettings {
@@ -44,6 +44,19 @@ pub struct AudioSettings {
     /// a lot of coming and going is one where these stop being information
     /// and become a noise.
     pub call_sounds: bool,
+    /// Whether to say out loud what the chimes above only announce.
+    ///
+    /// A second setting rather than a mode of the first, because the two are
+    /// wanted separately in both directions and neither is the greater
+    /// helping of the other. A chime says something happened; a voice says
+    /// what. Somebody who wants to know that company arrived without being
+    /// read a sentence about it, and somebody who wants the sentence and no
+    /// chime before it, are both ordinary.
+    ///
+    /// On by default, and hand-written for the same reason `call_sounds` is:
+    /// a derived `bool` is `false`, and a notification nobody has heard of is
+    /// a notification nobody switches on.
+    pub call_voices: bool,
 }
 
 impl Default for AudioSettings {
@@ -53,6 +66,7 @@ impl Default for AudioSettings {
             output: None,
             gate: GateConfig::default(),
             call_sounds: true,
+            call_voices: true,
         }
     }
 }

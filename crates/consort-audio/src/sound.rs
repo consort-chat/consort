@@ -23,6 +23,21 @@
 //! Decoding happens on first use and the result is kept. Somebody who never
 //! joins a call pays nothing, and somebody in a busy channel pays once rather
 //! than once per arrival.
+//!
+//! ## The spoken half is wired and has nothing to say yet
+//!
+//! [`Phrase`] is the TeamSpeak half: a chime says something happened, a voice
+//! says what. The mechanism is finished, switchable and tested. The three
+//! files behind it are silence, because a recorded sentence has to be recorded
+//! and a beep standing in for one would be worse than nothing: the listener
+//! would hear two chimes and learn less than from one.
+//!
+//! Silence is therefore deliberate rather than a bug, and it is the one
+//! placeholder that cannot mislead. Everything else about a phrase is already
+//! true: it decodes, it is the length of the sentence it will be, it queues
+//! behind the chime rather than over it, and its setting switches it. Dropping
+//! three recordings into `assets/voice` is the whole of what is left, and the
+//! test that says a sound is audible arrives with them.
 
 use std::sync::OnceLock;
 
@@ -39,6 +54,15 @@ const JOINED: &[u8] = include_bytes!("../assets/join.mp3");
 
 /// Somebody left it.
 const LEFT: &[u8] = include_bytes!("../assets/leave.mp3");
+
+/// "Somebody has entered your channel." Silence, for now. See the header.
+const SAYS_ENTERED: &[u8] = include_bytes!("../assets/voice/entered.mp3");
+
+/// "Somebody has left your channel." Silence, for now.
+const SAYS_LEFT: &[u8] = include_bytes!("../assets/voice/left.mp3");
+
+/// "Welcome back." Silence, for now.
+const SAYS_WELCOME_BACK: &[u8] = include_bytes!("../assets/voice/welcome-back.mp3");
 
 /// Which sound.
 ///
@@ -67,13 +91,66 @@ impl Sound {
             Self::Left => (&DECODED[1], LEFT),
         };
 
-        slot.get_or_init(|| {
-            decode(bytes).unwrap_or_else(|| {
-                tracing::warn!(sound = ?self, "a call sound would not decode");
-                Vec::new()
-            })
-        })
+        cached(slot, bytes, self)
     }
+}
+
+/// Which sentence.
+///
+/// A second enum rather than three more variants of [`Sound`], because the two
+/// are switched on and off separately and the type is what keeps the two
+/// switches from being applied to the wrong one. A caller holding a `Phrase`
+/// cannot accidentally consult the chime setting about it.
+///
+/// The phrases name nobody. That is what TeamSpeak's own default pack did, and
+/// it is the only version that can ship: a name has to be spoken by a
+/// synthesiser, which is a dependency, a licence and a startup cost, and
+/// "somebody" is a word this codebase has already decided is enough elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phrase {
+    /// "Somebody has entered your channel."
+    Entered,
+    /// "Somebody has left your channel."
+    Left,
+    /// "Welcome back", to the person who was away and is not any more.
+    WelcomeBack,
+}
+
+impl Phrase {
+    /// The samples to play: mono PCM at [`SAMPLE_RATE`].
+    ///
+    /// Currently silence for all three, on purpose. See the module header.
+    pub fn samples(self) -> &'static [i16] {
+        static DECODED: [OnceLock<Vec<i16>>; 3] =
+            [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+
+        let (slot, bytes) = match self {
+            Self::Entered => (&DECODED[0], SAYS_ENTERED),
+            Self::Left => (&DECODED[1], SAYS_LEFT),
+            Self::WelcomeBack => (&DECODED[2], SAYS_WELCOME_BACK),
+        };
+
+        cached(slot, bytes, self)
+    }
+}
+
+/// Decode `bytes` once and keep the result in `slot`.
+///
+/// Shared by both enums so that a sound and a sentence cannot end up with
+/// different ideas about what a failed decode does. It renders as silence
+/// either way: a missing chime is a call that is quieter than intended, and a
+/// panic here is a call that ends.
+fn cached(
+    slot: &'static OnceLock<Vec<i16>>,
+    bytes: &'static [u8],
+    what: impl std::fmt::Debug,
+) -> &'static [i16] {
+    slot.get_or_init(|| {
+        decode(bytes).unwrap_or_else(|| {
+            tracing::warn!(sound = ?what, "a call sound would not decode");
+            Vec::new()
+        })
+    })
 }
 
 /// Turn an MP3 into mono PCM at [`SAMPLE_RATE`].
@@ -244,6 +321,70 @@ mod tests {
     #[test]
     fn something_that_is_not_audio_decodes_to_silence_rather_than_a_panic() {
         assert_eq!(decode(b"this is not an mp3 file at all"), None);
+    }
+
+    mod phrases {
+        use super::*;
+
+        #[test]
+        fn every_phrase_decodes() {
+            // The one thing `include_bytes!` cannot check. It will happily
+            // embed a text file, and silence and an unreadable file are
+            // indistinguishable once played, which is exactly why this is
+            // worth asserting while the files are silent.
+            for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
+                assert!(
+                    !phrase.samples().is_empty(),
+                    "{phrase:?} decoded to nothing at all"
+                );
+            }
+        }
+
+        #[test]
+        fn a_phrase_is_the_length_of_a_sentence() {
+            // Wider than the chimes on purpose, and for the opposite reason. A
+            // chime has to be over before it intrudes; a sentence has to be
+            // long enough to be one. The bounds are set so that a recording
+            // dropped in later fits without anybody having to come back here.
+            for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
+                let seconds = phrase.samples().len() as f64 / f64::from(SAMPLE_RATE);
+                assert!(
+                    (0.5..=3.0).contains(&seconds),
+                    "{phrase:?} is {seconds:.2}s long"
+                );
+            }
+        }
+
+        #[test]
+        fn the_phrases_are_placeholders_until_somebody_records_them() {
+            // Here so the swap cannot happen quietly. Silence is the honest
+            // stand-in for a sentence, and it is also the state in which every
+            // other test in this file would pass while the feature said
+            // nothing at all.
+            //
+            // When this fails, a recording has landed. Replace it with the two
+            // assertions the chimes have and this one was standing in for:
+            // that a phrase is audible, and that entering and leaving do not
+            // sound the same.
+            for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
+                let loudest = phrase.samples().iter().map(|s| s.abs()).max().unwrap_or(0);
+                assert_eq!(
+                    loudest, 0,
+                    "{phrase:?} has audio in it now, so this test has done its job"
+                );
+            }
+        }
+
+        #[test]
+        fn decoding_happens_once() {
+            // Same slice, not merely an equal one. These are longer than the
+            // chimes, so decoding one per arrival would be a bigger hitch in
+            // the feeder than the chimes would have been.
+            assert!(std::ptr::eq(
+                Phrase::Entered.samples(),
+                Phrase::Entered.samples()
+            ));
+        }
     }
 
     mod resampling {

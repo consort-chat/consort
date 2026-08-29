@@ -25,6 +25,7 @@ fn settings_round_trip_through_json_unchanged() {
             voice_activity: false,
         },
         call_sounds: false,
+        call_voices: false,
     };
 
     let json = serde_json::to_string(&settings).expect("serialise");
@@ -149,6 +150,59 @@ fn a_settings_file_written_before_call_sounds_existed_still_has_them_on() {
 
     assert_eq!(settings.input.as_deref(), Some("Yeti Stereo Microphone"));
     assert!(settings.call_sounds);
+}
+
+#[test]
+fn spoken_notifications_are_on_for_somebody_who_never_chose() {
+    // The second field whose default is not the zero value, and it has to be
+    // written out for the same reason as the first: nobody switches on a
+    // notification they have never heard.
+    let settings: AudioSettings = serde_json::from_str("{}").expect("deserialise");
+
+    assert!(settings.call_voices);
+}
+
+#[test]
+fn a_settings_file_written_before_the_voices_existed_still_has_them_on() {
+    // The upgrade case, and the one that matters most here: everybody running
+    // Consort today has a settings file that predates this field.
+    let older = r#"{"input":null,"output":null,"callSounds":false}"#;
+
+    let settings: AudioSettings = serde_json::from_str(older).expect("deserialise");
+
+    assert!(!settings.call_sounds, "the older choice was not honoured");
+    assert!(settings.call_voices);
+}
+
+#[test]
+fn the_chimes_and_the_voices_switch_independently() {
+    // The whole reason there are two. Either one off and the other on has to
+    // be a state the file can hold, or the second setting is decoration.
+    let chimes_only = r#"{"callSounds":true,"callVoices":false}"#;
+    let voices_only = r#"{"callSounds":false,"callVoices":true}"#;
+
+    let chimes: AudioSettings = serde_json::from_str(chimes_only).expect("deserialise");
+    let voices: AudioSettings = serde_json::from_str(voices_only).expect("deserialise");
+
+    assert!(chimes.call_sounds && !chimes.call_voices);
+    assert!(!voices.call_sounds && voices.call_voices);
+}
+
+#[test]
+fn turning_the_voices_off_survives_the_round_trip() {
+    let off = AudioSettings {
+        call_voices: false,
+        ..AudioSettings::default()
+    };
+
+    let json = serde_json::to_string(&off).expect("serialise");
+    let read_back: AudioSettings = serde_json::from_str(&json).expect("deserialise");
+
+    assert!(!read_back.call_voices);
+    assert!(
+        read_back.call_sounds,
+        "the chimes were switched off with them"
+    );
 }
 
 #[test]

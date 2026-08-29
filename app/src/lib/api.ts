@@ -699,6 +699,14 @@ export interface AudioSettings {
    * a missing field must not render as off.
    */
   callSounds?: boolean;
+  /**
+   * Whether a call says out loud what `callSounds` only announces.
+   *
+   * Optional and read as `!== false` for the same reasons, and separate from
+   * it in both directions: a chime with no sentence and a sentence with no
+   * chime before it are both states somebody can ask for.
+   */
+  callVoices?: boolean;
 }
 
 /**

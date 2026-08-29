@@ -192,6 +192,7 @@ mod tests {
                     ..GateConfig::default()
                 },
                 call_sounds: false,
+                call_voices: false,
             },
             calls: CallSettings::default(),
         }

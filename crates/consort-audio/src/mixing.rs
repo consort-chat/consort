@@ -78,10 +78,16 @@ pub struct Voices {
 
 /// How much sound may be queued before the rest is dropped.
 ///
-/// Two seconds. Long enough for several arrivals in a row to be heard one
-/// after another, short enough that somebody rejoining a busy channel does not
-/// sit through a minute of chiming for people who are already there.
-pub const SOUND_SAMPLES: usize = 2 * crate::gate::SAMPLE_RATE as usize;
+/// Six seconds. It was two, which was right when the only thing that queued
+/// here was a chime a third of a second long, and became wrong the moment a
+/// spoken notification could follow one: a chime plus a sentence is over two
+/// seconds on its own, so a single arrival would have had its sentence cut off
+/// at the end by a cap meant to stop a backlog of several.
+///
+/// Still short enough for the thing the cap is for. Somebody rejoining a busy
+/// channel hears the first few arrivals and not the next minute of them, which
+/// is what a cap on a queue that drops from the end buys.
+pub const SOUND_SAMPLES: usize = 6 * crate::gate::SAMPLE_RATE as usize;
 
 impl Voices {
     /// Nobody, yet.

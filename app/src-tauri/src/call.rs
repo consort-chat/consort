@@ -175,6 +175,7 @@ mod tests {
             crate::ears::speakers(
                 consort_audio::Voices::new(),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ),
             move |event| recorder.0.lock().unwrap().push(event),
         );

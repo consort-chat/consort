@@ -209,6 +209,11 @@ pub struct AppState {
     /// `commands::set_audio_settings_for`, which is the only thing that writes
     /// it.
     chiming: crate::ears::Wanted,
+    /// Whether the spoken notifications are switched on, on the same terms as
+    /// `chiming` and for the same reasons. A second flag rather than a second
+    /// meaning on the first, because the two settings are independent and a
+    /// call thread that shared one could not tell them apart.
+    speaking: crate::ears::Wanted,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -229,9 +234,9 @@ impl AppState {
         // Read once here rather than defaulted, so a call joined before
         // anybody opens the settings screen already honours what the file
         // says.
-        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(
-            settings.load().audio.call_sounds,
-        ));
+        let audio = settings.load().audio;
+        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_sounds));
+        let speaking = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_voices));
 
         Self {
             client: RwLock::new(None),
@@ -251,6 +256,7 @@ impl AppState {
             microphone: Microphone::new(),
             voices: Voices::new(),
             chiming,
+            speaking,
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -322,7 +328,11 @@ impl AppState {
             CallBridge::spawn(
                 transport(),
                 self.microphone.clone(),
-                speakers(self.voices.clone(), self.chiming.clone()),
+                speakers(
+                    self.voices.clone(),
+                    self.chiming.clone(),
+                    self.speaking.clone(),
+                ),
                 self.call_reporter(),
             )
         });
@@ -487,6 +497,17 @@ impl AppState {
     /// what is on disk and what a call is doing can never disagree.
     pub fn set_call_sounds(&self, wanted: bool) {
         self.chiming
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Switch the spoken notifications on or off for a call in progress.
+    ///
+    /// Separate from [`set_call_sounds`](Self::set_call_sounds) rather than a
+    /// second argument to it, because they are two settings and a caller that
+    /// had to pass both would be one refactor away from passing the same value
+    /// twice.
+    pub fn set_call_voices(&self, wanted: bool) {
+        self.speaking
             .store(wanted, std::sync::atomic::Ordering::Relaxed);
     }
 

@@ -37,6 +37,6 @@ pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
 pub use mixing::{JITTER_FRAMES, JITTER_SAMPLES, Mixing, SOUND_SAMPLES, Voices};
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
-pub use sound::Sound;
+pub use sound::{Phrase, Sound};
 pub use thread::{AudioEvent, AudioThread, GatedSink};
 pub use tone::Tone;

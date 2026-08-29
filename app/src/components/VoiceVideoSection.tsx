@@ -483,6 +483,34 @@ export function VoiceVideoSection() {
         </div>
       )}
 
+      {settings !== null && (
+        <div className="voice-field">
+          <span className="voice-field__label">Spoken notifications</span>
+          <div className="voice-toggle">
+            <input
+              id="voice-call-voices"
+              className="voice-toggle__switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="voice-call-voices-note"
+              checked={settings.callVoices !== false}
+              onChange={(event) =>
+                void reset({ callVoices: event.target.checked })
+              }
+            />
+            <label className="voice-toggle__label" htmlFor="voice-call-voices">
+              Say who came and went, as well as chiming
+            </label>
+          </div>
+          <p className="voice-field__note" id="voice-call-voices-note">
+            A chime tells you something happened; this tells you what. Separate
+            from the switch above, so you can have either on its own. The
+            recordings are not in this build yet, so nothing is said until they
+            are.
+          </p>
+        </div>
+      )}
+
       <div className="voice-field">
         <span className="voice-field__label">Mic test</span>
         <LevelMeter

@@ -41,7 +41,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use crate::arrivals::Arrivals;
 use crate::event::{CallEvent, SelfAudio};
 use crate::failure::CallFailure;
-use crate::hearing::Ears;
+use crate::hearing::{Cue, Ears};
 use crate::microphone::Microphone;
 use crate::publish::pump;
 use crate::transport::{CallSession, CallTransport, Change, Roster};
@@ -353,8 +353,18 @@ async fn serve<T: CallTransport>(
                 apply(current.as_ref(), audio, &ears).await;
             }
             Message::SetAway(away) => {
+                // Only on the way back, and only from having actually been
+                // away. Somebody pressing the button twice, or a client that
+                // restates the flag it already had, is not somebody returning,
+                // and "welcome back" said to a person who never left is the
+                // kind of small wrongness that makes a whole feature feel
+                // broken.
+                let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
                 apply(current.as_ref(), audio, &ears).await;
+                if returning {
+                    ears.cue(Cue::Returned);
+                }
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
@@ -580,8 +590,9 @@ async fn watch_roster<R: Roster>(
                 // a chime for a refused media key would be the wrong sound for
                 // the wrong thing.
                 if let CallEvent::Connected { participants, .. } = &said {
-                    for chime in arrivals.settle(participants) {
-                        ears.chime(chime);
+                    for movement in arrivals.settle(participants) {
+                        tracing::debug!(cue = ?movement.cue, who = ?movement.who, "the roster moved");
+                        ears.cue(movement.cue);
                     }
                 }
 
@@ -672,7 +683,6 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hearing::Chime;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -773,7 +783,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct Deaf {
         silences: Arc<AtomicUsize>,
-        chimes: Arc<Mutex<Vec<Chime>>>,
+        cues: Arc<Mutex<Vec<Cue>>>,
     }
 
     impl Deaf {
@@ -781,8 +791,8 @@ mod tests {
             self.silences.load(Ordering::Relaxed)
         }
 
-        fn chimes(&self) -> Vec<Chime> {
-            self.chimes.lock().unwrap().clone()
+        fn cues(&self) -> Vec<Cue> {
+            self.cues.lock().unwrap().clone()
         }
     }
 
@@ -795,8 +805,8 @@ mod tests {
             self.silences.fetch_add(1, Ordering::Relaxed);
         }
 
-        fn chime(&self, chime: Chime) {
-            self.chimes.lock().unwrap().push(chime);
+        fn cue(&self, cue: Cue) {
+            self.cues.lock().unwrap().push(cue);
         }
     }
 
@@ -2010,7 +2020,7 @@ mod tests {
         /// other test there is about the event channel and threading an unused
         /// handle through all of them to serve these three would make the
         /// interesting ones harder to read.
-        async fn chiming<F, Fut>(transport: FakeTransport, act: F) -> Vec<Chime>
+        async fn chiming<F, Fut>(transport: FakeTransport, act: F) -> Vec<Cue>
         where
             F: FnOnce(watch::Sender<Standing>, Driver) -> Fut,
             Fut: Future<Output = Driver>,
@@ -2039,7 +2049,7 @@ mod tests {
                 })
                 .await;
 
-            ears.chimes()
+            ears.cues()
         }
 
         #[tokio::test]
@@ -2066,7 +2076,7 @@ mod tests {
             })
             .await;
 
-            assert_eq!(played, vec![Chime::Arrived]);
+            assert_eq!(played, vec![Cue::Arrived]);
         }
 
         #[tokio::test]
@@ -2113,6 +2123,79 @@ mod tests {
                 roster
                     .send((vec![person("Ada")], Some("no key".to_owned())))
                     .unwrap();
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert!(played.is_empty(), "{played:?}");
+        }
+
+        #[tokio::test]
+        async fn coming_back_from_away_says_so() {
+            // The one cue that does not come from the roster, because nobody
+            // else's roster changed: it is this session putting its own flag
+            // down. Driven from the message rather than from a diff for
+            // exactly that reason.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let played = chiming(transport, async |_roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                driver.send(Message::SetAway(true));
+                driver.next().await;
+                driver.send(Message::SetAway(false));
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert_eq!(played, vec![Cue::Returned]);
+        }
+
+        #[tokio::test]
+        async fn going_away_says_nothing() {
+            // Only the return is worth a sound. Somebody walking away from the
+            // keyboard is not there to hear it, and the people who are there
+            // learn it from the icon.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let played = chiming(transport, async |_roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                driver.send(Message::SetAway(true));
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert!(played.is_empty(), "{played:?}");
+        }
+
+        #[tokio::test]
+        async fn putting_down_a_flag_that_was_never_up_is_not_a_return() {
+            // A client that restates the flag it already had, or a button
+            // pressed twice. "Welcome back" said to somebody who never left is
+            // the kind of small wrongness that makes a whole feature feel
+            // broken, and it is the natural bug: the state is already there to
+            // be ignored.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let played = chiming(transport, async |_roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                assert_eq!(driver.next().await, connected(GENERAL));
+
+                driver.send(Message::SetAway(false));
+                // Nothing is emitted for a flag that did not move, so there is
+                // no event of its own to wait for. A mute behind it is one the
+                // loop must reach second, which makes it a barrier rather than
+                // a sleep.
+                driver.send(Message::SetMuted(true));
                 driver.next().await;
                 driver
             })
