@@ -1,6 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { asCommandError, audioSettings, setPersonVolume } from "../lib/api";
+import {
+  asCommandError,
+  audioSettings,
+  memberProfile,
+  setPersonVolume,
+  type MemberProfile,
+  type Participant,
+} from "../lib/api";
+import { elapsedLabel, presenceLabel, standingLabel } from "../lib/labels";
+import { RoomAvatar } from "./RoomAvatar";
 import "./PersonMenu.css";
 
 /** Full volume, which is also what somebody nobody has adjusted is at. */
@@ -9,15 +18,20 @@ const FULL = 100;
 /** How long to wait after a slider stops moving before writing it down. */
 const SETTLE_MS = 150;
 
-/** Roughly the menu's own size, for keeping it on screen. */
-const MENU_WIDTH = 232;
-const MENU_HEIGHT = 128;
+/** How far to keep the card from the edge of the window. */
+const GAP = 8;
 
 export interface PersonMenuProps {
-  /** The Matrix user ID, which is what the level is remembered against. */
-  userId: string;
-  /** What to call them, for the heading. */
-  name: string;
+  /**
+   * Who this is about, straight off the roster.
+   *
+   * The whole participant rather than an ID and a name, because everything the
+   * roster already knows is drawn here and asking for it again would be a
+   * second request for facts that are on screen behind this panel.
+   */
+  person: Participant;
+  /** The channel they are in. Half of the key an avatar and a profile take. */
+  roomId: string;
   /** Where the pointer was, in viewport coordinates. */
   at: { x: number; y: number };
   onClose: () => void;
@@ -26,13 +40,25 @@ export interface PersonMenuProps {
 /**
  * What one person's name in a voice channel opens.
  *
- * Only a volume, for now, and that is the whole reason it exists: there is
- * nowhere else to put "this one is too loud in my headphones". A master volume
- * cannot say it, because the problem is one person against the others, and the
- * settings screen cannot say it either, because it does not know who is in the
- * call.
+ * Two things somebody wants from a name in a list, in the order they want
+ * them. Who is this, and then, occasionally, turn them down.
  *
- * ## Why the level lives here rather than in the account
+ * ## What is on it, and what is deliberately not
+ *
+ * Everything drawn here is something a server or a call actually said.
+ * Presence comes from the homeserver, standing from the room's power levels,
+ * the join time from the SFU's own record, and the call state from the roster
+ * this panel was opened out of. Nothing is inferred and nothing is invented:
+ * where the answer is not known the card says so, because most homeservers
+ * have presence switched off and a card that quietly drew "Offline" for that
+ * would be putting a grey dot on somebody sitting right there.
+ *
+ * Messaging is a button that does not work, and it says so rather than being
+ * left off. Consort has no message view at all yet, so opening a direct
+ * message would put somebody in a room with no way to read or write in it,
+ * which is worse than a button that is honest about the state of things.
+ *
+ * ## Why the volume lives here rather than in the account
  *
  * There is no Matrix account data for it and there should not be. How loud
  * somebody sounds is a fact about the headphones on and the room being sat in,
@@ -43,17 +69,20 @@ export interface PersonMenuProps {
  *
  * ## Why it loads its own settings
  *
- * One request, when a menu opens, against threading a map of levels through
- * every component between here and the top of the sidebar for the sake of a
- * panel that is closed almost all of the time.
+ * One request each, when a card opens, against threading a map of levels and a
+ * map of profiles through every component between here and the top of the
+ * sidebar for the sake of a panel that is closed almost all of the time.
  */
-export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
+export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
   const [percent, setPercent] = useState<number | null>(null);
+  const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [placement, setPlacement] = useState({ left: at.x, top: at.y });
   const menu = useRef<HTMLDivElement | null>(null);
   const slider = useRef<HTMLInputElement | null>(null);
   const writing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<number | null>(null);
+  const userId = person.id;
 
   useEffect(() => {
     let cancelled = false;
@@ -65,8 +94,8 @@ export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
       })
       .catch((raw: unknown) => {
         if (cancelled) return;
-        // Drawn at full rather than left blank. A menu that never resolves is
-        // worse than one showing the value almost everybody is at.
+        // Drawn at full rather than left blank. A slider that never resolves
+        // is worse than one showing the value almost everybody is at.
         setPercent(FULL);
         setProblem(asCommandError(raw).message);
       });
@@ -76,8 +105,28 @@ export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
     };
   }, [userId]);
 
+  // The one request this panel makes of the homeserver. Its failure is not
+  // reported: the command already degrades every part of the answer to
+  // "nothing known" on its own, and this catch is for the case where there is
+  // no signed-in client at all, which the rest of the window is already
+  // shouting about.
+  useEffect(() => {
+    let cancelled = false;
+
+    void memberProfile(roomId, userId)
+      .then((profile) => {
+        if (cancelled) return;
+        setProfile(profile);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [roomId, userId]);
+
   // Escape and a click elsewhere both close it, which is what every menu on
-  // every platform does. `pointerdown` rather than `click`, so that the menu
+  // every platform does. `pointerdown` rather than `click`, so that the card
   // is gone before whatever was underneath it reacts.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -112,9 +161,23 @@ export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
     [userId],
   );
 
-  // Focus lands on the one control, so the menu is usable from the keyboard
-  // the moment it opens rather than after several tabs from wherever focus
-  // happened to be in the sidebar.
+  // Measured rather than assumed. The card's height depends on what is known
+  // about the person, so it grows when the profile lands, and a constant here
+  // would be a guess that goes stale the next time a line is added. Before
+  // paint, so nothing is drawn in the wrong place first.
+  useLayoutEffect(() => {
+    const node = menu.current;
+    if (node === null) return;
+    const box = node.getBoundingClientRect();
+    setPlacement({
+      left: Math.max(GAP, Math.min(at.x, window.innerWidth - box.width - GAP)),
+      top: Math.max(GAP, Math.min(at.y, window.innerHeight - box.height - GAP)),
+    });
+  }, [at.x, at.y, percent, profile]);
+
+  // Focus lands on the one control that does anything, so the card is usable
+  // from the keyboard the moment it opens rather than after several tabs from
+  // wherever focus happened to be in the sidebar.
   useLayoutEffect(() => {
     if (percent !== null) slider.current?.focus();
   }, [percent]);
@@ -134,21 +197,99 @@ export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
     }, SETTLE_MS);
   }
 
-  // Clamped so a name near the bottom of a long sidebar does not open a menu
-  // half off the screen. Measured against the window rather than the sidebar,
-  // because the menu is positioned against the window.
-  const left = Math.min(at.x, Math.max(0, window.innerWidth - MENU_WIDTH - 8));
-  const top = Math.min(at.y, Math.max(0, window.innerHeight - MENU_HEIGHT - 8));
+  const standing = profile === null ? null : standingLabel(profile.standing);
+  const states = callStates(person);
 
   return (
     <div
       ref={menu}
       className="person-menu"
       role="dialog"
-      aria-label={`${name}'s volume`}
-      style={{ left, top }}
+      aria-label={person.name}
+      style={{ left: placement.left, top: placement.top }}
     >
-      <p className="person-menu__who">{name}</p>
+      <div className="person-menu__header">
+        <RoomAvatar
+          roomId={roomId}
+          userId={person.id}
+          name={person.name}
+          className="person-menu__face"
+        />
+        <div className="person-menu__identity">
+          <p className="person-menu__who">{person.name}</p>
+          {/*
+            Under the display name rather than instead of it. Two people in a
+            room can carry the same display name, and the user ID is the only
+            thing on this card that tells them apart.
+          */}
+          <p className="person-menu__id">{person.id}</p>
+        </div>
+      </div>
+
+      {standing !== null && (
+        <p className="person-menu__badge">{standing}</p>
+      )}
+
+      <dl className="person-menu__facts">
+        <div className="person-menu__fact">
+          <dt className="person-menu__label">Status</dt>
+          <dd className="person-menu__detail">
+            {profile === null ? (
+              "Checking…"
+            ) : (
+              <>
+                <span
+                  className="person-menu__dot"
+                  data-presence={profile.presence}
+                  aria-hidden="true"
+                />
+                {presenceLabel(profile.presence)}
+              </>
+            )}
+          </dd>
+        </div>
+        {profile?.status != null && profile.status !== "" && (
+          <div className="person-menu__fact">
+            <dt className="person-menu__label">Says</dt>
+            <dd className="person-menu__detail">{profile.status}</dd>
+          </div>
+        )}
+        {person.since !== undefined && (
+          <div className="person-menu__fact">
+            <dt className="person-menu__label">In call</dt>
+            <dd className="person-menu__detail">
+              {elapsedLabel(person.since, Date.now())}
+            </dd>
+          </div>
+        )}
+        {states.length > 0 && (
+          <div className="person-menu__fact">
+            <dt className="person-menu__label">Right now</dt>
+            <dd className="person-menu__detail">{states.join(", ")}</dd>
+          </div>
+        )}
+      </dl>
+
+      {/*
+        Disabled and saying why, rather than absent. Somebody looking at a
+        person's card is looking for a way to talk to them, and a card with no
+        such button reads as a feature that was forgotten rather than one that
+        is not built.
+      */}
+      <button
+        type="button"
+        className="person-menu__action"
+        disabled
+        aria-describedby="person-menu-message-note"
+      >
+        Message
+      </button>
+      <p className="person-menu__note" id="person-menu-message-note">
+        Consort cannot show messages yet.
+      </p>
+
+      <hr className="person-menu__rule" />
+
       {percent === null ? (
         <p className="person-menu__note">Reading the saved volume…</p>
       ) : (
@@ -194,4 +335,21 @@ export function PersonMenu({ userId, name, at, onClose }: PersonMenuProps) {
       )}
     </div>
   );
+}
+
+/**
+ * The call state the row draws as icons, written out.
+ *
+ * Not a precedence, unlike the row. There the three flags compete for one
+ * slot, so the strongest claim wins and the others are dropped; here there is
+ * room to say all of them, and "deafened and away" is a different fact from
+ * either one alone.
+ */
+function callStates(person: Participant): string[] {
+  const states: string[] = [];
+  if (person.deafened === true) states.push("Deafened");
+  if (person.away === true) states.push("Away");
+  if (person.muted === true) states.push("Muted");
+  if (person.camera === true) states.push("Camera on");
+  return states;
 }

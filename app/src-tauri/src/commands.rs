@@ -294,6 +294,21 @@ pub async fn member_avatar_for(
     Ok(rooms::member_avatar(&client, &room_id, &user_id).await)
 }
 
+/// What can be said about one person in one room beyond their name.
+///
+/// One request to the homeserver, made when somebody opens a person's card and
+/// never on the way to drawing a roster. It cannot fail: presence is off on
+/// most homeservers, and a dialog in front of somebody who clicked a name out
+/// of curiosity would be worse than the word "unknown".
+pub async fn member_profile_for(
+    state: &AppState,
+    room_id: String,
+    user_id: String,
+) -> Result<rooms::MemberProfile, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::member_profile(&client, &room_id, &user_id).await)
+}
+
 /// What devices this machine has, and which of them are in use.
 ///
 /// Asked for whenever the settings screen opens, and after every change: a
@@ -842,6 +857,19 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// What can be said about one person in one room beyond their name.
+///
+/// Asked for when somebody opens a person's card under a voice channel. See
+/// `member_profile_for`.
+#[tauri::command]
+pub async fn member_profile(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_id: String,
+) -> Result<rooms::MemberProfile, CommandError> {
+    member_profile_for(&state, room_id, user_id).await
 }
 
 /// Verify this session with the account's recovery key.

@@ -168,6 +168,22 @@ pub struct Participant {
     /// camera because room state carries nothing that could say otherwise.
     #[serde(default)]
     pub camera: bool,
+    /// When they joined the call, in milliseconds since the Unix epoch.
+    ///
+    /// The SFU's own record rather than the moment this session noticed them,
+    /// so it is still right for people who were already in the call when we
+    /// arrived. `None` for somebody listed from room state alone, for somebody
+    /// whose media has not appeared yet, and against a server too old to
+    /// report it.
+    ///
+    /// Somebody on two devices joined when the first of them did.
+    ///
+    /// Deliberately not "when they joined the room". That is answerable from
+    /// their membership event, but the event carries the timestamp of their
+    /// *last* profile change, so it means "when they last picked a new
+    /// avatar", which is not a fact worth putting under somebody's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
 }
 
 impl Participant {
@@ -184,6 +200,7 @@ impl Participant {
             deafened: false,
             away: false,
             camera: false,
+            since: None,
         }
     }
 
@@ -205,6 +222,11 @@ impl Participant {
     /// The same person, with whether the call can see them.
     pub fn with_camera(self, camera: bool) -> Self {
         Self { camera, ..self }
+    }
+
+    /// The same person, with when they joined the call.
+    pub fn with_since(self, since: Option<u64>) -> Self {
+        Self { since, ..self }
     }
 }
 

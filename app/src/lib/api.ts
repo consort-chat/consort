@@ -170,6 +170,17 @@ export interface Participant {
    * cross.
    */
   camera?: boolean;
+  /**
+   * When they joined the call, in milliseconds since the Unix epoch.
+   *
+   * The SFU's own record rather than the moment this session noticed them, so
+   * it is still right for people who were already in the call when we arrived.
+   * Absent for anybody listed from room state, for anybody whose media has not
+   * appeared yet, and against a server too old to report it.
+   *
+   * Somebody on two devices joined when the first of them did.
+   */
+  since?: number;
 }
 
 /** One room under a rail entry. */
@@ -510,6 +521,56 @@ export function memberAvatar(
   userId: string,
 ): Promise<string | null> {
   return invoke<string | null>("member_avatar", { roomId, userId });
+}
+
+/**
+ * Where somebody's own client says they are.
+ *
+ * `"unknown"` is a real answer rather than a missing one. Most homeservers
+ * have presence switched off, because it is the most expensive thing in the
+ * protocol, and reading that silence as `"offline"` would put a grey dot on
+ * somebody sitting right there.
+ */
+export type Presence = "online" | "idle" | "offline" | "unknown";
+
+/** What somebody is allowed to do in a room, at the granularity a person cares about. */
+export type Standing = "admin" | "moderator" | "member";
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * Nothing here duplicates the roster: who they are, what they are called,
+ * whether they are muted and when they joined the call all arrive with the
+ * channel and are on screen before this is asked for.
+ */
+export interface MemberProfile {
+  presence: Presence;
+  /** Their own status line, when they set one. */
+  status: string | null;
+  /**
+   * Milliseconds since they last did anything, as the homeserver counts it.
+   *
+   * Null whenever presence is unknown, and often null even when it is not: the
+   * field is optional in the spec and Synapse omits it for people it has not
+   * heard from.
+   */
+  lastActiveAgo: number | null;
+  standing: Standing;
+}
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * One request to the homeserver, made when a person's card opens and never on
+ * the way to drawing a roster. It does not fail: every part of it degrades to
+ * "nothing known" on its own, because none of these facts is worth a dialog in
+ * front of somebody who clicked a name out of curiosity.
+ */
+export function memberProfile(
+  roomId: string,
+  userId: string,
+): Promise<MemberProfile> {
+  return invoke<MemberProfile>("member_profile", { roomId, userId });
 }
 
 /**

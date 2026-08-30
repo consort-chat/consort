@@ -66,7 +66,7 @@ matrix-sdk-base = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev
 # `matrix-sdk` feature: the SDK-backed command sender, the sticky bridge, and
 # the pre-2026 Element Call compatibility modes. Without it `call` is not
 # compiled at all and there is no `Call::join`.
-matrix-rtc-livekit = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "284cb5b40695ee26276aac7fffdc23272e5b9bad", features = [
+matrix-rtc-livekit = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "934cdbad34bda1a8a170faa022dcdd5436f4072a", features = [
     "matrix-sdk",
 ] }
 
@@ -76,7 +76,7 @@ matrix-rtc-livekit = { git = "https://github.com/tominal/matrix-rust-rtc", rev =
 # `Participant`. Same git source and rev, so it is the crate matrix-rtc-livekit
 # already links rather than a second copy. If the rev above moves, this moves
 # with it.
-matrix-rtc-media = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "284cb5b40695ee26276aac7fffdc23272e5b9bad" }
+matrix-rtc-media = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "934cdbad34bda1a8a170faa022dcdd5436f4072a" }
 
 # Dev-only, and for exactly one type: `KeyRejection`, which rides inside
 # `matrix_rtc_media::CallEvent::KeyDiscarded` and is not re-exported by the
@@ -84,7 +84,7 @@ matrix-rtc-media = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "
 # says why a media key was refused, which is the most useful thing Consort has
 # to tell somebody about a call nobody can hear. Same git source and rev, so it
 # is the crate already in the graph rather than a second copy.
-matrix-rtc-core = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "284cb5b40695ee26276aac7fffdc23272e5b9bad" }
+matrix-rtc-core = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "934cdbad34bda1a8a170faa022dcdd5436f4072a" }
 
 # Eight crates in Cargo.lock are pinned by hand and are load-bearing.
 #

@@ -262,6 +262,61 @@ in them, matching what TeamSpeak's default sound pack actually did, and
     slider is not half an amplitude, and the mixer clips rather than ducking, so
     a control that could go above unity would distort the whole call to make one
     part of it louder.
+13. The mute icon telling the truth about somebody who never unmuted, which it
+    had not been. The roster's `streams` answered "what have we subscribed to"
+    and `microphone_muted` read it as "what are they sending". Those differ in
+    exactly the case that matters: joining from Element Call's lobby with the
+    microphone off publishes no audio track at all, so nothing is ever
+    subscribed, there is no stream to mark muted, and the person who most needs
+    telling that their microphone is off was the one person nobody could see it
+    on.
+
+    Two changes, in two repositories. `matrix-rust-rtc` grew
+    `ConnectionEvent::TrackPublished` and `TrackUnpublished`, so a roster entry
+    is built from an announcement whether or not anything subscribes to it, and
+    it stopped throwing away `RoomEvent::Connected`, which is the only carrier
+    of the publications of everybody already in the call when we joined.
+    Consort's `microphone_muted` became `camera_live` negated: both ask what
+    the call can pick up, and a membership publishing nothing of that kind
+    cannot be picked up.
+
+    The old rule was defended in a doc comment on the grounds that publishing
+    nothing is not a choice somebody made. That is true and it is not the
+    question. The cost of the new rule is an icon during the moment between a
+    membership appearing and its first publication landing, which is a mute
+    that is true while it lasts. The cost of the old one was a person talking
+    into a dead microphone with nobody able to see why. It also puts us back in
+    step with Element Call, whose `isMicrophoneEnabled` reads a missing
+    publication as muted.
+
+14. A card behind the name, since there was already a panel there and it only
+    held a volume slider. One panel rather than two: left-click and right-click
+    open the same thing, because a person is one subject and splitting the
+    gestures would mean guessing which half somebody wanted.
+
+    What it draws is what something actually said. Presence from the
+    homeserver, standing from the room's power levels, the join time from the
+    SFU's own record, and the call state from the roster the card was opened
+    out of. Where the answer is not known the card says so, which for presence
+    is the ordinary case rather than an edge one: Synapse ships with presence
+    disabled and most servers of any size leave it that way, and drawing
+    "Offline" from that silence would put a grey dot on somebody sitting right
+    there in the call.
+
+    The join time is the SFU's `joined_at_ms` rather than a stamp taken when
+    this session first noticed somebody, and the difference is not academic:
+    stamping locally is wrong for precisely the people it is most often asked
+    about, since everybody already in the call would be dated from our own
+    arrival. It is deliberately not "when they joined the room", which is
+    answerable from their membership event but means "when they last changed
+    their profile" and would be a wrong fact under somebody's name.
+
+    Messaging is a button that does not work and says so. Not because
+    `create_dm` is hard, but because Consort has no message view at all: the
+    main pane is a placeholder. Opening a direct message would put somebody in
+    a room with no way to read or write in it, which is worse than a button
+    being honest about the state of things.
+
 12. The chime's default, which is the same decision seen from the other end.
     Two announcements of one arrival is not twice the information: the chime
     existed to get somebody's attention for a notification that used to be

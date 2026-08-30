@@ -189,7 +189,11 @@ function Participants({
    * The camera is only drawn when they did. See [`CameraIcon`].
    */
   live: boolean;
-  onOpenPerson: (person: Participant, at: { x: number; y: number }) => void;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   if (people.length === 0) return null;
 
@@ -218,23 +222,24 @@ function Participants({
             keyboard gets it for free, along with focus, Enter and Space.
 
             Both buttons open the same thing. Right-click is where anybody
-            looks for a menu about a person; left-click is what makes the row
+            looks for a card about a person; left-click is what makes the row
             look like the control it now is, and is the only one a touchpad
-            without a second button has.
+            without a second button has. Splitting them would mean two panels
+            about one person, and a person is one subject.
           */}
           <button
             type="button"
             className="channels__person-button"
             aria-haspopup="dialog"
             onClick={(event) =>
-              onOpenPerson(participant, {
+              onOpenPerson(participant, channel.id, {
                 x: event.clientX,
                 y: event.clientY,
               })
             }
             onContextMenu={(event) => {
               event.preventDefault();
-              onOpenPerson(participant, {
+              onOpenPerson(participant, channel.id, {
                 x: event.clientX,
                 y: event.clientY,
               });
@@ -346,7 +351,11 @@ function ChannelRow({
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: () => void;
-  onOpenPerson: (person: Participant, at: { x: number; y: number }) => void;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   const voice = channel.kind === "voice";
   const callState = voice ? callStateOf(channel, call) : null;
@@ -428,7 +437,11 @@ function Group({
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: (id: string) => void;
-  onOpenPerson: (person: Participant, at: { x: number; y: number }) => void;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   // An empty group is no group. A "VOICE" header over nothing reads as a
   // channel list that failed to load rather than a space with no voice rooms.
@@ -498,6 +511,7 @@ export function ChannelList({
   // to tell apart by the heading.
   const [opened, setOpened] = useState<{
     person: Participant;
+    roomId: string;
     at: { x: number; y: number };
   } | null>(null);
 
@@ -520,7 +534,9 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
-            onOpenPerson={(person, at) => setOpened({ person, at })}
+            onOpenPerson={(person, roomId, at) =>
+              setOpened({ person, roomId, at })
+            }
           />
           <Group
             label="Voice"
@@ -529,7 +545,9 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
-            onOpenPerson={(person, at) => setOpened({ person, at })}
+            onOpenPerson={(person, roomId, at) =>
+              setOpened({ person, roomId, at })
+            }
           />
         </>
       )}
@@ -543,8 +561,8 @@ export function ChannelList({
       {opened !== null && (
         <PersonMenu
           key={opened.person.id}
-          userId={opened.person.id}
-          name={opened.person.name}
+          person={opened.person}
+          roomId={opened.roomId}
           at={opened.at}
           onClose={() => setOpened(null)}
         />

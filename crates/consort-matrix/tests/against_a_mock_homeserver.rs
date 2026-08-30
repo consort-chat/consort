@@ -2876,3 +2876,148 @@ mod call_readiness {
         );
     }
 }
+
+/// What a person's card can say about them beyond their name.
+///
+/// Presence is one request and its failure is routine rather than exceptional:
+/// most homeservers have it switched off, and every one of these paths ends in
+/// a card that still draws. That is exactly the sort of thing a unit test
+/// cannot check, because there is nothing to degrade from without a server.
+mod member_profiles {
+    use super::*;
+    use consort_matrix::rooms::{Presence, Standing, member_profile};
+
+    const OTHER: &str = "@ada:example.org";
+    const ROOM: &str = "!room:example.org";
+
+    /// Answer the presence endpoint for `OTHER` with `response`.
+    async fn presence(server: &MatrixMockServer, response: wiremock::ResponseTemplate) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path(format!(
+                "/_matrix/client/v3/presence/{OTHER}/status"
+            )))
+            .respond_with(response)
+            .mount(server.server())
+            .await;
+    }
+
+    fn saying(body: serde_json::Value) -> wiremock::ResponseTemplate {
+        wiremock::ResponseTemplate::new(200).set_body_json(body)
+    }
+
+    #[tokio::test]
+    async fn presence_the_homeserver_reports_reaches_the_card() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(
+            &server,
+            saying(serde_json::json!({
+                "presence": "online",
+                "status_msg": "in a meeting",
+                "last_active_ago": 4_000,
+            })),
+        )
+        .await;
+
+        let profile = member_profile(&client, ROOM, OTHER).await;
+
+        assert_eq!(profile.presence, Presence::Online);
+        assert_eq!(profile.status.as_deref(), Some("in a meeting"));
+        assert_eq!(profile.last_active_ago, Some(4_000));
+    }
+
+    #[tokio::test]
+    async fn matrixs_unavailable_is_drawn_as_idle() {
+        // The wire word and the word a person reads are not the same. Nobody
+        // outside the spec calls "at their desk but not typing" unavailable.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(&server, saying(serde_json::json!({ "presence": "unavailable" }))).await;
+
+        let profile = member_profile(&client, ROOM, OTHER).await;
+
+        assert_eq!(profile.presence, Presence::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_with_presence_switched_off_yields_unknown() {
+        // The ordinary case, not an edge one. Synapse ships with presence
+        // disabled and most servers of any size leave it that way. Reading
+        // that silence as "offline" would put a grey dot on somebody who is
+        // sitting right there in the call.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(
+            &server,
+            wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "errcode": "M_UNKNOWN",
+                "error": "Presence is disabled on this server",
+            })),
+        )
+        .await;
+
+        let profile = member_profile(&client, ROOM, OTHER).await;
+
+        assert_eq!(profile.presence, Presence::Unknown);
+        assert_eq!(profile.status, None);
+        assert_eq!(profile.last_active_ago, None);
+    }
+
+    #[tokio::test]
+    async fn an_empty_status_message_is_not_a_status_message() {
+        // Synapse returns whatever was set, and clients have been known to set
+        // an empty string. A blank line under somebody's name reads as a
+        // rendering fault.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(
+            &server,
+            saying(serde_json::json!({ "presence": "offline", "status_msg": "   " })),
+        )
+        .await;
+
+        let profile = member_profile(&client, ROOM, OTHER).await;
+
+        assert_eq!(profile.presence, Presence::Offline);
+        assert_eq!(profile.status, None);
+    }
+
+    #[tokio::test]
+    async fn somebody_in_no_room_this_session_knows_is_an_ordinary_member() {
+        // No power levels to read, so no evidence of authority, which is
+        // exactly what an ordinary member looks like.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(&server, saying(serde_json::json!({ "presence": "online" }))).await;
+
+        let profile = member_profile(&client, ROOM, OTHER).await;
+
+        assert_eq!(profile.standing, Standing::Member);
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_user_id_does_not_reach_the_homeserver() {
+        // Nothing is mounted for presence here, so a request would 404 and the
+        // answer would be right for the wrong reason. The point is that the
+        // parse fails first.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let profile = member_profile(&client, ROOM, "not a user id").await;
+
+        assert_eq!(profile.presence, Presence::Unknown);
+        assert_eq!(profile.standing, Standing::Member);
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_room_id_is_still_an_ordinary_member() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        presence(&server, saying(serde_json::json!({ "presence": "online" }))).await;
+
+        let profile = member_profile(&client, "not a room id", OTHER).await;
+
+        assert_eq!(profile.standing, Standing::Member);
+        assert_eq!(profile.presence, Presence::Online);
+    }
+}

@@ -3790,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "matrix-rtc-bridge"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=284cb5b40695ee26276aac7fffdc23272e5b9bad#284cb5b40695ee26276aac7fffdc23272e5b9bad"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
 dependencies = [
  "async-trait",
  "log",
@@ -3806,7 +3806,7 @@ dependencies = [
 [[package]]
 name = "matrix-rtc-core"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=284cb5b40695ee26276aac7fffdc23272e5b9bad#284cb5b40695ee26276aac7fffdc23272e5b9bad"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
@@ -3822,7 +3822,7 @@ dependencies = [
 [[package]]
 name = "matrix-rtc-livekit"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=284cb5b40695ee26276aac7fffdc23272e5b9bad#284cb5b40695ee26276aac7fffdc23272e5b9bad"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3846,7 +3846,7 @@ dependencies = [
 [[package]]
 name = "matrix-rtc-media"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=284cb5b40695ee26276aac7fffdc23272e5b9bad#284cb5b40695ee26276aac7fffdc23272e5b9bad"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
 dependencies = [
  "async-trait",
  "futures-core",

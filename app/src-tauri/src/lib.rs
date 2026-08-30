@@ -98,6 +98,7 @@ pub fn run() {
             commands::resend_state,
             commands::room_avatar,
             commands::member_avatar,
+            commands::member_profile,
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,

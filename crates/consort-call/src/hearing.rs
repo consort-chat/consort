@@ -198,6 +198,7 @@ mod tests {
             device_id: None,
             is_local,
             reachable: true,
+            joined_at_ms: None,
             streams: kinds
                 .iter()
                 .map(|kind| StreamState {

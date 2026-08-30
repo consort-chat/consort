@@ -16,30 +16,33 @@ use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
 
 /// Whether this membership has muted its microphone.
 ///
-/// False for a membership publishing no microphone at all, which is not the
-/// same event: it is somebody still connecting, or a client that publishes
-/// nothing. Saying "muted" for that would put an icon on a person who has not
-/// touched anything, describing a state they are on their way out of.
+/// Exactly [`camera_live`] negated, and for the same reason: the question is
+/// what the call can hear, and a membership publishing no microphone at all
+/// cannot be heard. It used to answer "not muted" for that, on the argument
+/// that publishing nothing is not a choice somebody made. The argument is
+/// wrong about the case it matters in. Joining from a lobby with the
+/// microphone off publishes no audio track, so the person who most needs to be
+/// told their microphone is off was the one person nobody could see it on, and
+/// they find out by talking to a room that cannot hear them.
+///
+/// It also puts us back in step with every other client. Element Call reads a
+/// missing publication as muted too.
+///
+/// The cost is an icon during the moment between a membership appearing and
+/// its first publication landing, which is a mute that is true while it lasts.
 pub fn microphone_muted(member: &MediaParticipant) -> bool {
-    member
+    !member
         .streams
         .iter()
-        .find(|stream| stream.kind == MediaStreamKind::Microphone)
-        .is_some_and(|stream| stream.muted)
+        .any(|stream| stream.kind == MediaStreamKind::Microphone && !stream.muted)
 }
 
 /// Whether this membership has a camera the call can see.
 ///
-/// The microphone test with the other stream in it, and one deliberate
-/// difference: a membership publishing no camera at all is not on camera,
-/// where a membership publishing no microphone is not muted. That is not an
-/// inconsistency, it is the same principle applied to two questions whose
-/// honest default differs. "Muted" is a claim about somebody having chosen
-/// something, and nothing published is not a choice. "On camera" is a claim
-/// about what the call can see, and nothing published means it cannot see
-/// them. Which is also how every client that predates video here behaves,
-/// including Element Call, which publishes no camera track until somebody
-/// turns one on.
+/// The microphone test with the other stream in it, and no other difference:
+/// both ask what the call can pick up, and a membership publishing nothing of
+/// that kind cannot be picked up. Which is how Element Call behaves too, since
+/// it publishes no camera track until somebody turns one on.
 pub fn camera_live(member: &MediaParticipant) -> bool {
     member
         .streams
@@ -91,6 +94,33 @@ pub fn with_cameras(people: Vec<Participant>, memberships: &[(String, bool)]) ->
                 .iter()
                 .any(|(user_id, live)| *user_id == person.id && *live);
             person.with_camera(live)
+        })
+        .collect()
+}
+
+/// Attach when each named person joined the call, given one entry per
+/// membership.
+///
+/// `memberships` is `(user_id, joined_at_ms)` in roster order, matching
+/// [`with_mutes`].
+///
+/// The earliest of their memberships, because somebody who opened the call on
+/// a laptop and then picked up a phone has been in it since the laptop. `None`
+/// where no membership of theirs has a time yet, which is everybody drawn from
+/// room state and anybody whose media has not appeared.
+pub fn with_since(
+    people: Vec<Participant>,
+    memberships: &[(String, Option<u64>)],
+) -> Vec<Participant> {
+    people
+        .into_iter()
+        .map(|person| {
+            let since = memberships
+                .iter()
+                .filter(|(user_id, _)| *user_id == person.id)
+                .filter_map(|(_, since)| *since)
+                .min();
+            person.with_since(since)
         })
         .collect()
 }
@@ -293,6 +323,7 @@ mod speaking {
             device_id: None,
             is_local: false,
             reachable: true,
+            joined_at_ms: None,
             streams: Vec::new(),
         }
     }
@@ -377,6 +408,7 @@ mod tests {
             device_id: None,
             is_local: false,
             reachable: true,
+            joined_at_ms: None,
             streams,
         }
     }
@@ -409,11 +441,24 @@ mod tests {
     }
 
     #[test]
-    fn publishing_no_microphone_at_all_is_not_a_mute() {
-        // Somebody still connecting, or a client that publishes nothing. They
-        // have not touched a button, and an icon saying they have describes a
-        // state they are on their way out of.
-        assert!(!microphone_muted(&membership("@ada:example.org", vec![])));
+    fn publishing_no_microphone_at_all_is_a_mute() {
+        // The case this whole rule exists for. Joining from a lobby with the
+        // microphone off publishes no audio track, so there is no muted
+        // publication to find, only an absence. Reading that absence as "not
+        // muted" left the person who cannot be heard looking exactly like the
+        // person who can.
+        assert!(microphone_muted(&membership("@ada:example.org", vec![])));
+    }
+
+    #[test]
+    fn a_second_live_microphone_beats_a_muted_one() {
+        // One membership publishing twice is unusual, but "can the call hear
+        // them" is still answered by any live publication, not by the first
+        // one found.
+        assert!(!microphone_muted(&membership(
+            "@ada:example.org",
+            vec![microphone(true), microphone(false)]
+        )));
     }
 
     #[test]
@@ -430,6 +475,44 @@ mod tests {
         );
 
         assert!(!microphone_muted(&member));
+    }
+
+    #[test]
+    fn joining_twice_dates_from_the_first_time() {
+        // A laptop, then a phone. They have been in the call since the laptop,
+        // and picking up a second device is not arriving again.
+        let people = with_since(
+            vec![ada()],
+            &[
+                ("@ada:example.org".to_owned(), Some(1_700_000_060_000)),
+                ("@ada:example.org".to_owned(), Some(1_700_000_000_000)),
+            ],
+        );
+
+        assert_eq!(people[0].since, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn a_membership_with_no_time_yet_does_not_hide_one_that_has() {
+        let people = with_since(
+            vec![ada()],
+            &[
+                ("@ada:example.org".to_owned(), None),
+                ("@ada:example.org".to_owned(), Some(1_700_000_000_000)),
+            ],
+        );
+
+        assert_eq!(people[0].since, Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn somebody_the_call_has_not_seen_has_no_join_time() {
+        // Everybody drawn from room state, and anybody whose media has not
+        // appeared yet. An interface asking "how long have they been here"
+        // gets no answer rather than a made-up one.
+        let people = with_since(vec![ada()], &[]);
+
+        assert_eq!(people[0].since, None);
     }
 
     #[test]
@@ -498,6 +581,7 @@ mod cameras {
             device_id: None,
             is_local: false,
             reachable: true,
+            joined_at_ms: None,
             streams,
         }
     }
