@@ -148,8 +148,9 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
                  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
-macOS needs Xcode command line tools. Windows needs the MSVC C++ build tools and
-WebView2, which ships with Windows 11.
+macOS needs Xcode command line tools. Windows needs more than one line's worth,
+including one prerequisite that reports a successful install while installing
+nothing, so it has [a section of its own](#windows).
 
 ### Build and run
 
@@ -166,6 +167,159 @@ Rust crates and the Tauri app share one cargo workspace.
 
 The first build compiles the Matrix SDK from source and takes a while. Later
 builds are incremental and fast.
+
+### Windows
+
+Windows builds and the result runs. It needs more than Linux does, one of the
+prerequisites reports a successful install while installing nothing, and a
+release build has no console to tell you about any of it. Everything below is
+PowerShell.
+
+**The toolchains.**
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --id Rustlang.Rustup
+winget install --id OpenJS.NodeJS.LTS
+winget install --id pnpm.pnpm
+```
+
+rustup targets `x86_64-pc-windows-msvc` here, so the MSVC build tools are not
+optional: without them the first link fails with `linker 'link.exe' not found`.
+WebView2 needs nothing, because Windows 11 ships it. pnpm is installed directly
+rather than through `corepack enable`, because newer Node lines have dropped
+corepack; on the LTS either route works.
+
+Check that each one answers before starting a long build, because on this
+platform a success message is not evidence:
+
+```powershell
+rustup show          # the host triple should read x86_64-pc-windows-msvc
+cargo --version
+node --version
+pnpm --version
+```
+
+**NASM, from the zip rather than from winget.** matrix-sdk's crypto backend here
+is `rustls-aws-lc-rs`, and `aws-lc-sys` assembles its x86-64 code with NASM.
+
+`winget install --id NASM.NASM` is not the route. It reports a successful
+install and leaves nothing on `PATH`, nothing in either Program Files, and
+nothing `winget list` will admit to afterwards. NASM ships as a plain zip with
+`nasm.exe` in it, so skip the installer:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+$ver = '2.16.03'
+Invoke-WebRequest -Uri "https://www.nasm.us/pub/nasm/releasebuilds/$ver/win64/nasm-$ver-win64.zip" -OutFile "$env:TEMP\nasm.zip"
+Expand-Archive -Path "$env:TEMP\nasm.zip" -DestinationPath 'C:\Tools' -Force
+$nasm = "C:\Tools\nasm-$ver"
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$nasm", 'User')
+$env:Path += ";$nasm"
+nasm -v
+```
+
+If that URL 404s, the release listing is at
+<https://www.nasm.us/pub/nasm/releasebuilds/>: take the newest version's `win64`
+zip and adjust `$ver`. Use `SetEnvironmentVariable` rather than `setx PATH`.
+`setx` truncates the value at 1024 characters and will quietly eat entries you
+wanted to keep.
+
+There is a supported way out if NASM keeps fighting you, because aws-lc-sys
+ships 26 prebuilt object files for exactly this case:
+
+```powershell
+[Environment]::SetEnvironmentVariable('AWS_LC_SYS_PREBUILT_NASM', '1', 'User')
+```
+
+It is a fallback rather than an override. The gate in that build script fires
+only on Windows x86-64, with assembly enabled, and only when `nasm` is absent
+from `PATH`, so setting it alongside a working NASM changes nothing.
+
+**CMake is not needed,** which is worth writing down because everything about
+this dependency suggests it should be and the Linux CI container does install
+one. aws-lc-sys ships pregenerated bindings for `x86_64-pc-windows-msvc`, so it
+takes its `cc` builder rather than its CMake builder and never invokes CMake on
+this target. Install one anyway if you like; its 4.x policy changes will not
+reach you here.
+
+**Disk is the real constraint.** A release-only `target` runs to around 20 GB,
+most of it LiveKit's prebuilt libwebrtc, and a debug profile is a second full
+copy of the same thing. A 64 GB machine with Windows already on it fits one of
+those and not both, so stay off `pnpm tauri dev` on that checkout unless you
+have the room. Cargo does not collect the old copies either: libwebrtc unpacks
+under `target\release\build\scratch-<hash>\out`, every change to rustflags
+rehashes that directory, and what was there before stays there. Deleting
+`target` outright is the recovery, at the cost of fetching the libwebrtc zip
+again.
+
+**Build outward,** rather than straight at the app, so that a failure names the
+layer it came from:
+
+```powershell
+cargo build -p consort-matrix
+cargo build -p consort-audio
+cargo build -p consort-call
+```
+
+`consort-matrix` is the aws-lc-sys and SQLite test, `consort-audio` is cpal
+against WASAPI, and `consort-call` is the long one because it pulls libwebrtc.
+Finding out about a libwebrtc problem after forty minutes of compiling
+matrix-sdk is avoidable.
+
+Then the app:
+
+```powershell
+cd app
+pnpm install
+pnpm tauri build --no-bundle
+```
+
+`--no-bundle` is not optional. `bundle.targets` in `tauri.conf.json` is `["deb",
+"rpm"]`, and neither of those exists on Windows. If you want an installer,
+`pnpm tauri build --bundles nsis` produces one without touching the committed
+config, and the Tauri CLI fetches NSIS itself.
+
+The binary is `target\release\consort.exe`: at the workspace root rather than
+under `app\src-tauri`, and named `consort` rather than `consort-app`.
+
+#### Getting a log out of it
+
+A release build has no console, so a startup problem reads as silent refusal
+rather than as an error. `main.rs` sets `windows_subsystem = "windows"` for
+anything that is not a debug build, and every log line is then written to a
+handle that does not exist. Redirecting at process creation hands the child real
+ones:
+
+```powershell
+$exe = Resolve-Path .\target\release\consort.exe
+Start-Process -FilePath $exe `
+  -RedirectStandardOutput "$HOME\consort-out.log" `
+  -RedirectStandardError "$HOME\consort-err.log"
+```
+
+Run that from the workspace root, and give `Start-Process` absolute paths as
+above. It does not inherit PowerShell's idea of the current directory, so a
+relative one is resolved against somewhere else and the redirect either lands
+where you are not looking or fails outright.
+
+The log lines land in the stdout file. Watch it live from a second pane with
+`Get-Content -Wait "$HOME\consort-out.log"`.
+
+`RUST_LOG` set in the shell beforehand reaches the child. If you set one, start
+it with a bare level:
+
+```powershell
+$env:RUST_LOG = "info,matrix_sdk=warn"
+```
+
+A filter that names only targets turns every crate it forgot to `OFF` rather
+than leaving it where it was, which is how a log taken to find out why a call
+would not connect ends up containing nothing about the call. The default filter
+this build ships opens with a bare level for that reason.
+
+Its data directory, `settings.json` included, is
+`$env:APPDATA\chat.consort.desktop`.
 
 ### Two accounts at once
 
