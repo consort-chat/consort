@@ -55,11 +55,11 @@ pub mod thread;
 pub mod transport;
 pub mod trouble;
 
-pub use arrivals::Arrivals;
+pub use arrivals::{Arrivals, Movement};
 pub use dialect::{Dialect, detect};
 pub use event::{CallEvent, SelfAudio};
 pub use failure::CallFailure;
-pub use hearing::{Chime, Ears, Heard, audible, changes, mono};
+pub use hearing::{Cue, Ears, Heard, audible, changes, mono};
 pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use notices::{Announced, Flags, Notice};

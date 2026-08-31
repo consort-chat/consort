@@ -1,8 +1,8 @@
 # Plan: make an encrypted call audible
 
-Status: **All six phases done and proved live.** Every API named here was read
-at the pinned rev rather than recalled, and every claim below was measured
-rather than reasoned about.
+Status: **All six phases done and proved live, plus a seventh the first live
+use turned up.** Every API named here was read at the pinned rev rather than
+recalled, and every claim below was measured rather than reasoned about.
 
 This is Phase 6 of [PLAN-verification.md](PLAN-verification.md) and it turned
 out to be larger than the sentence there. That phase says "refuse to join an
@@ -312,3 +312,69 @@ whenever a recipient goes unreached could put a notice on every healthy call.
 Across four full call scenarios and eleven rollouts it fired zero times, and
 the one rollout with no recipients at all took the quiet branch, which is
 correct: having nobody to send to is not a failure to send.
+
+## Phase 7: the notice that fired on a call nobody could break
+
+The report added in phase 4 did its job on the first unencrypted call somebody
+made with it. A red banner sat under the roster saying
+
+> Anybody joining from now on will not hear you: your new audio key could not
+> be sent (1 of 1 member(s) did not get key index 1: ... Encryption failed
+> because your device is not verified).
+
+while the call worked in both directions and an Element Call session in a
+browser was hearing every word. Every part of that sentence was true and the
+whole of it was wrong.
+
+**The room was unencrypted.** MSC4143 forbids RTC encryption there, and
+`Call::join` already knew: it reads `latest_encryption_state` and hands the
+answer to `with_frame_encryption`, so frames go out in the clear, which is what
+every conforming peer expects and why the call was audible.
+
+**The core was never told.** `Session::join` only overrode `manage_media_keys`
+from the negotiated slot mechanism, and `negotiated_encryption` returns `None`
+when no slot state has been supplied. The pre-MSC4354 Element Call generation
+publishes no `m.rtc.slot` at all, so a call with one in it fell through to the
+caller's own preference, which defaults to on. The core minted media keys,
+posted them to every peer, and reported the failure when the to-device send was
+refused: a key exchange for a cipher nobody was going to run.
+
+**Why the send failed at all is a separate and real problem.** This session's
+own cross-signing identity reads `NeverVerified`, so
+`CollectStrategy::IdentityBasedStrategy` refuses to encrypt to anybody. That
+would have stopped an encrypted call dead, and the gate in
+`consort_matrix::calls::gate` is exactly what stops one being joined. It is
+correct that an unencrypted room was allowed through it. It is not correct that
+the key machinery ran anyway.
+
+Three fixes, in the fork and here:
+
+1. The room settles `manage_media_keys` where the slot cannot
+   (`Session::join`), and `Call::join` reports the room's encryption to the
+   manager *before* joining rather than leaving it to the bridge's own
+   schedule. The encryption manager is built and started by the join, so
+   learning it a moment later is one key too late.
+2. `Fault::NotDistributed { at_join: false }` now names the likely cause, like
+   its sibling already did. What it said before was what had happened and
+   nothing about what to do, which is the shape of message somebody
+   screenshots because there is nothing else to do with it.
+3. **Nothing cleared a `THIS_SESSION` fault.** `what_it_says` could produce
+   `(member, None)` for a membership that recovered and had no equivalent for
+   our own key, because the core had no event for a distribution that
+   succeeded. A failure at one rotation stayed on screen for the rest of the
+   call even after a later rotation reached everybody, which in an encrypted
+   room is the ordinary way this resolves: somebody verifies the session
+   mid-call and the notice should go.
+
+   So the core reports the transition back, as
+   `on_key_distribution_recovered` through the key bridge and the engine, out
+   as `CallEvent::KeyDistributionRecovered`, and `what_it_says` maps it to
+   `(THIS_SESSION, None)`. Only the transition: an event per successful
+   rollout would tell a host nothing is wrong once per arrival for the whole
+   of every call. A rollout with no recipients counts, because if the peer we
+   could not reach has left there is nobody left to not hear us.
+
+There is also no log file. Everything goes to stderr under `RUST_LOG`, which is
+fine while somebody is running `pnpm tauri dev` and useless for the case this
+phase came from, where the question is asked an hour after the call. Answering
+it needed reading the crypto store out of SQLite by hand.

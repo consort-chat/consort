@@ -209,6 +209,18 @@ pub struct AppState {
     /// `commands::set_audio_settings_for`, which is the only thing that writes
     /// it.
     chiming: crate::ears::Wanted,
+    /// Whether the spoken notifications are switched on, on the same terms as
+    /// `chiming` and for the same reasons. A second flag rather than a second
+    /// meaning on the first, because the two settings are independent and a
+    /// call thread that shared one could not tell them apart.
+    speaking: crate::ears::Wanted,
+    /// How loud each person in a call should be.
+    ///
+    /// Held here rather than inside the call, because what somebody chose
+    /// about a person is not a fact about the call they happened to choose it
+    /// in: it has to survive leaving, rejoining, and the application being shut
+    /// for a week. See [`crate::ears::Levels`].
+    levels: Arc<crate::ears::Levels>,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -229,9 +241,19 @@ impl AppState {
         // Read once here rather than defaulted, so a call joined before
         // anybody opens the settings screen already honours what the file
         // says.
-        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(
-            settings.load().audio.call_sounds,
-        ));
+        let audio = settings.load().audio;
+        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_sounds));
+        let speaking = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_voices));
+
+        // Likewise read once here. A call joined before anybody opens the
+        // settings screen has to be at the volume the file says, and the
+        // alternative is a first arrival at full volume followed by a
+        // correction, which is precisely the sound somebody turned it down to
+        // avoid.
+        let voices = Voices::new();
+        voices.set_output_level(audio.output_volume);
+        voices.set_notification_level(audio.notification_volume);
+        let levels = crate::ears::Levels::new(voices.clone(), audio.person_volumes.clone());
 
         Self {
             client: RwLock::new(None),
@@ -249,8 +271,10 @@ impl AppState {
             events,
             settings,
             microphone: Microphone::new(),
-            voices: Voices::new(),
+            voices,
             chiming,
+            speaking,
+            levels,
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -322,7 +346,12 @@ impl AppState {
             CallBridge::spawn(
                 transport(),
                 self.microphone.clone(),
-                speakers(self.voices.clone(), self.chiming.clone()),
+                speakers(
+                    self.voices.clone(),
+                    self.chiming.clone(),
+                    self.speaking.clone(),
+                    self.levels.clone(),
+                ),
                 self.call_reporter(),
             )
         });
@@ -488,6 +517,33 @@ impl AppState {
     pub fn set_call_sounds(&self, wanted: bool) {
         self.chiming
             .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Switch the spoken notifications on or off for a call in progress.
+    ///
+    /// Separate from [`set_call_sounds`](Self::set_call_sounds) rather than a
+    /// second argument to it, because they are two settings and a caller that
+    /// had to pass both would be one refactor away from passing the same value
+    /// twice.
+    pub fn set_call_voices(&self, wanted: bool) {
+        self.speaking
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set how loud a call and its notifications should be, as percentages.
+    ///
+    /// Beside `settings()` for the same reason the two switches above are: the
+    /// mixer is read inside the device callback and cannot go and read a file,
+    /// and the two must not be able to disagree.
+    pub fn set_volumes(&self, output: u8, notifications: u8) {
+        self.voices.set_output_level(output);
+        self.voices.set_notification_level(notifications);
+    }
+
+    /// How loud each person should be, for the command that changes one of
+    /// them and for the call that has to apply them.
+    pub fn levels(&self) -> &Arc<crate::ears::Levels> {
+        &self.levels
     }
 
     pub fn settings(&self) -> &SettingsStore {

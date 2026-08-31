@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +38,10 @@ const defaults: AudioSettings = {
     voiceActivity: true,
   },
   callSounds: true,
+  callVoices: true,
+  outputVolume: 100,
+  notificationVolume: 60,
+  personVolumes: {},
 };
 
 const report: AudioDeviceReport = {
@@ -374,18 +378,32 @@ describe("VoiceVideoSection", () => {
     );
   });
 
-  it("offers call sounds as a switch, on by default", async () => {
-    // On is the default in Rust too, and this is where the two would drift.
-    // A missing field on the wire has to render as on, not as off.
+  it("draws the chime switch from what the wire said", async () => {
+    // The chime defaults off in Rust and the announcement defaults on, so this
+    // pane cannot read both the same way. Drawn from the payload rather than
+    // from a guess, which is where the two would drift.
     render(<VoiceVideoSection />);
 
-    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+    const toggle = await screen.findByRole("switch", { name: /chime as well/i });
     expect(toggle).toBeChecked();
   });
 
-  it("saves call sounds being turned off", async () => {
+  it("draws the chime as off when the field is missing entirely", async () => {
+    // The upgrade case, and the one asymmetry worth pinning: a payload written
+    // before the field existed has to render as off, because off is the Rust
+    // default. Read as `!== false` it would render as on and the switch would
+    // disagree with what the call actually does.
+    const { callSounds: _dropped, ...older } = defaults;
+    audioSettings.mockResolvedValue(older as AudioSettings);
     render(<VoiceVideoSection />);
-    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+
+    const toggle = await screen.findByRole("switch", { name: /chime as well/i });
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("saves the chime being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", { name: /chime as well/i });
 
     await userEvent.click(toggle);
 
@@ -397,12 +415,172 @@ describe("VoiceVideoSection", () => {
     );
   });
 
+  it("offers spoken notifications as a switch, on by default", async () => {
+    // On is the default in Rust too, and this is where the two would drift. A
+    // missing field on the wire has to render as on, not as off.
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", {
+      name: /say out loud/i,
+    });
+    expect(toggle).toBeChecked();
+  });
+
+  it("saves spoken notifications being turned off", async () => {
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /say out loud/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        callVoices: false,
+      }),
+    );
+  });
+
+  it("leaves the chimes alone when the spoken notifications go off", async () => {
+    // The whole reason there are two switches. One patch that reached the
+    // other field would make the second setting decoration, and the symptom
+    // would be somebody losing their chimes by turning off the sentences.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /say out loud/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.callSounds).toBe(true);
+  });
+
+  it("leaves the spoken notifications alone when the chimes go off", async () => {
+    // The same claim in the other direction, which is the one an
+    // implementation that shares a field would still pass without.
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /chime as well/i,
+    });
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.callVoices).toBe(true);
+  });
+
+  it("offers a call volume slider at what was saved", async () => {
+    audioSettings.mockResolvedValue({ ...defaults, outputVolume: 70 });
+    render(<VoiceVideoSection />);
+
+    const slider = await screen.findByRole("slider", {
+      name: /everybody in a call/i,
+    });
+    expect(slider).toHaveValue("70");
+  });
+
+  it("offers an announcement volume slider at what was saved", async () => {
+    audioSettings.mockResolvedValue({ ...defaults, notificationVolume: 35 });
+    render(<VoiceVideoSection />);
+
+    const slider = await screen.findByRole("slider", {
+      name: /announcement volume/i,
+    });
+    expect(slider).toHaveValue("35");
+  });
+
+  it("draws full volume when the field is missing entirely", async () => {
+    // A settings file written before the sliders existed. Read as anything
+    // other than the Rust default, the control would disagree with what the
+    // call is actually doing.
+    const { outputVolume: _o, notificationVolume: _n, ...older } = defaults;
+    audioSettings.mockResolvedValue(older as AudioSettings);
+    render(<VoiceVideoSection />);
+
+    expect(
+      await screen.findByRole("slider", { name: /everybody in a call/i }),
+    ).toHaveValue("100");
+    expect(
+      await screen.findByRole("slider", { name: /announcement volume/i }),
+    ).toHaveValue("60");
+  });
+
+  it("saves a call volume that was dragged", async () => {
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /everybody in a call/i,
+    });
+
+    fireEvent.change(slider, { target: { value: "40" } });
+
+    await waitFor(() =>
+      expect(setAudioSettings).toHaveBeenCalledWith({
+        ...defaults,
+        outputVolume: 40,
+      }),
+    );
+  });
+
+  it("writes once for a slider dragged across the range", async () => {
+    // A range input fires an event per step. Writing the settings file on each
+    // of them would be a hundred rewrites for one adjustment.
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /announcement volume/i,
+    });
+
+    for (const value of ["50", "40", "30", "20"]) {
+      fireEvent.change(slider, { target: { value } });
+    }
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    expect(setAudioSettings).toHaveBeenCalledTimes(1);
+    expect(setAudioSettings).toHaveBeenCalledWith({
+      ...defaults,
+      notificationVolume: 20,
+    });
+  });
+
+  it("moves the slider before the write lands", async () => {
+    // The number under the thumb is what somebody is aiming with, so it cannot
+    // wait for a round trip to the settings file.
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /everybody in a call/i,
+    });
+
+    fireEvent.change(slider, { target: { value: "40" } });
+
+    expect(slider).toHaveValue("40");
+    expect(setAudioSettings).not.toHaveBeenCalled();
+  });
+
+  it("leaves the two volumes independent of each other", async () => {
+    // Two controls over two levels. One patch reaching the other field would
+    // make the second slider decoration, and the symptom would be somebody
+    // turning a call down and losing their announcements with it.
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /announcement volume/i,
+    });
+
+    fireEvent.change(slider, { target: { value: "10" } });
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    const [saved] = setAudioSettings.mock.calls.at(-1) as [typeof defaults];
+    expect(saved.outputVolume).toBe(defaults.outputVolume);
+  });
+
   it("leaves the gate alone when call sounds change", async () => {
     // The two patches merge at different depths, and a top-level change that
     // reached in and rewrote the gate would silently reset somebody's voice
     // activity tuning every time they touched an unrelated switch.
     render(<VoiceVideoSection />);
-    const toggle = await screen.findByRole("switch", { name: /joins or leaves/i });
+    const toggle = await screen.findByRole("switch", { name: /chime as well/i });
 
     await userEvent.click(toggle);
 

@@ -7,9 +7,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // throws into the catch that turns a missing picture into an initial, and the
 // tests would still pass while exercising the wrong path.
 const memberAvatar = vi.hoisted(() => vi.fn());
+// The menu a name opens reads the saved levels and writes them back. Mocked
+// for the same reason the avatar is: an unmocked `invoke` throws into a catch
+// and the test would pass having exercised the failure path.
+const audioSettings = vi.hoisted(() => vi.fn());
+const setPersonVolume = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
+  audioSettings,
+  setPersonVolume,
 }));
 
 import { ChannelList } from "./ChannelList";
@@ -39,6 +46,11 @@ function person(id: string, name: string, muted = false): Participant {
   return { id, name, muted };
 }
 
+/** Somebody in the call with their camera on. */
+function onCamera(id: string, name: string): Participant {
+  return { id, name, muted: false, camera: true };
+}
+
 function space(channels: Channel[], name = "Kahu HQ"): Space {
   return { id: "!s:example.org", name, avatar: null, channels };
 }
@@ -55,10 +67,36 @@ const PNG = "data:image/png;base64,iVBORw0KGgo=";
 /** No call, which is what almost every test here is about. */
 const IDLE: Call = { state: "disconnected" };
 
+const LOUNGE = "!lounge:example.org";
+
+/** What `audioSettings` answers with, for the menu a name opens. */
+const SETTINGS = {
+  input: null,
+  output: null,
+  gate: {
+    openAt: 0.6,
+    closeAt: 0.3,
+    attackFrames: 2,
+    holdMs: 300,
+    denoise: true,
+    voiceActivity: true,
+  },
+  callSounds: false,
+  callVoices: true,
+  outputVolume: 100,
+  notificationVolume: 60,
+  personVolumes: {},
+};
+
 describe("ChannelList", () => {
   beforeEach(() => {
     resetAvatarCache();
     memberAvatar.mockReset().mockResolvedValue(null);
+    // Every name is now a control that opens a menu, and the menu reads the
+    // saved levels. Answered for every test rather than only the ones about
+    // the menu, because any click on a name reaches it.
+    audioSettings.mockReset().mockResolvedValue(SETTINGS);
+    setPersonVolume.mockReset().mockResolvedValue(undefined);
   });
 
   it("names the space at the top", () => {
@@ -345,7 +383,6 @@ describe("ChannelList", () => {
   });
 
   describe("the call this session is in", () => {
-    const LOUNGE = "!lounge:example.org";
 
     function withLounge() {
       return space([
@@ -772,6 +809,147 @@ describe("ChannelList", () => {
 
       expect(entryFor("Lounge")).not.toHaveAttribute("data-call");
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  describe("cameras", () => {
+    /** The call this session is in, with `people` in it. */
+    function inTheCall(people: Participant[]) {
+      return (
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: people,
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />
+      );
+    }
+
+    it("crosses out the camera of somebody who has theirs off", () => {
+      render(inTheCall([person("@ada:example.org", "Ada")]));
+
+      expect(
+        screen.getByLabelText("Ada has their camera off"),
+      ).toBeVisible();
+    });
+
+    it("draws a plain camera for somebody who has theirs on", () => {
+      render(inTheCall([onCamera("@ada:example.org", "Ada")]));
+
+      expect(screen.getByLabelText("Ada has their camera on")).toBeVisible();
+      expect(
+        screen.queryByLabelText("Ada has their camera off"),
+      ).toBeNull();
+    });
+
+    it("says nothing about the camera of somebody in another channel", () => {
+      // The one place a cross would be an invention rather than a reading.
+      // Room state carries nothing about cameras, so "off" and "nobody looked"
+      // would be drawn identically and only one of them would be true.
+      render(
+        <ChannelList
+          space={space([
+            voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
+          ])}
+          selectedId={null}
+          call={IDLE}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.queryByLabelText("Ada has their camera off"),
+      ).toBeNull();
+      expect(screen.queryByLabelText("Ada has their camera on")).toBeNull();
+    });
+
+    it("draws the camera beside the mute rather than instead of it", () => {
+      // Two questions, not one slot. Somebody muted with their camera on is
+      // ordinary, and a precedence between them would hide one of the two.
+      render(inTheCall([{ id: "@ada:example.org", name: "Ada", muted: true, camera: true }]));
+
+      expect(screen.getByLabelText("Ada is muted")).toBeVisible();
+      expect(screen.getByLabelText("Ada has their camera on")).toBeVisible();
+    });
+  });
+
+  describe("the menu on a name", () => {
+    function withAda() {
+      return (
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada")],
+            trouble: null,
+          }}
+          onSelect={vi.fn()}
+        />
+      );
+    }
+
+    it("opens on a right-click, which is where anybody looks for it", async () => {
+      render(withAda());
+
+      await userEvent.pointer({
+        keys: "[MouseRight]",
+        target: screen.getByRole("button", { name: /Ada/ }),
+      });
+
+      expect(await screen.findByRole("dialog", { name: /Ada/ })).toBeVisible();
+    });
+
+    it("opens on an ordinary click too", async () => {
+      // A touchpad without a second button, and a keyboard, both have to be
+      // able to reach it. Making the row a button is what buys that.
+      render(withAda());
+
+      await userEvent.click(screen.getByRole("button", { name: /Ada/ }));
+
+      expect(await screen.findByRole("dialog", { name: /Ada/ })).toBeVisible();
+    });
+
+    it("does not join the channel when a name is clicked", async () => {
+      // The names sit under the control that opens the channel. Clicking one
+      // and finding yourself in a call would be the worst possible surprise.
+      const onSelect = vi.fn();
+      render(
+        <ChannelList
+          space={space([voice(LOUNGE, "Lounge")])}
+          selectedId={null}
+          call={{
+            state: "connected",
+            roomId: LOUNGE,
+            participants: [person("@ada:example.org", "Ada")],
+            trouble: null,
+          }}
+          onSelect={onSelect}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: /Ada/ }));
+
+      await screen.findByRole("dialog", { name: /Ada/ });
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("closes again", async () => {
+      render(withAda());
+      await userEvent.click(screen.getByRole("button", { name: /Ada/ }));
+      await screen.findByRole("dialog", { name: /Ada/ });
+
+      await userEvent.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: /Ada/ })).toBeNull(),
+      );
     });
   });
 });

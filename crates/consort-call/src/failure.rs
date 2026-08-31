@@ -7,14 +7,18 @@ use std::time::Duration;
 
 use matrix_rtc_livekit::CallError;
 
+use crate::dialect::Dialect;
+
 /// What went wrong, in categories somebody can act on.
 ///
-/// Four, not one, because they send a person to four different places. A room
+/// Five, not one, because they send a person to five different places. A room
 /// this account is not in is a sync that has not landed. A homeserver that
 /// will not answer is the same outage that is already breaking everything
 /// else. No voice server is a deployment that has none, or one this account
 /// is not allowed to use. Signalling is the call itself refusing, and is the
-/// only one where the network is fine and the call still will not happen.
+/// only one where the network is fine and the call still will not happen. An
+/// unreadable dialect is none of those: nothing is broken anywhere, and the
+/// call is refused before it is attempted.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallFailure {
     /// This account is not in that room, or sync has not delivered it yet.
@@ -33,6 +37,19 @@ pub enum CallFailure {
     /// Announcing this session in the call failed.
     #[error("this session could not be announced in the call: {0}")]
     Signalling(String),
+
+    /// A call in this dialect would connect and be heard by nobody.
+    ///
+    /// The one failure here that is neither the network nor the deployment. It
+    /// is a limit of this build, it will not clear by retrying, and the only
+    /// thing that changes it is the setting the message names. See
+    /// [`Dialect::readable`] for why, and for when this goes away.
+    #[error(
+        "this build cannot hold a call in the {} dialect: set \"fallbackDialect\" to \"{}\" in settings.json",
+        .0.name(),
+        Dialect::default().name()
+    )]
+    UnreadableDialect(Dialect),
 
     /// The join did not finish in time.
     ///
@@ -78,6 +95,7 @@ mod tests {
             CallFailure::Homeserver("connection refused".to_owned()),
             CallFailure::NoTransport("no focus advertised".to_owned()),
             CallFailure::Signalling("membership rejected".to_owned()),
+            CallFailure::UnreadableDialect(Dialect::Current),
             CallFailure::TimedOut(Duration::from_secs(30)),
         ];
 
@@ -96,6 +114,27 @@ mod tests {
             CallFailure::TimedOut(Duration::from_secs(30)).to_string(),
             "the call did not connect within 30s"
         );
+    }
+
+    #[test]
+    fn an_unreadable_dialect_names_both_the_one_it_got_and_the_one_to_write() {
+        // This message is the entire remedy. A person reading it has to be
+        // able to go to one file and type one word without asking anybody,
+        // so it has to carry the setting's name and a value that parses.
+        let said = CallFailure::UnreadableDialect(Dialect::Current).to_string();
+
+        assert!(said.contains("current"), "{said}");
+        assert!(said.contains("fallbackDialect"), "{said}");
+        assert!(said.contains(Dialect::default().name()), "{said}");
+    }
+
+    #[test]
+    fn the_dialect_an_unreadable_join_is_told_to_use_is_one_that_works() {
+        // The advice is generated from the default rather than written out, so
+        // that moving the default moves the advice. This is what makes that
+        // safe: a default nobody can hold a call in would otherwise become a
+        // message telling people to configure exactly that.
+        assert!(Dialect::default().readable());
     }
 
     #[test]

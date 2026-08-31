@@ -39,6 +39,7 @@
 //! [`consort_call::Microphone`]: https://docs.rs/consort-call
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::gate::FRAME_SAMPLES;
@@ -62,7 +63,7 @@ pub const JITTER_SAMPLES: usize = JITTER_FRAMES * FRAME_SAMPLES;
 /// Keyed by whatever the caller uses to tell participants apart. Nothing here
 /// looks inside the key, so the call layer's `member_id` is what ends up in it
 /// without this crate having to know that MatrixRTC exists.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Voices {
     people: Arc<Mutex<HashMap<String, VecDeque<i16>>>>,
     /// Sounds this client is making about the call, rather than audio from
@@ -74,14 +75,87 @@ pub struct Voices {
     /// late audio is worthless, and wrong for a sound half a second long,
     /// which would arrive as its own last 120 milliseconds.
     sounds: Arc<Mutex<VecDeque<i16>>>,
+    /// How loud everything leaving here should be, as a percentage.
+    ///
+    /// An atomic rather than a field the audio thread is handed a copy of,
+    /// because the two ends are different threads: this is read inside the
+    /// device callback and written by whoever moved a slider. A percentage
+    /// rather than the multiplier it becomes, so that what is stored is what
+    /// was chosen and the curve stays in one place.
+    output: Arc<AtomicU8>,
+    /// The same, for the chimes and spoken notifications only.
+    ///
+    /// Underneath [`Self::output`] rather than beside it: this says how loud a
+    /// notification is *relative to the call*, which is the thing anybody
+    /// actually wants to set. A notification level that ignored the master
+    /// would get louder every time somebody turned the call down.
+    notifications: Arc<AtomicU8>,
+    /// How loud each person should be, keyed the way the queues are.
+    ///
+    /// Replaced wholesale rather than edited, by
+    /// [`set_person_levels`](Self::set_person_levels), because the keys are
+    /// memberships and a membership is fresh on every join: a map that was only
+    /// ever added to would grow for the lifetime of the process and hold levels
+    /// against people who left an hour ago.
+    ///
+    /// Separate from the queue map rather than a second field on each queue,
+    /// because the two have different lifetimes. `forget` drops a queue the
+    /// moment somebody's stream stops, and a level that went with it would be
+    /// lost every time a person muted.
+    people_levels: Arc<Mutex<HashMap<String, u8>>>,
+}
+
+/// Full volume, as these percentages count it.
+pub const FULL_VOLUME: u8 = 100;
+
+/// A percentage turned into something to multiply samples by.
+///
+/// Squared rather than proportional, because a slider that is linear in
+/// amplitude is not linear in anything a person hears. Half amplitude is about
+/// six decibels down, which the ear takes as roughly two thirds as loud, so a
+/// proportional slider spends its bottom half on changes nobody can hear much
+/// of and its top half on almost nothing. Squaring puts the middle of the
+/// slider near the middle of the range somebody is listening for.
+///
+/// Attenuation only, and clamped so it stays that way. Above unity there is
+/// nothing to gain and something to lose: the mixer clips rather than ducks
+/// (see [`clamp`]), and a control that could push the sum past full scale would
+/// distort everybody at once to make one person louder.
+pub fn gain(percent: u8) -> f32 {
+    let fraction = f32::from(percent.min(FULL_VOLUME)) / f32::from(FULL_VOLUME);
+    fraction * fraction
+}
+
+impl Default for Voices {
+    /// Everything at full volume, which is what somebody who has never touched
+    /// a slider should hear.
+    ///
+    /// Hand-written rather than derived for one reason: a derived `AtomicU8` is
+    /// zero, and zero here is silence. A call that played nothing until the
+    /// settings were read would be the worst possible default.
+    fn default() -> Self {
+        Self {
+            people: Arc::default(),
+            sounds: Arc::default(),
+            output: Arc::new(AtomicU8::new(FULL_VOLUME)),
+            notifications: Arc::new(AtomicU8::new(FULL_VOLUME)),
+            people_levels: Arc::default(),
+        }
+    }
 }
 
 /// How much sound may be queued before the rest is dropped.
 ///
-/// Two seconds. Long enough for several arrivals in a row to be heard one
-/// after another, short enough that somebody rejoining a busy channel does not
-/// sit through a minute of chiming for people who are already there.
-pub const SOUND_SAMPLES: usize = 2 * crate::gate::SAMPLE_RATE as usize;
+/// Six seconds. It was two, which was right when the only thing that queued
+/// here was a chime a third of a second long, and became wrong the moment a
+/// spoken notification could follow one: a chime plus a sentence is over two
+/// seconds on its own, so a single arrival would have had its sentence cut off
+/// at the end by a cap meant to stop a backlog of several.
+///
+/// Still short enough for the thing the cap is for. Somebody rejoining a busy
+/// channel hears the first few arrivals and not the next minute of them, which
+/// is what a cap on a queue that drops from the end buys.
+pub const SOUND_SAMPLES: usize = 6 * crate::gate::SAMPLE_RATE as usize;
 
 impl Voices {
     /// Nobody, yet.
@@ -109,6 +183,41 @@ impl Voices {
     /// How much sound is waiting to play.
     pub fn sound_waiting(&self) -> usize {
         self.sounds().len()
+    }
+
+    /// Set how loud everything leaving here should be, as a percentage.
+    ///
+    /// Takes effect on the next buffer, including for audio already queued.
+    /// That is the point of applying it at the mix rather than on the way in: a
+    /// slider that only affected what arrived after it was moved would do
+    /// nothing at all for the hundred milliseconds somebody is listening to
+    /// while they move it.
+    pub fn set_output_level(&self, percent: u8) {
+        self.output
+            .store(percent.min(FULL_VOLUME), Ordering::Relaxed);
+    }
+
+    /// Set how loud the chimes and spoken notifications should be, as a
+    /// percentage of the output level above.
+    pub fn set_notification_level(&self, percent: u8) {
+        self.notifications
+            .store(percent.min(FULL_VOLUME), Ordering::Relaxed);
+    }
+
+    /// Replace every per-person level at once.
+    ///
+    /// Wholesale rather than one at a time, because these are keyed by
+    /// membership and a membership is fresh on every join. Handing over the
+    /// whole set is what keeps the map the size of the call rather than the
+    /// size of everybody who has ever been in one.
+    ///
+    /// Anybody left out plays at full volume, which is also what somebody
+    /// nobody has ever adjusted gets.
+    pub fn set_person_levels(&self, levels: HashMap<String, u8>) {
+        *self.people_levels() = levels
+            .into_iter()
+            .map(|(who, percent)| (who, percent.min(FULL_VOLUME)))
+            .collect();
     }
 
     /// Add what `who` just said to what is waiting to be played.
@@ -181,25 +290,39 @@ impl Voices {
     ///
     /// A person with nothing waiting contributes silence. See the header.
     pub fn mix(&self, sum: &mut [i32]) {
+        // Read once for the whole buffer rather than per sample. Half of one
+        // millisecond of somebody's own slider movement landing on the next
+        // buffer instead of this one is not a thing anybody can hear, and a
+        // level that changed underneath a buffer would be a discontinuity that
+        // is.
+        let output = gain(self.output.load(Ordering::Relaxed));
+
+        let levels = self.people_levels();
         let mut voices = self.voices();
-        for waiting in voices.values_mut() {
+        for (who, waiting) in voices.iter_mut() {
+            // Multiplied together rather than applied in two passes: the
+            // per-person level says how loud somebody is *in* the call, so
+            // turning the call down has to turn them down with it.
+            let level = output * gain(levels.get(who).copied().unwrap_or(FULL_VOLUME));
             // `drain` on the shorter of the two, so a queue with less than a
             // full buffer in it contributes what it has and the rest stays
             // silent rather than the whole voice being skipped.
             let taking = waiting.len().min(sum.len());
             for (slot, sample) in sum.iter_mut().zip(waiting.drain(..taking)) {
-                *slot += i32::from(sample);
+                *slot += scaled(sample, level);
             }
         }
         drop(voices);
+        drop(levels);
 
         // Into the same accumulator, so a sound that lands while four people
         // are talking is clamped once with everything else rather than
         // separately against a total it cannot see.
+        let level = output * gain(self.notifications.load(Ordering::Relaxed));
         let mut sounds = self.sounds();
         let taking = sounds.len().min(sum.len());
         for (slot, sample) in sum.iter_mut().zip(sounds.drain(..taking)) {
-            *slot += i32::from(sample);
+            *slot += scaled(sample, level);
         }
     }
 
@@ -223,6 +346,26 @@ impl Voices {
     fn sounds(&self) -> MutexGuard<'_, VecDeque<i16>> {
         self.sounds.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// The per-person levels, on the same terms as the two above.
+    fn people_levels(&self) -> MutexGuard<'_, HashMap<String, u8>> {
+        self.people_levels
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// One sample at one level, in the width the accumulator uses.
+///
+/// Rounded rather than truncated. Truncation is a bias towards zero on every
+/// sample, which on quiet speech at a low level is a small constant distortion
+/// rather than a small constant error.
+fn scaled(sample: i16, level: f32) -> i32 {
+    // The common case by a wide margin, and exact: nobody has touched a slider.
+    if level == 1.0 {
+        return i32::from(sample);
+    }
+    (f32::from(sample) * level).round() as i32
 }
 
 /// [`Voices`] being handed to a device, one buffer at a time.

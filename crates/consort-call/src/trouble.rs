@@ -102,7 +102,7 @@ impl Fault {
                 at_join: false,
             } => format!(
                 "Anybody joining from now on will not hear you: your new audio key could not be \
-                 sent ({reason})."
+                 sent ({reason}). That usually means this session is not cross-signed."
             ),
             Self::NothingSent => "Your audio could not be encrypted, so nobody in this call \
                  can hear you."
@@ -200,6 +200,12 @@ pub fn what_it_says(event: &CallEvent) -> Option<(&str, Option<Fault>)> {
                 at_join: *at_join,
             }),
         )),
+        // The way back down from the fault above, and the only one there is.
+        // Nothing else in this table can clear `THIS_SESSION`: the fault is
+        // about our own outgoing key, so no report about a membership says
+        // anything about it, and without this a notice about a call somebody
+        // has since fixed stays up for the rest of it.
+        CallEvent::KeyDistributionRecovered => Some((THIS_SESSION, None)),
         // A key that arrived and was refused, which knows why, unlike a key
         // that never arrived, which is guessing.
         CallEvent::KeyDiscarded {
@@ -296,12 +302,19 @@ mod tests {
     }
 
     #[test]
-    fn the_two_most_likely_faults_name_cross_signing() {
+    fn every_fault_with_a_known_cause_names_it() {
         // The cause phase 0 reproduced, and the one that is fixed from the
         // settings screen rather than by waiting. Leaving it out would send
         // somebody looking at their network.
+        //
+        // Both halves of `NotDistributed` say it, and that is the correction
+        // rather than the original intent: the mid-call one said what had
+        // happened and nothing about what to do, which is the shape of message
+        // somebody screenshots because there is nothing else to do with it.
         assert!(Fault::NoKey.sentence().contains("cross-signed"));
         assert!(refused().sentence().contains("cross-signed"));
+        assert!(undistributed(true).sentence().contains("cross-signed"));
+        assert!(undistributed(false).sentence().contains("cross-signed"));
     }
 
     #[test]
@@ -311,6 +324,49 @@ mod tests {
         assert!(faults.note("_@ada:example.org_LAPTOP", Some(Fault::NoKey)));
 
         assert_eq!(faults.sentence(), Some(Fault::NoKey.sentence()));
+    }
+
+    #[test]
+    fn our_own_key_working_again_takes_its_notice_down() {
+        // The one report that clears `THIS_SESSION`, and the reason it had to
+        // be added upstream rather than derived here. Nothing about a
+        // membership says anything about our own outgoing key, so before this
+        // there was no event in the stream that could take the notice off the
+        // screen: the fault is a fact about one rollout, and a call somebody
+        // fixed mid-way through went on being described as broken.
+        let mut faults = Faults::default();
+        let broke = CallEvent::KeyDistributionFailed {
+            reason: "1 of 1 member(s) did not get key index 1".to_owned(),
+            at_join: false,
+        };
+        let (member, fault) = what_it_says(&broke).expect("a distribution failure says something");
+        faults.note(member, fault);
+        assert!(faults.sentence().is_some());
+
+        let mended = CallEvent::KeyDistributionRecovered;
+        let (member, fault) = what_it_says(&mended).expect("so does a recovery");
+        faults.note(member, fault);
+
+        assert_eq!(faults.sentence(), None);
+    }
+
+    #[test]
+    fn a_recovery_is_filed_where_the_failure_was() {
+        // Both under `THIS_SESSION`, because a key filed under one name and
+        // cleared under another is a notice that never comes down, which is
+        // exactly the bug this pair exists to fix and would be invisible in
+        // the test above if either side used a real member id.
+        let broke = CallEvent::KeyDistributionFailed {
+            reason: "refused".to_owned(),
+            at_join: true,
+        };
+        let mended = CallEvent::KeyDistributionRecovered;
+
+        let failed = what_it_says(&broke);
+        let recovered = what_it_says(&mended);
+
+        assert_eq!(failed.map(|(member, _)| member), Some(THIS_SESSION));
+        assert_eq!(recovered.map(|(member, _)| member), Some(THIS_SESSION));
     }
 
     #[test]

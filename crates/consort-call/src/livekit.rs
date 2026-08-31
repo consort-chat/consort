@@ -250,6 +250,25 @@ impl CallTransport for LiveKitTransport {
         let occupied = room.active_room_call_participants().len();
         let dialect = dialect::detect(occupied, self.fallback_dialect);
 
+        // Refused rather than attempted, and refused here rather than after
+        // the discovery below, because there is nothing to discover for a call
+        // that is not going to happen.
+        //
+        // `Call::join` would succeed. It would publish membership, get a
+        // token, connect to the SFU and carry RTP into a room this session can
+        // never see anybody in. Naming the setting is the only version of that
+        // a person can do anything about. See `Dialect::readable`.
+        if !dialect.readable() {
+            tracing::warn!(
+                %room_id,
+                ?dialect,
+                ?self.fallback_dialect,
+                occupied,
+                "refusing a call in a dialect this build cannot read back"
+            );
+            return Err(CallFailure::UnreadableDialect(dialect));
+        }
+
         // Resolved before the join rather than inside it, because upstream
         // takes the fallback as a value and has no way to ask a question at
         // the moment it turns out to need one.
@@ -509,7 +528,19 @@ impl CallSession for LiveKitSession {
         // a statement of what should currently be true rather than a tally that
         // can drift. It is called on every roster change and has to be
         // idempotent anyway; see `CallSession::listen`.
-        let audible = hearing::audible(&self.call.engine().participants());
+        let participants = self.call.engine().participants();
+
+        // Before the pumps are started, so that a person somebody has turned
+        // down is already turned down on their first frame rather than for the
+        // second half of their first word.
+        ears.attribute(
+            &participants
+                .iter()
+                .map(|member| (member.member_id.clone(), member.user_id.clone()))
+                .collect::<Vec<_>>(),
+        );
+
+        let audible = hearing::audible(&participants);
 
         let mut playing = self.playing.borrow_mut();
         let attached: BTreeSet<String> = playing.keys().cloned().collect();
@@ -603,6 +634,8 @@ struct Seen {
     member_id: String,
     user_id: String,
     muted: bool,
+    camera: bool,
+    since: Option<u64>,
 }
 
 /// One view of a call: who is in it, and what is wrong with it.
@@ -660,6 +693,8 @@ impl Roster for LiveKitRoster {
                 member_id: member.member_id.clone(),
                 user_id: member.user_id.clone(),
                 muted: roster::microphone_muted(member),
+                camera: roster::camera_live(member),
+                since: member.joined_at_ms,
             })
             .collect();
 
@@ -669,6 +704,14 @@ impl Roster for LiveKitRoster {
         let mutes: Vec<(String, bool)> = seen
             .iter()
             .map(|one| (one.user_id.clone(), one.muted))
+            .collect();
+        let cameras: Vec<(String, bool)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.camera))
+            .collect();
+        let arrivals: Vec<(String, Option<u64>)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.since))
             .collect();
         let whose: Vec<(String, String)> = seen
             .into_iter()
@@ -681,6 +724,8 @@ impl Roster for LiveKitRoster {
         let named = rooms::name_participants(&self.client, &self.room_id, &user_ids).await;
 
         let named = roster::with_mutes(named, &mutes);
+        let named = roster::with_cameras(named, &cameras);
+        let named = roster::with_since(named, &arrivals);
         let named = roster::with_deafened(named, &whose, &flags.deafened);
         roster::with_away(named, &whose, &flags.away)
     }

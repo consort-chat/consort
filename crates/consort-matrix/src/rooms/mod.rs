@@ -35,10 +35,12 @@ mod avatar;
 pub mod dto;
 mod facts;
 mod hierarchy;
+pub mod profile;
 mod snapshot;
 
 pub use avatar::{avatar, member_avatar};
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
+pub use profile::{MemberProfile, Presence, Standing, member_profile};
 
 use std::time::Duration;
 

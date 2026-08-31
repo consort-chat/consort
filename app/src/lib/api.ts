@@ -155,6 +155,32 @@ export interface Participant {
    * is the entire difference between walking away and leaving.
    */
   away?: boolean;
+  /**
+   * Whether a camera of theirs is live.
+   *
+   * True only for somebody publishing a camera that is not muted. Somebody on
+   * two devices is on camera if either of them is, which is the opposite fold
+   * to `muted` and right for the reason behind it: both are chosen so the icon
+   * never claims less exposure than there is.
+   *
+   * Known only for the call this session is sitting in. Room state carries
+   * nothing like it, so a person listed from there is reported without a
+   * camera because nothing checked, not because anything found one off, and
+   * the interface draws no camera at all for them rather than a confident
+   * cross.
+   */
+  camera?: boolean;
+  /**
+   * When they joined the call, in milliseconds since the Unix epoch.
+   *
+   * The SFU's own record rather than the moment this session noticed them, so
+   * it is still right for people who were already in the call when we arrived.
+   * Absent for anybody listed from room state, for anybody whose media has not
+   * appeared yet, and against a server too old to report it.
+   *
+   * Somebody on two devices joined when the first of them did.
+   */
+  since?: number;
 }
 
 /** One room under a rail entry. */
@@ -498,6 +524,56 @@ export function memberAvatar(
 }
 
 /**
+ * Where somebody's own client says they are.
+ *
+ * `"unknown"` is a real answer rather than a missing one. Most homeservers
+ * have presence switched off, because it is the most expensive thing in the
+ * protocol, and reading that silence as `"offline"` would put a grey dot on
+ * somebody sitting right there.
+ */
+export type Presence = "online" | "idle" | "offline" | "unknown";
+
+/** What somebody is allowed to do in a room, at the granularity a person cares about. */
+export type Standing = "admin" | "moderator" | "member";
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * Nothing here duplicates the roster: who they are, what they are called,
+ * whether they are muted and when they joined the call all arrive with the
+ * channel and are on screen before this is asked for.
+ */
+export interface MemberProfile {
+  presence: Presence;
+  /** Their own status line, when they set one. */
+  status: string | null;
+  /**
+   * Milliseconds since they last did anything, as the homeserver counts it.
+   *
+   * Null whenever presence is unknown, and often null even when it is not: the
+   * field is optional in the spec and Synapse omits it for people it has not
+   * heard from.
+   */
+  lastActiveAgo: number | null;
+  standing: Standing;
+}
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * One request to the homeserver, made when a person's card opens and never on
+ * the way to drawing a roster. It does not fail: every part of it degrades to
+ * "nothing known" on its own, because none of these facts is worth a dialog in
+ * front of somebody who clicked a name out of curiosity.
+ */
+export function memberProfile(
+  roomId: string,
+  userId: string,
+): Promise<MemberProfile> {
+  return invoke<MemberProfile>("member_profile", { roomId, userId });
+}
+
+/**
  * The five things a person can do to a verification flow.
  *
  * All of them take the same pair of identifiers, straight off the event that
@@ -695,10 +771,51 @@ export interface AudioSettings {
    * Whether a call makes a sound when somebody joins or leaves it.
    *
    * Optional here so a payload written before the field existed still parses,
-   * and read as `!== false` wherever it is drawn: the Rust default is on, and
-   * a missing field must not render as off.
+   * and read as `=== true` wherever it is drawn, because the Rust default is
+   * **off**: the chime and the sentence below announce the same arrival, and
+   * the chime existed to get somebody's attention for a notification that used
+   * to be nothing but the chime.
    */
   callSounds?: boolean;
+  /**
+   * Whether a call says out loud what `callSounds` only announces.
+   *
+   * Optional too, but read as `!== false`, because this one defaults on: it is
+   * the notification, and the chime in front of it is the optional half. The
+   * two are separate in both directions, so a chime with no sentence and a
+   * sentence with no chime are both states somebody can ask for.
+   */
+  callVoices?: boolean;
+  /**
+   * How loud a call should be, 0 to 100.
+   *
+   * The master, covering everybody in the call and the notifications above
+   * them. Optional and read as `?? 100`, which is the Rust default.
+   */
+  outputVolume?: number;
+  /**
+   * How loud the chimes and spoken notifications should be, as a percentage of
+   * `outputVolume`.
+   *
+   * Underneath the master rather than beside it, so turning a call down turns
+   * these down with it. Optional and read as `?? 60`: a notification is
+   * mastered to be heard on its own and a call is somebody talking three feet
+   * from a microphone, so at one level the notification is the loud thing in
+   * the room.
+   */
+  notificationVolume?: number;
+  /**
+   * How loud one particular person should be, by Matrix user ID.
+   *
+   * Read-only from here. It is written by `setPersonVolume`, from the menu
+   * beside somebody's name in a call, and deliberately not sent back by
+   * `setAudioSettings`: this screen does not draw these, and a screen that
+   * wrote back what it never read would erase every one of them.
+   *
+   * Absent means full volume, so the map holds only the people somebody has
+   * actually adjusted.
+   */
+  personVolumes?: Record<string, number>;
 }
 
 /**
@@ -761,6 +878,28 @@ export function audioSettings(): Promise<AudioSettings> {
  */
 export function setAudioSettings(audio: AudioSettings): Promise<void> {
   return invoke<void>("set_audio_settings", { audio });
+}
+
+/**
+ * Set how loud one person should be, as a percentage, and remember it.
+ *
+ * Its own call rather than part of `setAudioSettings`, because it is set from
+ * somewhere else entirely: a menu beside a name in a call, which knows one
+ * user ID and nothing about devices or gates.
+ *
+ * Kept per machine, which is the only place it can be kept. Nothing in Matrix
+ * carries "that one is too loud in my headphones", and it should not: it is a
+ * fact about the room somebody is sitting in rather than about their account.
+ * It does survive leaving the call, rejoining, and restarting.
+ *
+ * `100` removes the entry rather than storing it, because full volume is the
+ * absence of a choice.
+ */
+export function setPersonVolume(
+  userId: string,
+  percent: number,
+): Promise<void> {
+  return invoke<void>("set_person_volume", { userId, percent });
 }
 
 /**

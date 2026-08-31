@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import {
   NOBODY,
   callRoomId,
@@ -7,6 +9,7 @@ import {
   type Space,
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
+import { PersonMenu } from "./PersonMenu";
 import { RoomAvatar } from "./RoomAvatar";
 import "./ChannelList.css";
 
@@ -130,14 +133,67 @@ function AwayIcon({ "aria-label": label }: { "aria-label": string }) {
   );
 }
 
+/**
+ * A camera, struck through when nobody can see them.
+ *
+ * Always drawn for the call this session is in, which is the difference
+ * between this and the three glyphs above. Those say somebody chose something,
+ * so their absence means "nothing to report"; this one answers a question that
+ * always has an answer, and an icon that only appeared when a camera came on
+ * would leave "off" and "we have not looked" drawn identically.
+ *
+ * Which is exactly why it is never drawn for a channel this session is not in.
+ * Room state carries nothing about cameras, so a cross there would be an
+ * invention rather than a reading.
+ */
+function CameraIcon({
+  on,
+  "aria-label": label,
+}: {
+  on: boolean;
+  "aria-label": string;
+}) {
+  return (
+    <svg
+      className="channels__camera"
+      data-on={on}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={label}
+    >
+      <path d="M3 7.5h11v9H3z" />
+      <path d="m14 12 6-3.5v7z" />
+      {!on && <path d="m3.5 3.5 17 17" />}
+    </svg>
+  );
+}
+
 function Participants({
   channel,
   people,
   speaking,
+  live,
+  onOpenPerson,
 }: {
   channel: Channel;
   people: Participant[];
   speaking: ReadonlySet<string>;
+  /**
+   * Whether these came from the live call roster rather than from room state.
+   *
+   * The camera is only drawn when they did. See [`CameraIcon`].
+   */
+  live: boolean;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   if (people.length === 0) return null;
 
@@ -159,37 +215,85 @@ function Participants({
           data-muted={participant.muted === true}
           data-speaking={speaking.has(participant.id)}
         >
-          <RoomAvatar
-            roomId={channel.id}
-            userId={participant.id}
-            name={participant.name}
-            className="channels__face"
-          />
-          <span className="channels__who">{participant.name}</span>
           {/*
-            Drawn rather than only dimmed, and with a name on it. Somebody
-            scanning this list for who to talk to is reading names, not
-            noticing that one of them is a shade lighter, and a colour with no
-            glyph beside it is nothing at all to a screen reader.
+            A button rather than a row with a click handler on it. What it
+            opens is a menu, and a menu that can only be reached with a mouse
+            is a menu half the people here cannot reach at all: this way the
+            keyboard gets it for free, along with focus, Enter and Space.
 
-            One icon, never two. All three flags can be set on one person at
-            once, because each of the stronger ones implies the microphone is
-            off, so this is a precedence rather than a set of conditions.
-
-            Deafened first: it is the only one that says talking to them will
-            not reach them at all. Then away, which says they are not there to
-            answer. Muted last, because it is the weakest claim of the three
-            and the only one that leaves somebody listening and present.
+            Both buttons open the same thing. Right-click is where anybody
+            looks for a card about a person; left-click is what makes the row
+            look like the control it now is, and is the only one a touchpad
+            without a second button has. Splitting them would mean two panels
+            about one person, and a person is one subject.
           */}
-          {participant.deafened === true ? (
-            <DeafenedIcon aria-label={`${participant.name} is deafened`} />
-          ) : participant.away === true ? (
-            <AwayIcon aria-label={`${participant.name} is away`} />
-          ) : (
-            participant.muted === true && (
-              <MutedIcon aria-label={`${participant.name} is muted`} />
-            )
-          )}
+          <button
+            type="button"
+            className="channels__person-button"
+            aria-haspopup="dialog"
+            onClick={(event) =>
+              onOpenPerson(participant, channel.id, {
+                x: event.clientX,
+                y: event.clientY,
+              })
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onOpenPerson(participant, channel.id, {
+                x: event.clientX,
+                y: event.clientY,
+              });
+            }}
+          >
+            <RoomAvatar
+              roomId={channel.id}
+              userId={participant.id}
+              name={participant.name}
+              className="channels__face"
+            />
+            <span className="channels__who">{participant.name}</span>
+            {/*
+              Drawn rather than only dimmed, and with a name on it. Somebody
+              scanning this list for who to talk to is reading names, not
+              noticing that one of them is a shade lighter, and a colour with
+              no glyph beside it is nothing at all to a screen reader.
+
+              One icon, never two. All three flags can be set on one person at
+              once, because each of the stronger ones implies the microphone is
+              off, so this is a precedence rather than a set of conditions.
+
+              Deafened first: it is the only one that says talking to them will
+              not reach them at all. Then away, which says they are not there
+              to answer. Muted last, because it is the weakest claim of the
+              three and the only one that leaves somebody listening and
+              present.
+            */}
+            {participant.deafened === true ? (
+              <DeafenedIcon aria-label={`${participant.name} is deafened`} />
+            ) : participant.away === true ? (
+              <AwayIcon aria-label={`${participant.name} is away`} />
+            ) : (
+              participant.muted === true && (
+                <MutedIcon aria-label={`${participant.name} is muted`} />
+              )
+            )}
+            {/*
+              Beside the precedence above rather than inside it, because it is
+              a different question. Somebody muted with their camera on is
+              ordinary, and so is the reverse, so these are two facts about one
+              person rather than two candidates for one slot.
+            */}
+            {live && (
+              <CameraIcon
+                on={participant.camera === true}
+                aria-label={
+                  participant.camera === true
+                    ? `${participant.name} has their camera on`
+                    : `${participant.name} has their camera off`
+                }
+              />
+            )}
+          </button>
         </li>
       ))}
     </ul>
@@ -221,11 +325,17 @@ function callStateOf(channel: Channel, call: Call): Call["state"] | null {
  * never will, so both keep whatever room state last said rather than blanking
  * a list that was correct a second ago.
  */
-function peopleIn(channel: Channel, call: Call): Participant[] {
+function peopleIn(
+  channel: Channel,
+  call: Call,
+): { people: Participant[]; live: boolean } {
   if (call.state === "connected" && call.roomId === channel.id) {
-    return call.participants;
+    return { people: call.participants, live: true };
   }
-  return channel.participants;
+  // `live` is not decoration on the list: it is what separates a camera that
+  // is off from a camera nothing has looked at. Room state carries neither
+  // cameras nor mutes, so everything drawn from it is a name and an avatar.
+  return { people: channel.participants, live: false };
 }
 
 function ChannelRow({
@@ -234,15 +344,22 @@ function ChannelRow({
   call,
   speaking,
   onSelect,
+  onOpenPerson,
 }: {
   channel: Channel;
   selected: boolean;
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: () => void;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   const voice = channel.kind === "voice";
   const callState = voice ? callStateOf(channel, call) : null;
+  const roster = peopleIn(channel, call);
 
   return (
     <li>
@@ -295,8 +412,10 @@ function ChannelRow({
       {voice && (
         <Participants
           channel={channel}
-          people={peopleIn(channel, call)}
+          people={roster.people}
+          live={roster.live}
           speaking={speaking}
+          onOpenPerson={onOpenPerson}
         />
       )}
     </li>
@@ -310,6 +429,7 @@ function Group({
   call,
   speaking,
   onSelect,
+  onOpenPerson,
 }: {
   label: string;
   channels: Channel[];
@@ -317,6 +437,11 @@ function Group({
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: (id: string) => void;
+  onOpenPerson: (
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) => void;
 }) {
   // An empty group is no group. A "VOICE" header over nothing reads as a
   // channel list that failed to load rather than a space with no voice rooms.
@@ -334,6 +459,7 @@ function Group({
             call={call}
             speaking={speaking}
             onSelect={() => onSelect(channel.id)}
+            onOpenPerson={onOpenPerson}
           />
         ))}
       </ul>
@@ -380,6 +506,14 @@ export function ChannelList({
 }: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
+  // Which name was clicked, and where the pointer was when it happened. One at
+  // a time: two open menus about two people would be two sliders somebody has
+  // to tell apart by the heading.
+  const [opened, setOpened] = useState<{
+    person: Participant;
+    roomId: string;
+    at: { x: number; y: number };
+  } | null>(null);
 
   return (
     <div className="channels">
@@ -400,6 +534,9 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
+            onOpenPerson={(person, roomId, at) =>
+              setOpened({ person, roomId, at })
+            }
           />
           <Group
             label="Voice"
@@ -408,8 +545,27 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
+            onOpenPerson={(person, roomId, at) =>
+              setOpened({ person, roomId, at })
+            }
           />
         </>
+      )}
+
+      {/*
+        At the root of the list rather than inside the row that opened it. The
+        sidebar scrolls, so a menu nested in a row would be clipped by it at
+        exactly the moment somebody near the bottom of a long channel list
+        opens one.
+      */}
+      {opened !== null && (
+        <PersonMenu
+          key={opened.person.id}
+          person={opened.person}
+          roomId={opened.roomId}
+          at={opened.at}
+          onClose={() => setOpened(null)}
+        />
       )}
     </div>
   );

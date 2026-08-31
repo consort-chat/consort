@@ -1,0 +1,20 @@
+# Windows links the C runtime statically, and this is where that gets said out
+# loud so that the C and C++ halves of the build hear it too.
+#
+# rustc already links the static CRT on `*-pc-windows-msvc`: the link line
+# carries `/DEFAULTLIB:libcmt.lib` and `/NODEFAULTLIB:msvcrt.lib` with nothing
+# asking it to. What it does not do is advertise `crt-static` in the target's
+# cfg, and `cc` decides between `/MT` and `/MD` by reading exactly that. So the
+# C++ it compiles comes out `/MD` while everything it is linked against is
+# `/MT`, and the build dies at the first cdylib with a wall of `LNK2038:
+# mismatch detected for 'RuntimeLibrary'`.
+#
+# The mismatch names webrtc-sys because LiveKit's prebuilt `webrtc.lib` is
+# static-CRT too, so it drags in `libcpmt.lib` and stands opposite the one
+# `/MD` object in the link: the cxx bridge, compiled by `cc` moments earlier in
+# the same build. Nothing here changes what rustc does. It only stops `cc` from
+# guessing the opposite.
+#
+# Scoped to the one triple, so a Linux or macOS build never reads it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

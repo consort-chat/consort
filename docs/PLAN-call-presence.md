@@ -1,7 +1,12 @@
 # Plan: what a call sounds like and who is in it
 
-Status: **sounds and away are done. Remote deafen is still
-built-but-unconfirmed. Sections 4 and 5 are asked for and not started.**
+Status: **sounds and away are done, two of the three sentences are recorded and
+audible, and all of it now has volume controls: a master for the call, one for
+the announcements underneath it, and one per person from a menu on their name.
+The chime ships off by default, because the sentence says what it used to
+announce. Remote deafen is still built-but-unconfirmed. What is left is phase
+7's live confirmation, phase 8's chimes, and the one recording for "welcome
+back".**
 
 Three additions to a call that is otherwise built.
 [PLAN-voice-presence.md](PLAN-voice-presence.md) drew who is sitting in a voice
@@ -222,9 +227,102 @@ in them, matching what TeamSpeak's default sound pack actually did, and
 6. `Participant::away`, the icon, the button, the precedence.
 7. Confirm all three against a second live client, which is the only thing that
    can actually fail in an interesting way.
-8. Swap in Element's join and leave sounds, with their provenance beside them.
-9. The spoken notifications: `Arrivals` returning names, the second setting,
-   the phrases, and "welcome back" on the way out of away.
+8. Swap in join and leave chimes to replace the generated fifths, with their
+   provenance beside them in `crates/consort-audio/assets/PROVENANCE.md`. Less
+   urgent than it was: phase 12 turned the chime off by default, so the
+   generated fifth is no longer what anybody hears on a fresh install.
+9. The spoken notifications' mechanism: `Arrivals` returning names, the second
+   setting, `Cue::Returned`, and the queue that holds a sentence.
+10. The recordings themselves, which is the same drop-in as phase 8. Arriving
+    and leaving are done: ElevenLabs recreations of TeamSpeak's spoken
+    notifications, dropped in on 2026-08-29. "Welcome back" is still silent,
+    and its test fails the moment that changes.
+11. How loud all of it is, which the recordings turned from a nicety into a
+    defect. A synthesised chime was quiet because it was synthesised quiet; a
+    real sentence is mastered to be heard on its own, and played at the level
+    of somebody talking three feet from a microphone it is the loud thing in
+    the room. Three controls rather than one, because there are three
+    questions:
+
+    - the **call**, which is the master and covers everybody in it;
+    - the **announcements**, as a percentage of that rather than beside it, so
+      turning a call down turns them down with it. Sixty by default, which is
+      the number the recordings asked for;
+    - **one person**, from a menu on their name, remembered by user ID in the
+      settings file. There is no account data for "that one is too loud in my
+      headphones" and there should not be: it is a fact about the room somebody
+      is sitting in.
+
+    The last of those is why `Heard` grew `attribute`. Everything that plays is
+    keyed by membership, because that is what a queue of audio belongs to, and
+    a person on two devices is two queues. A person's settings are keyed by the
+    person. Nothing but the call knows both at once.
+
+    The curve is squared rather than proportional, and attenuation only. Half a
+    slider is not half an amplitude, and the mixer clips rather than ducking, so
+    a control that could go above unity would distort the whole call to make one
+    part of it louder.
+13. The mute icon telling the truth about somebody who never unmuted, which it
+    had not been. The roster's `streams` answered "what have we subscribed to"
+    and `microphone_muted` read it as "what are they sending". Those differ in
+    exactly the case that matters: joining from Element Call's lobby with the
+    microphone off publishes no audio track at all, so nothing is ever
+    subscribed, there is no stream to mark muted, and the person who most needs
+    telling that their microphone is off was the one person nobody could see it
+    on.
+
+    Two changes, in two repositories. `matrix-rust-rtc` grew
+    `ConnectionEvent::TrackPublished` and `TrackUnpublished`, so a roster entry
+    is built from an announcement whether or not anything subscribes to it, and
+    it stopped throwing away `RoomEvent::Connected`, which is the only carrier
+    of the publications of everybody already in the call when we joined.
+    Consort's `microphone_muted` became `camera_live` negated: both ask what
+    the call can pick up, and a membership publishing nothing of that kind
+    cannot be picked up.
+
+    The old rule was defended in a doc comment on the grounds that publishing
+    nothing is not a choice somebody made. That is true and it is not the
+    question. The cost of the new rule is an icon during the moment between a
+    membership appearing and its first publication landing, which is a mute
+    that is true while it lasts. The cost of the old one was a person talking
+    into a dead microphone with nobody able to see why. It also puts us back in
+    step with Element Call, whose `isMicrophoneEnabled` reads a missing
+    publication as muted.
+
+14. A card behind the name, since there was already a panel there and it only
+    held a volume slider. One panel rather than two: left-click and right-click
+    open the same thing, because a person is one subject and splitting the
+    gestures would mean guessing which half somebody wanted.
+
+    What it draws is what something actually said. Presence from the
+    homeserver, standing from the room's power levels, the join time from the
+    SFU's own record, and the call state from the roster the card was opened
+    out of. Where the answer is not known the card says so, which for presence
+    is the ordinary case rather than an edge one: Synapse ships with presence
+    disabled and most servers of any size leave it that way, and drawing
+    "Offline" from that silence would put a grey dot on somebody sitting right
+    there in the call.
+
+    The join time is the SFU's `joined_at_ms` rather than a stamp taken when
+    this session first noticed somebody, and the difference is not academic:
+    stamping locally is wrong for precisely the people it is most often asked
+    about, since everybody already in the call would be dated from our own
+    arrival. It is deliberately not "when they joined the room", which is
+    answerable from their membership event but means "when they last changed
+    their profile" and would be a wrong fact under somebody's name.
+
+    Messaging is a button that does not work and says so. Not because
+    `create_dm` is hard, but because Consort has no message view at all: the
+    main pane is a placeholder. Opening a direct message would put somebody in
+    a room with no way to read or write in it, which is worse than a button
+    being honest about the state of things.
+
+12. The chime's default, which is the same decision seen from the other end.
+    Two announcements of one arrival is not twice the information: the chime
+    existed to get somebody's attention for a notification that used to be
+    nothing but the chime, and in front of a sentence it is a doorbell before
+    somebody who is already talking. So the pair ships as one sound, the chime
+    is the optional half, and either one alone is a single click.
 
 ## Risks
 
@@ -275,3 +373,39 @@ never opened the settings screen still hears that company arrived. It is read
 through an atomic rather than the settings file, because the question is asked
 on the call thread at the moment a roster changes and a file read there would
 be a disk touch in the middle of a call for one boolean.
+
+**The sound queue was two seconds, which was exactly long enough for the
+feature that existed.** Nothing was wrong with it while a chime was the only
+thing that could be queued. A chime and its sentence are over two seconds
+together, and they queue rather than overlap, so a single person walking in
+would have had the end of their sentence cut off by a cap that was there to
+stop a backlog of several. Six seconds now, and the test that says so builds
+the two lengths by hand rather than trusting the assets, because the assets are
+the part that is going to change.
+
+**`Chime` was the wrong name for the seam the moment a third thing could
+happen.** "Welcome back" has no chime behind it: there are two chimes and they
+already mean arriving and leaving, so giving one of them a third meaning would
+have made both ambiguous. The type is `Cue` now, meaning what happened rather
+than what to play, which is also what the two settings need it to be, since a
+cue may become a chime, a sentence, both or neither and this crate must not
+know which. It settled a second confusion for free: `chime` was already the
+name of the settings screen's test tone, and one word was doing two unrelated
+jobs.
+
+**Coming back from away does not come from the roster, and that is not an
+accident of where it was easy to put.** Nobody else's roster changes when this
+session puts its own flag down, so the cue is raised from the message that
+lowers the flag, and only when it was actually up. A client that restates a
+flag it already had is not somebody returning, and "welcome back" said to a
+person who never left is the kind of small wrongness that makes a whole feature
+feel broken.
+
+**The phrases ship silent, which is the only honest placeholder for a
+sentence.** A recorded phrase has to be recorded. A beep standing in for one
+would leave a listener with two chimes and less information than one, so the
+files are silence and everything around them is finished: the mechanism, both
+switches, the ordering, and the tests. What is asserted about them is what is
+true (they decode, they are the length of the sentence they will be, they do
+not swallow the chime queued in front of them) plus one test whose only job is
+to fail the day a recording lands, so the swap cannot happen quietly.
