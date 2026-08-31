@@ -2932,7 +2932,11 @@ mod member_profiles {
         // outside the spec calls "at their desk but not typing" unavailable.
         let server = MatrixMockServer::new().await;
         let (_dir, client) = signed_in(&server).await;
-        presence(&server, saying(serde_json::json!({ "presence": "unavailable" }))).await;
+        presence(
+            &server,
+            saying(serde_json::json!({ "presence": "unavailable" })),
+        )
+        .await;
 
         let profile = member_profile(&client, ROOM, OTHER).await;
 
