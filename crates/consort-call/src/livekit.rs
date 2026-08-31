@@ -250,6 +250,25 @@ impl CallTransport for LiveKitTransport {
         let occupied = room.active_room_call_participants().len();
         let dialect = dialect::detect(occupied, self.fallback_dialect);
 
+        // Refused rather than attempted, and refused here rather than after
+        // the discovery below, because there is nothing to discover for a call
+        // that is not going to happen.
+        //
+        // `Call::join` would succeed. It would publish membership, get a
+        // token, connect to the SFU and carry RTP into a room this session can
+        // never see anybody in. Naming the setting is the only version of that
+        // a person can do anything about. See `Dialect::readable`.
+        if !dialect.readable() {
+            tracing::warn!(
+                %room_id,
+                ?dialect,
+                ?self.fallback_dialect,
+                occupied,
+                "refusing a call in a dialect this build cannot read back"
+            );
+            return Err(CallFailure::UnreadableDialect(dialect));
+        }
+
         // Resolved before the join rather than inside it, because upstream
         // takes the fallback as a value and has no way to ask a question at
         // the moment it turns out to need one.

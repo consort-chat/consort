@@ -16,6 +16,12 @@
 //!
 //! [`detect`] answers half the question, and it is the important half. See its
 //! documentation for why the other half is not answerable from here.
+//!
+//! ## Only one of the three works today
+//!
+//! [`Dialect::readable`] is the other constraint, and it is a property of this
+//! build rather than of any deployment. See it before adding a dialect or
+//! changing the default.
 
 use matrix_rtc_livekit::compat::ElementCallCompat;
 
@@ -35,7 +41,9 @@ use matrix_rtc_livekit::compat::ElementCallCompat;
 pub enum Dialect {
     /// MSC4143 plus MSC4354, the current specification. Sticky membership
     /// events, MSC4195 token exchange, per-join SFU identity.
-    #[default]
+    ///
+    /// Where this is going, and not somewhere this build can go yet. See
+    /// [`Dialect::readable`].
     Current,
     /// The 2025 Element Call generation. Additive: a join stays valid to a
     /// current peer, but leaves and media keys do not, so a call in this mode
@@ -48,6 +56,10 @@ pub enum Dialect {
     ///
     /// This is what a deployment running an Element Call from before the 2026
     /// rewrite needs, and it was the one proven end to end in phase 0.
+    ///
+    /// The default, because it is the only one of the three this build can
+    /// currently hold a call in. See [`Dialect::readable`].
+    #[default]
     State,
 }
 
@@ -62,10 +74,10 @@ pub enum Dialect {
 ///
 /// ## Why the other two cannot be told apart here
 ///
-/// Reading MSC4354 sticky membership needs `unstable-msc4354` on matrix-sdk,
-/// which this workspace does not turn on, so an empty answer above means
-/// either "an empty channel" or "a channel full of people whose membership
-/// this build cannot see". Even with it on, [`Dialect::Current`] and
+/// Nothing here can see MSC4354 sticky membership at all, for the reasons in
+/// [`Dialect::readable`], so an empty answer above means either "an empty
+/// channel" or "a channel full of people whose membership this build cannot
+/// see". Even once it can, [`Dialect::Current`] and
 /// [`Dialect::Sticky`] would still not be distinguishable by counting: a
 /// sticky-dialect join is deliberately additive and stays valid to a current
 /// peer, so both generations write an event that reads the same from outside.
@@ -83,6 +95,51 @@ pub fn detect(live_state_memberships: usize, fallback: Dialect) -> Dialect {
     }
 
     fallback
+}
+
+impl Dialect {
+    /// The name this dialect is written under in `settings.json`.
+    ///
+    /// The same string serde produces, and asserted to stay that way, because
+    /// the only reason to name a dialect in a sentence is to tell somebody
+    /// what to put in that file.
+    pub fn name(self) -> &'static str {
+        match self {
+            Dialect::Current => "current",
+            Dialect::Sticky => "sticky",
+            Dialect::State => "state",
+        }
+    }
+
+    /// Whether this build can read back the membership a call in this dialect
+    /// publishes.
+    ///
+    /// Only [`Dialect::State`] can, and the reason is a chain rather than a
+    /// preference. Each link was read rather than assumed, so it is written
+    /// down here to be re-checked rather than rediscovered:
+    ///
+    /// 1. `matrix-rtc-bridge` reads the peers of a call with
+    ///    `Room::live_sticky_events`.
+    /// 2. That is filled by exactly one call site in matrix-sdk,
+    ///    `sticky_manager.dispatch` in `matrix-sdk-base`'s `sliding_sync`.
+    /// 3. Consort syncs with `sync_with_result_callback`, which is sync v2 and
+    ///    never reaches that call site. Turning on `unstable-msc4354` does not
+    ///    change this: it adds the ruma types, not the ingestion.
+    /// 4. The sticky bridge takes a second wake source, room updates, only in
+    ///    `ElementCallCompat::StateEvents`. In the other two it has no source
+    ///    at all, so it seeds an empty roster and then waits forever.
+    ///
+    /// So a call in the other two dialects connects, publishes membership,
+    /// carries RTP and shows an empty room to the person who joined it. That
+    /// is the failure this module opens by naming, which is why the LiveKit
+    /// transport refuses such a join rather than making it.
+    ///
+    /// This is a build limitation with an end date. When Consort moves to
+    /// sliding sync, this method and every refusal that consults it come out
+    /// together, and the tests below are what say so.
+    pub fn readable(self) -> bool {
+        matches!(self, Dialect::State)
+    }
 }
 
 impl From<Dialect> for ElementCallCompat {
@@ -156,11 +213,55 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_the_specification_rather_than_the_workaround() {
-        // A default that quietly picks a compatibility mode is a default that
-        // outlives the deployment needing it. When Element Call catches up,
-        // nothing here has to change for a new deployment to be right.
-        assert_eq!(Dialect::default(), Dialect::Current);
+    fn the_default_is_a_dialect_a_call_can_actually_be_held_in() {
+        // The default used to be `Current`, on the grounds that a default
+        // which quietly picks a compatibility mode outlives the deployment
+        // needing it. True, and beaten by the fact that this build cannot read
+        // a call in that dialect at all: the principled default produced a
+        // call that connected and showed an empty room.
+        //
+        // Written against `readable` rather than against `State` so that the
+        // day sliding sync lands, this test starts passing for `Current` on
+        // its own and the default can move back without anybody having to
+        // remember why it moved.
+        assert!(
+            Dialect::default().readable(),
+            "the default has to be a dialect this build can read"
+        );
+    }
+
+    #[test]
+    fn only_the_pre_msc4354_dialect_can_be_read_by_this_build() {
+        // The constraint itself. Sticky membership is ingested on the sliding
+        // sync path only, and Consort syncs with `sync_with_result_callback`.
+        assert!(Dialect::State.readable());
+        assert!(!Dialect::Current.readable());
+        assert!(!Dialect::Sticky.readable());
+    }
+
+    #[test]
+    fn detection_can_only_ever_land_on_a_readable_dialect_or_the_fallback() {
+        // Belt and braces on the asymmetry: an occupied room is answered
+        // `State`, which is readable, so detection can never turn a working
+        // configuration into a broken one.
+        for present in [1, 2, 50] {
+            for fallback in [Dialect::Current, Dialect::Sticky, Dialect::State] {
+                assert!(detect(present, fallback).readable());
+            }
+        }
+    }
+
+    #[test]
+    fn the_name_a_dialect_is_told_by_is_the_name_it_is_written_under() {
+        // `name` exists to tell somebody what to put in `settings.json`. If it
+        // drifts from serde, the advice sends them to a value that parses as
+        // nothing and silently falls back to the default.
+        for dialect in [Dialect::Current, Dialect::Sticky, Dialect::State] {
+            assert_eq!(
+                serde_json::to_string(&dialect).unwrap(),
+                format!("\"{}\"", dialect.name())
+            );
+        }
     }
 
     #[test]

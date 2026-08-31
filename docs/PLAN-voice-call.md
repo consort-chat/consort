@@ -374,6 +374,22 @@ to-device type carries the media keys. Nor can it see sticky membership at all
 without `unstable-msc4354`. So detection only ever pushes towards `State`, and
 the answer for a channel nobody is in comes from `settings.json`.
 
+**Correction, found while debugging a Windows build that would not join.** The
+sentence above about `unstable-msc4354` is right about the symptom and wrong
+about the cause, and the difference matters: turning that feature on would not
+have helped. Sticky events are ingested at exactly one place in matrix-sdk,
+`sticky_manager.dispatch` on the simplified sliding sync path, and Consort syncs
+with `sync_with_result_callback`. The feature adds ruma types, not ingestion.
+On top of that, the sticky bridge subscribes to room updates only in
+`ElementCallCompat::StateEvents`, so in the other two modes it seeds an empty
+roster and then waits on a channel nothing publishes to.
+
+So `State` is not merely the dialect this deployment happens to need, it is the
+only one this build can hold a call in at all, which is why it is now the
+default and why the other two are refused rather than attempted. See
+`Dialect::readable`, which carries the chain and comes out when Consort moves to
+sliding sync.
+
 That settings section, `calls`, has no interface and should not get one. Both
 fields are properties of a deployment rather than preferences, the right value
 is the same for everybody on a server, and a picker offering somebody a choice

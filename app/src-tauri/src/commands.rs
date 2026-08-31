@@ -531,6 +531,17 @@ async fn call_connect_for(
     let (device, gate) = microphone_to_open(state, host);
     let output = speakers_to_open(state, host);
 
+    // Out here rather than in the closure below, which runs at most once per
+    // process. Editing `settings.json` and pressing join again reuses the
+    // transport built from the old file, and nothing about that is visible;
+    // with this line it is, because the dialect logged here and the one
+    // `consort_call` logs a moment later stop agreeing.
+    tracing::info!(
+        %room_id,
+        fallback_dialect = settings.fallback_dialect.name(),
+        "connecting to a call"
+    );
+
     state.connect_call(
         room_id,
         // Only called if this session has never joined a call before. The

@@ -219,11 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn the_dialect_nothing_says_otherwise_about_is_the_specification() {
-        // A default that quietly picked a compatibility mode would outlive the
-        // deployment needing it, and the failure it produces is a call that
-        // connects and is heard by nobody.
-        assert_eq!(CallSettings::default().fallback_dialect, Dialect::Current);
+    fn the_dialect_nothing_says_otherwise_about_is_one_that_works() {
+        // Deliberately not asserted against a named variant. Which dialect is
+        // usable is `consort_call`'s to decide and its to change, and a second
+        // copy of the answer over here would only ever be found out of date by
+        // somebody whose calls had stopped connecting.
+        assert!(CallSettings::default().fallback_dialect.readable());
         assert_eq!(CallSettings::default().service_url_fallback, None);
     }
 
@@ -235,7 +236,9 @@ mod tests {
         let (_dir, store) = store();
         let chosen = Settings {
             calls: CallSettings {
-                fallback_dialect: Dialect::State,
+                // Not the default, so that a round trip which quietly dropped
+                // the field would still fail this.
+                fallback_dialect: Dialect::Sticky,
                 service_url_fallback: Some("https://example.org/sfu".to_owned()),
             },
             ..Settings::default()
@@ -245,7 +248,7 @@ mod tests {
 
         assert_eq!(store.load(), chosen);
         let raw = std::fs::read_to_string(store.path()).expect("read");
-        assert!(raw.contains("\"fallbackDialect\": \"state\""), "{raw}");
+        assert!(raw.contains("\"fallbackDialect\": \"sticky\""), "{raw}");
     }
 
     #[test]
