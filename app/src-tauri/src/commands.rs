@@ -14,7 +14,9 @@ use consort_audio::{
     choose,
 };
 use consort_call::LiveKitTransport;
-use consort_matrix::{BackendKind, Credentials, Profile, auth, rooms, verification};
+use consort_matrix::{
+    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, verification,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -292,6 +294,21 @@ pub async fn member_avatar_for(
     Ok(rooms::member_avatar(&client, &room_id, &user_id).await)
 }
 
+/// What can be said about one person in one room beyond their name.
+///
+/// One request to the homeserver, made when somebody opens a person's card and
+/// never on the way to drawing a roster. It cannot fail: presence is off on
+/// most homeservers, and a dialog in front of somebody who clicked a name out
+/// of curiosity would be worse than the word "unknown".
+pub async fn member_profile_for(
+    state: &AppState,
+    room_id: String,
+    user_id: String,
+) -> Result<rooms::MemberProfile, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::member_profile(&client, &room_id, &user_id).await)
+}
+
 /// What devices this machine has, and which of them are in use.
 ///
 /// Asked for whenever the settings screen opens, and after every change: a
@@ -314,17 +331,65 @@ fn audio_settings_for(state: &AppState) -> AudioSettings {
 /// lose a concurrent change for no benefit.
 fn set_audio_settings_for(
     state: &AppState,
-    audio: AudioSettings,
+    mut audio: AudioSettings,
 ) -> Result<(), crate::settings::SettingsError> {
     let gate = audio.gate;
+    let call_sounds = audio.call_sounds;
+    let call_voices = audio.call_voices;
+    let output_volume = audio.output_volume;
+    let notification_volume = audio.notification_volume;
     let mut settings = state.settings().load();
+    // The one field this does not take the caller's word for. The settings
+    // screen holds every other part of the audio section, so writing the whole
+    // thing is honest; it does not hold the per-person levels, which are set
+    // from a menu beside a person's name in a call. Taking its word for them
+    // would erase every one of them the first time somebody changed a device.
+    audio.person_volumes = std::mem::take(&mut settings.audio.person_volumes);
     settings.audio = audio;
     state.settings().save(&settings)?;
+    // Same reasoning as the retune below, and the same ordering: after the
+    // save, so a call already in progress and the file can never disagree.
+    state.set_call_sounds(call_sounds);
+    state.set_call_voices(call_voices);
+    state.set_volumes(output_volume, notification_volume);
     // After the save rather than instead of it, so what the meter is doing and
     // what the file says can never disagree. A microphone that is open right
     // now was started with the old tuning, and nothing else would tell it.
     // Cheap and idempotent when only a device name changed.
     state.retune_gate(gate);
+    Ok(())
+}
+
+/// Set how loud one person should be, as a percentage, and remember it.
+///
+/// Its own command rather than part of the audio section above, because it is
+/// set from somewhere else entirely: a menu beside a person's name in a call,
+/// which knows one user ID and nothing about devices or gates. A caller that
+/// had to send the whole audio section to change one person's volume would be
+/// sending back settings it never read.
+///
+/// A read-modify-write of the map, which is safe here for the same reason the
+/// whole-section write above is: everything that touches this file goes through
+/// `SettingsStore`, on the main thread, one command at a time.
+fn set_person_volume_for(
+    state: &AppState,
+    user_id: String,
+    percent: u8,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    if percent >= consort_audio::FULL_VOLUME {
+        // Full volume is the absence of a choice, not a choice of 100. Storing
+        // it would grow the file by a line for every person somebody ever
+        // nudged and put back, and the mixer would pay a multiply by one for
+        // each of them.
+        settings.audio.person_volumes.remove(&user_id);
+    } else {
+        settings.audio.person_volumes.insert(user_id, percent);
+    }
+    state.settings().save(&settings)?;
+    // After the save, like everything else here, so a call in progress and the
+    // file cannot disagree.
+    state.levels().choose(settings.audio.person_volumes.clone());
     Ok(())
 }
 
@@ -439,16 +504,56 @@ async fn call_connect_for(
     room_id: String,
 ) -> Result<(), CommandError> {
     let client = signed_in_client(state).await?;
-    let calls = state.settings().load().calls;
+
+    // Asked before anything is opened, published or connected, because every
+    // one of those steps succeeds in the failure this prevents. A call joined
+    // by a session that cannot distribute a media key connects, fills its
+    // roster and carries RTP, and is heard by nobody.
+    //
+    // A gate that cannot reach an answer lets the join through. The error is
+    // about not being able to ask rather than about the answer, `CallReadiness`
+    // has no variant for "not known" on purpose, and there is no honest
+    // refusal to draw from a request that timed out. The same network that
+    // stopped the question will stop the join a moment later and say so in the
+    // vocabulary of the thing that actually failed.
+    match calls::can_join(&client, &room_id).await {
+        Ok(JoinVerdict::Allowed) => {}
+        Ok(JoinVerdict::Refused(readiness)) => {
+            state.refuse_call(room_id, readiness);
+            return Ok(());
+        }
+        Err(error) => {
+            tracing::warn!(%error, %room_id, "joining without knowing whether it can be heard");
+        }
+    }
+
+    let settings = state.settings().load().calls;
     let (device, gate) = microphone_to_open(state, host);
     let output = speakers_to_open(state, host);
+
+    // Out here rather than in the closure below, which runs at most once per
+    // process. Editing `settings.json` and pressing join again reuses the
+    // transport built from the old file, and nothing about that is visible;
+    // with this line it is, because the dialect logged here and the one
+    // `consort_call` logs a moment later stop agreeing.
+    tracing::info!(
+        %room_id,
+        fallback_dialect = settings.fallback_dialect.name(),
+        "connecting to a call"
+    );
 
     state.connect_call(
         room_id,
         // Only called if this session has never joined a call before. The
         // dialect here is the fallback for a channel nobody is in;
         // `consort_call::detect` looks at the channel first.
-        move || LiveKitTransport::new(client, calls.fallback_dialect, calls.service_url_fallback),
+        move || {
+            LiveKitTransport::new(
+                client,
+                settings.fallback_dialect,
+                settings.service_url_fallback,
+            )
+        },
         CallAudio {
             device,
             output,
@@ -484,6 +589,15 @@ fn call_set_deafened_for(state: &AppState, deafened: bool) {
     state.set_call_deafened(deafened);
 }
 
+/// Say that nobody is at this computer.
+///
+/// Not a third way of muting, though it mutes. The microphone going off is a
+/// consequence; the point is that everybody else in the call can see it and
+/// stop waiting for an answer, which is the one thing a plain mute cannot say.
+fn call_set_away_for(state: &AppState, away: bool) {
+    state.set_call_away(away);
+}
+
 #[tauri::command]
 pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
     audio_devices_for(&state, &CpalHost)
@@ -492,6 +606,15 @@ pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
 #[tauri::command]
 pub fn audio_settings(state: State<'_, AppState>) -> AudioSettings {
     audio_settings_for(&state)
+}
+
+#[tauri::command]
+pub fn set_person_volume(
+    state: State<'_, AppState>,
+    user_id: String,
+    percent: u8,
+) -> Result<(), CommandError> {
+    set_person_volume_for(&state, user_id, percent).map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -540,6 +663,11 @@ pub fn call_set_muted(state: State<'_, AppState>, muted: bool) {
 #[tauri::command]
 pub fn call_set_deafened(state: State<'_, AppState>, deafened: bool) {
     call_set_deafened_for(&state, deafened);
+}
+
+#[tauri::command]
+pub fn call_set_away(state: State<'_, AppState>, away: bool) {
+    call_set_away_for(&state, away);
 }
 
 /// Verify this session with the account's recovery key.
@@ -742,6 +870,19 @@ pub async fn member_avatar(
     member_avatar_for(&state, room_id, user_id).await
 }
 
+/// What can be said about one person in one room beyond their name.
+///
+/// Asked for when somebody opens a person's card under a voice channel. See
+/// `member_profile_for`.
+#[tauri::command]
+pub async fn member_profile(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_id: String,
+) -> Result<rooms::MemberProfile, CommandError> {
+    member_profile_for(&state, room_id, user_id).await
+}
+
 /// Verify this session with the account's recovery key.
 ///
 /// The one command in this file that takes a secret. It is not logged, not
@@ -839,6 +980,7 @@ mod tests {
 
             call_set_muted_for(&state, true);
             call_set_deafened_for(&state, true);
+            call_set_away_for(&state, true);
 
             assert!(!state.has_call_thread());
             assert!(
@@ -886,6 +1028,11 @@ mod tests {
                     open_at: 0.8,
                     ..GateConfig::default()
                 },
+                call_sounds: true,
+                call_voices: false,
+                output_volume: 70,
+                notification_volume: 25,
+                ..AudioSettings::default()
             };
 
             set_audio_settings_for(&state, chosen.clone()).expect("save");
@@ -942,6 +1089,86 @@ mod tests {
 
             assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
             assert_eq!(report.output.selected.as_deref(), Some("Headphones"));
+        }
+
+        #[test]
+        fn a_persons_volume_is_remembered() {
+            // There is nowhere else it could be. No account data says "that one
+            // is too loud in my headphones", so this file is the only thing
+            // between somebody setting it and setting it again next week.
+            let (_dir, state, _) = state();
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&55),
+            );
+        }
+
+        #[test]
+        fn putting_somebody_back_to_full_forgets_them_rather_than_writing_it_down() {
+            // Full volume is the absence of a choice. Written down, the file
+            // would grow a line for every person anybody ever nudged and put
+            // back, and the mixer would multiply each of them by one.
+            let (_dir, state, _) = state();
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 100).expect("save");
+
+            assert!(audio_settings_for(&state).person_volumes.is_empty());
+        }
+
+        #[test]
+        fn changing_a_device_does_not_erase_everybodys_volume() {
+            // The one field the settings screen does not hold and must not be
+            // trusted to send back. It writes the whole audio section, so
+            // taking its word for this would wipe every per-person level the
+            // first time somebody picked a different microphone.
+            let (_dir, state, _) = state();
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 55).expect("save");
+
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&55),
+                "the settings screen wrote over a level it never drew"
+            );
+        }
+
+        #[test]
+        fn the_volumes_are_saved_before_anything_is_told_about_them() {
+            // The ordering every setter here shares, and the reason it is
+            // worth a test: a mixer turned down against a file that failed to
+            // save is a call that is quiet now and loud again on the next
+            // launch, with nothing to explain either.
+            let (_dir, state, _) = state();
+
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    output_volume: 40,
+                    notification_volume: 20,
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            let saved = audio_settings_for(&state);
+            assert_eq!(saved.output_volume, 40);
+            assert_eq!(saved.notification_volume, 20);
         }
 
         #[test]

@@ -19,16 +19,41 @@ pub struct SelfAudio {
     pub muted: bool,
     /// Whether this session has stopped receiving everybody else's audio.
     pub deafened: bool,
+    /// Whether this session has said it is away from the computer.
+    ///
+    /// The third state, and it is not a shade of either of the others. It
+    /// mutes, because a live microphone in an empty room is the thing it
+    /// exists to prevent, and it deliberately does not deafen: the whole
+    /// point of walking away rather than leaving is that you can hear your
+    /// name from the next room and come back.
+    ///
+    /// It is also the only one of the three whose entire value is that other
+    /// people can see it. A muted person may be listening intently; an away
+    /// person is not there, and everybody else can stop waiting for them to
+    /// answer.
+    ///
+    /// `#[serde(default)]` so a client that predates this reads a payload
+    /// carrying it and still gets the other two right.
+    #[serde(default)]
+    pub away: bool,
 }
 
 impl SelfAudio {
-    /// Whether the microphone is off, for either reason.
+    /// Whether the microphone is off, for any of the three reasons.
     ///
     /// Deafening mutes. It is what every client with both buttons does, and it
     /// is the only honest option: carrying on talking into a room you have
     /// stopped listening to is not a state anybody means to be in.
+    ///
+    /// Being away mutes for a plainer reason. Nobody is at the keyboard, so
+    /// nothing said near it was said to the call.
+    ///
+    /// All three stay independent underneath. Pressing unmute while away or
+    /// deafened sets `muted` and changes nothing audible, which is the same
+    /// bargain the deafen button has always made: the state you asked for is
+    /// recorded, and the stronger one still decides.
     pub fn microphone_off(self) -> bool {
-        self.muted || self.deafened
+        self.muted || self.deafened || self.away
     }
 }
 
@@ -122,32 +147,88 @@ mod tests {
     use super::*;
 
     #[test]
-    fn self_audio_puts_its_two_flags_beside_the_tag() {
+    fn self_audio_puts_its_flags_beside_the_tag() {
         // A newtype variant under an internal tag flattens, which is what the
-        // frontend reads: `{state, muted, deafened}` and no nesting. Worth
-        // pinning, because it is the one shape here that comes from how serde
-        // treats the variant rather than from how the enum is written.
+        // frontend reads: `{state, muted, deafened, away}` and no nesting.
+        // Worth pinning, because it is the one shape here that comes from how
+        // serde treats the variant rather than from how the enum is written.
         let json = serde_json::to_value(CallEvent::SelfAudio(SelfAudio {
             muted: true,
             deafened: false,
+            away: true,
         }))
         .unwrap();
 
         assert_eq!(json["state"], "selfAudio");
         assert_eq!(json["muted"], true);
         assert_eq!(json["deafened"], false);
+        assert_eq!(json["away"], true);
     }
 
     #[test]
     fn deafening_is_enough_to_have_the_microphone_off() {
         assert!(
             SelfAudio {
-                muted: false,
-                deafened: true
+                deafened: true,
+                ..SelfAudio::default()
             }
             .microphone_off()
         );
         assert!(!SelfAudio::default().microphone_off());
+    }
+
+    #[test]
+    fn being_away_is_enough_to_have_the_microphone_off() {
+        // The half of away that is not just an icon. Somebody who is not at
+        // the keyboard is not talking to the call, whatever the room they left
+        // it in sounds like.
+        assert!(
+            SelfAudio {
+                away: true,
+                ..SelfAudio::default()
+            }
+            .microphone_off()
+        );
+    }
+
+    #[test]
+    fn away_does_not_imply_deafened() {
+        // The entire difference from deafen. Walking away and still hearing
+        // your name is the reason to press this rather than leave.
+        let away = SelfAudio {
+            away: true,
+            ..SelfAudio::default()
+        };
+
+        assert!(away.microphone_off());
+        assert!(!away.deafened);
+    }
+
+    #[test]
+    fn the_three_states_stay_independent() {
+        // `microphone_off` collapses them for the one question it answers, and
+        // nothing else may. An interface drawing an away icon has to be able
+        // to tell an away person from a muted one.
+        let all = SelfAudio {
+            muted: true,
+            deafened: true,
+            away: true,
+        };
+        let json = serde_json::to_value(all).unwrap();
+
+        assert_eq!(json["muted"], true);
+        assert_eq!(json["deafened"], true);
+        assert_eq!(json["away"], true);
+    }
+
+    #[test]
+    fn a_payload_from_a_client_that_predates_away_still_reads() {
+        // Two Consort builds in one call. The older one sends two fields and
+        // this must not refuse the whole message over the third.
+        let old: SelfAudio = serde_json::from_str(r#"{"muted":true,"deafened":false}"#).unwrap();
+
+        assert!(old.muted);
+        assert!(!old.away);
     }
 
     fn tag(event: &CallEvent) -> String {

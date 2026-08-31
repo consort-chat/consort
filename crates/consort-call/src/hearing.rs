@@ -58,6 +58,64 @@ pub trait Heard: Send + Sync + 'static {
     /// that travels to the SFU and back, and without this the audio already in
     /// the buffer plays out underneath somebody who has just asked for quiet.
     fn silence(&self);
+
+    /// Make whatever sound goes with something happening in the call.
+    ///
+    /// A request rather than samples, because this crate must never link an
+    /// audio backend: what the sound actually is belongs to `consort-audio`,
+    /// and the seam that already exists for playing a call is the right place
+    /// to hand this over too.
+    ///
+    /// Must not block, like everything else here. It is called from the call
+    /// thread while it is servicing the SFU.
+    fn cue(&self, cue: Cue);
+
+    /// Say which person each membership currently in the call belongs to, as
+    /// `(member_id, user_id)`.
+    ///
+    /// The one thing the other side of this seam cannot work out for itself.
+    /// Everything above is keyed by membership, because that is what a queue of
+    /// audio belongs to: one person on a laptop and a phone is two streams and
+    /// mixing them into one queue would interleave them into noise. A person's
+    /// settings are keyed by *them*, because "this one is too loud" is not a
+    /// fact about a device. This is the only place both are known at once.
+    ///
+    /// Called on every roster change, and idempotent: it is a statement of who
+    /// is in the call now rather than a delta. Memberships absent from it have
+    /// gone, and whatever was hung on them should go too.
+    ///
+    /// Must not block, like everything else here.
+    fn attribute(&self, whose: &[(String, String)]);
+}
+
+/// Something in a call worth making a sound about.
+///
+/// What happened, never what to play. There are two settings on the other side
+/// of this seam, one for the chimes and one for the spoken notifications, and
+/// a cue may become either, both or neither. This crate does not know which
+/// are switched on and must not: it knows somebody arrived.
+///
+/// Named for the request rather than for the chime it used to be the only
+/// possible answer to, which also stops it colliding with the settings
+/// screen's test chime. Those two were the same word for two unrelated things.
+///
+/// Only what this session's own membership can be sure of. There is no
+/// "somebody muted" here and there should not be: mute is toggled far more
+/// often than people arrive, and a channel that pinged for every one of them
+/// is a channel people turn the sounds off in within the hour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cue {
+    /// Somebody joined the voice channel this session is in.
+    Arrived,
+    /// Somebody left it.
+    Departed,
+    /// This session stopped being away.
+    ///
+    /// The one cue that is about us rather than about anybody else, and the
+    /// only one with no chime behind it: "welcome back" is a sentence or it is
+    /// nothing. It also does not come from the roster, because nobody else's
+    /// roster changed. It comes from the moment the flag is put down.
+    Returned,
 }
 
 /// A shared handle on somewhere to play a call.
@@ -140,6 +198,7 @@ mod tests {
             device_id: None,
             is_local,
             reachable: true,
+            joined_at_ms: None,
             streams: kinds
                 .iter()
                 .map(|kind| StreamState {

@@ -142,6 +142,48 @@ pub struct Participant {
     /// so an interface can say which of the two somebody chose.
     #[serde(default)]
     pub deafened: bool,
+    /// Whether they have said they are not at their computer.
+    ///
+    /// Carried the same way `deafened` is, over the call's data channel and
+    /// between Consort clients only, and true under the same rule: every one
+    /// of their memberships said so. Somebody away on a laptop who is at their
+    /// phone is at their computer.
+    ///
+    /// Implies the microphone is off, and deliberately implies nothing about
+    /// [`deafened`](Self::deafened). Still hearing the call is the entire
+    /// difference between walking away and leaving.
+    #[serde(default)]
+    pub away: bool,
+    /// Whether a camera of theirs is live.
+    ///
+    /// True only for somebody publishing a camera that is not muted, which on
+    /// the wire is the same test the microphone gets, applied to the other
+    /// stream. Somebody on two devices is on camera if either of them is: the
+    /// opposite of the [`muted`](Self::muted) rule, and for the same reason
+    /// behind it, which is that the answer should describe what the call can
+    /// actually see and hear rather than what one device happens to be doing.
+    ///
+    /// False where nothing knows, exactly like `muted`, and with the same
+    /// caveat: somebody listed from room state alone is reported without a
+    /// camera because room state carries nothing that could say otherwise.
+    #[serde(default)]
+    pub camera: bool,
+    /// When they joined the call, in milliseconds since the Unix epoch.
+    ///
+    /// The SFU's own record rather than the moment this session noticed them,
+    /// so it is still right for people who were already in the call when we
+    /// arrived. `None` for somebody listed from room state alone, for somebody
+    /// whose media has not appeared yet, and against a server too old to
+    /// report it.
+    ///
+    /// Somebody on two devices joined when the first of them did.
+    ///
+    /// Deliberately not "when they joined the room". That is answerable from
+    /// their membership event, but the event carries the timestamp of their
+    /// *last* profile change, so it means "when they last picked a new
+    /// avatar", which is not a fact worth putting under somebody's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
 }
 
 impl Participant {
@@ -156,6 +198,9 @@ impl Participant {
             name: name.into(),
             muted: false,
             deafened: false,
+            away: false,
+            camera: false,
+            since: None,
         }
     }
 
@@ -167,6 +212,21 @@ impl Participant {
     /// The same person, with what their own client said about them.
     pub fn with_deafened(self, deafened: bool) -> Self {
         Self { deafened, ..self }
+    }
+
+    /// The same person, with whether their own client says they are there.
+    pub fn with_away(self, away: bool) -> Self {
+        Self { away, ..self }
+    }
+
+    /// The same person, with whether the call can see them.
+    pub fn with_camera(self, camera: bool) -> Self {
+        Self { camera, ..self }
+    }
+
+    /// The same person, with when they joined the call.
+    pub fn with_since(self, since: Option<u64>) -> Self {
+        Self { since, ..self }
     }
 }
 

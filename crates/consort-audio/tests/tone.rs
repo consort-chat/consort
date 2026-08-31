@@ -58,11 +58,7 @@ fn it_starts_and_ends_in_silence() {
     let (played, _) = play(64);
 
     assert_eq!(played[0], 0, "the first sample is a click");
-    assert_eq!(
-        played[Tone::SAMPLES - 1],
-        0,
-        "the last sample is a click"
-    );
+    assert_eq!(played[Tone::SAMPLES - 1], 0, "the last sample is a click");
 }
 
 #[test]

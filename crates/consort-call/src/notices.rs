@@ -14,6 +14,11 @@
 //! deafened person appears to everybody else as merely muted, which is true
 //! but is not the interesting half.
 //!
+//! Away is not either, and it is further from anything the stack knows about:
+//! it is not a fact about audio at all, it is a fact about whether there is a
+//! person in the chair. Being seen is the whole of its value, so the same
+//! channel carries it.
+//!
 //! ## Why a data message and not an attribute
 //!
 //! LiveKit participant attributes are exactly the right shape for this: a
@@ -71,6 +76,16 @@ pub struct Notice {
     pub member_id: String,
     /// Whether they have stopped listening to the call.
     pub deafened: bool,
+    /// Whether they have said they are away from the computer.
+    ///
+    /// Added without touching [`VERSION`], which is what the version field was
+    /// for: `Notice` does not deny unknown fields, so a build that predates
+    /// this reads a notice carrying it and still gets `deafened` right, and
+    /// `#[serde(default)]` means this build reads an older notice as not away.
+    /// Bumping to `v: 2` would instead have made the two builds invisible to
+    /// each other, which is the opposite of what a version field is for here.
+    #[serde(default)]
+    pub away: bool,
 }
 
 /// The version this build writes and the only one it reads.
@@ -78,11 +93,12 @@ pub const VERSION: u8 = 1;
 
 impl Notice {
     /// What this session should be telling everybody right now.
-    pub fn new(member_id: impl Into<String>, deafened: bool) -> Self {
+    pub fn new(member_id: impl Into<String>, deafened: bool, away: bool) -> Self {
         Self {
             v: VERSION,
             member_id: member_id.into(),
             deafened,
+            away,
         }
     }
 
@@ -104,15 +120,32 @@ impl Notice {
     }
 }
 
-/// Who in the call has deafened themselves.
+/// The memberships each notice named, split by what it said.
+///
+/// Two lists rather than one map because this is what the roster needs: a
+/// pass per flag, marking the people every one of whose memberships said it.
+/// See [`crate::roster`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Flags {
+    /// Memberships that have stopped listening.
+    pub deafened: Vec<String>,
+    /// Memberships whose owner is not at the computer.
+    pub away: Vec<String>,
+}
+
+/// What everybody in the call has last said about their own audio.
+///
+/// Named for the act rather than for one of the things announced, because it
+/// tracks two and will track more: a type called `Deafened` that also knows who
+/// is away is a type whose name has to be read past.
 ///
 /// Keyed by LiveKit participant identity rather than by `member_id`, because
 /// leaving is reported in terms of the identity and nothing else, and a person
 /// who disconnects without a parting word must not stay deafened forever.
 #[derive(Default)]
-pub struct Deafened(HashMap<String, Notice>);
+pub struct Announced(HashMap<String, Notice>);
 
-impl Deafened {
+impl Announced {
     pub fn new() -> Self {
         Self::default()
     }
@@ -136,13 +169,25 @@ impl Deafened {
         self.0.remove(identity).is_some()
     }
 
-    /// The memberships currently deafened.
-    pub fn members(&self) -> Vec<String> {
-        self.0
-            .values()
-            .filter(|notice| notice.deafened)
-            .map(|notice| notice.member_id.clone())
-            .collect()
+    /// The memberships currently deafened, and the ones currently away.
+    ///
+    /// Both in one pass, and separately from each other. A person can be both:
+    /// deafening while away is what happens when somebody turns their
+    /// headphones off on the way out, and collapsing the two would lose which
+    /// icon to draw.
+    pub fn flags(&self) -> Flags {
+        let members = |wanted: fn(&Notice) -> bool| {
+            self.0
+                .values()
+                .filter(|notice| wanted(notice))
+                .map(|notice| notice.member_id.clone())
+                .collect()
+        };
+
+        Flags {
+            deafened: members(|notice| notice.deafened),
+            away: members(|notice| notice.away),
+        }
     }
 }
 
@@ -157,7 +202,7 @@ mod tests {
 
     #[test]
     fn a_notice_survives_the_round_trip() {
-        let sent = Notice::new("ada-laptop", true);
+        let sent = Notice::new("ada-laptop", true, false);
 
         assert_eq!(Notice::decode(&sent.encode()), Some(sent));
     }
@@ -168,7 +213,7 @@ mod tests {
         // changed underneath it, and the only symptom would be two Consort
         // versions silently not understanding each other.
         let json: serde_json::Value =
-            serde_json::from_slice(&Notice::new("ada-laptop", true).encode()).unwrap();
+            serde_json::from_slice(&Notice::new("ada-laptop", true, false).encode()).unwrap();
 
         assert_eq!(json["v"], 1);
         assert_eq!(json["memberId"], "ada-laptop");
@@ -195,28 +240,28 @@ mod tests {
 
     #[test]
     fn somebody_who_deafened_is_listed() {
-        let mut deafened = Deafened::new();
+        let mut announced = Announced::new();
 
-        assert!(deafened.note("ada-identity", Notice::new("ada-laptop", true)));
-        assert_eq!(deafened.members(), vec!["ada-laptop".to_owned()]);
+        assert!(announced.note("ada-identity", Notice::new("ada-laptop", true, false)));
+        assert_eq!(announced.flags().deafened, vec!["ada-laptop".to_owned()]);
     }
 
     #[test]
     fn somebody_who_is_merely_present_is_not_listed() {
-        let mut deafened = Deafened::new();
+        let mut announced = Announced::new();
 
-        deafened.note("ada-identity", Notice::new("ada-laptop", false));
+        announced.note("ada-identity", Notice::new("ada-laptop", false, false));
 
-        assert!(deafened.members().is_empty());
+        assert!(announced.flags().deafened.is_empty());
     }
 
     #[test]
     fn undeafening_takes_them_off_the_list() {
-        let mut deafened = Deafened::new();
-        deafened.note("ada-identity", Notice::new("ada-laptop", true));
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
 
-        assert!(deafened.note("ada-identity", Notice::new("ada-laptop", false)));
-        assert!(deafened.members().is_empty());
+        assert!(announced.note("ada-identity", Notice::new("ada-laptop", false, false)));
+        assert!(announced.flags().deafened.is_empty());
     }
 
     #[test]
@@ -224,10 +269,10 @@ mod tests {
         // Everybody re-announces on every roster change, so most notices
         // repeat. Redrawing the roster for each would mean one redraw per
         // participant every time anybody walked in.
-        let mut deafened = Deafened::new();
-        deafened.note("ada-identity", Notice::new("ada-laptop", true));
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
 
-        assert!(!deafened.note("ada-identity", Notice::new("ada-laptop", true)));
+        assert!(!announced.note("ada-identity", Notice::new("ada-laptop", true, false)));
     }
 
     #[test]
@@ -235,28 +280,28 @@ mod tests {
         // A client that crashes or drops its connection says nothing on the
         // way out, and staying deafened forever would be a headphone icon
         // beside somebody who is not in the call.
-        let mut deafened = Deafened::new();
-        deafened.note("ada-identity", Notice::new("ada-laptop", true));
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
 
-        assert!(deafened.gone("ada-identity"));
-        assert!(deafened.members().is_empty());
+        assert!(announced.gone("ada-identity"));
+        assert!(announced.flags().deafened.is_empty());
     }
 
     #[test]
     fn somebody_leaving_who_was_never_heard_from_is_not_a_change() {
-        let mut deafened = Deafened::new();
+        let mut announced = Announced::new();
 
-        assert!(!deafened.gone("a-stranger"));
+        assert!(!announced.gone("a-stranger"));
     }
 
     #[test]
     fn two_people_deafened_are_both_listed() {
-        let mut deafened = Deafened::new();
-        deafened.note("ada-identity", Notice::new("ada-laptop", true));
-        deafened.note("bob-identity", Notice::new("bob-phone", true));
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
+        announced.note("bob-identity", Notice::new("bob-phone", true, false));
 
         assert_eq!(
-            sorted(deafened.members()),
+            sorted(announced.flags().deafened),
             vec!["ada-laptop".to_owned(), "bob-phone".to_owned()]
         );
     }
@@ -268,13 +313,13 @@ mod tests {
         // by hand, and it has to land in the same map or the roster would draw
         // the headphones beside everybody except the person who pressed the
         // button.
-        let mut deafened = Deafened::new();
+        let mut announced = Announced::new();
 
-        assert!(deafened.note("our-identity", Notice::new("our-laptop", true)));
-        assert!(deafened.note("theirs", Notice::new("their-laptop", true)));
+        assert!(announced.note("our-identity", Notice::new("our-laptop", true, false)));
+        assert!(announced.note("theirs", Notice::new("their-laptop", true, false)));
 
         assert_eq!(
-            sorted(deafened.members()),
+            sorted(announced.flags().deafened),
             vec!["our-laptop".to_owned(), "their-laptop".to_owned()]
         );
     }
@@ -284,23 +329,88 @@ mod tests {
         // Our own entry is keyed by our own identity, which the SFU never
         // reports as disconnected. Sharing a key with anybody would undeafen us
         // the moment they hung up.
-        let mut deafened = Deafened::new();
-        deafened.note("our-identity", Notice::new("our-laptop", true));
-        deafened.note("theirs", Notice::new("their-laptop", true));
+        let mut announced = Announced::new();
+        announced.note("our-identity", Notice::new("our-laptop", true, false));
+        announced.note("theirs", Notice::new("their-laptop", true, false));
 
-        assert!(deafened.gone("theirs"));
+        assert!(announced.gone("theirs"));
 
-        assert_eq!(deafened.members(), vec!["our-laptop".to_owned()]);
+        assert_eq!(announced.flags().deafened, vec!["our-laptop".to_owned()]);
     }
 
     #[test]
     fn one_person_on_two_devices_is_tracked_per_device() {
         // Deafening a laptop says nothing about a phone that is also in the
         // call, and the roster folds the two together afterwards.
-        let mut deafened = Deafened::new();
-        deafened.note("ada-laptop-identity", Notice::new("ada-laptop", true));
-        deafened.note("ada-phone-identity", Notice::new("ada-phone", false));
+        let mut announced = Announced::new();
+        announced.note(
+            "ada-laptop-identity",
+            Notice::new("ada-laptop", true, false),
+        );
+        announced.note("ada-phone-identity", Notice::new("ada-phone", false, false));
 
-        assert_eq!(deafened.members(), vec!["ada-laptop".to_owned()]);
+        assert_eq!(announced.flags().deafened, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn somebody_who_is_away_is_listed_separately_from_the_deafened() {
+        // Two questions, two icons. A person away with their headphones still
+        // on is not deafened, and drawing them as such would say the call
+        // cannot reach them when it can.
+        let mut announced = Announced::new();
+
+        announced.note("ada-identity", Notice::new("ada-laptop", false, true));
+
+        let flags = announced.flags();
+        assert_eq!(flags.away, vec!["ada-laptop".to_owned()]);
+        assert!(flags.deafened.is_empty());
+    }
+
+    #[test]
+    fn somebody_can_be_away_and_deafened_at_once() {
+        // What turning your headphones off on the way out looks like.
+        let mut announced = Announced::new();
+
+        announced.note("ada-identity", Notice::new("ada-laptop", true, true));
+
+        let flags = announced.flags();
+        assert_eq!(flags.deafened, vec!["ada-laptop".to_owned()]);
+        assert_eq!(flags.away, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn coming_back_takes_them_off_the_away_list() {
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", false, true));
+
+        assert!(announced.note("ada-identity", Notice::new("ada-laptop", false, false)));
+        assert!(announced.flags().away.is_empty());
+    }
+
+    #[test]
+    fn a_notice_from_a_build_that_predates_away_reads_as_not_away() {
+        // The compatibility that the version field was left alone for. An
+        // older Consort in the same call sends two fields, and refusing the
+        // message or guessing `true` would both be worse than this.
+        let older = br#"{"v":1,"memberId":"ada-laptop","deafened":true}"#;
+
+        let notice = Notice::decode(older).expect("an older notice was refused");
+        assert!(notice.deafened);
+        assert!(!notice.away);
+    }
+
+    #[test]
+    fn a_build_that_predates_away_can_still_read_ours() {
+        // The other direction, which is the one that cannot be tested by
+        // deserialising: an older build's `Notice` has no `away` field and
+        // serde ignores unknown ones, so what matters is that the two fields
+        // it does read are still there and still named the same.
+        let json: serde_json::Value =
+            serde_json::from_slice(&Notice::new("ada-laptop", true, true).encode()).unwrap();
+
+        assert_eq!(json["v"], 1);
+        assert_eq!(json["memberId"], "ada-laptop");
+        assert_eq!(json["deafened"], true);
+        assert_eq!(json["away"], true);
     }
 }

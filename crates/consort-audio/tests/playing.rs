@@ -42,7 +42,10 @@ fn the_same_sound_comes_out_of_every_channel() {
     playing.fill_i16(&mut buffer);
 
     for pair in buffer.as_chunks::<2>().0 {
-        assert_eq!(pair[0], pair[1], "the channels are carrying different audio");
+        assert_eq!(
+            pair[0], pair[1],
+            "the channels are carrying different audio"
+        );
     }
     assert!(
         buffer.iter().any(|&sample| sample != 0),
@@ -60,7 +63,12 @@ fn a_mono_device_gets_the_same_chime() {
     stereo.fill_i16(&mut in_stereo);
     mono.fill_i16(&mut in_mono);
 
-    let left: Vec<i16> = in_stereo.as_chunks::<2>().0.iter().map(|pair| pair[0]).collect();
+    let left: Vec<i16> = in_stereo
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| pair[0])
+        .collect();
     assert_eq!(left, in_mono);
 }
 

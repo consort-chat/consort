@@ -1,4 +1,4 @@
-import type { Call, SelfAudio } from "../lib/api";
+import { microphoneOff, type Call, type SelfAudio } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
 
@@ -82,6 +82,31 @@ function HeadphonesIcon({ off }: { off: boolean }) {
   );
 }
 
+/**
+ * A clock, filled in when this session has said nobody is here.
+ *
+ * A clock rather than a crossed-out anything, and that is the point of the
+ * button: the other two icons say what is switched off, and this one says
+ * where the person went. TeamSpeak drew it this way and it reads instantly.
+ */
+function ClockIcon({ on }: { on: boolean }) {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill={on ? "currentColor" : "none"}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" stroke={on ? "var(--surface)" : "currentColor"} />
+    </svg>
+  );
+}
+
 interface Props {
   call: Call;
   /**
@@ -116,6 +141,7 @@ interface Props {
   onDisconnect: () => void;
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
+  onSetAway: (away: boolean) => void;
 }
 
 /**
@@ -142,15 +168,18 @@ export function CallPanel({
   onDisconnect,
   onSetMuted,
   onSetDeafened,
+  onSetAway,
 }: Props) {
   if (call.state === "disconnected" || call.state === "failed") return null;
 
-  // Deafening mutes, so the microphone button reads as off either way. It stays
-  // pressable: unmuting while deafened is a reasonable thing to ask for and the
-  // Rust side takes it, it simply does not take effect until the ears come back
-  // on. What it must not do is claim the microphone is live when it is not.
+  // Deafening mutes, and so does being away, so the microphone button reads as
+  // off in all three cases. It stays pressable: unmuting while deafened or away
+  // is a reasonable thing to ask for and the Rust side takes it, it simply does
+  // not take effect until the stronger state is cleared. What it must not do is
+  // claim the microphone is live when it is not.
   const { muted, deafened } = selfAudio;
-  const microphoneOff = muted || deafened;
+  const away = selfAudio.away === true;
+  const off = microphoneOff(selfAudio);
 
   return (
     <div
@@ -189,11 +218,11 @@ export function CallPanel({
           type="button"
           className="call-panel__control"
           onClick={() => onSetMuted(!muted)}
-          aria-pressed={microphoneOff}
+          aria-pressed={off}
           aria-label="Mute microphone"
-          title={microphoneOff ? "Unmute" : "Mute"}
+          title={off ? "Unmute" : "Mute"}
         >
-          <MicrophoneIcon off={microphoneOff} />
+          <MicrophoneIcon off={off} />
         </button>
 
         <button
@@ -205,6 +234,22 @@ export function CallPanel({
           title={deafened ? "Undeafen" : "Deafen"}
         >
           <HeadphonesIcon off={deafened} />
+        </button>
+
+        {/*
+          Between deafen and hang up, which is where it belongs by severity:
+          the two to its left change what this session hears and says, this one
+          says where the person is, and the one to its right ends the call.
+        */}
+        <button
+          type="button"
+          className="call-panel__control"
+          onClick={() => onSetAway(!away)}
+          aria-pressed={away}
+          aria-label="Mark yourself away"
+          title={away ? "You are away" : "Mark yourself away"}
+        >
+          <ClockIcon on={away} />
         </button>
 
         <button

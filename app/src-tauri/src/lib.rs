@@ -98,9 +98,11 @@ pub fn run() {
             commands::resend_state,
             commands::room_avatar,
             commands::member_avatar,
+            commands::member_profile,
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,
+            commands::set_person_volume,
             commands::audio_test_start,
             commands::audio_test_stop,
             commands::audio_tone_play,
@@ -109,6 +111,7 @@ pub fn run() {
             commands::call_disconnect,
             commands::call_set_muted,
             commands::call_set_deafened,
+            commands::call_set_away,
             commands::verification_accept,
             commands::verification_start_sas,
             commands::verification_confirm,
@@ -186,9 +189,9 @@ fn under_profile(base: PathBuf, profile: Option<&str>) -> PathBuf {
 
 /// Logging to stderr, filtered by `RUST_LOG`.
 ///
-/// The default keeps matrix-sdk at `warn`. At `info` it narrates every sync
-/// response, which buries our own lines during exactly the debugging session
-/// where they matter.
+/// See [`default_log_filter`] for what is on when nothing is set, and for the
+/// trap a hand-written `RUST_LOG` inherits: a filter that lists targets and
+/// gives no bare level turns every crate it forgot to `OFF`.
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
 
@@ -204,8 +207,38 @@ fn init_tracing() {
 }
 
 /// The filter used when `RUST_LOG` says nothing.
+///
+/// It opens with a bare `warn`, and that is the load-bearing part. `EnvFilter`
+/// gives a target matching no directive `OFF`, not the level of the most
+/// general directive, so a crate left out of a list is not quieter than the
+/// rest: it is silent at `error!` too. A leading bare directive is the only way
+/// to say "and everything else at this level", because
+/// `Builder::with_default_directive` applies only when the parsed filter came
+/// out empty.
+///
+/// That hole cost a debugging session. A log taken to find out why a call would
+/// not join contained nothing from `consort_call`, nothing from any
+/// `matrix_rtc_*` crate, and nothing from livekit, which between them are every
+/// line that has anything to say about joining a call. Naming crates is now the
+/// belt: the bare `warn` is the braces, and a crate added to the workspace
+/// tomorrow can no longer be silent by omission.
+///
+/// `matrix_sdk` stays named even though the bare directive already puts it at
+/// `warn`. At `info` it narrates every sync response and buries our own lines
+/// during exactly the debugging session where they matter, so it wants to be
+/// held down explicitly rather than by whatever the general level happens to be.
 fn default_log_filter() -> &'static str {
-    "consort_app_lib=info,consort_matrix=info,matrix_sdk=warn"
+    // `concat!` rather than a line continuation: rustfmt joins the lines of a
+    // continued literal without removing their indentation, and the stray
+    // spaces make every directive after the first fail to parse. It says so on
+    // stderr and carries on with what was left, which is a filter that silently
+    // does something else.
+    concat!(
+        "warn,",
+        "consort_app_lib=info,consort_matrix=info,consort_call=info,consort_audio=info,",
+        "matrix_rtc_bridge=info,matrix_rtc_core=info,matrix_rtc_livekit=info,matrix_rtc_media=info,",
+        "matrix_sdk=warn",
+    )
 }
 
 #[cfg(test)]
@@ -219,11 +252,80 @@ mod tests {
     }
 
     #[test]
-    fn the_default_log_filter_keeps_the_sdk_quiet_but_our_crates_talkative() {
+    fn the_default_log_filter_keeps_the_sdk_quiet() {
+        assert!(default_log_filter().contains("matrix_sdk=warn"));
+    }
+
+    #[test]
+    fn every_crate_that_has_something_to_say_about_a_call_is_named() {
+        // An omission here is not a crate that says less, it is one that says
+        // nothing above the bare level below. These four are the ones that
+        // narrate a join, and a join is the thing this build is hardest to
+        // diagnose.
         let filter = default_log_filter();
-        assert!(filter.contains("matrix_sdk=warn"));
-        assert!(filter.contains("consort_matrix=info"));
-        assert!(filter.contains("consort_app_lib=info"));
+
+        for target in [
+            "consort_app_lib",
+            "consort_matrix",
+            "consort_call",
+            "consort_audio",
+            "matrix_rtc_bridge",
+            "matrix_rtc_core",
+            "matrix_rtc_livekit",
+            "matrix_rtc_media",
+        ] {
+            assert!(
+                filter.contains(&format!("{target}=info")),
+                "{target} is missing from {filter}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_crate_the_default_filter_forgot_is_not_silent() {
+        // The braces, and the reason the bare `warn` is in the string rather
+        // than passed to `with_default_directive`, which applies only to a
+        // filter that parsed to nothing. Driven through a real subscriber
+        // because the failure this guards against is not a parse error: the
+        // filter is perfectly valid and simply drops the event.
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(default_log_filter()))
+            .with_writer(move || writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(target: "a_crate_nobody_thought_to_list", "the call did not join");
+            tracing::info!(target: "matrix_rtc_bridge", "the sticky bridge woke up");
+            tracing::info!(target: "matrix_sdk", "a sync response arrived");
+        });
+
+        let said = captured.said();
+        assert!(said.contains("the call did not join"), "{said}");
+        assert!(said.contains("the sticky bridge woke up"), "{said}");
+        assert!(!said.contains("a sync response arrived"), "{said}");
+    }
+
+    /// Somewhere for a subscriber under test to write.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Captured {
+        fn said(&self) -> String {
+            String::from_utf8(self.0.lock().expect("not poisoned").clone()).expect("utf-8")
+        }
+    }
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("not poisoned").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]

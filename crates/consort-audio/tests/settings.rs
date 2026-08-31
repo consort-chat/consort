@@ -9,6 +9,8 @@
 //! a person turned it into with a text editor. None of those should stop the
 //! application from starting.
 
+use std::collections::BTreeMap;
+
 use consort_audio::{AudioSettings, GateConfig};
 
 #[test]
@@ -24,6 +26,11 @@ fn settings_round_trip_through_json_unchanged() {
             denoise: false,
             voice_activity: false,
         },
+        call_sounds: false,
+        call_voices: false,
+        output_volume: 80,
+        notification_volume: 35,
+        person_volumes: BTreeMap::from([("@ada:example.org".to_owned(), 55)]),
     };
 
     let json = serde_json::to_string(&settings).expect("serialise");
@@ -42,6 +49,28 @@ fn an_empty_object_is_every_default() {
         GateConfig::default(),
         "a file written before the gate was configurable must still start the \
          gate, rather than starting it with every threshold at zero"
+    );
+}
+
+#[test]
+fn the_defaults_are_the_pair_of_sounds_a_fresh_install_should_make() {
+    // Both halves of one decision, and the reason this is a test rather than a
+    // comment: they are two independent booleans one refactor away from being
+    // set the obvious way round. The sentence is the notification; the chime in
+    // front of it is optional and off, because two announcements of one arrival
+    // is how somebody ends up turning both of them off.
+    let settings = AudioSettings::default();
+
+    assert!(!settings.call_sounds, "the chime is the optional half");
+    assert!(settings.call_voices, "the sentence is the notification");
+    assert_eq!(
+        settings.output_volume, 100,
+        "somebody who has asked for nothing should get what the sound card was handed"
+    );
+    assert!(
+        settings.notification_volume < settings.output_volume,
+        "a notification is mastered to be heard on its own and a call is not, so \
+         playing them at one level puts the notification on top"
     );
 }
 
@@ -124,4 +153,141 @@ fn a_file_written_before_the_toggle_existed_keeps_the_gate() {
 
     assert!(settings.gate.voice_activity);
     assert_eq!(settings.gate.open_at, 0.8);
+}
+
+#[test]
+fn the_chime_is_off_for_somebody_who_never_chose() {
+    // It was on, and the sentence turning up is what changed the answer: the
+    // chime's job was to get somebody's attention for a notification that used
+    // to be nothing but the chime. Two announcements of one arrival is not
+    // twice the information, it is a doorbell in front of somebody already
+    // talking.
+    let settings: AudioSettings = serde_json::from_str("{}").expect("deserialise");
+
+    assert!(!settings.call_sounds);
+}
+
+#[test]
+fn a_settings_file_written_before_call_sounds_existed_gets_the_current_default() {
+    // The upgrade case. A file from an older build has no such key, and the
+    // container-level `default` fills it in from `Default` rather than from
+    // the zero value. That the two now agree is a coincidence of this
+    // particular default and not the mechanism, which is what the two volume
+    // assertions are here to keep honest.
+    let older = r#"{"input":"Yeti Stereo Microphone","output":null}"#;
+
+    let settings: AudioSettings = serde_json::from_str(older).expect("deserialise");
+
+    assert_eq!(settings.input.as_deref(), Some("Yeti Stereo Microphone"));
+    assert!(!settings.call_sounds);
+    assert_eq!(
+        settings.output_volume,
+        AudioSettings::default().output_volume
+    );
+    assert_eq!(
+        settings.notification_volume,
+        AudioSettings::default().notification_volume,
+    );
+}
+
+#[test]
+fn a_volume_of_zero_is_a_choice_and_not_a_missing_field() {
+    // The trap that comes with defaulting a numeric field. Somebody who drags
+    // a slider to nothing has said something, and a reader that treated the
+    // zero as absent would hand them full volume on the next launch and look
+    // like the setting does not work.
+    let json = r#"{"outputVolume":0,"notificationVolume":0}"#;
+
+    let settings: AudioSettings = serde_json::from_str(json).expect("deserialise");
+
+    assert_eq!(settings.output_volume, 0);
+    assert_eq!(settings.notification_volume, 0);
+}
+
+#[test]
+fn a_persons_own_level_is_kept_by_user_id() {
+    // Per person and per machine, because there is nowhere else it could live:
+    // no account data says "this one is too loud in my headphones", and it is a
+    // fact about the room somebody is sitting in rather than about the account.
+    let json = r#"{"personVolumes":{"@ada:example.org":55}}"#;
+
+    let settings: AudioSettings = serde_json::from_str(json).expect("deserialise");
+
+    assert_eq!(settings.person_volumes.get("@ada:example.org"), Some(&55));
+    assert_eq!(
+        settings.person_volumes.get("@grace:example.org"),
+        None,
+        "somebody nobody has adjusted should have no entry rather than a written-down 100"
+    );
+}
+
+#[test]
+fn spoken_notifications_are_on_for_somebody_who_never_chose() {
+    // The second field whose default is not the zero value, and it has to be
+    // written out for the same reason as the first: nobody switches on a
+    // notification they have never heard.
+    let settings: AudioSettings = serde_json::from_str("{}").expect("deserialise");
+
+    assert!(settings.call_voices);
+}
+
+#[test]
+fn a_settings_file_written_before_the_voices_existed_still_has_them_on() {
+    // The upgrade case, and the one that matters most here: everybody running
+    // Consort today has a settings file that predates this field.
+    let older = r#"{"input":null,"output":null,"callSounds":false}"#;
+
+    let settings: AudioSettings = serde_json::from_str(older).expect("deserialise");
+
+    assert!(!settings.call_sounds, "the older choice was not honoured");
+    assert!(settings.call_voices);
+}
+
+#[test]
+fn the_chimes_and_the_voices_switch_independently() {
+    // The whole reason there are two. Either one off and the other on has to
+    // be a state the file can hold, or the second setting is decoration.
+    let chimes_only = r#"{"callSounds":true,"callVoices":false}"#;
+    let voices_only = r#"{"callSounds":false,"callVoices":true}"#;
+
+    let chimes: AudioSettings = serde_json::from_str(chimes_only).expect("deserialise");
+    let voices: AudioSettings = serde_json::from_str(voices_only).expect("deserialise");
+
+    assert!(chimes.call_sounds && !chimes.call_voices);
+    assert!(!voices.call_sounds && voices.call_voices);
+}
+
+#[test]
+fn turning_the_voices_off_survives_the_round_trip() {
+    let off = AudioSettings {
+        call_voices: false,
+        ..AudioSettings::default()
+    };
+
+    let json = serde_json::to_string(&off).expect("serialise");
+    let read_back: AudioSettings = serde_json::from_str(&json).expect("deserialise");
+
+    assert!(!read_back.call_voices);
+    assert_eq!(
+        read_back.call_sounds,
+        AudioSettings::default().call_sounds,
+        "the chimes moved when only the voices were touched"
+    );
+}
+
+#[test]
+fn turning_the_chime_on_survives_the_round_trip() {
+    // The setting exists to be moved, and a preference that does not persist is
+    // worse than no preference at all: it looks like it worked and reverts on
+    // the next launch. Written as the non-default direction on purpose, so a
+    // serialiser that dropped the field entirely would fail here.
+    let on = AudioSettings {
+        call_sounds: true,
+        ..AudioSettings::default()
+    };
+
+    let json = serde_json::to_string(&on).expect("serialise");
+    let read_back: AudioSettings = serde_json::from_str(&json).expect("deserialise");
+
+    assert!(read_back.call_sounds);
 }

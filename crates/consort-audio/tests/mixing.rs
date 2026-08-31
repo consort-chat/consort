@@ -9,6 +9,8 @@
 //! works and sounds bad, which is the hardest kind of bug to be told about
 //! usefully.
 
+use std::collections::HashMap;
+
 use consort_audio::{FRAME_SAMPLES, JITTER_SAMPLES, Mixing, Voices};
 
 /// Fill one mono buffer of `frames` samples.
@@ -243,4 +245,299 @@ fn every_clone_is_the_same_set_of_queues() {
     calling.hear("alice", &[3, 3]);
 
     assert_eq!(play(&voices, 2), vec![3, 3]);
+}
+
+/// Sounds this client makes about the call, rather than audio from anybody in
+/// it.
+///
+/// A separate queue with separate rules, and the rules are the reason these
+/// are worth writing down: a voice queue drops its oldest samples when it
+/// overflows, which for a chime would silently turn a recognisable sound into
+/// its own last fragment.
+mod sounds {
+    use super::*;
+    use consort_audio::{SAMPLE_RATE, SOUND_SAMPLES};
+
+    #[test]
+    fn a_sound_plays_out_of_the_call_s_own_output() {
+        let voices = Voices::new();
+        voices.play(&[7, 7, 7, 7]);
+
+        assert_eq!(play(&voices, 4), vec![7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn a_sound_mixes_with_whoever_is_talking() {
+        // Not instead of them. Somebody arriving while a person is mid-word
+        // must not mute that word, and it must not clip either: both go into
+        // the same accumulator and are clamped once at the end.
+        let voices = Voices::new();
+        voices.hear("alice", &[100, 100]);
+        voices.play(&[5, 5]);
+
+        assert_eq!(play(&voices, 2), vec![105, 105]);
+    }
+
+    #[test]
+    fn two_sounds_queue_rather_than_overlapping() {
+        // Two people arriving at once is two sounds one after another. Summed
+        // on top of each other it would be one sound at twice the amplitude,
+        // which is a different sound and a louder one.
+        let voices = Voices::new();
+        voices.play(&[1, 2]);
+        voices.play(&[3, 4]);
+
+        assert_eq!(play(&voices, 4), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn what_is_played_is_taken_off_the_queue() {
+        let voices = Voices::new();
+        voices.play(&[1, 2, 3, 4]);
+
+        assert_eq!(play(&voices, 2), vec![1, 2]);
+        assert_eq!(voices.sound_waiting(), 2);
+        assert_eq!(play(&voices, 2), vec![3, 4]);
+        assert_eq!(voices.sound_waiting(), 0);
+    }
+
+    #[test]
+    fn a_sound_is_not_capped_at_the_jitter_buffer() {
+        // The whole reason this is not just another entry in the voice map.
+        // `JITTER_SAMPLES` is 120 ms, which is right for speech and would cut
+        // all but the tail off anything long enough to recognise.
+        let voices = Voices::new();
+        let chime = vec![9i16; JITTER_SAMPLES * 3];
+
+        voices.play(&chime);
+
+        assert_eq!(voices.sound_waiting(), chime.len());
+    }
+
+    #[test]
+    fn a_burst_of_arrivals_cannot_queue_forever() {
+        // Somebody rejoining a busy channel must not sit through a minute of
+        // chiming for people who were already there.
+        let voices = Voices::new();
+
+        for _ in 0..100 {
+            voices.play(&vec![1i16; SOUND_SAMPLES]);
+        }
+
+        assert_eq!(voices.sound_waiting(), SOUND_SAMPLES);
+    }
+
+    #[test]
+    fn one_arrival_fits_its_chime_and_its_sentence() {
+        // The reason the cap moved from two seconds to six. A chime is about a
+        // third of a second and a spoken notification is about a second and a
+        // half, and they queue rather than overlap, so the old cap cut the end
+        // off the sentence for a single person walking in. The failure would
+        // have been a voice that stops mid-word, which reads as a broken
+        // recording rather than as a queue that is too short.
+        let voices = Voices::new();
+        let chime = vec![1i16; SAMPLE_RATE as usize / 3];
+        let sentence = vec![2i16; SAMPLE_RATE as usize * 3 / 2];
+
+        voices.play(&chime);
+        voices.play(&sentence);
+
+        assert_eq!(
+            voices.sound_waiting(),
+            chime.len() + sentence.len(),
+            "the sentence was truncated by the cap"
+        );
+    }
+
+    #[test]
+    fn the_overflow_is_dropped_from_the_end() {
+        // The opposite of what a voice queue does, and deliberately. A
+        // truncated chime is still recognisably the chime; one missing its
+        // beginning is a click.
+        let voices = Voices::new();
+        voices.play(&vec![1i16; SOUND_SAMPLES - 2]);
+
+        voices.play(&[2, 2, 3, 3]);
+
+        assert_eq!(voices.sound_waiting(), SOUND_SAMPLES);
+        let played = play(&voices, SOUND_SAMPLES);
+        assert_eq!(
+            &played[SOUND_SAMPLES - 2..],
+            &[2, 2],
+            "the tail of the queue is not the start of the newest sound"
+        );
+    }
+
+    #[test]
+    fn deafening_drops_whatever_had_not_played_yet() {
+        // Undeafening otherwise replays a burst of arrivals for people who
+        // have been in the channel for a minute by then.
+        let voices = Voices::new();
+        voices.play(&[1, 2, 3, 4]);
+
+        voices.silence();
+
+        assert_eq!(voices.sound_waiting(), 0);
+        assert_eq!(play(&voices, 4), vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn every_clone_shares_the_sound_queue_too() {
+        // The call thread queues and the audio thread drains, exactly as for
+        // voices. A clone that copied would chime into a buffer nobody plays.
+        let voices = Voices::new();
+        let calling = voices.clone();
+
+        calling.play(&[8, 8]);
+
+        assert_eq!(play(&voices, 2), vec![8, 8]);
+    }
+}
+
+/// How loud everything is, which is three separate questions with one answer.
+///
+/// The failure these guard against is the quiet one. Every level here is a
+/// multiply that either happens or does not, and a level applied in the wrong
+/// place produces a call that works: it is simply at the wrong volume, and
+/// nobody can tell whether that is the setting or the person.
+mod levels {
+    use super::*;
+    use consort_audio::{FULL_VOLUME, gain};
+
+    /// A level that is unmistakable in a sample value, and not so low that
+    /// rounding is what is being measured.
+    const HALF: u8 = 50;
+
+    #[test]
+    fn nobody_who_has_chosen_nothing_is_attenuated() {
+        // The case that has to be exact rather than merely close. Every call
+        // anybody has ever made runs through this path, and a curve that
+        // returned 0.999 at the top would quietly resample every sample in
+        // every call for nothing.
+        let voices = Voices::new();
+        voices.hear("alice", &[1000, -1000, 32767, -32768]);
+
+        assert_eq!(play(&voices, 4), vec![1000, -1000, 32767, -32768]);
+    }
+
+    #[test]
+    fn the_output_level_turns_everybody_down_together() {
+        let voices = Voices::new();
+        voices.set_output_level(HALF);
+        voices.hear("alice", &[1000, 1000]);
+        voices.hear("bob", &[1000, 1000]);
+
+        let played = play(&voices, 2);
+        let expected = (2000.0 * f64::from(gain(HALF))).round() as i16;
+        assert_eq!(played, vec![expected, expected]);
+    }
+
+    #[test]
+    fn the_curve_is_not_proportional() {
+        // Half a slider is not half an amplitude, and this is the assertion
+        // that keeps it that way. A proportional control spends its bottom half
+        // on changes nobody can hear much of; squaring puts the middle of the
+        // travel near the middle of what somebody is listening for.
+        assert!(
+            gain(HALF) < 0.5,
+            "half the slider should be under half the amplitude"
+        );
+        assert_eq!(gain(FULL_VOLUME), 1.0);
+        assert_eq!(gain(0), 0.0);
+    }
+
+    #[test]
+    fn nothing_can_be_made_louder_than_it_was() {
+        // The mixer clips rather than ducking, deliberately, so a control that
+        // could push the sum past full scale would distort the whole call to
+        // make one part of it louder.
+        assert_eq!(gain(200), 1.0);
+        assert_eq!(gain(u8::MAX), 1.0);
+    }
+
+    #[test]
+    fn a_notification_is_measured_against_the_output_and_not_beside_it() {
+        // The whole reason the notification level is a percentage of the master
+        // rather than its own absolute. Set beside it, turning a call down
+        // would leave the chimes where they were, so every arrival would get
+        // louder relative to the call the quieter somebody made it.
+        let voices = Voices::new();
+        voices.set_output_level(HALF);
+        voices.set_notification_level(HALF);
+        voices.play(&[1000, 1000]);
+
+        let played = play(&voices, 2);
+        let both = f64::from(gain(HALF)) * f64::from(gain(HALF));
+        let expected = (1000.0 * both).round() as i16;
+        assert_eq!(played, vec![expected, expected]);
+    }
+
+    #[test]
+    fn the_notification_level_leaves_the_people_alone() {
+        // And the other half of that: these are two controls, and turning the
+        // chimes down must not turn the conversation down with them.
+        let voices = Voices::new();
+        voices.set_notification_level(0);
+        voices.hear("alice", &[1000, 1000]);
+        voices.play(&[500, 500]);
+
+        assert_eq!(play(&voices, 2), vec![1000, 1000]);
+    }
+
+    #[test]
+    fn one_person_can_be_turned_down_without_the_rest() {
+        // What the menu beside somebody's name is for. Anybody not named plays
+        // at full volume, so the map holds only the people who have been
+        // adjusted rather than an entry per person in the call.
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), HALF)]));
+        voices.hear("alice", &[1000, 1000]);
+        voices.hear("bob", &[1000, 1000]);
+
+        let quiet = (1000.0 * f64::from(gain(HALF))).round() as i16;
+        assert_eq!(play(&voices, 2), vec![quiet + 1000, quiet + 1000]);
+    }
+
+    #[test]
+    fn a_persons_level_survives_them_going_quiet_and_coming_back() {
+        // The bug this arrangement exists to avoid. Levels are kept apart from
+        // the queues because `forget` drops a queue the moment somebody's
+        // stream stops, which happens every time a person mutes, and a level
+        // stored alongside would be lost with it.
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), HALF)]));
+        voices.hear("alice", &[1000]);
+        let _ = play(&voices, 1);
+
+        voices.forget("alice");
+        voices.hear("alice", &[1000]);
+
+        let quiet = (1000.0 * f64::from(gain(HALF))).round() as i16;
+        assert_eq!(play(&voices, 1), vec![quiet]);
+    }
+
+    #[test]
+    fn replacing_the_levels_forgets_whoever_is_no_longer_named() {
+        // Wholesale rather than incremental, because these are keyed by
+        // membership and a membership is fresh on every join: a map that was
+        // only ever added to would grow for the lifetime of the process.
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), 0)]));
+        voices.set_person_levels(HashMap::new());
+        voices.hear("alice", &[1000]);
+
+        assert_eq!(play(&voices, 1), vec![1000]);
+    }
+
+    #[test]
+    fn silence_is_reachable_at_the_bottom_of_every_slider() {
+        // A volume control that cannot reach zero is a volume control somebody
+        // drags to the end of and then goes looking for a mute button.
+        let voices = Voices::new();
+        voices.set_output_level(0);
+        voices.hear("alice", &[32767, -32768]);
+        voices.play(&[32767, -32768]);
+
+        assert_eq!(play(&voices, 2), vec![0, 0]);
+    }
 }

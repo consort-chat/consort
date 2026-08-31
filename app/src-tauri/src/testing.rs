@@ -300,6 +300,12 @@ impl consort_call::PublishedAudio for FakeCallTrack {
 pub struct FakeCallRoster(tokio::sync::watch::Receiver<Standing>);
 
 impl consort_call::Roster for FakeCallRoster {
+    fn me(&self) -> Option<String> {
+        // This fake roster never lists the signed-in user, so there is nobody
+        // to leave out of an arrival diff.
+        None
+    }
+
     async fn now(&self) -> Vec<consort_matrix::Participant> {
         self.0.borrow().0.clone()
     }
@@ -336,6 +342,13 @@ impl consort_call::CallSession for FakeCallSession {
     }
 
     async fn set_deafened(&self, _deafened: bool) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn announce_self(
+        &self,
+        _audio: consort_call::SelfAudio,
+    ) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }
 

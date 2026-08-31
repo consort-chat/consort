@@ -192,17 +192,48 @@
   list-style: none;
 }
 
+/*
+  The row itself is now only a row. The grid moved onto the button inside it
+  when a name became something you could open a menu on: a button that was not
+  the full width of the row would leave a strip of dead space beside every
+  name, which is worse than not being clickable at all because it looks
+  clickable and is not.
+*/
 .channels__person {
+  display: block;
+}
+
+.channels__person-button {
   display: grid;
   /*
-    A third column that is only there when it is. `auto` collapses to nothing
-    for everybody who is not muted, so the names stay on one line and the
-    column does not appear as an empty gutter down the whole list.
+    Two trailing columns that are only there when they are. `auto` collapses to
+    nothing for a row with no icon in it, so the names stay on one line and
+    neither column appears as an empty gutter down the whole list.
+
+    Two rather than one because they answer different questions. Muted and on
+    camera are both ordinary at once, so they cannot share a slot.
   */
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
   gap: var(--space-2);
   align-items: center;
+  width: 100%;
   padding: 2px var(--space-2);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.channels__person-button:hover {
+  background: var(--surface-overlay);
+}
+
+.channels__person-button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 /*
@@ -269,4 +300,27 @@
   color: var(--text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+  Whether the call can see somebody.
+
+  Dimmer than the mute glyph and never dimmed further, because unlike that one
+  it is drawn for everybody: at the weight of a status icon, a column of them
+  down a busy channel would be the loudest thing in the sidebar and would say
+  nothing, since most of the time most cameras are off.
+
+  A camera that is on is the exception and is drawn as one, in the colour the
+  interface uses for live things elsewhere.
+*/
+.channels__camera {
+  width: 13px;
+  height: 13px;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.channels__camera[data-on="true"] {
+  color: var(--mint);
+  opacity: 1;
 }

@@ -8,7 +8,7 @@
  * reloaded by React Fast Refresh, which silently turns every edit into a full
  * page reload.
  */
-import type { Call, Channel, Connection } from "./api";
+import type { Call, Channel, Connection, Presence, Standing } from "./api";
 
 /**
  * One short phrase per connection state.
@@ -83,5 +83,75 @@ export function callLabel(call: Call): string {
       return "Not in a voice channel";
     case "failed":
       return "Could not connect";
+  }
+}
+
+/**
+ * How long somebody has been in the call, in words.
+ *
+ * Rounded down and coarse on purpose. The exact figure is never the question,
+ * and a second-by-second reading would be a number that changes while it is
+ * being read, on a panel that is open for a few seconds at a time.
+ *
+ * `now` is passed in rather than read here, so this is a pure function and a
+ * test does not have to freeze the clock.
+ */
+export function elapsedLabel(since: number, now: number): string {
+  const seconds = Math.floor((now - since) / 1000);
+  // A clock a few seconds ahead of the server would otherwise read as an hour
+  // short of a day, going backwards. "Just now" is true of both.
+  if (seconds < 60) return "Just now";
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} ${plural(minutes, "minute")}`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${plural(hours, "hour")}`;
+
+  // A call running for days is a channel somebody left open, and the number of
+  // hours stops being informative long before this.
+  const days = Math.floor(hours / 24);
+  return `${days} ${plural(days, "day")}`;
+}
+
+function plural(count: number, word: string): string {
+  return count === 1 ? word : `${word}s`;
+}
+
+/**
+ * One short phrase per presence state.
+ *
+ * "Unknown" is drawn rather than hidden. A homeserver with presence switched
+ * off is the ordinary case, and a card that silently omits the line would read
+ * as a card that has not finished loading.
+ */
+export function presenceLabel(presence: Presence): string {
+  switch (presence) {
+    case "online":
+      return "Online";
+    case "idle":
+      return "Idle";
+    case "offline":
+      return "Offline";
+    case "unknown":
+      return "Status unknown";
+  }
+}
+
+/**
+ * What to call somebody's standing, or nothing for an ordinary member.
+ *
+ * `null` rather than "Member", because a badge on everybody is a badge that
+ * says nothing. The label exists to mark the two cases that change what a
+ * person can do to you.
+ */
+export function standingLabel(standing: Standing): string | null {
+  switch (standing) {
+    case "admin":
+      return "Admin";
+    case "moderator":
+      return "Moderator";
+    case "member":
+      return null;
   }
 }

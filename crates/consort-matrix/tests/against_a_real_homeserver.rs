@@ -1660,3 +1660,233 @@ mod room_list {
         assert!(voice.joined);
     }
 }
+
+/// Phase 5 of `docs/PLAN-call-encryption.md`: the gate, against a real one.
+///
+/// Everything the gate is made of was tested against fakes, and a fake cannot
+/// disagree with the SDK about what "verified" means. These can. They are also
+/// the only place the claim "verifying opens the gate without a restart" is
+/// checked at all, because it is a claim about a live observable rather than
+/// about a function's return value.
+///
+/// What is deliberately not here is whether two verified sessions can hear
+/// each other. That needs an SFU and a microphone, so it stays a thing to do
+/// by hand. These prove the half that gates it.
+mod gate {
+    use super::*;
+
+    use consort_matrix::{CallReadiness, JoinVerdict, calls};
+    use matrix_sdk::Client;
+    use matrix_sdk::ruma::api::client::room::create_room::v3::Request;
+
+    /// A room this account is in, encrypted or not.
+    ///
+    /// Encryption is turned on after creation rather than through
+    /// `initial_state`, because that is the call whose result the gate reads:
+    /// `latest_encryption_state` answers from the same state event this sets.
+    async fn a_room(client: &Client, name: &str, encrypted: bool) -> String {
+        let mut request = Request::new();
+        request.name = Some(name.to_owned());
+        let room = client.create_room(request).await.unwrap();
+
+        if encrypted {
+            room.enable_encryption().await.unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+            while !room.latest_encryption_state().await.unwrap().is_encrypted() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the room never became encrypted"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        }
+
+        room.room_id().to_string()
+    }
+
+    /// Ask the gate until it says what we are waiting for, or give up loudly.
+    ///
+    /// Polled rather than asked once, because both sides of this are eventually
+    /// consistent: a fresh device's own verification state arrives over sync,
+    /// and so does the signature that changes it.
+    async fn wait_for_verdict(
+        client: &Client,
+        room_id: &str,
+        what: &str,
+        matches: impl Fn(&JoinVerdict) -> bool,
+    ) -> JoinVerdict {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let verdict = calls::can_join(client, room_id).await.unwrap();
+            if matches(&verdict) {
+                return verdict;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "waited for {what}; the gate last said {verdict:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn an_unverified_session_is_refused_a_call_in_an_encrypted_room() {
+        // The failure this whole milestone exists for. Before the gate, this
+        // session joined, published a membership, drew a working call, and
+        // could not be heard by anybody.
+        let (ours, _theirs) = two_devices("gate-refused").await;
+        let room_id = a_room(&ours.client, "encrypted", true).await;
+
+        let verdict = wait_for_verdict(&ours.client, &room_id, "a refusal", |verdict| {
+            matches!(verdict, JoinVerdict::Refused(_))
+        })
+        .await;
+
+        // And it says which of the two problems it is, because they are fixed
+        // in different places. This account has an identity: the second login
+        // is simply not signed by it yet.
+        assert_eq!(
+            verdict,
+            JoinVerdict::Refused(CallReadiness::SessionUnverified),
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn an_unverified_session_is_still_allowed_a_call_in_an_unencrypted_room() {
+        // The regression a gate on readiness alone would cause, and it would
+        // not have been a subtle one: MSC4143 forbids RTC encryption in an
+        // unencrypted room, so no media key is distributed there and nothing
+        // about cross-signing can stop anybody hearing anybody. Refusing here
+        // would break calls that work.
+        let (ours, _theirs) = two_devices("gate-cleartext").await;
+        let room_id = a_room(&ours.client, "cleartext", false).await;
+
+        // Asserted, not waited for. This session is unverified for the whole
+        // test, so a verdict that needs waiting for is a verdict that came
+        // from the wrong question.
+        let refused = calls::can_join(&ours.client, &room_id).await.unwrap();
+        let readiness = consort_matrix::calls::readiness(&ours.client)
+            .await
+            .unwrap();
+
+        assert_eq!(refused, JoinVerdict::Allowed);
+        assert_ne!(
+            readiness,
+            CallReadiness::Ready,
+            "this session was supposed to be unverified, so the allow proves nothing"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn verifying_opens_the_gate_without_a_restart() {
+        // The milestone, and the one claim no unit test can make: the same
+        // `Client`, with no sign-out and no reload, goes from refused to
+        // allowed because a verification finished underneath it.
+        let (ours, theirs) = two_devices("gate-opens").await;
+        let room_id = a_room(&ours.client, "encrypted", true).await;
+
+        let refused = wait_for_verdict(&ours.client, &room_id, "a refusal", |verdict| {
+            matches!(verdict, JoinVerdict::Refused(_))
+        })
+        .await;
+        assert_eq!(
+            refused,
+            JoinVerdict::Refused(CallReadiness::SessionUnverified),
+        );
+
+        // The emoji handshake, driven the same way `emoji` drives it.
+        let (flows, sink) = flow_recorder();
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
+        let their_request = theirs.ask_to_verify_us().await;
+
+        let asked = wait_for_flow(&flows, "the request", |state| {
+            matches!(state, FlowState::Requested)
+        })
+        .await;
+        verification::accept(&ours.client, &asked.other_user_id, &asked.flow_id)
+            .await
+            .unwrap();
+        let their_side = tokio::spawn(play_the_other_device(their_request, Choice::Confirm));
+
+        let comparing = wait_for_flow(&flows, "the emoji", |state| {
+            matches!(state, FlowState::Comparing { .. })
+        })
+        .await;
+        verification::confirm(&ours.client, &comparing.other_user_id, &comparing.flow_id)
+            .await
+            .unwrap();
+        their_side.await.unwrap();
+        wait_for_flow(&flows, "both sides to agree", |state| {
+            matches!(state, FlowState::Done)
+        })
+        .await;
+
+        // The point of the whole thing. Same client, same room, no restart.
+        let allowed = wait_for_verdict(&ours.client, &room_id, "the gate to open", |verdict| {
+            matches!(verdict, JoinVerdict::Allowed)
+        })
+        .await;
+
+        assert_eq!(allowed, JoinVerdict::Allowed);
+        supervisor.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn the_readiness_watcher_reports_the_change_rather_than_being_asked() {
+        // What the interface actually reads. `can_join` is asked at the moment
+        // somebody clicks a channel; this is the stream that clears the notice
+        // already on screen, and it is driven by a different SDK observable, so
+        // one working does not mean the other does.
+        let (ours, theirs) = two_devices("gate-watch").await;
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let watcher = {
+            let seen = seen.clone();
+            calls::watch_readiness(ours.client.clone(), move |readiness| {
+                seen.lock().unwrap().push(readiness)
+            })
+        };
+
+        let (flows, sink) = flow_recorder();
+        let (supervisor, _) = verification::supervise(ours.client.clone(), sink);
+        let their_request = theirs.ask_to_verify_us().await;
+
+        let asked = wait_for_flow(&flows, "the request", |state| {
+            matches!(state, FlowState::Requested)
+        })
+        .await;
+        verification::accept(&ours.client, &asked.other_user_id, &asked.flow_id)
+            .await
+            .unwrap();
+        let their_side = tokio::spawn(play_the_other_device(their_request, Choice::Confirm));
+
+        let comparing = wait_for_flow(&flows, "the emoji", |state| {
+            matches!(state, FlowState::Comparing { .. })
+        })
+        .await;
+        verification::confirm(&ours.client, &comparing.other_user_id, &comparing.flow_id)
+            .await
+            .unwrap();
+        their_side.await.unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            if seen.lock().unwrap().contains(&CallReadiness::Ready) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the watcher never said ready; it said {:?}",
+                seen.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        watcher.abort();
+        supervisor.abort();
+    }
+}

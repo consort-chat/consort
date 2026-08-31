@@ -150,3 +150,96 @@
   color: var(--text-primary);
   cursor: pointer;
 }
+
+/*
+  A volume slider, its label and its number.
+
+  Three columns rather than a stack, because the number has to sit where the
+  eye already is when the thumb moves. Underneath it, a value nobody is looking
+  at changes silently.
+
+  The track and thumb are styled rather than left native, which is the one
+  place here that is worth the trouble: a platform slider on a dark surface is
+  either invisible or the wrong blue, and unlike a `select` there is no
+  keyboard behaviour to lose by painting it.
+*/
+.voice-volume {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.voice-volume__label {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.voice-volume__value {
+  min-width: 3.5ch;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.voice-volume__slider {
+  width: 100%;
+  height: 20px;
+  appearance: none;
+  cursor: pointer;
+  background: transparent;
+}
+
+.voice-volume__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--surface-overlay);
+  border-radius: 999px;
+}
+
+.voice-volume__slider::-moz-range-track {
+  height: 4px;
+  background: var(--surface-overlay);
+  border-radius: 999px;
+}
+
+.voice-volume__slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  appearance: none;
+  background: var(--violet);
+  border: none;
+  border-radius: 50%;
+  transition: transform var(--duration-fast) ease;
+}
+
+.voice-volume__slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--violet);
+  border: none;
+  border-radius: 50%;
+  transition: transform var(--duration-fast) ease;
+}
+
+.voice-volume__slider:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.voice-volume__slider:hover::-moz-range-thumb {
+  transform: scale(1.15);
+}
+
+.voice-volume__slider:focus-visible {
+  outline: none;
+}
+
+.voice-volume__slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--shadow-focus);
+}
+
+.voice-volume__slider:focus-visible::-moz-range-thumb {
+  box-shadow: var(--shadow-focus);
+}

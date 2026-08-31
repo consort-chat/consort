@@ -37,6 +37,24 @@ keyring = "4"
 # to the wrong one.
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 
+[target.'cfg(windows)'.dependencies]
+# Windows ships no SQLite and no import library for one, so the `sqlite` feature
+# leaves the linker hunting a file that was never there and the build dies at
+# the first cdylib with `LNK1181: cannot open input file 'sqlite3.lib'`. Nothing
+# earlier in the build says so: an rlib is not linked, so `cargo build -p
+# consort-matrix` passes and the error surfaces against consort-app instead,
+# naming a crate that has no SQLite in it.
+#
+# `bundled-sqlite` compiles the amalgamation with the MSVC toolchain that is
+# already a prerequisite, which removes the search rather than satisfying it.
+#
+# Scoped to Windows rather than set on the workspace dependency because the
+# other two platforms have the library, and building a second private copy of
+# SQLite into every binary is not a cost they should carry. Features union
+# across target sections, so this reaches the final link and changes nothing
+# about a Linux or macOS build.
+matrix-sdk = { workspace = true, features = ["bundled-sqlite"] }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

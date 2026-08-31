@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
-    Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync, verification,
+    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync,
+    verification,
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -17,7 +18,7 @@ use consort_audio::{GateConfig, Voices};
 use crate::audio::Backends;
 use crate::call::CallBridge;
 use crate::ears::speakers;
-use crate::events::{AppEvent, EventSink, LatestSink};
+use crate::events::{AppEvent, CallRefused, EventSink, LatestSink};
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
 
@@ -126,6 +127,14 @@ pub struct AppState {
     /// verification state is read from the crypto store and is known before
     /// the first sync response arrives.
     verification_task: TaskSlot,
+    /// The watcher reporting whether a call from this session could be heard.
+    ///
+    /// A fifth task rather than a reading taken off `verification_task`,
+    /// because `CallReadiness` draws a distinction `SessionVerification`
+    /// cannot: an account with no cross-signing identity at all is fixed
+    /// somewhere else entirely from a session that merely has not been
+    /// verified yet, and the interface has to say which.
+    readiness_task: TaskSlot,
     /// The watcher for incoming verification requests.
     ///
     /// The one whose abort does more than stop a loop: it owns a task per
@@ -189,6 +198,29 @@ pub struct AppState {
     /// same reason: both ends outlive any one call. The call thread fills it
     /// and the sound card drains it, and it is empty and harmless in between.
     voices: Voices,
+    /// Whether a call makes a sound when somebody walks into it.
+    ///
+    /// Lifted out of the settings file into an atomic because it is read on
+    /// the call thread, at the moment a roster changes, and written from
+    /// whichever thread saved the settings. Reading the file there would be a
+    /// disk touch in the middle of a call for one boolean.
+    ///
+    /// Seeded from the file at startup and kept in step by
+    /// `commands::set_audio_settings_for`, which is the only thing that writes
+    /// it.
+    chiming: crate::ears::Wanted,
+    /// Whether the spoken notifications are switched on, on the same terms as
+    /// `chiming` and for the same reasons. A second flag rather than a second
+    /// meaning on the first, because the two settings are independent and a
+    /// call thread that shared one could not tell them apart.
+    speaking: crate::ears::Wanted,
+    /// How loud each person in a call should be.
+    ///
+    /// Held here rather than inside the call, because what somebody chose
+    /// about a person is not a fact about the call they happened to choose it
+    /// in: it has to survive leaving, rejoining, and the application being shut
+    /// for a week. See [`crate::ears::Levels`].
+    levels: Arc<crate::ears::Levels>,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -206,6 +238,22 @@ pub struct AppState {
 impl AppState {
     pub fn new(store: SessionStore, settings: SettingsStore, events: Arc<dyn EventSink>) -> Self {
         let events = Arc::new(LatestSink::new(events));
+        // Read once here rather than defaulted, so a call joined before
+        // anybody opens the settings screen already honours what the file
+        // says.
+        let audio = settings.load().audio;
+        let chiming = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_sounds));
+        let speaking = Arc::new(std::sync::atomic::AtomicBool::new(audio.call_voices));
+
+        // Likewise read once here. A call joined before anybody opens the
+        // settings screen has to be at the volume the file says, and the
+        // alternative is a first arrival at full volume followed by a
+        // correction, which is precisely the sound somebody turned it down to
+        // avoid.
+        let voices = Voices::new();
+        voices.set_output_level(audio.output_volume);
+        voices.set_notification_level(audio.notification_volume);
+        let levels = crate::ears::Levels::new(voices.clone(), audio.person_volumes.clone());
 
         Self {
             client: RwLock::new(None),
@@ -214,6 +262,7 @@ impl AppState {
             refresh_task: Mutex::new(None),
             sync_task: Mutex::new(None),
             verification_task: Mutex::new(None),
+            readiness_task: Mutex::new(None),
             flow_task: Mutex::new(None),
             backup_task: Mutex::new(None),
             rooms_task: Mutex::new(None),
@@ -222,7 +271,10 @@ impl AppState {
             events,
             settings,
             microphone: Microphone::new(),
-            voices: Voices::new(),
+            voices,
+            chiming,
+            speaking,
+            levels,
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -294,11 +346,38 @@ impl AppState {
             CallBridge::spawn(
                 transport(),
                 self.microphone.clone(),
-                speakers(self.voices.clone()),
+                speakers(
+                    self.voices.clone(),
+                    self.chiming.clone(),
+                    self.speaking.clone(),
+                    self.levels.clone(),
+                ),
                 self.call_reporter(),
             )
         });
         bridge.connect(room_id);
+    }
+
+    /// Say that a join will not be attempted, and why.
+    ///
+    /// On the call channel rather than as an error from the command, because
+    /// this is the answer to "what is my call doing" and the interface reads
+    /// that in exactly one place. A refusal returned as a command error would
+    /// be a second thing to render, in a second component, saying something
+    /// about the same call.
+    ///
+    /// It starts no call thread, which is the point. Nothing is opened, no
+    /// membership is published, and a session that is already in a call
+    /// elsewhere stays in it: refusing a new channel must not evict the
+    /// channel somebody is currently talking in.
+    pub fn refuse_call(&self, room_id: String, readiness: CallReadiness) {
+        tracing::info!(
+            %room_id,
+            ?readiness,
+            "refusing to join an encrypted call this session cannot be heard in"
+        );
+        self.events
+            .emit(AppEvent::CallRefused(CallRefused { room_id, readiness }));
     }
 
     /// Leave the voice channel, if this session is in one.
@@ -325,6 +404,17 @@ impl AppState {
     pub fn set_call_muted(&self, muted: bool) {
         if let Some(bridge) = self.locked_call().as_ref() {
             bridge.set_muted(muted);
+        }
+    }
+
+    /// Say that nobody is at this computer.
+    ///
+    /// Mutes and does not deafen, which is the whole difference from the
+    /// button below it. A no-op before the first call of the session, like the
+    /// other two and for the same reason.
+    pub fn set_call_away(&self, away: bool) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_away(away);
         }
     }
 
@@ -418,6 +508,44 @@ impl AppState {
         &self.store
     }
 
+    /// Switch the join and leave sounds on or off for a call in progress.
+    ///
+    /// Beside `settings()` rather than derived from it, because the call
+    /// thread cannot read a file at the moment a roster changes. Called by the
+    /// command that saves the settings, right after it saves them, so that
+    /// what is on disk and what a call is doing can never disagree.
+    pub fn set_call_sounds(&self, wanted: bool) {
+        self.chiming
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Switch the spoken notifications on or off for a call in progress.
+    ///
+    /// Separate from [`set_call_sounds`](Self::set_call_sounds) rather than a
+    /// second argument to it, because they are two settings and a caller that
+    /// had to pass both would be one refactor away from passing the same value
+    /// twice.
+    pub fn set_call_voices(&self, wanted: bool) {
+        self.speaking
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set how loud a call and its notifications should be, as percentages.
+    ///
+    /// Beside `settings()` for the same reason the two switches above are: the
+    /// mixer is read inside the device callback and cannot go and read a file,
+    /// and the two must not be able to disagree.
+    pub fn set_volumes(&self, output: u8, notifications: u8) {
+        self.voices.set_output_level(output);
+        self.voices.set_notification_level(notifications);
+    }
+
+    /// How loud each person should be, for the command that changes one of
+    /// them and for the call that has to apply them.
+    pub fn levels(&self) -> &Arc<crate::ears::Levels> {
+        &self.levels
+    }
+
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
     }
@@ -496,25 +624,23 @@ impl AppState {
         )
         .await;
 
-        // Say once, out loud, whether this session could be heard in a call.
+        // Whether this session could be heard in an encrypted call, for as
+        // long as the session lasts rather than once at startup.
         //
-        // Not tracked with the rest. It answers a question and ends, within a
-        // request at the very worst, so there is nothing later to abort and a
-        // slot to hold it in would only ever hold a finished task.
-        //
-        // Worth having in the log permanently rather than only while the call
-        // layer is being built: an unverified session is the one fault that
-        // looks exactly like a working call until somebody says something and
-        // nobody hears it.
-        let readiness_client = client.clone();
-        tokio::spawn(async move {
-            match calls::readiness(&readiness_client).await {
-                Ok(readiness) => {
-                    tracing::info!(?readiness, "whether this session can be heard in a call")
-                }
-                Err(error) => tracing::warn!(%error, "could not work out call readiness"),
-            }
-        });
+        // Once was wrong in the direction that matters. Every session begins
+        // unverified and the whole point of verifying one is that calls start
+        // working afterwards, so an answer taken at startup and kept would
+        // lock somebody out of every call until they restarted the
+        // application, which is worse than the failure the answer exists to
+        // prevent.
+        let events = self.events.clone();
+        replace_task(
+            &self.readiness_task,
+            calls::watch_readiness(client.clone(), move |state| {
+                events.emit(AppEvent::CallReadiness(state));
+            }),
+        )
+        .await;
 
         let events = self.events.clone();
         let (flow_task, initiator) = verification::supervise(client, move |flow| {
@@ -573,6 +699,7 @@ impl AppState {
         // announcing a cancellation nobody performed would be a lie about
         // whose decision it was.
         stop_task(&self.verification_task).await;
+        stop_task(&self.readiness_task).await;
         stop_task(&self.flow_task).await;
         stop_task(&self.backup_task).await;
         *self.initiator.lock().await = None;
@@ -1200,6 +1327,91 @@ mod tests {
                 panic!("the call never connected: {:?}", sink.events());
             };
             assert_eq!(trouble.as_deref(), Some("nobody can hear you"));
+        }
+
+        #[test]
+        fn a_refused_join_starts_nothing() {
+            // The whole point of asking before the join rather than after it.
+            // Nothing is opened, no membership is published, and there is no
+            // thread left behind holding a device.
+            let (_dir, state, sink) = state();
+
+            state.refuse_call(GENERAL.to_owned(), CallReadiness::SessionUnverified);
+
+            assert!(!state.has_call_thread());
+            assert!(
+                sink.events()
+                    .iter()
+                    .all(|event| !matches!(event, AppEvent::Call(_))),
+                "a refusal spoke on the call channel: {:?}",
+                sink.events()
+            );
+        }
+
+        #[test]
+        fn a_refused_join_says_which_room_and_which_failure() {
+            let (_dir, state, sink) = state();
+
+            state.refuse_call(GENERAL.to_owned(), CallReadiness::NoIdentity);
+
+            let Some(AppEvent::CallRefused(refusal)) = sink
+                .events()
+                .into_iter()
+                .find(|event| matches!(event, AppEvent::CallRefused(_)))
+            else {
+                panic!("no refusal reached the webview: {:?}", sink.events());
+            };
+            assert_eq!(refusal.room_id, GENERAL);
+            // Which one it was, not merely that it was one. The two are
+            // cleared in two different places and the interface has to say
+            // which.
+            assert_eq!(refusal.readiness, CallReadiness::NoIdentity);
+        }
+
+        #[test]
+        fn refusing_one_channel_does_not_evict_the_call_in_another() {
+            // The reason a refusal is not a call state. Somebody sitting in a
+            // voice channel who clicks a second one and is refused is still
+            // sitting in the first, and an interface told otherwise would draw
+            // a client connected to nothing while this process is publishing a
+            // membership.
+            let (_dir, state, sink) = state();
+            state.connect_call(GENERAL.to_owned(), FakeCallTransport::joining, call_audio());
+            until_call(&sink, "connected");
+
+            state.refuse_call(
+                "!lounge:example.org".to_owned(),
+                CallReadiness::SessionUnverified,
+            );
+
+            let latest = sink
+                .events()
+                .into_iter()
+                .rev()
+                .find_map(|event| match event {
+                    AppEvent::Call(call) => Some(call),
+                    _ => None,
+                })
+                .expect("the call channel said nothing at all");
+            assert!(
+                matches!(latest, CallEvent::Connected { ref room_id, .. } if room_id == GENERAL),
+                "the refusal changed what call this session is in: {latest:?}"
+            );
+        }
+
+        #[test]
+        fn a_refusal_is_not_replayed_to_a_webview_that_reloaded() {
+            // It is an incident, not a state. What it reports is already a
+            // standing answer on the readiness channel; this only adds "the
+            // thing you just clicked", and a click from twenty minutes ago is
+            // not news to somebody who has since verified.
+            assert!(
+                !AppEvent::CallRefused(CallRefused {
+                    room_id: GENERAL.to_owned(),
+                    readiness: CallReadiness::SessionUnverified,
+                })
+                .is_worth_keeping()
+            );
         }
 
         #[test]

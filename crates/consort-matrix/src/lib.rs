@@ -60,7 +60,7 @@ pub mod verification;
 
 pub use auth::{Credentials, Profile};
 pub use backup::KeyBackup;
-pub use calls::CallReadiness;
+pub use calls::{CallReadiness, JoinVerdict};
 pub use error::{Error, Result};
 pub use rooms::{Channel, ChannelKind, Participant, Rooms, Space};
 pub use secrets::{Backend, BackendKind};

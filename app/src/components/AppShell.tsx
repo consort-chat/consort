@@ -5,6 +5,7 @@ import {
   NOBODY,
   callRoomId,
   type Call,
+  type CallRefused,
   type Channel,
   type Connection,
   type KeyBackup,
@@ -17,6 +18,7 @@ import {
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
 import { CallPanel } from "./CallPanel";
+import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
 import { SettingsModal } from "./SettingsModal";
 import { SpaceRail } from "./SpaceRail";
@@ -77,7 +79,11 @@ function paneDetail(channel: Channel | null): string {
 function nameOfCalledChannel(rooms: Rooms, call: Call): string | null {
   const roomId = callRoomId(call);
   if (roomId === null) return null;
+  return nameOfChannel(rooms, roomId);
+}
 
+/// What a room is called, across every space, or null when nothing knows.
+function nameOfChannel(rooms: Rooms, roomId: string): string | null {
   for (const space of rooms.spaces) {
     const found = space.channels.find((channel) => channel.id === roomId);
     if (found) return channelLabel(found);
@@ -125,6 +131,16 @@ interface Props {
   onLeaveVoice: () => void;
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
+  onSetAway: (away: boolean) => void;
+  /**
+   * A voice channel that was clicked and not joined, or null.
+   *
+   * Held by the caller rather than here, because it is dismissed rather than
+   * superseded: a component that owned it would clear it on every re-render
+   * caused by anything else in the shell.
+   */
+  callRefused: CallRefused | null;
+  onDismissRefusal: () => void;
   onSignedOut: () => void;
 }
 
@@ -161,6 +177,9 @@ export function AppShell({
   onLeaveVoice,
   onSetMuted,
   onSetDeafened,
+  onSetAway,
+  callRefused,
+  onDismissRefusal,
   onSignedOut,
 }: Props) {
   const [spaceId, setSpaceId] = useState(HOME_ID);
@@ -251,6 +270,7 @@ export function AppShell({
           onDisconnect={onLeaveVoice}
           onSetMuted={onSetMuted}
           onSetDeafened={onSetDeafened}
+          onSetAway={onSetAway}
         />
         <UserPanel
           profile={profile}
@@ -268,6 +288,20 @@ export function AppShell({
               onDismiss={() => onDismissFlow(flow.flowId)}
             />
           ))}
+
+          {/*
+            Above the verification banner, and deliberately. This is the thing
+            that just happened; the banner below it is the standing state and
+            carries the way out of it, which is why this one does not repeat
+            either route.
+          */}
+          {callRefused !== null && (
+            <CallRefusedNotice
+              refusal={callRefused}
+              channelName={nameOfChannel(rooms, callRefused.roomId)}
+              onDismiss={onDismissRefusal}
+            />
+          )}
 
           <VerificationBanner
             state={verification.state}

@@ -22,7 +22,9 @@
 
 use matrix_sdk::Client;
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinHandle;
 
+use crate::verification::Changes;
 use crate::{Error, Result};
 
 /// Whether an encrypted call joined right now would be audible.
@@ -116,6 +118,75 @@ pub async fn readiness(client: &Client) -> Result<CallReadiness> {
     // what verifying a session establishes and what the strategy demands
     // before it will encrypt to anyone.
     Ok(classify(identity.map(|identity| identity.is_verified())))
+}
+
+/// Watch whether this session can send media keys, reporting each change.
+///
+/// # Why this is watched rather than asked once
+///
+/// The answer moves, and it moves in the direction that matters. Every session
+/// starts unverified, somebody verifies it during that session, and from then
+/// on calls work. Asked once at startup and cached, that person stays locked
+/// out of every call until they restart the application, which is a worse bug
+/// than the one the gate exists to fix.
+///
+/// # Why the verification stream is the trigger
+///
+/// It is the same fact seen from a lower resolution.
+/// `encryption().verification_state()` publishes whenever this device's trust
+/// against its own account changes, which is exactly when [`readiness`] would
+/// answer differently. What it cannot do is stand in for the answer:
+/// `VerificationState` has no way to say "this account has no cross-signing
+/// identity at all", and that is one of the two failures, needing a different
+/// sentence and a different action. So the stream says *when* to ask and
+/// [`readiness`] says *what*.
+///
+/// Each wake costs one crypto-store read, and only on the uncommon path a
+/// request. The SDK republishes the same state after every `/keys/query`
+/// mentioning one of our devices, so most wakes report nothing: [`Changes`]
+/// drops the repeats before anybody is told.
+///
+/// # Lifetime
+///
+/// Same as [`crate::verification::watch`], and owned the same way. The task
+/// holds the `Client` and watches an observable belonging to it, so the stream
+/// never ends on its own. The caller aborts the handle when the session goes.
+pub fn watch<F>(client: Client, on_change: F) -> JoinHandle<()>
+where
+    F: Fn(CallReadiness) + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut states = client.encryption().verification_state();
+        let mut changes = Changes::new();
+
+        // The value, not just the changes: the SDK's subscriber hands over
+        // where things currently stand before any update, so the first pass
+        // through this loop is the answer at startup and no separate one-shot
+        // call is needed beside it.
+        while states.next().await.is_some() {
+            match readiness(&client).await {
+                Ok(state) => {
+                    if let Some(state) = changes.accept(state) {
+                        tracing::info!(?state, "whether this session can be heard in a call");
+                        on_change(state);
+                    }
+                }
+                // Not reported as a state. Every variant of `CallReadiness` is
+                // a finding about the account, and a homeserver that would not
+                // answer is a finding about the network: publishing one as the
+                // other would put "set up cross-signing" in front of somebody
+                // whose wifi dropped. The last good answer stands.
+                Err(error) => {
+                    tracing::warn!(%error, "could not work out call readiness");
+                }
+            }
+        }
+
+        // Only reachable once the client is gone, which cannot happen while
+        // this task holds one. Logged rather than ignored so that a future
+        // change to that is not silent.
+        tracing::warn!("the call readiness watcher ended");
+    })
 }
 
 /// The decision, over the two facts the strategy actually consults.

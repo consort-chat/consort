@@ -55,6 +55,28 @@ export type Verification =
   | { state: "unverified" };
 
 /**
+ * Whether an encrypted call joined right now would be audible, mirrored from
+ * `consort_matrix::calls::CallReadiness`.
+ *
+ * Not a rewording of `Verification`, and the difference is the whole reason
+ * this exists. Media keys travel to-device under the SDK's identity-based
+ * sharing strategy, which refuses in two distinct shapes, and each sends a
+ * person somewhere different. `noIdentity` means the *account* has no
+ * cross-signing identity, fixed by setting up recovery on any client.
+ * `sessionUnverified` means the account has one and this device is not trusted
+ * against it, fixed here. Collapsing them tells somebody who has already done
+ * the first thing to go and do it again.
+ *
+ * There is no "not known yet". `Verification` needs one because it republishes
+ * a state it watches; this is a question with an answer, and the watcher does
+ * not report until it has one.
+ */
+export type CallReadiness =
+  | { state: "ready" }
+  | { state: "noIdentity" }
+  | { state: "sessionUnverified" };
+
+/**
  * What is happening to this session's room keys, mirrored from
  * `consort_matrix::backup`.
  *
@@ -121,6 +143,44 @@ export interface Participant {
    * can say which of the two somebody chose.
    */
   deafened?: boolean;
+  /**
+   * Whether they have said they are not at their computer.
+   *
+   * Carried the same way `deafened` is, between Consort clients over the
+   * call's data channel, and true under the same rule: every one of their
+   * memberships said so.
+   *
+   * Implies the microphone is off and implies nothing about `deafened`.
+   * Somebody away with their headphones on can still hear their name, which
+   * is the entire difference between walking away and leaving.
+   */
+  away?: boolean;
+  /**
+   * Whether a camera of theirs is live.
+   *
+   * True only for somebody publishing a camera that is not muted. Somebody on
+   * two devices is on camera if either of them is, which is the opposite fold
+   * to `muted` and right for the reason behind it: both are chosen so the icon
+   * never claims less exposure than there is.
+   *
+   * Known only for the call this session is sitting in. Room state carries
+   * nothing like it, so a person listed from there is reported without a
+   * camera because nothing checked, not because anything found one off, and
+   * the interface draws no camera at all for them rather than a confident
+   * cross.
+   */
+  camera?: boolean;
+  /**
+   * When they joined the call, in milliseconds since the Unix epoch.
+   *
+   * The SFU's own record rather than the moment this session noticed them, so
+   * it is still right for people who were already in the call when we arrived.
+   * Absent for anybody listed from room state, for anybody whose media has not
+   * appeared yet, and against a server too old to report it.
+   *
+   * Somebody on two devices joined when the first of them did.
+   */
+  since?: number;
 }
 
 /** One room under a rail entry. */
@@ -337,6 +397,51 @@ export function onVerification(
 }
 
 /**
+ * Listen for changes in whether a call from this session could be heard.
+ *
+ * Same contract as `onVerification`: the channel name matches
+ * `AppEvent::CALL_READINESS`, and the returned function stops listening.
+ *
+ * Watched rather than asked once because the answer moves in the direction
+ * that matters. Every session starts unable to distribute media keys, and
+ * verifying it is precisely what changes that, so a value read at startup
+ * would say "no" for the rest of a session in which somebody fixed it.
+ */
+export function onCallReadiness(
+  handler: (state: CallReadiness) => void,
+): Promise<UnlistenFn> {
+  return listen<CallReadiness>("call-readiness", (event) =>
+    handler(event.payload),
+  );
+}
+
+/**
+ * A voice channel that was clicked and not joined, mirrored from
+ * `crate::events::CallRefused`.
+ *
+ * Deliberately not on the `call` channel. That one carries what this session
+ * is currently doing, and somebody sitting in one voice channel who clicks a
+ * second one and is refused is still sitting in the first.
+ */
+export interface CallRefused {
+  roomId: string;
+  readiness: CallReadiness;
+}
+
+/**
+ * Listen for a join that was refused before it was attempted.
+ *
+ * An incident rather than state, so `resendState` never repeats it: a
+ * complaint about a click made twenty minutes ago is not news to somebody who
+ * has since verified. The standing answer lives on `onCallReadiness`.
+ */
+export function onCallRefused(
+  handler: (refusal: CallRefused) => void,
+): Promise<UnlistenFn> {
+  return listen<CallRefused>("call-refused", (event) => handler(event.payload));
+}
+
+/**
  * Listen for verification flows starting, moving on, and ending.
  *
  * Unlike the two channels above this one carries incidents rather than state,
@@ -416,6 +521,56 @@ export function memberAvatar(
   userId: string,
 ): Promise<string | null> {
   return invoke<string | null>("member_avatar", { roomId, userId });
+}
+
+/**
+ * Where somebody's own client says they are.
+ *
+ * `"unknown"` is a real answer rather than a missing one. Most homeservers
+ * have presence switched off, because it is the most expensive thing in the
+ * protocol, and reading that silence as `"offline"` would put a grey dot on
+ * somebody sitting right there.
+ */
+export type Presence = "online" | "idle" | "offline" | "unknown";
+
+/** What somebody is allowed to do in a room, at the granularity a person cares about. */
+export type Standing = "admin" | "moderator" | "member";
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * Nothing here duplicates the roster: who they are, what they are called,
+ * whether they are muted and when they joined the call all arrive with the
+ * channel and are on screen before this is asked for.
+ */
+export interface MemberProfile {
+  presence: Presence;
+  /** Their own status line, when they set one. */
+  status: string | null;
+  /**
+   * Milliseconds since they last did anything, as the homeserver counts it.
+   *
+   * Null whenever presence is unknown, and often null even when it is not: the
+   * field is optional in the spec and Synapse omits it for people it has not
+   * heard from.
+   */
+  lastActiveAgo: number | null;
+  standing: Standing;
+}
+
+/**
+ * What can be said about one person in one room beyond their name.
+ *
+ * One request to the homeserver, made when a person's card opens and never on
+ * the way to drawing a roster. It does not fail: every part of it degrades to
+ * "nothing known" on its own, because none of these facts is worth a dialog in
+ * front of somebody who clicked a name out of curiosity.
+ */
+export function memberProfile(
+  roomId: string,
+  userId: string,
+): Promise<MemberProfile> {
+  return invoke<MemberProfile>("member_profile", { roomId, userId });
 }
 
 /**
@@ -612,6 +767,55 @@ export interface AudioSettings {
   input: string | null;
   output: string | null;
   gate: GateConfig;
+  /**
+   * Whether a call makes a sound when somebody joins or leaves it.
+   *
+   * Optional here so a payload written before the field existed still parses,
+   * and read as `=== true` wherever it is drawn, because the Rust default is
+   * **off**: the chime and the sentence below announce the same arrival, and
+   * the chime existed to get somebody's attention for a notification that used
+   * to be nothing but the chime.
+   */
+  callSounds?: boolean;
+  /**
+   * Whether a call says out loud what `callSounds` only announces.
+   *
+   * Optional too, but read as `!== false`, because this one defaults on: it is
+   * the notification, and the chime in front of it is the optional half. The
+   * two are separate in both directions, so a chime with no sentence and a
+   * sentence with no chime are both states somebody can ask for.
+   */
+  callVoices?: boolean;
+  /**
+   * How loud a call should be, 0 to 100.
+   *
+   * The master, covering everybody in the call and the notifications above
+   * them. Optional and read as `?? 100`, which is the Rust default.
+   */
+  outputVolume?: number;
+  /**
+   * How loud the chimes and spoken notifications should be, as a percentage of
+   * `outputVolume`.
+   *
+   * Underneath the master rather than beside it, so turning a call down turns
+   * these down with it. Optional and read as `?? 60`: a notification is
+   * mastered to be heard on its own and a call is somebody talking three feet
+   * from a microphone, so at one level the notification is the loud thing in
+   * the room.
+   */
+  notificationVolume?: number;
+  /**
+   * How loud one particular person should be, by Matrix user ID.
+   *
+   * Read-only from here. It is written by `setPersonVolume`, from the menu
+   * beside somebody's name in a call, and deliberately not sent back by
+   * `setAudioSettings`: this screen does not draw these, and a screen that
+   * wrote back what it never read would erase every one of them.
+   *
+   * Absent means full volume, so the map holds only the people somebody has
+   * actually adjusted.
+   */
+  personVolumes?: Record<string, number>;
 }
 
 /**
@@ -674,6 +878,28 @@ export function audioSettings(): Promise<AudioSettings> {
  */
 export function setAudioSettings(audio: AudioSettings): Promise<void> {
   return invoke<void>("set_audio_settings", { audio });
+}
+
+/**
+ * Set how loud one person should be, as a percentage, and remember it.
+ *
+ * Its own call rather than part of `setAudioSettings`, because it is set from
+ * somewhere else entirely: a menu beside a name in a call, which knows one
+ * user ID and nothing about devices or gates.
+ *
+ * Kept per machine, which is the only place it can be kept. Nothing in Matrix
+ * carries "that one is too loud in my headphones", and it should not: it is a
+ * fact about the room somebody is sitting in rather than about their account.
+ * It does survive leaving the call, rejoining, and restarting.
+ *
+ * `100` removes the entry rather than storing it, because full volume is the
+ * absence of a choice.
+ */
+export function setPersonVolume(
+  userId: string,
+  percent: number,
+): Promise<void> {
+  return invoke<void>("set_person_volume", { userId, percent });
 }
 
 /**
@@ -836,10 +1062,32 @@ export interface SelfAudio {
   muted: boolean;
   /** Whether this session has stopped receiving everybody else's audio. */
   deafened: boolean;
+  /**
+   * Whether this session has said nobody is at the computer.
+   *
+   * Mutes and does not deafen. Optional on the wire so a payload written
+   * before the field existed still parses.
+   */
+  away?: boolean;
 }
 
-/** Neither, which is where every session starts and where Rust starts too. */
-export const HEARING: SelfAudio = { muted: false, deafened: false };
+/** None of the three, which is where every session starts and Rust too. */
+export const HEARING: SelfAudio = {
+  muted: false,
+  deafened: false,
+  away: false,
+};
+
+/**
+ * Whether the microphone is off, for any of the three reasons.
+ *
+ * Mirrors `SelfAudio::microphone_off` in Rust, and must keep mirroring it: the
+ * button draws itself from this, and a disagreement is a microphone icon that
+ * says the opposite of what the call is doing.
+ */
+export function microphoneOff(audio: SelfAudio): boolean {
+  return audio.muted || audio.deafened || audio.away === true;
+}
 
 /**
  * Listen to whether this session is muted or deafened.
@@ -903,4 +1151,15 @@ export function callSetMuted(muted: boolean): Promise<void> {
  */
 export function callSetDeafened(deafened: boolean): Promise<void> {
   return invoke<void>("call_set_deafened", { deafened });
+}
+
+/**
+ * Say that nobody is at this computer, or that somebody is again.
+ *
+ * Mutes and deliberately does not deafen. Same contract as the two above: what
+ * comes back is the `self-audio` channel saying what the state now is, so this
+ * resolves as soon as the request is queued rather than when it has landed.
+ */
+export function callSetAway(away: boolean): Promise<void> {
+  return invoke<void>("call_set_away", { away });
 }

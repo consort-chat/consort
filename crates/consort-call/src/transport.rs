@@ -23,6 +23,7 @@
 
 use consort_matrix::Participant;
 
+use crate::event::SelfAudio;
 use crate::failure::CallFailure;
 use crate::hearing::Ears;
 use crate::publish::PublishedAudio;
@@ -100,7 +101,28 @@ pub trait CallSession {
     /// Whoever implements this owns keeping it true as people join. A person
     /// who deafened and then had somebody walk into the channel must not start
     /// hearing them.
+    ///
+    /// Telling anybody else is not part of this. See
+    /// [`announce_self`](Self::announce_self).
     async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure>;
+
+    /// Tell the other Consort clients in the call what this session is doing
+    /// with its own audio.
+    ///
+    /// Separate from the two setters above because it is a different kind of
+    /// act and because it does not correspond to either of them one for one.
+    /// Muting is already broadcast by the SFU and needs nothing here; deafening
+    /// and being away are invisible to everything in the stack and need all of
+    /// it. Folding this into `set_deafened` meant that adding a second thing
+    /// worth announcing had nowhere to go.
+    ///
+    /// Called on every roster change as well as on every button, because a
+    /// person who walks in has missed everything said before they arrived.
+    ///
+    /// A failure is the implementation's to log. This is an icon on somebody
+    /// else's screen: it is not worth ending a call over, and whatever was
+    /// announced has already happened locally.
+    async fn announce_self(&self, audio: SelfAudio) -> Result<(), CallFailure>;
 
     /// Play everybody else in this call into `ears`, and keep doing it as
     /// people come and go.
@@ -155,6 +177,20 @@ pub trait Roster {
     /// is one entry. Empty is a real answer, for the moment between joining
     /// and this session's own membership coming back round.
     async fn now(&self) -> Vec<Participant>;
+
+    /// Which of the people in [`now`](Self::now) is this session's own user.
+    ///
+    /// The roster deliberately includes us: a voice channel draws everybody in
+    /// it, and leaving the reader out would be a list that is wrong by one for
+    /// the one person looking at it. So something has to say which entry that
+    /// is, and this is the only layer that can: a `member_id` is per device and
+    /// a roster is per person, so the two cannot be matched up further down.
+    ///
+    /// `None` from an implementation that does not know, which is treated as
+    /// "none of them". Being wrong that way costs one chime at the start of a
+    /// call; being wrong by guessing would put somebody's own name in a
+    /// diff every time their second device connected.
+    fn me(&self) -> Option<String>;
 
     /// What is wrong with this call's audio, if anything.
     ///

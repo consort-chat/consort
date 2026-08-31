@@ -18,7 +18,30 @@ use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
-use consort_matrix::{Connection, Flow, KeyBackup, Rooms, SessionVerification};
+use consort_matrix::{CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification};
+use serde::Serialize;
+
+/// A join that was not attempted, because it could not have been heard.
+///
+/// Deliberately not a `CallEvent`. The call thread never produces one: the
+/// decision happens before the thread is asked for anything, and putting it in
+/// that enum would put a variant in front of every reader of a call's progress
+/// that no call ever reaches.
+///
+/// More importantly it is not a call state. The call channel carries what this
+/// session is currently doing, and somebody sitting in one voice channel who
+/// clicks a second one and is refused is still sitting in the first. Reported
+/// there it would evict the call they are in and draw a client connected to
+/// nothing while this process is very much still publishing a membership.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallRefused {
+    /// The channel that was clicked, so the interface can name it.
+    pub room_id: String,
+    /// Why, in the two-answer vocabulary the frontend already reads. See
+    /// `consort_matrix::CallReadiness`.
+    pub readiness: CallReadiness,
+}
 
 /// Something the frontend needs to be told about without having asked.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +50,16 @@ pub enum AppEvent {
     Connection(Connection),
     /// Whether this session is verified changed.
     Verification(SessionVerification),
+    /// Whether this session could be heard in an encrypted call changed.
+    ///
+    /// Its own channel rather than a reading of
+    /// [`Verification`](Self::Verification), because the two answer different
+    /// questions and one of them cannot be derived from the other. A session
+    /// on an account with no cross-signing identity at all is `Unverified` on
+    /// that channel and `NoIdentity` here, and those send a person to two
+    /// different places: one is fixed on this device, the other on the
+    /// account.
+    CallReadiness(CallReadiness),
     /// A verification flow started, moved on, or ended.
     VerificationFlow(Flow),
     /// What is happening to this session's room keys changed.
@@ -40,6 +73,9 @@ pub enum AppEvent {
     Audio(AudioEvent),
     /// This session's voice call started, ended, or would not start.
     Call(CallEvent),
+    /// A voice channel was clicked and not joined, because a call from this
+    /// session in that room would have been inaudible.
+    CallRefused(CallRefused),
     /// This session muted itself, or deafened itself, or stopped.
     ///
     /// A channel of its own rather than another value on [`Call`](Self::Call),
@@ -63,6 +99,8 @@ impl AppEvent {
     pub const CONNECTION: &'static str = "connection";
     /// The channel carrying this session's verification state.
     pub const VERIFICATION: &'static str = "verification";
+    /// The channel carrying whether a call from this session could be heard.
+    pub const CALL_READINESS: &'static str = "call-readiness";
     /// The channel carrying the progress of one verification flow.
     pub const VERIFICATION_FLOW: &'static str = "verification-flow";
     /// The channel carrying whether room keys are being backed up.
@@ -73,6 +111,8 @@ impl AppEvent {
     pub const AUDIO: &'static str = "audio";
     /// The channel carrying this session's voice call.
     pub const CALL: &'static str = "call";
+    /// The channel carrying a join that was refused before it was attempted.
+    pub const CALL_REFUSED: &'static str = "call-refused";
     /// The channel carrying whether this session is muted or deafened.
     pub const SELF_AUDIO: &'static str = "self-audio";
     /// The channel carrying who in the call is talking.
@@ -83,11 +123,13 @@ impl AppEvent {
         match self {
             Self::Connection(_) => Self::CONNECTION,
             Self::Verification(_) => Self::VERIFICATION,
+            Self::CallReadiness(_) => Self::CALL_READINESS,
             Self::VerificationFlow(_) => Self::VERIFICATION_FLOW,
             Self::KeyBackup(_) => Self::KEY_BACKUP,
             Self::Rooms(_) => Self::ROOMS,
             Self::Audio(_) => Self::AUDIO,
             Self::Call(_) => Self::CALL,
+            Self::CallRefused(_) => Self::CALL_REFUSED,
             Self::SelfAudio(_) => Self::SELF_AUDIO,
             Self::Speaking(_) => Self::SPEAKING,
         }
@@ -133,12 +175,18 @@ impl AppEvent {
         match self {
             Self::Connection(_)
             | Self::Verification(_)
+            | Self::CallReadiness(_)
             | Self::KeyBackup(_)
             | Self::Rooms(_)
             | Self::Call(_)
             | Self::SelfAudio(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
-            Self::Audio(_) | Self::Speaking(_) => false,
+            // A refusal is an incident, not a state. What it reports is
+            // already on the `call-readiness` channel as a standing answer,
+            // and this only adds "the thing you just clicked". Replayed on a
+            // reload it would put a complaint about a click from twenty
+            // minutes ago in front of somebody who has since verified.
+            Self::Audio(_) | Self::Speaking(_) | Self::CallRefused(_) => false,
         }
     }
 
@@ -151,11 +199,13 @@ impl AppEvent {
         match self {
             Self::Connection(state) => serde_json::to_value(state),
             Self::Verification(state) => serde_json::to_value(state),
+            Self::CallReadiness(state) => serde_json::to_value(state),
             Self::VerificationFlow(flow) => serde_json::to_value(flow),
             Self::KeyBackup(state) => serde_json::to_value(state),
             Self::Rooms(rooms) => serde_json::to_value(rooms),
             Self::Audio(event) => serde_json::to_value(event),
             Self::Call(event) => serde_json::to_value(event),
+            Self::CallRefused(refusal) => serde_json::to_value(refusal),
             Self::SelfAudio(audio) => serde_json::to_value(audio),
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
         }
@@ -809,6 +859,7 @@ mod tests {
             let muted = AppEvent::SelfAudio(SelfAudio {
                 muted: true,
                 deafened: false,
+                away: false,
             });
 
             assert_eq!(muted.channel(), AppEvent::SELF_AUDIO);
@@ -824,6 +875,7 @@ mod tests {
                 AppEvent::SelfAudio(SelfAudio {
                     muted: true,
                     deafened: false,
+                    away: false,
                 })
                 .is_worth_keeping()
             );
@@ -834,6 +886,7 @@ mod tests {
             let payload = AppEvent::SelfAudio(SelfAudio {
                 muted: false,
                 deafened: true,
+                away: false,
             })
             .payload()
             .unwrap();

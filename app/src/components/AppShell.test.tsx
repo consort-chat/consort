@@ -28,6 +28,7 @@ import type {
   AudioDeviceReport,
   AudioSettings,
   Call,
+  CallRefused,
   Channel,
   Profile,
   Rooms,
@@ -89,6 +90,9 @@ function shell({
   onLeaveVoice = vi.fn(),
   onSetMuted = vi.fn(),
   onSetDeafened = vi.fn(),
+  onSetAway = vi.fn(),
+  callRefused = null,
+  onDismissRefusal = vi.fn(),
 }: {
   rooms?: Rooms;
   call?: Call;
@@ -98,6 +102,9 @@ function shell({
   onLeaveVoice?: ReturnType<typeof vi.fn>;
   onSetMuted?: ReturnType<typeof vi.fn>;
   onSetDeafened?: ReturnType<typeof vi.fn>;
+  onSetAway?: ReturnType<typeof vi.fn>;
+  callRefused?: CallRefused | null;
+  onDismissRefusal?: ReturnType<typeof vi.fn>;
 } = {}) {
   const { container } = render(
     <AppShell
@@ -116,6 +123,9 @@ function shell({
       onLeaveVoice={onLeaveVoice}
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
+      onSetAway={onSetAway}
+      callRefused={callRefused}
+      onDismissRefusal={onDismissRefusal}
       onSignedOut={onSignedOut}
     />,
   );
