@@ -32,7 +32,7 @@ use matrix_rtc_media::{
     Participant as MediaParticipant, PublishOptions,
 };
 use matrix_sdk::Client;
-use matrix_sdk::ruma::{OwnedRoomId, RoomId};
+use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
 
 use livekit::DataPacket;
 
@@ -237,6 +237,18 @@ pub struct LiveKitSession {
     /// task owns the map so that the local and remote halves cannot race to
     /// say what the call currently looks like.
     saying: watch::Sender<SelfAudio>,
+    /// When this session joined, in milliseconds since the Unix epoch.
+    ///
+    /// Held because nothing else will say it. See [`roster::arrived_at`]: the
+    /// transport reports the people who arrive after us and never reports us,
+    /// so our own row in the roster has no join time unless this one is put
+    /// there.
+    ///
+    /// On the session rather than the roster, which is read again every time
+    /// the interface asks where it is. Stamping it there would restart the
+    /// clock on our own name each time somebody clicked the channel they are
+    /// already in.
+    joined_at: u64,
 }
 
 impl CallTransport for LiveKitTransport {
@@ -304,6 +316,7 @@ impl CallTransport for LiveKitTransport {
             microphone: OnceLock::new(),
             playing: RefCell::default(),
             saying: watch::channel(SelfAudio::default()).0,
+            joined_at: MilliSecondsSinceUnixEpoch::now().0.into(),
         })
     }
 }
@@ -610,6 +623,7 @@ impl CallSession for LiveKitSession {
         )));
 
         LiveKitRoster {
+            joined_at: self.joined_at,
             memberships: self.call.subscribe_participants(),
             reports: self.call.subscribe_call_events(),
             faults: Faults::default(),
@@ -644,6 +658,8 @@ struct Seen {
 /// are drawn in one place. Splitting them would mean two watchers racing to
 /// say what a call currently is, and whichever spoke last would win.
 pub struct LiveKitRoster {
+    /// When this session joined, copied from the one place that knows.
+    joined_at: u64,
     /// Derived from MatrixRTC signalling and enriched with live media state,
     /// and one entry per membership rather than per person.
     memberships: watch::Receiver<Vec<MediaParticipant>>,
@@ -694,7 +710,7 @@ impl Roster for LiveKitRoster {
                 user_id: member.user_id.clone(),
                 muted: roster::microphone_muted(member),
                 camera: roster::camera_live(member),
-                since: member.joined_at_ms,
+                since: roster::arrived_at(member, self.joined_at),
             })
             .collect();
 

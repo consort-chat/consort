@@ -178,6 +178,10 @@ export interface Participant {
    * Absent for anybody listed from room state, for anybody whose media has not
    * appeared yet, and against a server too old to report it.
    *
+   * Ourselves excepted. An arrival is something the SFU watches other people
+   * do, so it says nothing about the client that was already there, and the
+   * call supplies that one from the moment its own join returned.
+   *
    * Somebody on two devices joined when the first of them did.
    */
   since?: number;

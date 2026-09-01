@@ -176,6 +176,11 @@ pub struct Participant {
     /// whose media has not appeared yet, and against a server too old to
     /// report it.
     ///
+    /// Ourselves excepted, and only ourselves. An arrival is something the SFU
+    /// watches other people do, so it has nothing to say about the one client
+    /// that was already here, and the call fills that row in from the moment
+    /// its own join returned.
+    ///
     /// Somebody on two devices joined when the first of them did.
     ///
     /// Deliberately not "when they joined the room". That is answerable from

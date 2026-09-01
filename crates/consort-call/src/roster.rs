@@ -50,6 +50,23 @@ pub fn camera_live(member: &MediaParticipant) -> bool {
         .any(|stream| stream.kind == MediaStreamKind::Camera && !stream.muted)
 }
 
+/// When this membership joined the call, `ours` standing in for our own.
+///
+/// The transport reports arrivals, and an arrival is something somebody else
+/// does. LiveKit tells this client who turned up after it connected and there
+/// is no event in which it turns up itself, so our own membership came back
+/// with no time on it and the card belonging to the person reading it was the
+/// one card in the call with no "in call" line.
+///
+/// `ours` is the moment this session's join returned, which is a fact this
+/// process holds outright rather than one the SFU has to be asked for. It
+/// stands in for exactly one row: everybody else keeps the transport's record,
+/// which is the only thing that can be right about people who were already in
+/// the call when we arrived.
+pub fn arrived_at(member: &MediaParticipant, ours: u64) -> Option<u64> {
+    member.joined_at_ms.or(member.is_local.then_some(ours))
+}
+
 /// Attach each named person's mute state, given one entry per membership.
 ///
 /// `memberships` is `(user_id, muted)` in roster order, and `people` is the
@@ -475,6 +492,45 @@ mod tests {
         );
 
         assert!(!microphone_muted(&member));
+    }
+
+    #[test]
+    fn our_own_arrival_is_the_one_this_session_wrote_down() {
+        // Nothing else can supply it. The transport reports the people who
+        // turn up after us and has no event for us, so this is the one row in
+        // the call whose arrival has to come from the client that arrived.
+        let ours = MediaParticipant {
+            is_local: true,
+            ..membership("@ada:example.org", vec![])
+        };
+
+        assert_eq!(
+            arrived_at(&ours, 1_700_000_000_000),
+            Some(1_700_000_000_000)
+        );
+    }
+
+    #[test]
+    fn nobody_else_borrows_the_time_we_joined() {
+        // Ours and only ours. Lending it to somebody the call has not placed
+        // yet would draw every new arrival as having been here as long as we
+        // have.
+        let theirs = membership("@ada:example.org", vec![]);
+
+        assert_eq!(arrived_at(&theirs, 1_700_000_000_000), None);
+    }
+
+    #[test]
+    fn the_transport_answers_for_everybody_it_can_place() {
+        let theirs = MediaParticipant {
+            joined_at_ms: Some(1_700_000_060_000),
+            ..membership("@ada:example.org", vec![])
+        };
+
+        assert_eq!(
+            arrived_at(&theirs, 1_700_000_000_000),
+            Some(1_700_000_060_000)
+        );
     }
 
     #[test]
