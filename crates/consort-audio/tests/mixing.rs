@@ -402,7 +402,7 @@ mod sounds {
 /// nobody can tell whether that is the setting or the person.
 mod levels {
     use super::*;
-    use consort_audio::{FULL_VOLUME, gain};
+    use consort_audio::{FULL_VOLUME, MAX_PERSON_VOLUME, gain};
 
     /// A level that is unmistakable in a sample value, and not so low that
     /// rounding is what is being measured.
@@ -447,12 +447,60 @@ mod levels {
     }
 
     #[test]
-    fn nothing_can_be_made_louder_than_it_was() {
-        // The mixer clips rather than ducking, deliberately, so a control that
-        // could push the sum past full scale would distort the whole call to
-        // make one part of it louder.
-        assert_eq!(gain(200), 1.0);
-        assert_eq!(gain(u8::MAX), 1.0);
+    fn the_master_and_the_notifications_stop_at_full() {
+        // Everything is already summed by the time these two apply, so there is
+        // nothing left they could raise on its own: a master above unity is a
+        // way of asking for the whole call as distortion. Enforced where they
+        // are stored rather than in the curve, which one person is allowed to
+        // take further.
+        let voices = Voices::new();
+        voices.set_output_level(u8::MAX);
+        voices.set_notification_level(u8::MAX);
+        voices.hear("alice", &[1000, 1000]);
+        voices.play(&[500, 500]);
+
+        assert_eq!(play(&voices, 2), vec![1500, 1500]);
+    }
+
+    #[test]
+    fn one_person_can_be_turned_up_past_full() {
+        // Somebody on a laptop microphone across the room arrives quiet against
+        // everybody else, and bringing the rest of the call down to meet them
+        // is the wrong repair: it makes every other voice worse to fix one.
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), 200)]));
+        voices.hear("alice", &[1000, 1000]);
+
+        let loud = (1000.0 * f64::from(gain(200))).round() as i16;
+        assert!(loud > 1000, "200% should be louder than the sample was");
+        assert_eq!(play(&voices, 2), vec![loud, loud]);
+    }
+
+    #[test]
+    fn a_boost_stops_at_the_ceiling_rather_than_wherever_it_was_asked_to() {
+        // The ceiling is the curve's, so a settings file edited by hand cannot
+        // ask for a multiply the mixer was never measured at.
+        assert_eq!(gain(MAX_PERSON_VOLUME), gain(u8::MAX));
+
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), u8::MAX)]));
+        voices.hear("alice", &[100]);
+
+        let capped = (100.0 * f64::from(gain(MAX_PERSON_VOLUME))).round() as i16;
+        assert_eq!(play(&voices, 1), vec![capped]);
+    }
+
+    #[test]
+    fn a_boosted_person_clips_rather_than_wrapping() {
+        // The whole reason the sum is accumulated in `i32` and clamped once at
+        // the end. Boosting somebody already near full scale is exactly the
+        // case that overflows, and a wrap would put a full-scale sample of the
+        // opposite sign into somebody's headphones.
+        let voices = Voices::new();
+        voices.set_person_levels(HashMap::from([("alice".to_owned(), MAX_PERSON_VOLUME)]));
+        voices.hear("alice", &[20000, -20000]);
+
+        assert_eq!(play(&voices, 2), vec![i16::MAX, i16::MIN]);
     }
 
     #[test]

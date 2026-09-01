@@ -893,7 +893,9 @@ export function setAudioSettings(audio: AudioSettings): Promise<void> {
  * It does survive leaving the call, rejoining, and restarting.
  *
  * `100` removes the entry rather than storing it, because full volume is the
- * absence of a choice.
+ * absence of a choice. Exactly `100`, not anything at or above it: the range
+ * runs to 250, and above full is a boost for somebody who arrives too quiet to
+ * be brought up any other way.
  */
 export function setPersonVolume(
   userId: string,

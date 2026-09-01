@@ -108,6 +108,22 @@ pub struct Voices {
 /// Full volume, as these percentages count it.
 pub const FULL_VOLUME: u8 = 100;
 
+/// As loud as one person may be made.
+///
+/// One person, and only one person. The master and the notification level
+/// still stop at [`FULL_VOLUME`], because turning the whole call up past full
+/// scale turns it into distortion rather than volume: everything is already
+/// summed by then, so there is nothing left that could be raised on its own.
+///
+/// A single stream is a different question, and the reason this exists.
+/// Somebody on a laptop microphone three feet away arrives quiet against
+/// everybody else, and the repair is to bring that one voice up rather than to
+/// bring the rest of the room down to meet it. Above unity the sum can reach
+/// full scale and clip (see [`clamp`]), which is the cost and is the right
+/// shape of cost: it lands on the moments the boosted person is actually loud
+/// rather than on every call all the time.
+pub const MAX_PERSON_VOLUME: u8 = 250;
+
 /// A percentage turned into something to multiply samples by.
 ///
 /// Squared rather than proportional, because a slider that is linear in
@@ -117,12 +133,17 @@ pub const FULL_VOLUME: u8 = 100;
 /// of and its top half on almost nothing. Squaring puts the middle of the
 /// slider near the middle of the range somebody is listening for.
 ///
-/// Attenuation only, and clamped so it stays that way. Above unity there is
-/// nothing to gain and something to lose: the mixer clips rather than ducks
-/// (see [`clamp`]), and a control that could push the sum past full scale would
-/// distort everybody at once to make one person louder.
+/// The squaring applies above a hundred as well, which is why the number on a
+/// person's slider has never been an amplitude and is not one here either.
+/// Half the travel is already a quarter of the amplitude, so a top of 250 is
+/// a little over six times, and the control stays one continuous curve instead
+/// of changing character at the point somebody crosses full volume.
+///
+/// Clamped at [`MAX_PERSON_VOLUME`], the highest anything is allowed to ask
+/// for. The lower ceiling on the master and the notifications is kept where
+/// those two are stored, so this stays one curve rather than three.
 pub fn gain(percent: u8) -> f32 {
-    let fraction = f32::from(percent.min(FULL_VOLUME)) / f32::from(FULL_VOLUME);
+    let fraction = f32::from(percent.min(MAX_PERSON_VOLUME)) / f32::from(FULL_VOLUME);
     fraction * fraction
 }
 
@@ -216,7 +237,7 @@ impl Voices {
     pub fn set_person_levels(&self, levels: HashMap<String, u8>) {
         *self.people_levels() = levels
             .into_iter()
-            .map(|(who, percent)| (who, percent.min(FULL_VOLUME)))
+            .map(|(who, percent)| (who, percent.min(MAX_PERSON_VOLUME)))
             .collect();
     }
 

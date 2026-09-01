@@ -15,6 +15,21 @@ import "./PersonMenu.css";
 /** Full volume, which is also what somebody nobody has adjusted is at. */
 const FULL = 100;
 
+/**
+ * As loud as one person can be made.
+ *
+ * Past full rather than up to it, because the case this control is for is
+ * somebody who arrives too quiet rather than too loud. A laptop microphone
+ * across a room comes in well under everybody else, and the only repair a
+ * slider that stopped at full could offer was to turn the rest of the call
+ * down to meet them, which makes four voices worse to fix one.
+ *
+ * The percentage is slider travel and not amplitude, here as everywhere else
+ * on this control: the curve is squared, so half is already a quarter and this
+ * top is a little over six times. It matches
+ * `consort_audio::MAX_PERSON_VOLUME`, which is where it is actually enforced.
+ */
+const LOUDEST = 250;
 
 /** How long to wait after a slider stops moving before writing it down. */
 const SETTLE_MS = 150;
@@ -47,7 +62,7 @@ export interface PersonMenuProps {
  * What one person's name in a voice channel opens.
  *
  * Two things somebody wants from a name in a list, in the order they want
- * them. Who is this, and then, occasionally, turn them down.
+ * them. Who is this, and then, occasionally, change how loud they are.
  *
  * ## What is on it, and what is deliberately not
  *
@@ -322,7 +337,7 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
             className="person-menu__slider"
             type="range"
             min={0}
-            max={100}
+            max={LOUDEST}
             step={1}
             value={percent}
             onChange={(event) => change(Number(event.target.value))}

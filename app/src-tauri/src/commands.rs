@@ -377,11 +377,16 @@ fn set_person_volume_for(
     percent: u8,
 ) -> Result<(), crate::settings::SettingsError> {
     let mut settings = state.settings().load();
-    if percent >= consort_audio::FULL_VOLUME {
+    if percent == consort_audio::FULL_VOLUME {
         // Full volume is the absence of a choice, not a choice of 100. Storing
         // it would grow the file by a line for every person somebody ever
         // nudged and put back, and the mixer would pay a multiply by one for
         // each of them.
+        //
+        // Equality rather than "at or above", which is what this was while a
+        // hundred was the top of the slider. It no longer is: a person can be
+        // boosted past it, and treating 150 as "nothing chosen" would drop the
+        // choice on the way to the file and put them straight back to full.
         settings.audio.person_volumes.remove(&user_id);
     } else {
         settings.audio.person_volumes.insert(user_id, percent);
@@ -1119,6 +1124,25 @@ mod tests {
             set_person_volume_for(&state, "@ada:example.org".to_owned(), 100).expect("save");
 
             assert!(audio_settings_for(&state).person_volumes.is_empty());
+        }
+
+        #[test]
+        fn a_boost_is_written_down_rather_than_read_as_no_choice() {
+            // The regression the "at or above full" test used to allow. While a
+            // hundred was the top of the slider, anything at or over it meant
+            // "nothing chosen"; now that somebody can be turned up, a level of
+            // 150 taken that way would be dropped on the way to the file and
+            // put the person straight back to full.
+            let (_dir, state, _) = state();
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 150).expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&150),
+            );
         }
 
         #[test]

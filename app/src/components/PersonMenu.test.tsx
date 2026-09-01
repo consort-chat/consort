@@ -96,6 +96,30 @@ describe("PersonMenu", () => {
     expect(await slider()).toHaveValue("100");
   });
 
+  it("goes past full volume, for somebody who arrives too quiet", async () => {
+    // The case a slider that stopped at full could not answer. Somebody on a
+    // laptop microphone across a room comes in under everybody else, and the
+    // only repair available was to turn the rest of the call down to meet
+    // them, which makes four voices worse to fix one.
+    open();
+
+    expect(await slider()).toHaveAttribute("max", "250");
+  });
+
+  it("remembers a boost rather than reading it as no choice at all", async () => {
+    // Full volume is the absence of a choice and is not written down. Anything
+    // above it is very much a choice, and the Rust side tells them apart by
+    // equality for exactly this reason.
+    open();
+    const control = await slider();
+
+    fireEvent.change(control, { target: { value: "180" } });
+
+    await waitFor(() =>
+      expect(setPersonVolume).toHaveBeenCalledWith("@ada:example.org", 180),
+    );
+  });
+
   it("names the person it is about", async () => {
     // One menu at a time, opened from a list of similar rows. Without the name
     // on it there is nothing to say which row it belongs to.

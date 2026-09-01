@@ -95,6 +95,12 @@ pub struct AudioSettings {
     /// actually adjusted rather than an entry per person they have ever been
     /// in a call with.
     ///
+    /// Above a hundred is a boost rather than an attenuation, up to
+    /// [`MAX_PERSON_VOLUME`](crate::MAX_PERSON_VOLUME). Unlike the two levels
+    /// above it, which are a master and cannot usefully go past full, this one
+    /// is a single voice among several and somebody who arrives quiet has to
+    /// be brought up rather than everybody else brought down.
+    ///
     /// A `BTreeMap` rather than a `HashMap` because this is written to a file
     /// a person may open: ordered keys mean the same settings produce the same
     /// bytes, and a diff shows the line that changed rather than a reshuffle.

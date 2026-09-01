@@ -34,7 +34,10 @@ pub use gate::{
     SAMPLE_RATE, VoiceGate,
 };
 pub use meter::{FRAMES_PER_READING, Meter, READINGS_PER_SECOND, Reading};
-pub use mixing::{FULL_VOLUME, JITTER_FRAMES, JITTER_SAMPLES, Mixing, SOUND_SAMPLES, Voices, gain};
+pub use mixing::{
+    FULL_VOLUME, JITTER_FRAMES, JITTER_SAMPLES, MAX_PERSON_VOLUME, Mixing, SOUND_SAMPLES, Voices,
+    gain,
+};
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
 pub use sound::{Phrase, Sound};
