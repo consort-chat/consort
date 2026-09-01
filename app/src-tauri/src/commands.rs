@@ -376,6 +376,12 @@ fn set_person_volume_for(
     user_id: String,
     percent: u8,
 ) -> Result<(), crate::settings::SettingsError> {
+    // Clamped rather than trusted. The mixer clamps on the way out, so a
+    // larger number would be written to the file, read back, and drawn on a
+    // slider as a level nothing is actually playing at. The slider cannot send
+    // one, but a command is reachable from anything running in the webview and
+    // the file outlives whatever sent it.
+    let percent = percent.min(consort_audio::MAX_PERSON_VOLUME);
     let mut settings = state.settings().load();
     if percent == consort_audio::FULL_VOLUME {
         // Full volume is the absence of a choice, not a choice of 100. Storing
@@ -1142,6 +1148,23 @@ mod tests {
                     .person_volumes
                     .get("@ada:example.org"),
                 Some(&150),
+            );
+        }
+
+        #[test]
+        fn a_level_above_the_ceiling_is_stored_as_the_ceiling() {
+            // The mixer clamps on the way out, so anything higher would be
+            // written down, read back, and drawn on a slider as a level
+            // nothing is actually playing at.
+            let (_dir, state, _) = state();
+
+            set_person_volume_for(&state, "@ada:example.org".to_owned(), 255).expect("save");
+
+            assert_eq!(
+                audio_settings_for(&state)
+                    .person_volumes
+                    .get("@ada:example.org"),
+                Some(&consort_audio::MAX_PERSON_VOLUME),
             );
         }
 
