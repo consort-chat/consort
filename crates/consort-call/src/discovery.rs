@@ -32,6 +32,35 @@
 //! is the same as if the key had been absent, which is the case upstream
 //! already handles.
 
+/// The most of a discovery document worth reading.
+///
+/// A client discovery document is a handful of keys: a homeserver base URL,
+/// perhaps an identity server, perhaps a list of foci. Real ones are a few
+/// hundred bytes. This is not a limit on how large a valid one may be, because
+/// there is no such thing; it is a limit on how much of a stranger's response
+/// this process will hold. The host is named by the server name out of the
+/// user's own ID, it is asked before anything has authenticated anything, and
+/// an unbounded read of an unbounded body is an unbounded allocation.
+pub const MAX_DOCUMENT: usize = 64 * 1024;
+
+/// Take as much of a chunk as there is room for, and say whether to ask for
+/// another.
+///
+/// Truncating rather than failing, because the outcome of a document this
+/// module cannot parse is already "the server advertises no focus", which is
+/// the same outcome as a document that genuinely does not. A caller that
+/// stopped early has nothing better to say than that.
+pub fn take_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    let room = MAX_DOCUMENT - body.len();
+    if chunk.len() < room {
+        body.extend_from_slice(chunk);
+        return true;
+    }
+
+    body.extend_from_slice(&chunk[..room]);
+    false
+}
+
 /// Where a server name publishes its client discovery document.
 ///
 /// Keyed on the server name, the domain in a user ID, and not on the
@@ -104,6 +133,55 @@ mod tests {
                 ]
             }}"#
         )
+    }
+
+    #[test]
+    fn a_chunk_that_fits_is_taken_whole_and_leaves_room() {
+        let mut body = Vec::new();
+
+        assert!(take_chunk(&mut body, b"{\"m.homeserver\":"));
+        assert!(take_chunk(&mut body, b" {}}"));
+
+        assert_eq!(body, br#"{"m.homeserver": {}}"#);
+    }
+
+    #[test]
+    fn a_chunk_that_overflows_is_cut_at_the_cap_and_ends_the_read() {
+        let mut body = vec![b'x'; MAX_DOCUMENT - 4];
+
+        assert!(!take_chunk(&mut body, &[b'y'; 64]));
+
+        assert_eq!(body.len(), MAX_DOCUMENT);
+        assert_eq!(&body[MAX_DOCUMENT - 4..], b"yyyy");
+    }
+
+    #[test]
+    fn one_enormous_chunk_is_still_only_the_cap() {
+        // The shape that matters: a hostile server does not have to send many
+        // chunks to make this allocate, it can send one.
+        let mut body = Vec::new();
+
+        assert!(!take_chunk(&mut body, &vec![b'y'; MAX_DOCUMENT * 4]));
+
+        assert_eq!(body.len(), MAX_DOCUMENT);
+    }
+
+    #[test]
+    fn a_full_body_takes_nothing_more() {
+        let mut body = vec![b'x'; MAX_DOCUMENT];
+
+        assert!(!take_chunk(&mut body, b"more"));
+
+        assert_eq!(body.len(), MAX_DOCUMENT);
+    }
+
+    #[test]
+    fn a_truncated_document_advertises_nothing_rather_than_half_a_url() {
+        let mut body = Vec::new();
+        let whole = advertising("https://sfu.example.org");
+        take_chunk(&mut body, &whole.as_bytes()[..whole.len() / 2]);
+
+        assert_eq!(livekit_focus(&String::from_utf8(body).unwrap()), None);
     }
 
     #[test]

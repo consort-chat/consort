@@ -168,19 +168,37 @@ impl LiveKitTransport {
     ///
     /// The SDK's own HTTP client rather than a new one, so the request
     /// inherits the TLS setup, the proxy and the connection pool that every
-    /// other request this app makes already uses. The timeout covers reading
-    /// the body as well as getting a response, which is also what keeps an
-    /// implausibly large document from being read to the end.
+    /// other request this app makes already uses.
+    ///
+    /// Read a chunk at a time against [`discovery::MAX_DOCUMENT`] rather than
+    /// with `text()`, which reads to the end. The timeout bounds how long a
+    /// server may take, and a server sending as fast as the link allows is
+    /// inside it the whole time, so it bounds size only by accident and on a
+    /// fast link that accident is measured in hundreds of megabytes.
     async fn read_document(&self, url: &str) -> Result<String, matrix_sdk::reqwest::Error> {
-        self.client
+        let mut response = self
+            .client
             .http_client()
             .get(url)
             .timeout(WELL_KNOWN_TIMEOUT)
             .send()
             .await?
-            .error_for_status()?
-            .text()
-            .await
+            .error_for_status()?;
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if !discovery::take_chunk(&mut body, &chunk) {
+                tracing::warn!(
+                    url,
+                    limit = discovery::MAX_DOCUMENT,
+                    "the discovery document is larger than any discovery document is; \
+                     reading no more of it"
+                );
+                break;
+            }
+        }
+
+        Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
     /// The room, if this account is in it and sync has delivered it.
