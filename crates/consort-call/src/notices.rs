@@ -49,7 +49,7 @@
 //! otherwise be audible). So everybody re-announces whenever anybody arrives,
 //! and the newcomer is told by all of them without having to ask.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -175,11 +175,16 @@ impl Announced {
     /// deafening while away is what happens when somebody turns their
     /// headphones off on the way out, and collapsing the two would lose which
     /// icon to draw.
+    ///
+    /// A membership more than one participant has claimed is dropped from
+    /// both. See [`Self::contested`].
     pub fn flags(&self) -> Flags {
+        let contested = self.contested();
         let members = |wanted: fn(&Notice) -> bool| {
             self.0
                 .values()
                 .filter(|notice| wanted(notice))
+                .filter(|notice| !contested.contains(notice.member_id.as_str()))
                 .map(|notice| notice.member_id.clone())
                 .collect()
         };
@@ -188,6 +193,57 @@ impl Announced {
             deafened: members(|notice| notice.deafened),
             away: members(|notice| notice.away),
         }
+    }
+
+    /// Memberships that more than one participant says are theirs.
+    ///
+    /// A notice names its own sender, and nothing here can check that claim: a
+    /// LiveKit `Participant` carries an identity and the membership is derived
+    /// from it differently in each MatrixRTC generation, which is the reason
+    /// the field exists at all. So anybody in the call can send a notice
+    /// carrying somebody else's membership id and have the roster draw a
+    /// headphone icon beside a person who is listening.
+    ///
+    /// What this uses instead is that everybody re-announces on every roster
+    /// change. A forged claim about somebody who is in the call and running
+    /// Consort therefore sits next to that person's own claim about
+    /// themselves, and the two are visible here as one membership arriving
+    /// from two identities. Neither is trusted over the other: the flag is
+    /// dropped and the person is drawn as ordinary, which is the answer that
+    /// is wrong in the least damaging direction.
+    ///
+    /// Two gaps this does not close, both wanting the sender's identity to be
+    /// checked against the roster rather than inferred from a conflict.
+    /// Somebody running Element Call sends no notice at all, so a claim about
+    /// them meets no opposition. And this is only as good as the re-announce:
+    /// a forgery is answered the moment the roster next changes, but not
+    /// before. Closing them takes an `identity` on `matrix_rtc_media`'s
+    /// `Participant`, which is a change to the fork.
+    ///
+    /// A reconnection can produce a conflict honestly, for as long as the SFU
+    /// still reports the old participant. The icon flickers off and comes
+    /// back, which is the same failure in the same safe direction.
+    fn contested(&self) -> HashSet<&str> {
+        let mut claims: HashMap<&str, usize> = HashMap::new();
+        for notice in self.0.values() {
+            *claims.entry(notice.member_id.as_str()).or_default() += 1;
+        }
+
+        let contested: HashSet<&str> = claims
+            .into_iter()
+            .filter(|(_, claimants)| *claimants > 1)
+            .map(|(member_id, _)| member_id)
+            .collect();
+
+        if !contested.is_empty() {
+            tracing::warn!(
+                ?contested,
+                "more than one participant claims the same call membership; \
+                 believing neither about it"
+            );
+        }
+
+        contested
     }
 }
 
@@ -350,6 +406,63 @@ mod tests {
         announced.note("ada-phone-identity", Notice::new("ada-phone", false, false));
 
         assert_eq!(announced.flags().deafened, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn a_membership_two_participants_claim_is_believed_from_neither() {
+        // Anybody in a call can send a notice naming somebody else's
+        // membership, and nothing in the payload proves otherwise. What gives
+        // it away is that the person it is about re-announces too, so the
+        // forgery and the truth arrive together under one membership id from
+        // two identities. Dropping both is wrong in the safe direction: an
+        // icon that should be there goes missing, rather than one appearing
+        // beside somebody who is listening.
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", false, false));
+
+        announced.note("liar-identity", Notice::new("ada-laptop", true, true));
+
+        let flags = announced.flags();
+        assert!(flags.deafened.is_empty());
+        assert!(flags.away.is_empty());
+    }
+
+    #[test]
+    fn a_forged_claim_does_not_take_anybody_else_down_with_it() {
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", false, false));
+        announced.note("bob-identity", Notice::new("bob-phone", true, false));
+
+        announced.note("liar-identity", Notice::new("ada-laptop", true, false));
+
+        assert_eq!(announced.flags().deafened, vec!["bob-phone".to_owned()]);
+    }
+
+    #[test]
+    fn a_forgery_withdrawn_leaves_the_truth_standing() {
+        // What a liar disconnecting looks like, and what a reconnection race
+        // looks like once the SFU stops reporting the old participant.
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
+        announced.note("liar-identity", Notice::new("ada-laptop", false, false));
+        assert!(announced.flags().deafened.is_empty());
+
+        announced.gone("liar-identity");
+
+        assert_eq!(announced.flags().deafened, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn two_participants_agreeing_is_still_two_participants() {
+        // Not a special case worth making one. A claim nobody can verify is
+        // unverified whether or not it happens to match, and a forger who
+        // guesses the current state right gains nothing by it.
+        let mut announced = Announced::new();
+        announced.note("ada-identity", Notice::new("ada-laptop", true, false));
+
+        announced.note("liar-identity", Notice::new("ada-laptop", true, false));
+
+        assert!(announced.flags().deafened.is_empty());
     }
 
     #[test]
