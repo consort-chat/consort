@@ -6,11 +6,12 @@
 //! Three things have to survive a restart and they live in three places.
 //!
 //! The SDK's own state and crypto stores are a SQLite database the SDK
-//! manages; we only choose the directory. The access and refresh tokens go to
-//! the platform keyring, or to an owner-only file when no keyring is reachable,
-//! which is [`crate::secrets`]. Everything else, meaning the homeserver URL,
-//! the store directory, the user ID and the device ID, is not secret and goes
-//! in a small JSON file.
+//! manages; we choose the directory and the key it is encrypted with. The
+//! access and refresh tokens, and that key, go to the platform keyring, or to
+//! an owner-only file when no keyring is reachable, which is
+//! [`crate::secrets`]. Everything else, meaning the homeserver URL, the store
+//! directory, the user ID and the device ID, is not secret and goes in a small
+//! JSON file.
 //!
 //! ## Why the split
 //!
@@ -23,7 +24,7 @@
 //! on its own once `handle_refresh_tokens` is on, and only the keyring entry
 //! has to be rewritten when it does.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use matrix_sdk::authentication::SessionTokens;
 use matrix_sdk::authentication::matrix::MatrixSession;
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use crate::atomic;
 use crate::error::{Error, Result};
 use crate::secrets::{Backend, BackendKind, short_digest};
+use crate::store_key::StoreKey;
 
 /// Name Consort gives itself to the platform credential store.
 ///
@@ -51,6 +53,9 @@ pub struct StoredSession {
     pub homeserver: String,
     /// Directory holding the SDK's SQLite state and crypto stores.
     pub store_path: PathBuf,
+    /// What those stores are encrypted with. Without it they cannot be opened
+    /// at all, which is why a session missing one is no session.
+    pub store_key: StoreKey,
     /// User ID, device ID, and the access/refresh tokens.
     pub session: MatrixSession,
 }
@@ -153,7 +158,8 @@ impl SessionStore {
     ///
     /// A missing file is `Ok(None)`, not an error: a first launch is the normal
     /// case, not a failure. Metadata present with no matching tokens is also
-    /// `Ok(None)`, which is what a keyring cleared behind our back looks like.
+    /// `Ok(None)`, which is what a keyring cleared behind our back looks like,
+    /// and so is metadata whose store key has gone the same way.
     pub fn load(&self) -> Result<Option<StoredSession>> {
         let path = self.session_file();
         let bytes = match std::fs::read(&path) {
@@ -178,9 +184,14 @@ impl SessionStore {
             return Ok(None);
         };
 
+        let Some(store_key) = self.store_key(&metadata.store_path)? else {
+            return Ok(None);
+        };
+
         Ok(Some(StoredSession {
             homeserver: metadata.homeserver,
             store_path: metadata.store_path,
+            store_key,
             session: MatrixSession {
                 meta: SessionMeta { user_id, device_id },
                 tokens,
@@ -190,14 +201,21 @@ impl SessionStore {
 
     /// Write the session, replacing any existing one.
     ///
-    /// Tokens go first. If the metadata write then fails there is an orphaned
-    /// keyring entry, which is harmless and gets overwritten by the next login.
-    /// The other order would leave metadata pointing at tokens that do not
-    /// exist, which reads as a corrupt session.
+    /// Secrets go first. If the metadata write then fails there are orphaned
+    /// keyring entries, which are harmless and get overwritten by the next
+    /// login. The other order would leave metadata pointing at secrets that do
+    /// not exist, which reads as a corrupt session.
+    ///
+    /// The store key is written here and nowhere else, which means a login
+    /// that never gets this far leaves no key behind. The store it created is
+    /// then unopenable, and that is fine: without metadata pointing at it, the
+    /// next launch shows the login form, and a login discards the store at that
+    /// path before creating a new one.
     pub fn save(&self, session: &StoredSession) -> Result<()> {
         let user_id = session.session.meta.user_id.to_string();
 
         self.save_tokens(&user_id, &session.session.tokens)?;
+        self.save_store_key(&session.store_path, &session.store_key)?;
 
         let metadata = SessionMetadata {
             homeserver: session.homeserver.clone(),
@@ -228,6 +246,37 @@ impl SessionStore {
         self.secrets.set(&token_key(user_id), &json)
     }
 
+    fn save_store_key(&self, store_path: &Path, key: &StoreKey) -> Result<()> {
+        self.secrets.set(&store_key_name(store_path), &key.encode())
+    }
+
+    /// The key an existing store was encrypted with, if we still have it.
+    ///
+    /// `Ok(None)` covers both a key that was never written, which is what a
+    /// session predating store encryption looks like, and one that came back
+    /// unreadable. Neither is an error worth surfacing: the store cannot be
+    /// opened either way, and the cure for both is the login that discards it
+    /// and builds a fresh one.
+    pub fn store_key(&self, store_path: &Path) -> Result<Option<StoreKey>> {
+        let Some(encoded) = self.secrets.get(&store_key_name(store_path))? else {
+            tracing::warn!(
+                path = %store_path.display(),
+                looked_in = ?self.secrets.kind(),
+                "no key on record for this encryption store; treating the session as ended"
+            );
+            return Ok(None);
+        };
+
+        let key = StoreKey::decode(&encoded);
+        if key.is_none() {
+            tracing::warn!(
+                path = %store_path.display(),
+                "the key on record for this encryption store is not a key"
+            );
+        }
+        Ok(key)
+    }
+
     /// Read the tokens for an account, if they are there.
     pub fn load_tokens(&self, user_id: &str) -> Result<Option<SessionTokens>> {
         let Some(json) = self.secrets.get(&token_key(user_id))? else {
@@ -238,20 +287,24 @@ impl SessionStore {
             .map_err(Error::CorruptSession)
     }
 
-    /// Remove the stored session, metadata and tokens both.
+    /// Remove the stored session: the metadata, the tokens, and the key the
+    /// SDK's stores were encrypted with.
     ///
     /// Missing is success, since the caller wanted it gone and it is gone.
     ///
-    /// Leaves the SQLite stores alone on purpose. They hold the device's
-    /// Megolm keys, and deleting them makes previously readable history
-    /// permanently undecryptable for that device. Signing out is not a request
-    /// to destroy message history.
+    /// The SQLite stores themselves stay on disk, because the client that owns
+    /// them is still alive here and still holds handles to them. Taking the key
+    /// away is what makes that clutter rather than a pile of readable room keys
+    /// left behind by somebody who asked to sign out: what remains cannot be
+    /// opened by anything, us included, and the next sign-in deletes the
+    /// directory before creating a new one.
     pub fn clear(&self) -> Result<()> {
-        // Read the metadata before removing it, because it names the account
-        // whose tokens have to go. A metadata file we cannot parse still gets
-        // deleted: leaving it would fail the same way on every launch.
-        let user_id = match self.read_metadata() {
-            Ok(Some(metadata)) => Some(metadata.user_id),
+        // Read the metadata before removing it, because it names both the
+        // account whose tokens have to go and the store whose key does. A
+        // metadata file we cannot parse still gets deleted: leaving it would
+        // fail the same way on every launch.
+        let stored = match self.read_metadata() {
+            Ok(Some(metadata)) => Some(metadata),
             Ok(None) => None,
             Err(error) => {
                 tracing::warn!(%error, "clearing an unreadable session file");
@@ -261,8 +314,9 @@ impl SessionStore {
 
         atomic::remove_if_present(&self.session_file())?;
 
-        if let Some(user_id) = user_id {
-            self.secrets.delete(&token_key(&user_id))?;
+        if let Some(metadata) = stored {
+            self.secrets.delete(&token_key(&metadata.user_id))?;
+            self.secrets.delete(&store_key_name(&metadata.store_path))?;
         }
 
         Ok(())
@@ -283,6 +337,15 @@ impl SessionStore {
 /// The key an account's tokens are filed under.
 fn token_key(user_id: &str) -> String {
     format!("session-tokens:{user_id}")
+}
+
+/// The key a store's encryption key is filed under.
+///
+/// Named after the store path rather than the account, because that is the one
+/// identifier both sides have. A login knows the account and derives the path
+/// from it; a restore has only the path, read back out of the metadata file.
+fn store_key_name(store_path: &Path) -> String {
+    format!("store-key:{}", short_digest(&store_path.to_string_lossy()))
 }
 
 fn parse_user_id(value: &str) -> Result<OwnedUserId> {
@@ -309,6 +372,7 @@ mod tests {
         StoredSession {
             homeserver: "https://example.org/".to_owned(),
             store_path: PathBuf::from("/tmp/consort/accounts/abcd"),
+            store_key: StoreKey::generate(),
             session: MatrixSession {
                 meta: SessionMeta {
                     user_id: ruma::UserId::parse(user).unwrap(),
@@ -336,6 +400,7 @@ mod tests {
 
         assert_eq!(loaded.homeserver, original.homeserver);
         assert_eq!(loaded.store_path, original.store_path);
+        assert_eq!(loaded.store_key.as_bytes(), original.store_key.as_bytes());
         assert_eq!(loaded.session.meta.user_id, original.session.meta.user_id);
         assert_eq!(
             loaded.session.meta.device_id,
@@ -389,7 +454,6 @@ mod tests {
 
         store.save(&session("@bob:example.org")).unwrap();
 
-        assert_eq!(backend.len(), 1);
         let stored = backend
             .get("session-tokens:@bob:example.org")
             .unwrap()
@@ -423,7 +487,11 @@ mod tests {
 
         let loaded = store.load().unwrap().unwrap();
         assert_eq!(loaded.session.tokens.access_token, "syt_second");
-        assert_eq!(backend.len(), 1);
+        assert_eq!(
+            backend.len(),
+            2,
+            "one entry for the tokens, one for the key"
+        );
     }
 
     #[test]
@@ -477,6 +545,9 @@ mod tests {
                 "session-tokens:@bob:example.org",
                 r#"{"access_token":"syt_old"}"#,
             )
+            .unwrap();
+        store
+            .save_store_key(Path::new("/tmp/x"), &StoreKey::generate())
             .unwrap();
         let json = br#"{"homeserver":"https://example.org/","store_path":"/tmp/x","user_id":"@bob:example.org","device_id":"DEV"}"#;
         atomic::write_private(&store.session_file(), json, "session").unwrap();
@@ -532,7 +603,7 @@ mod tests {
 
     #[test]
     fn clearing_leaves_the_sqlite_store_directory_alone() {
-        // Deleting it would make old history permanently undecryptable.
+        // Its key is gone, so what is left is unreadable. See `clear`.
         let (dir, store, _) = store();
         let account_dir = dir.path().join("accounts").join("deadbeef");
         std::fs::create_dir_all(&account_dir).unwrap();
@@ -609,6 +680,102 @@ mod tests {
 
         assert!(path.starts_with(dir.path()));
         assert!(!path.to_string_lossy().contains(".."));
+    }
+
+    #[test]
+    fn the_store_key_goes_to_the_secret_backend_and_never_to_the_metadata_file() {
+        let (_dir, store, backend) = store();
+        let saved = session("@bob:example.org");
+
+        store.save(&saved).unwrap();
+
+        let encoded = backend
+            .get(&store_key_name(&saved.store_path))
+            .unwrap()
+            .expect("the key was stored under the store path");
+        assert_eq!(
+            StoreKey::decode(&encoded).unwrap().as_bytes(),
+            saved.store_key.as_bytes()
+        );
+        let on_disk = std::fs::read_to_string(store.session_file()).unwrap();
+        assert!(!on_disk.contains(&encoded));
+    }
+
+    #[test]
+    fn a_session_whose_store_key_is_gone_is_treated_as_signed_out() {
+        // What a session written before store encryption looks like, and what
+        // a cleared keyring looks like from the other side. Neither store can
+        // be opened, so the only useful screen is the login form.
+        let (_dir, store, backend) = store();
+        let saved = session("@bob:example.org");
+        store.save(&saved).unwrap();
+
+        backend.delete(&store_key_name(&saved.store_path)).unwrap();
+
+        assert!(store.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_session_whose_store_key_is_unreadable_is_treated_as_signed_out() {
+        let (_dir, store, backend) = store();
+        let saved = session("@bob:example.org");
+        store.save(&saved).unwrap();
+
+        backend
+            .set(&store_key_name(&saved.store_path), "not a key")
+            .unwrap();
+
+        assert!(store.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_fresh_store_key_replaces_the_one_the_same_store_had() {
+        // Every login discards the store at that path, so the key that opened
+        // the old one must not survive to be used on the new one.
+        let (_dir, store, _) = store();
+        let first = session("@bob:example.org");
+        let second = session("@bob:example.org");
+        store.save(&first).unwrap();
+
+        store.save(&second).unwrap();
+
+        assert_ne!(first.store_key.as_bytes(), second.store_key.as_bytes());
+        assert_eq!(
+            store.load().unwrap().unwrap().store_key.as_bytes(),
+            second.store_key.as_bytes()
+        );
+    }
+
+    #[test]
+    fn two_stores_do_not_share_a_key() {
+        let (_dir, store, _) = store();
+        let one = Path::new("/tmp/one");
+        let two = Path::new("/tmp/two");
+        store.save_store_key(one, &StoreKey::generate()).unwrap();
+        store.save_store_key(two, &StoreKey::generate()).unwrap();
+
+        assert_ne!(
+            store.store_key(one).unwrap().unwrap().as_bytes(),
+            store.store_key(two).unwrap().unwrap().as_bytes()
+        );
+    }
+
+    #[test]
+    fn signing_out_takes_the_store_key_with_it() {
+        // The store files outlive a sign out because the client still holds
+        // them open. Without this they would outlive it readable.
+        let (_dir, store, backend) = store();
+        let saved = session("@bob:example.org");
+        store.save(&saved).unwrap();
+
+        store.clear().unwrap();
+
+        assert!(
+            backend
+                .get(&store_key_name(&saved.store_path))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

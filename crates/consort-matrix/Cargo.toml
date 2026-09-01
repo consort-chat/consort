@@ -25,6 +25,12 @@ tokio = { workspace = true }
 # definition. Already in the tree by way of the SDK.
 base64 = "0.22"
 sha2 = "0.10"
+# Only for the store key in `store_key`, which has to be unguessable and so
+# cannot come from anything less than the operating system's CSPRNG. Already in
+# the tree by way of matrix-sdk, and the default features are the ones it
+# already resolves, so cargo unifies the two rather than compiling a second
+# copy.
+rand = "0.9"
 # The platform credential store: Secret Service on Linux and the BSDs, the
 # Credential Manager on Windows, Keychain on macOS. The `v1` feature (the
 # default) is the one that selects a store per platform automatically and

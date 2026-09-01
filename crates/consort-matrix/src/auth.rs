@@ -10,11 +10,12 @@ use std::path::Path;
 use matrix_sdk::config::RequestConfig;
 use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
 use matrix_sdk::store::RoomLoadSettings;
-use matrix_sdk::{Client, ClientBuilder, SessionChange};
+use matrix_sdk::{Client, ClientBuilder, SessionChange, SqliteStoreConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::session::{SessionStore, StoredSession};
+use crate::store_key::StoreKey;
 
 /// Shown to the homeserver in the user's device list.
 const DEVICE_DISPLAY_NAME: &str = "Consort";
@@ -113,10 +114,13 @@ pub async fn login(store: &SessionStore, credentials: &Credentials) -> Result<(C
     let store_path = store.store_path_for(&format!("{server}|{localpart}"));
     discard_previous_device_store(&store_path)?;
     crate::atomic::create_dir_private(&store_path)?;
+    // Held in memory until the login succeeds. `store.save` is what writes it
+    // down, so a login that fails leaves nothing behind but an empty store the
+    // next attempt discards anyway.
+    let store_key = StoreKey::generate();
 
-    let client = base_builder()
+    let client = base_builder(&store_path, &store_key)
         .server_name_or_homeserver_url(&server)
-        .sqlite_store(&store_path, None)
         .build()
         .await?;
 
@@ -164,6 +168,7 @@ pub async fn login(store: &SessionStore, credentials: &Credentials) -> Result<(C
     let stored = StoredSession {
         homeserver: client.homeserver().to_string(),
         store_path,
+        store_key,
         session,
     };
     store.save(&stored)?;
@@ -221,9 +226,8 @@ fn discard_previous_device_store(store_path: &Path) -> Result<()> {
 /// `build()` makes no network request at all, which means a restore also works
 /// entirely offline.
 pub async fn restore(stored: &StoredSession) -> Result<(Client, Profile)> {
-    let client = base_builder()
+    let client = base_builder(&stored.store_path, &stored.store_key)
         .homeserver_url(&stored.homeserver)
-        .sqlite_store(&stored.store_path, None)
         .build()
         .await?;
 
@@ -312,8 +316,21 @@ pub async fn persist_token_refreshes(client: Client, store: SessionStore) {
 /// restored with different encryption settings than it was created with keeps
 /// working for messaging and then fails when the voice layer checks for a
 /// cross-signed device.
-fn base_builder() -> ClientBuilder {
+///
+/// The store takes its path and its key together, as arguments rather than as a
+/// later builder call, so that no caller can reach a `Client` while having
+/// forgotten one of them. Forgetting the key is not a build failure: the SDK
+/// happily writes the Olm account and every room key out in the clear.
+///
+/// `cache_path` is `None`, which is what `ClientBuilder::sqlite_store` passes.
+/// The longer method is used only because it is the one that takes a key rather
+/// than a passphrase; see [`StoreKey`] for why that distinction matters.
+fn base_builder(store_path: &Path, store_key: &StoreKey) -> ClientBuilder {
     Client::builder()
+        .sqlite_store_with_config_and_cache_path(
+            SqliteStoreConfig::new(store_path).key(Some(store_key.as_bytes())),
+            None::<&Path>,
+        )
         // Bounded retries, because the default is unbounded and invisible.
         //
         // Left alone, matrix-sdk retries a 5xx behind the caller's back for

@@ -979,6 +979,7 @@ dependencies = [
  "keyring",
  "matrix-sdk",
  "matrix-sdk-base",
+ "rand 0.9.5",
  "rustls",
  "serde",
  "serde_json",

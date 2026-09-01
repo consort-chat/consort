@@ -41,6 +41,15 @@
 //! [`SessionStore::backend_kind`]. See [`secrets`] for why that fallback
 //! exists rather than a hard failure.
 //!
+//! ## Where the room keys go
+//!
+//! Into the same SQLite databases the SDK keeps everything else in, encrypted
+//! with 32 random bytes that go to the secret store beside the access token.
+//! See [`store_key`] for why a key rather than a passphrase, and for what that
+//! does and does not protect. A session whose key has gone is not a session:
+//! [`SessionStore::load`] reports it as signed out, and the next login builds a
+//! store from scratch.
+//!
 //! ## The rustls provider
 //!
 //! Nothing here installs a rustls `CryptoProvider`, but something must, exactly
@@ -55,6 +64,7 @@ pub mod error;
 pub mod rooms;
 pub mod secrets;
 pub mod session;
+pub mod store_key;
 pub mod sync;
 pub mod verification;
 
@@ -65,6 +75,7 @@ pub use error::{Error, Result};
 pub use rooms::{Channel, ChannelKind, Participant, Rooms, Space};
 pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
+pub use store_key::StoreKey;
 pub use sync::{Connection, StopReason};
 pub use verification::{Flow, FlowState, SessionVerification};
 

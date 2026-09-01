@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use consort_matrix::secrets::MemoryBackend;
-use consort_matrix::{Credentials, SessionStore, StoredSession, auth};
+use consort_matrix::{Credentials, SessionStore, StoreKey, StoredSession, auth};
 use matrix_sdk::authentication::SessionTokens;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::test_utils::mocks::{LoginResponseTemplate200, MatrixMockServer};
@@ -170,7 +170,11 @@ async fn a_successful_login_returns_the_profile_and_persists_the_session() {
     let reloaded = store.load().unwrap().expect("the session was persisted");
     assert_eq!(reloaded.session.tokens.access_token, "syt_first");
     assert_eq!(reloaded.session.meta.device_id.as_str(), DEVICE);
-    assert_eq!(backend.len(), 1, "the token went to the secret backend");
+    assert_eq!(
+        backend.len(),
+        2,
+        "the token and the store key went to the secret backend"
+    );
 }
 
 #[tokio::test]
@@ -440,6 +444,7 @@ async fn a_restore_brings_back_a_client_without_a_password() {
     let stored = StoredSession {
         homeserver: server.uri(),
         store_path: dir.path().join("account"),
+        store_key: StoreKey::generate(),
         session: MatrixSession {
             meta: SessionMeta {
                 user_id: ruma::user_id!("@bob:example.org").to_owned(),
@@ -469,6 +474,7 @@ async fn a_restore_survives_a_homeserver_that_answers_nothing() {
     let stored = StoredSession {
         homeserver: server.uri(),
         store_path: dir.path().join("account"),
+        store_key: StoreKey::generate(),
         session: MatrixSession {
             meta: SessionMeta {
                 user_id: ruma::user_id!("@bob:example.org").to_owned(),
@@ -488,6 +494,57 @@ async fn a_restore_survives_a_homeserver_that_answers_nothing() {
     assert_eq!(profile.user_id, USER);
     // No display name came back, so the UI falls back to the user ID.
     assert_eq!(profile.display_name, None);
+}
+
+#[tokio::test]
+async fn a_login_records_the_key_its_stores_are_encrypted_with() {
+    let server = MatrixMockServer::new().await;
+    mount_login(&server, "syt_first").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+
+    auth::login(&store, &credentials(&server)).await.unwrap();
+
+    let reloaded = store.load().unwrap().expect("the session was saved");
+    assert_eq!(
+        store
+            .store_key(&reloaded.store_path)
+            .unwrap()
+            .expect("a key was recorded for the store")
+            .as_bytes(),
+        reloaded.store_key.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn the_stores_a_login_writes_cannot_be_opened_with_the_wrong_key() {
+    // The property the whole store-key mechanism exists for, asserted against
+    // the SDK rather than against our own bookkeeping. Passing `None` here
+    // would not fail: matrix-sdk would open the databases and read what it
+    // found as plaintext, which is exactly the state this replaced.
+    let server = MatrixMockServer::new().await;
+    mount_login(&server, "syt_first").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+    let (client, _) = auth::login(&store, &credentials(&server)).await.unwrap();
+    let store_path = store.load().unwrap().unwrap().store_path;
+    drop(client);
+
+    let error = matrix_sdk::Client::builder()
+        .homeserver_url(server.uri())
+        .sqlite_store_with_config_and_cache_path(
+            matrix_sdk::SqliteStoreConfig::new(&store_path)
+                .key(Some(StoreKey::generate().as_bytes())),
+            None::<&std::path::Path>,
+        )
+        .build()
+        .await
+        .expect_err("a store opened with the wrong key must not open");
+
+    assert!(
+        matches!(error, matrix_sdk::ClientBuildError::SqliteStore(_)),
+        "expected the store open to fail, got {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -535,9 +592,10 @@ async fn a_logout_clears_locally_even_when_the_server_refuses() {
 ///
 /// It is not done here because the client is still alive at this point and
 /// holds open sqlite handles, so the removal has to move to after the client
-/// is dropped. Until then `discard_previous_device_store` clears it on the way
-/// into the next sign-in, which is what stops the leftovers from being a bug
-/// rather than just clutter.
+/// is dropped. What has changed since this deferral was written is that the
+/// files are no longer readable: `SessionStore::clear` deletes the key they
+/// are encrypted with, so what is left is bytes nobody can open. The next test
+/// is the one that says so.
 #[tokio::test]
 async fn a_logout_leaves_the_crypto_store_on_disk_for_now() {
     let server = MatrixMockServer::new().await;
@@ -554,6 +612,22 @@ async fn a_logout_leaves_the_crypto_store_on_disk_for_now() {
         store_path.is_dir(),
         "if this starts failing the deferral above has been resolved; update it"
     );
+}
+
+#[tokio::test]
+async fn a_logout_takes_the_key_to_the_store_it_leaves_behind() {
+    // What makes the deferral above clutter rather than a privacy bug.
+    let server = MatrixMockServer::new().await;
+    mount_login(&server, "syt_first").await;
+    server.mock_logout().ok().mount().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+    let (client, _) = auth::login(&store, &credentials(&server)).await.unwrap();
+    let store_path = store.load().unwrap().unwrap().store_path;
+
+    auth::logout(&client, &store).await.unwrap();
+
+    assert!(store.store_key(&store_path).unwrap().is_none());
 }
 
 #[tokio::test]
