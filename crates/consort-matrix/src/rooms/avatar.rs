@@ -129,12 +129,33 @@ fn thumbnail() -> MediaFormat {
     ))
 }
 
+/// The most avatar data worth carrying.
+///
+/// What is asked for is a [`SIZE`] square thumbnail, and a server that means
+/// well answers in kilobytes. The cap is about what a server that does not
+/// mean well can do with the same request: this data crosses the IPC boundary
+/// as base64, so it is a third larger again by the time the webview holds it,
+/// and there is one of these per person in a room list.
+///
+/// Generous on purpose. It is a ceiling on the absurd, not a judgement about
+/// what a reasonable avatar weighs.
+const MAX_BYTES: usize = 2 * 1024 * 1024;
+
 /// Bytes an `img` tag can be pointed at, or `None` when they are not an image.
 ///
 /// `what` names the caller in the log, because both callers reach here and a
 /// line saying only that something was not an image is a line that starts a
 /// search rather than ending one.
 fn as_data_url(bytes: &[u8], what: &str) -> Option<String> {
+    if bytes.len() > MAX_BYTES {
+        tracing::warn!(
+            bytes = bytes.len(),
+            limit = MAX_BYTES,
+            "{what} is larger than an avatar has any reason to be"
+        );
+        return None;
+    }
+
     let Some(mime) = image_type(bytes) else {
         tracing::warn!(
             bytes = bytes.len(),
@@ -222,5 +243,32 @@ mod tests {
         // Short reads are what a failed download looks like.
         assert_eq!(image_type(&[0x89, b'P']), None);
         assert_eq!(image_type(b"RIFF"), None);
+    }
+
+    #[test]
+    fn a_real_avatar_becomes_a_data_url() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+
+        let url = as_data_url(&png, "a room avatar").expect("a png is an image");
+
+        assert!(url.starts_with("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn an_avatar_larger_than_the_cap_is_refused_before_it_is_encoded() {
+        // A well-formed png header on a body no thumbnail request asked for.
+        // Refused on size, so the sniffing below it never runs.
+        let mut huge = vec![0u8; MAX_BYTES + 1];
+        huge[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        assert_eq!(as_data_url(&huge, "a room avatar"), None);
+    }
+
+    #[test]
+    fn an_avatar_at_exactly_the_cap_is_still_an_avatar() {
+        let mut big = vec![0u8; MAX_BYTES];
+        big[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        assert!(as_data_url(&big, "a room avatar").is_some());
     }
 }
