@@ -64,6 +64,12 @@ jobs:
         # something nobody reviewed.
         run: pnpm install --frozen-lockfile
 
+      - name: Audit dependencies
+        # Clean today. Fails on a vulnerability, which on a lockfile that is
+        # deliberately frozen is the only way anybody finds out. See
+        # docs/DEPENDENCIES.md.
+        run: pnpm audit --audit-level=moderate
+
       - name: Type check
         run: pnpm typecheck
 
@@ -140,6 +146,35 @@ jobs:
         with:
           name: rust-coverage
           path: lcov.info
+
+  advisories:
+    name: Advisories
+    runs-on: docker
+    container:
+      image: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      # Its own job rather than a step in the Rust one, because it needs no
+      # system libraries and no compiled workspace: it reads Cargo.lock. Run
+      # alongside the build rather than after it, so an advisory is reported on
+      # a pull request whose tests are still going.
+      - name: Cache cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-audit-${{ runner.os }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit dependencies
+        # Fails on a vulnerability. Crates that are merely unmaintained,
+        # unsound or yanked are reported and do not fail: almost all of them
+        # are the GTK3 bindings Tauri brings in, which this project cannot
+        # move. docs/DEPENDENCIES.md has what to do when a real one fires, and
+        # why an ignore entry has to carry a reason.
+        run: cargo audit
 
   hygiene:
     name: Hygiene

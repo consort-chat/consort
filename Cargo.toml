@@ -57,11 +57,12 @@ matrix-sdk-base = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev
 # dialect has no `m.rtc.slot` event, so nothing consulted it. See
 # tominal/matrix-rust-rtc `fix/no-e2ee-in-unencrypted-rooms`.
 #
-# The fork tracks upstream and carries that one commit on top. When it lands
-# upstream this goes back to BillCarsonFr and the rev moves with it. Until
-# then, note the risk a fork does not share with the matrix-sdk pin above: it
-# is ours to keep rebased, and a stale fork is a silent way to miss upstream
-# fixes.
+# The fork branched at 7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8 and carries
+# eight commits on top of it, on feature/plain-rooms-and-arrival-mute. When
+# they land upstream this goes back to BillCarsonFr and the rev moves with it.
+# Until then, note the risk a fork does not share with the matrix-sdk pin
+# above: it is ours to keep rebased, and a stale fork is a silent way to miss
+# upstream fixes. docs/DEPENDENCIES.md is how to find out how far behind it is.
 #
 # `matrix-sdk` feature: the SDK-backed command sender, the sticky bridge, and
 # the pre-2026 Element Call compatibility modes. Without it `call` is not

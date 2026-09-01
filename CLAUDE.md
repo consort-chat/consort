@@ -82,6 +82,8 @@ errors that look like nonsense. Never bump this pin alone.
 
 The upstream repo is at `../matrix-rust-rtc` on this machine. Check
 `crates/matrix-rtc-livekit/Cargo.toml` there before touching the pin.
+[docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) has what moves each pin, how to
+see how far behind the fork has fallen, and what to do about an advisory.
 
 ### Call::join cannot live in a Tauri command
 
