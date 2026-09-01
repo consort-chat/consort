@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 
 import {
   asCommandError,
@@ -15,6 +14,7 @@ import "./PersonMenu.css";
 
 /** Full volume, which is also what somebody nobody has adjusted is at. */
 const FULL = 100;
+
 
 /** How long to wait after a slider stops moving before writing it down. */
 const SETTLE_MS = 150;
@@ -33,7 +33,12 @@ export interface PersonMenuProps {
   person: Participant;
   /** The channel they are in. Half of the key an avatar and a profile take. */
   roomId: string;
-  /** Where the pointer was, in viewport coordinates. */
+  /**
+   * Where to put its top left corner, in viewport coordinates.
+   *
+   * A request rather than an instruction. It is clamped against the window
+   * below, so a card asked for near an edge comes back inside one.
+   */
   at: { x: number; y: number };
   onClose: () => void;
 }
@@ -201,15 +206,7 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
   const standing = profile === null ? null : standingLabel(profile.standing);
   const states = callStates(person);
 
-  // Into the body rather than into the sidebar that opened it. The card is
-  // already `position: fixed`, so this moves nothing on screen, but a scroll
-  // container paints its own scrollbar over everything inside it: `z-index` is
-  // resolved within the box, and the scrollbar is not in that box's stacking
-  // order at all. Nested in the channel list, the card came out with the
-  // sidebar's scrollbar drawn straight down the middle of it. Nothing else
-  // changes: the pointer and key handlers are on `document` and test for
-  // containment through the ref, both of which follow the node here.
-  return createPortal(
+  return (
     <div
       ref={menu}
       className="person-menu"
@@ -342,8 +339,7 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
           {problem}
         </p>
       )}
-    </div>,
-    document.body,
+    </div>
   );
 }
 

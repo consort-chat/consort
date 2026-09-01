@@ -322,12 +322,12 @@ describe("ChannelList", () => {
     expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
   });
 
-  it("opens the person menu outside the sidebar that scrolls", async () => {
-    // The sidebar is a scroll container, and a scroll container paints its own
-    // scrollbar over everything inside it whatever their `z-index` is. Left in
-    // the list, the card came out with the scrollbar drawn down the middle of
-    // it. The card is `position: fixed`, so leaving the subtree costs it
-    // nothing and is the only thing that gets it out from under.
+  it("opens the person menu clear of the column it was opened from", async () => {
+    // Not under the pointer, which is where it used to open. WebKitGTK paints a
+    // scroll container's scrollbar on top of the page rather than inside it, so
+    // a card overlapping this column came out with a grey bar down the middle
+    // of it and no `z-index` could lift it clear. Staying off the column is the
+    // only fix that holds, and it is also where every other client puts it.
     const { container } = render(
       <ChannelList
         space={space([
@@ -338,12 +338,14 @@ describe("ChannelList", () => {
         onSelect={vi.fn()}
       />,
     );
+    const column = container.querySelector(".channels");
+    if (column === null) throw new Error("no channel list to measure");
+    column.getBoundingClientRect = () => new DOMRect(0, 0, 240, 600);
 
     await userEvent.click(screen.getByText("Ada"));
 
     const card = screen.getByRole("dialog", { name: "Ada" });
-    expect(card).toBeVisible();
-    expect(container).not.toContainElement(card);
+    expect(card).toHaveStyle({ left: "240px" });
   });
 
   it("asks for a person's picture in the room they are in", async () => {

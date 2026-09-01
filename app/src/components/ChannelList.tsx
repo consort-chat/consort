@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   NOBODY,
@@ -506,17 +506,42 @@ export function ChannelList({
 }: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
-  // Which name was clicked, and where the pointer was when it happened. One at
-  // a time: two open menus about two people would be two sliders somebody has
-  // to tell apart by the heading.
+  // Which name was clicked, and where to draw the card about them. One at a
+  // time: two open menus about two people would be two sliders somebody has to
+  // tell apart by the heading.
   const [opened, setOpened] = useState<{
     person: Participant;
     roomId: string;
     at: { x: number; y: number };
   } | null>(null);
+  const list = useRef<HTMLDivElement | null>(null);
+
+  /*
+    Beside the sidebar rather than under the pointer, which is where this used
+    to open and where it cannot stay.
+
+    The sidebar scrolls, and WebKitGTK draws the scrollbar of a scroll container
+    on top of the page rather than inside it. It is not in anybody's stacking
+    order, so no `z-index` reaches over it and moving the card out of the
+    subtree does not either: a card overlapping this column comes out with a
+    grey bar down the middle of it whatever the DOM says. The only fix that
+    holds is to not overlap the column.
+
+    It is also the better place for it. A card opened at the pointer covers the
+    list somebody is reading, and every other client puts the person beside the
+    names rather than over them.
+  */
+  function open(
+    person: Participant,
+    roomId: string,
+    at: { x: number; y: number },
+  ) {
+    const column = list.current?.getBoundingClientRect();
+    setOpened({ person, roomId, at: { x: column?.right ?? at.x, y: at.y } });
+  }
 
   return (
-    <div className="channels">
+    <div className="channels" ref={list}>
       <header className="channels__header">
         <h2 className="channels__space" title={space.name}>
           {space.name}
@@ -534,9 +559,7 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
-            onOpenPerson={(person, roomId, at) =>
-              setOpened({ person, roomId, at })
-            }
+            onOpenPerson={open}
           />
           <Group
             label="Voice"
@@ -545,9 +568,7 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
-            onOpenPerson={(person, roomId, at) =>
-              setOpened({ person, roomId, at })
-            }
+            onOpenPerson={open}
           />
         </>
       )}
@@ -555,9 +576,7 @@ export function ChannelList({
       {/*
         At the root of the list rather than inside the row that opened it, so
         that one menu is open at a time and it survives the row scrolling out
-        from under it. Where it actually lands in the document is the menu's
-        own business: it portals itself to the body, for the reason written
-        beside it there.
+        from under it.
       */}
       {opened !== null && (
         <PersonMenu
