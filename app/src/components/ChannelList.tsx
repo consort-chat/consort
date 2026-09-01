@@ -553,10 +553,11 @@ export function ChannelList({
       )}
 
       {/*
-        At the root of the list rather than inside the row that opened it. The
-        sidebar scrolls, so a menu nested in a row would be clipped by it at
-        exactly the moment somebody near the bottom of a long channel list
-        opens one.
+        At the root of the list rather than inside the row that opened it, so
+        that one menu is open at a time and it survives the row scrolling out
+        from under it. Where it actually lands in the document is the menu's
+        own business: it portals itself to the body, for the reason written
+        beside it there.
       */}
       {opened !== null && (
         <PersonMenu

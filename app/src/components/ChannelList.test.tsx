@@ -322,6 +322,30 @@ describe("ChannelList", () => {
     expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
   });
 
+  it("opens the person menu outside the sidebar that scrolls", async () => {
+    // The sidebar is a scroll container, and a scroll container paints its own
+    // scrollbar over everything inside it whatever their `z-index` is. Left in
+    // the list, the card came out with the scrollbar drawn down the middle of
+    // it. The card is `position: fixed`, so leaving the subtree costs it
+    // nothing and is the only thing that gets it out from under.
+    const { container } = render(
+      <ChannelList
+        space={space([
+          voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
+        ])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Ada"));
+
+    const card = screen.getByRole("dialog", { name: "Ada" });
+    expect(card).toBeVisible();
+    expect(container).not.toContainElement(card);
+  });
+
   it("asks for a person's picture in the room they are in", async () => {
     // A Matrix profile is per room, so the room is half of the question. The
     // answer replaces the initial in place.

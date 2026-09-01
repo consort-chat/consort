@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   asCommandError,
@@ -200,7 +201,15 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
   const standing = profile === null ? null : standingLabel(profile.standing);
   const states = callStates(person);
 
-  return (
+  // Into the body rather than into the sidebar that opened it. The card is
+  // already `position: fixed`, so this moves nothing on screen, but a scroll
+  // container paints its own scrollbar over everything inside it: `z-index` is
+  // resolved within the box, and the scrollbar is not in that box's stacking
+  // order at all. Nested in the channel list, the card came out with the
+  // sidebar's scrollbar drawn straight down the middle of it. Nothing else
+  // changes: the pointer and key handlers are on `document` and test for
+  // containment through the ref, both of which follow the node here.
+  return createPortal(
     <div
       ref={menu}
       className="person-menu"
@@ -333,7 +342,8 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
           {problem}
         </p>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
