@@ -3,10 +3,21 @@ import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
 
 /**
- * A crossed-out speaker, for the control that leaves.
+ * A handset laid back down, for the control that leaves.
  *
- * The same speaker the channel list draws, with a line through it, because the
- * one thing this button must not be mistaken for is the one that joins.
+ * It used to be a crossed-out speaker, chosen so it could not be mistaken for
+ * the speaker that joins. It could not, but it was mistaken for something
+ * worse: sitting in a row that already mutes a microphone and deafens a pair
+ * of headphones, a struck-through speaker reads as a third switch for audio
+ * rather than as the way out. A handset is the one glyph in this vocabulary
+ * that ends a call instead of silencing part of one, which is why every other
+ * client uses it.
+ *
+ * The drawing is the handset the rest of the world draws, turned until it lies
+ * flat. The rotation is what makes it a hang-up rather than a call, and the
+ * scale keeps the corners of a diagonal shape inside the box once it is turned
+ * across it. `strokeWidth` is that scale divided back out, so this weighs the
+ * same on screen as the three icons beside it.
  */
 function HangUpIcon() {
   return (
@@ -15,14 +26,15 @@ function HangUpIcon() {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="2.56"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M11 5 6.5 9H3v6h3.5L11 19z" />
-      <path d="m16 9 5 6" />
-      <path d="m21 9-5 6" />
+      <path
+        transform="rotate(135 12 12) translate(2.64 2.64) scale(0.78)"
+        d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"
+      />
     </svg>
   );
 }
@@ -58,9 +70,11 @@ function MicrophoneIcon({ off }: { off: boolean }) {
 /**
  * Headphones, struck through when this session has stopped listening.
  *
- * Headphones rather than a second speaker. The disconnect button is already a
- * struck-through speaker, and three buttons in a row where two are the same
- * crossed-out glyph is a row nobody can read at a glance.
+ * Headphones rather than a second speaker, so that the thing being switched
+ * off is what this session hears rather than a speaker somewhere in the room.
+ * It also keeps the strike-through meaning one thing: the two icons that carry
+ * one are the two ends of this session's audio, and nothing else in the row
+ * borrows it.
  */
 function HeadphonesIcon({ off }: { off: boolean }) {
   return (
