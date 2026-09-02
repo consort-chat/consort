@@ -69,6 +69,18 @@ pub enum Error {
     #[error("stored session contains an invalid {field}: {value}")]
     InvalidStoredIdentifier { field: &'static str, value: String },
 
+    /// A command named a room this account is not in.
+    ///
+    /// Reachable without a bug: a room can be left from another session
+    /// between the room list being drawn and somebody clicking a channel in
+    /// it.
+    #[error("this account is not in room {room_id}")]
+    NoSuchRoom { room_id: String },
+
+    /// Somebody pressed send with nothing typed.
+    #[error("a message with no text in it")]
+    EmptyMessage,
+
     /// A command named a verification flow the SDK no longer has.
     ///
     /// Not necessarily a bug. Flows expire after ten minutes, either side can
@@ -171,6 +183,12 @@ impl Error {
             Self::CorruptSession(_) | Self::InvalidStoredIdentifier { .. } => {
                 "The saved session was unreadable, so you have been signed out.".to_owned()
             }
+            Self::NoSuchRoom { .. } => {
+                "That room is not one this account is in. It may have been left from another \
+                 session."
+                    .to_owned()
+            }
+            Self::EmptyMessage => "There is nothing to send.".to_owned(),
             Self::NoSuchFlow { .. } => {
                 "That verification is no longer waiting for an answer. Start a new one.".to_owned()
             }

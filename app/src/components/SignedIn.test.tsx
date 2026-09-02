@@ -29,6 +29,16 @@ const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
 const verificationRecoveryExists = vi.hoisted(() => vi.fn());
 const verificationRecover = vi.hoisted(() => vi.fn());
+// The main pane draws a room's messages, which is a subscription and three
+// commands. Mocked rather than left to fail: an unmocked `invoke` rejects into
+// nothing anybody awaits, which surfaces as an unhandled rejection attributed
+// to whichever test happened to be running.
+const onTimeline = vi.hoisted(() => vi.fn());
+const timelineOpen = vi.hoisted(() => vi.fn());
+const timelineClose = vi.hoisted(() => vi.fn());
+const timelineEarlier = vi.hoisted(() => vi.fn());
+const timelineSend = vi.hoisted(() => vi.fn());
+const memberNames = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   logout,
@@ -53,6 +63,12 @@ vi.mock("../lib/api", async (importOriginal) => ({
   verificationVerifyThisSession,
   verificationOtherSessionsExist,
   verificationRecoveryExists,
+  onTimeline,
+  timelineOpen,
+  timelineClose,
+  timelineEarlier,
+  timelineSend,
+  memberNames,
   verificationRecover,
 }));
 
@@ -174,6 +190,12 @@ function resetApiMocks() {
   // route is the only one on offer. Tests about recovery say otherwise.
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
+  onTimeline.mockReset().mockResolvedValue(() => {});
+  timelineOpen.mockReset().mockResolvedValue(undefined);
+  timelineClose.mockReset().mockResolvedValue(undefined);
+  timelineEarlier.mockReset().mockResolvedValue(undefined);
+  timelineSend.mockReset().mockResolvedValue(undefined);
+  memberNames.mockReset().mockResolvedValue({});
   resetAvatarCache();
 }
 

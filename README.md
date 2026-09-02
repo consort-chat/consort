@@ -8,11 +8,10 @@ alternative that actually works. The protocol underneath is Matrix, all the way
 down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
-> **Status: early.** Consort signs you in, remembers you, and can verify itself
-> by emoji in either direction: ask from here, or answer a request from another
-> client. No rooms, no messages, no voice yet. Recovery-key verification and key
-> backup are next, then voice, and the README will stop saying this when they
-> land.
+> **Status: early.** Consort signs you in, remembers you, verifies itself,
+> draws your rooms, joins voice channels, and reads and sends text in a room.
+> Threads, edits, reactions and attachments are not built, and the README will
+> stop saying this when they land.
 
 ---
 
@@ -51,12 +50,21 @@ at whatever homeserver you already run.
   call or clicking the channel. Somebody connecting from Element Call in a
   browser appears within a sync and disappears when they hang up, and the same
   person on two devices appears once.
+- Reading and sending text in a room. Consecutive messages from one person are
+  drawn as one, emotes and notices are drawn as themselves, and a message this
+  session has no key for is drawn as a message it cannot read rather than left
+  out: a gap that says nothing about itself cannot be told apart from a quiet
+  room. Scrolling back asks the homeserver for more.
+- Text in a voice channel, because a voice channel is an ordinary Matrix room
+  that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-No messages, and no way to join a voice channel: Consort can see who is in a
-call but cannot be in one itself. See [the roadmap](#roadmap).
+Threads, edits, reactions, replies drawn as replies, redactions, formatting,
+attachments, read receipts and typing notifications. A message sent from here
+appears when the sync brings it back rather than immediately, because there is
+no local echo yet. See [the roadmap](#roadmap).
 
 ---
 
@@ -523,10 +531,11 @@ whether a model wrote them or you did.
 | Key backup, so history older than this session decrypts | working |
 | Room list and voice channel discovery | working |
 | Seeing who is already in a voice channel | working |
-| Join a voice channel over MatrixRTC and LiveKit | planned |
+| Join a voice channel over MatrixRTC and LiveKit | working |
 | Audio device pickers, a level meter and an output test | working |
-| RNNoise voice activity detection with hysteresis gating | running, with nothing to publish to yet |
-| Text messaging | planned |
+| RNNoise voice activity detection with hysteresis gating | working |
+| Reading and sending text in a room | working |
+| Threads, edits, reactions and attachments | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 
 "Working" is doing some work in that first row, and it is not a synonym for
@@ -535,11 +544,11 @@ unverified: it cannot decrypt encrypted history, and no encrypted call will
 accept it. Authentication is not finished until the row under it is, because a
 session you cannot verify is an account rather than a usable client.
 
-It is doing some work in the room list row too. Consort draws every space the
-account has joined, the channels under each of them, and a Home entry for
-rooms belonging to no space. Voice channels are marked as voice channels, which
-is what the row after it needs. What you cannot do yet is click one and be in
-it, or read a word in any of the text channels.
+It is doing some work in the text row too. A room's messages are drawn, in
+order, with names and avatars, and typing into the box sends one. What is not
+there is everything a conversation grows once it is busy: threads, edits,
+reactions, attachments, and a reply drawn as a reply rather than as quoted
+text.
 
 ## Known limitations
 

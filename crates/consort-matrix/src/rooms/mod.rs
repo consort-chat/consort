@@ -42,6 +42,7 @@ pub use avatar::{avatar, member_avatar};
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
 pub use profile::{MemberProfile, Presence, Standing, member_profile};
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use matrix_sdk::Client;
@@ -119,6 +120,37 @@ pub async fn name_participants(
     };
 
     facts::name_all(&room, user_ids.iter().map(String::as_str)).await
+}
+
+/// What to call each of `user_ids` in `room_id`, by user ID.
+///
+/// The names beside messages. A timeline carries user IDs and nothing else,
+/// because a display name is per room and changes under a message that was
+/// drawn an hour ago; asking here means the name on screen is the one the room
+/// currently knows, and asking for a batch means one read rather than one per
+/// message from the same person.
+///
+/// Local, and no request, on the same terms as [`name_participants`]:
+/// `get_member_no_sync` reads the store. Somebody whose `m.room.member` has
+/// not arrived is absent from the map rather than guessed at, and the caller
+/// draws their user ID, which is still something a person recognises.
+pub async fn member_names(
+    client: &Client,
+    room_id: &str,
+    user_ids: &[String],
+) -> BTreeMap<String, String> {
+    let Ok(parsed) = matrix_sdk::ruma::RoomId::parse(room_id) else {
+        return BTreeMap::new();
+    };
+    let Some(room) = client.get_room(&parsed) else {
+        return BTreeMap::new();
+    };
+
+    facts::name_all(&room, user_ids.iter().map(String::as_str))
+        .await
+        .into_iter()
+        .map(|person| (person.id, person.name))
+        .collect()
 }
 
 /// Watch the account's rooms, reporting the whole tree whenever it changes.

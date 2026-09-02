@@ -20,6 +20,7 @@ import { channelLabel } from "../lib/labels";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
+import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
 import { SpaceRail } from "./SpaceRail";
 import { UserPanel } from "./UserPanel";
@@ -57,12 +58,9 @@ function KeyBackupNotice({ state }: { state: KeyBackup["state"] }) {
   );
 }
 
-/** What the main pane says about whatever is selected. */
-function paneDetail(channel: Channel | null): string {
-  if (channel === null) return "Messages come after voice.";
-  return channel.kind === "voice"
-    ? "Clicking a voice channel joins it."
-    : "Messages come after voice.";
+/** What the main pane says when no channel is selected. */
+function paneDetail(): string {
+  return "Pick a channel to read it. Clicking a voice one joins it as well.";
 }
 
 /**
@@ -327,16 +325,24 @@ export function AppShell({
           )}
         </div>
 
-        <div className="shell__empty">
-          {/*
-            The page's `h1`. It moved here from the account name, which was
-            this screen's heading back when the screen was one centred card.
-            It names the selected channel, and says there is nothing here when
-            nothing is selected, which is the state the app opens in.
-          */}
-          <h1 className="shell__empty-headline">{paneHeadline(channel)}</h1>
-          <p className="shell__empty-detail">{paneDetail(channel)}</p>
-        </div>
+        {/*
+          The page's `h1` lives in whichever of these is drawn. It names the
+          selected channel, and says there is nothing here when nothing is
+          selected, which is the state the app opens in.
+
+          Keyed by room, so switching channels remounts rather than reusing:
+          the scroll position, the draft and the resolved names all belong to
+          the room they were for, and carrying any of them across would put one
+          room's half-typed sentence under another room's name.
+        */}
+        {channel === null ? (
+          <div className="shell__empty">
+            <h1 className="shell__empty-headline">{paneHeadline(channel)}</h1>
+            <p className="shell__empty-detail">{paneDetail()}</p>
+          </div>
+        ) : (
+          <RoomTimeline key={channel.id} channel={channel} />
+        )}
 
         {/*
           Not decoration. The device ID is the value you need when checking

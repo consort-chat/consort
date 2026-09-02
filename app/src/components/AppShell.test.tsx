@@ -10,6 +10,16 @@ const onAudio = vi.hoisted(() => vi.fn());
 const logout = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
 
+// The main pane draws a room's messages, which is a subscription and three
+// commands. Mocked rather than left to fail: an unmocked `invoke` rejects into
+// nothing anybody awaits, which surfaces as an unhandled rejection attributed
+// to whichever test happened to be running.
+const onTimeline = vi.hoisted(() => vi.fn());
+const timelineOpen = vi.hoisted(() => vi.fn());
+const timelineClose = vi.hoisted(() => vi.fn());
+const timelineEarlier = vi.hoisted(() => vi.fn());
+const timelineSend = vi.hoisted(() => vi.fn());
+const memberNames = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   audioDevices,
@@ -18,6 +28,12 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioTestStop,
   onAudio,
   logout,
+  onTimeline,
+  timelineOpen,
+  timelineClose,
+  timelineEarlier,
+  timelineSend,
+  memberNames,
   roomAvatar,
 }));
 
@@ -142,6 +158,12 @@ describe("AppShell", () => {
     onAudio.mockReset().mockResolvedValue(() => {});
     logout.mockReset().mockResolvedValue(undefined);
     roomAvatar.mockReset().mockResolvedValue(null);
+    onTimeline.mockReset().mockResolvedValue(() => {});
+    timelineOpen.mockReset().mockResolvedValue(undefined);
+    timelineClose.mockReset().mockResolvedValue(undefined);
+    timelineEarlier.mockReset().mockResolvedValue(undefined);
+    timelineSend.mockReset().mockResolvedValue(undefined);
+    memberNames.mockReset().mockResolvedValue({});
   });
 
   it("opens settings from the gear on the user strip", async () => {

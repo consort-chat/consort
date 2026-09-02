@@ -18,7 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
-use consort_matrix::{CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification};
+use consort_matrix::{
+    CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification, Timeline,
+};
 use serde::Serialize;
 
 /// A join that was not attempted, because it could not have been heard.
@@ -98,6 +100,13 @@ pub enum AppEvent {
     /// and neither is anything `consort-call` can see. See
     /// [`consort_audio::talking`].
     Speaking(Vec<String>),
+    /// The messages loaded for the room currently open.
+    ///
+    /// One channel rather than one per room, because exactly one room is open
+    /// at a time and the value carries which one it is. A reader that gets a
+    /// timeline for a room it is not showing ignores it, which is what the
+    /// moment between two clicks looks like.
+    Timeline(Timeline),
 }
 
 impl AppEvent {
@@ -123,6 +132,8 @@ impl AppEvent {
     pub const SELF_AUDIO: &'static str = "self-audio";
     /// The channel carrying who in the call is talking.
     pub const SPEAKING: &'static str = "speaking";
+    /// The channel carrying the open room's messages.
+    pub const TIMELINE: &'static str = "timeline";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -138,6 +149,7 @@ impl AppEvent {
             Self::CallRefused(_) => Self::CALL_REFUSED,
             Self::SelfAudio(_) => Self::SELF_AUDIO,
             Self::Speaking(_) => Self::SPEAKING,
+            Self::Timeline(_) => Self::TIMELINE,
         }
     }
 
@@ -170,6 +182,11 @@ impl AppEvent {
     /// talking before the webview restarted, with nothing to take it off
     /// again if they have since left the call.
     ///
+    /// A timeline is state, and the one most obviously so: a webview that
+    /// reloads with a room open and is not told comes back to an empty pane,
+    /// and the thing that would fill it is somebody else saying something,
+    /// which in a quiet room is never.
+    ///
     /// A call is state, all four of it. There is always a current answer to
     /// "am I in a voice channel", and a webview that reloaded mid-call and was
     /// not told would draw a client sitting in no channel while this process
@@ -185,7 +202,8 @@ impl AppEvent {
             | Self::KeyBackup(_)
             | Self::Rooms(_)
             | Self::Call(_)
-            | Self::SelfAudio(_) => true,
+            | Self::SelfAudio(_)
+            | Self::Timeline(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             // A refusal is an incident, not a state. What it reports is
             // already on the `call-readiness` channel as a standing answer,
@@ -214,6 +232,7 @@ impl AppEvent {
             Self::CallRefused(refusal) => serde_json::to_value(refusal),
             Self::SelfAudio(audio) => serde_json::to_value(audio),
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
+            Self::Timeline(timeline) => serde_json::to_value(timeline),
         }
     }
 }
@@ -1164,6 +1183,65 @@ mod tests {
                 .map(|event| event.channel())
                 .collect();
             assert_eq!(resent, vec![AppEvent::VERIFICATION, AppEvent::CONNECTION]);
+        }
+    }
+
+    /// The open room's messages.
+    #[cfg(test)]
+    mod timelines {
+        use super::*;
+
+        fn general() -> Timeline {
+            Timeline {
+                room_id: "!general:example.org".to_owned(),
+                ..Timeline::default()
+            }
+        }
+
+        #[test]
+        fn a_timeline_travels_on_its_own_channel() {
+            // Not the room list's. That one is re-sent whenever anybody joins
+            // anything, and a timeline riding on it would be re-serialised for
+            // every one of those.
+            assert_eq!(AppEvent::Timeline(general()).channel(), AppEvent::TIMELINE);
+            assert_ne!(AppEvent::TIMELINE, AppEvent::ROOMS);
+        }
+
+        #[test]
+        fn a_timeline_is_kept_for_a_late_subscriber() {
+            // The starkest case of the rule. A webview that reloads with a room
+            // open and is not caught up comes back to an empty pane, and the thing
+            // that would fill it is somebody else saying something, which in a
+            // quiet room is never.
+            assert!(AppEvent::Timeline(general()).is_worth_keeping());
+        }
+
+        #[test]
+        fn the_payload_is_the_timeline_itself() {
+            let payload = AppEvent::Timeline(general()).payload().unwrap();
+
+            assert_eq!(payload["roomId"], "!general:example.org");
+            assert_eq!(payload["messages"], serde_json::json!([]));
+            assert!(payload.get("timeline").is_none(), "a wrapper to unpick");
+        }
+
+        #[test]
+        fn an_empty_timeline_replaces_what_was_being_kept() {
+            // How closing a room and signing out both take somebody's conversation
+            // off the retained channel. Checked through `resend`, because what is
+            // kept is only observable as what a late subscriber is handed.
+            let recorder = Arc::new(RecordingSink::new());
+            let latest = LatestSink::new(recorder.clone());
+            latest.emit(AppEvent::Timeline(general()));
+            latest.emit(AppEvent::Timeline(Timeline::default()));
+
+            latest.resend();
+
+            assert_eq!(
+                recorder.events().last(),
+                Some(&AppEvent::Timeline(Timeline::default())),
+                "the previous room was still waiting for a late subscriber"
+            );
         }
     }
 }

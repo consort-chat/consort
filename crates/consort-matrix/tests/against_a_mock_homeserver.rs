@@ -3099,3 +3099,528 @@ mod member_profiles {
         assert_eq!(profile.presence, Presence::Online);
     }
 }
+
+/// One room's messages, wired to a sync loop and a paginating homeserver.
+///
+/// The ordering, the deduplication and the rules about which events are
+/// messages are unit-tested, because all three are pure and every branch is
+/// reachable without a server. What needs one, and what is here, is the wiring
+/// nothing else can reach: that a page comes back the right way round, that
+/// paging stops when the homeserver says there is no more, that a message
+/// arriving in a sync reaches the same list, and that sending puts the right
+/// thing on the wire.
+///
+/// The sync responses are written out rather than built, on the same terms as
+/// the room list tests above: the builders live in `matrix-sdk-test`, which
+/// matrix-sdk does not re-export, and one JSON literal is cheaper than a
+/// second git dependency pinned to the same rev.
+mod timeline {
+    use super::*;
+    use consort_matrix::timeline::{self, MessageKind, Timeline};
+    use consort_matrix::{Connection, sync};
+    use matrix_sdk::test_utils::mocks::RoomMessagesResponseTemplate;
+
+    const ROOM: &str = "!general:example.org";
+    const OTHER: &str = "@ada:example.org";
+
+    /// One message as a homeserver returns it from `/messages`.
+    ///
+    /// That endpoint answers with full events, which carry a `room_id`, unlike
+    /// the sync-shaped ones below. Getting the two mixed up is not a
+    /// compilation error; it is a page that silently deserialises to nothing.
+    fn said(id: &str, body: &str, at: u64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "event_id": id,
+            "room_id": ROOM,
+            "sender": OTHER,
+            "origin_server_ts": at,
+            "content": { "msgtype": "m.text", "body": body },
+        })
+    }
+
+    fn raw(
+        value: serde_json::Value,
+    ) -> matrix_sdk::ruma::serde::Raw<ruma::events::AnyTimelineEvent> {
+        matrix_sdk::ruma::serde::Raw::new(&value)
+            .expect("the fixture is valid JSON")
+            .cast_unchecked()
+    }
+
+    /// Answer `/messages` with `chunk`, newest first, and `end` as the token
+    /// for the page behind it.
+    async fn paginating(
+        server: &MatrixMockServer,
+        chunk: Vec<serde_json::Value>,
+        end: Option<&str>,
+    ) {
+        let mut template = RoomMessagesResponseTemplate::default()
+            .events(chunk.into_iter().map(raw).collect::<Vec<_>>());
+        template = match end {
+            Some(end) => template.end_token(end),
+            // The start of the room, which is how the homeserver says there is
+            // nothing older.
+            None => RoomMessagesResponseTemplate {
+                end: None,
+                ..template
+            },
+        };
+        server
+            .mock_room_messages()
+            .expect_any_access_token()
+            .ok(template)
+            .mount()
+            .await;
+    }
+
+    /// A sync response carrying `events` in this room's timeline.
+    ///
+    /// Mounted straight onto wiremock rather than through `mock_sync`, whose
+    /// builder takes a `JoinedRoomBuilder` this crate cannot name. What it
+    /// costs is writing the envelope out, which also puts the shape of a sync
+    /// on the page.
+    async fn syncing(server: &MatrixMockServer, events: Vec<serde_json::Value>) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "rooms": {
+                        "join": {
+                            ROOM: {
+                                "timeline": { "events": events, "limited": false },
+                            },
+                        },
+                    },
+                })),
+            )
+            .mount(server.server())
+            .await;
+    }
+
+    /// The same message as it arrives in a sync, which carries no `room_id`.
+    fn arriving(id: &str, body: &str, at: u64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "event_id": id,
+            "sender": OTHER,
+            "origin_server_ts": at,
+            "content": { "msgtype": "m.text", "body": body },
+        })
+    }
+
+    fn bodies(timeline: &Timeline) -> Vec<&str> {
+        timeline
+            .messages
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect()
+    }
+
+    /// The last report that was not a spinner going up.
+    fn settled(reports: &[Timeline]) -> Option<&Timeline> {
+        reports.iter().rev().find(|report| !report.loading)
+    }
+
+    #[tokio::test]
+    async fn opening_a_room_reads_a_page_of_its_history() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        // Newest first, which is what a backwards pagination answers with.
+        paginating(
+            &server,
+            vec![said("$2", "second", 2_000), said("$1", "first", 1_000)],
+            None,
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+
+        let settled = settled(&reports).unwrap();
+        assert_eq!(settled.room_id, ROOM);
+        assert_eq!(
+            bodies(settled),
+            vec!["first", "second"],
+            "a backwards page has to be turned round, or every page reads backwards"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_room_at_the_start_of_its_history_offers_nothing_more() {
+        // The homeserver said there is no page behind this one, so the
+        // interface must not draw a control that asks for one.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        paginating(&server, vec![said("$1", "first", 1_000)], None).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+
+        assert!(!settled(&reports).unwrap().more_before);
+    }
+
+    #[tokio::test]
+    async fn a_room_with_more_behind_it_says_so() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        paginating(&server, vec![said("$1", "first", 1_000)], Some("t-older")).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+
+        assert!(settled(&reports).unwrap().more_before);
+    }
+
+    #[tokio::test]
+    async fn a_room_this_account_is_not_in_reports_itself_as_empty() {
+        // Left from another session between the room list being drawn and
+        // somebody clicking a channel in it. Reported rather than silent, or
+        // the pane keeps whatever room was open before.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
+        drop(watch);
+
+        assert_eq!(reports[0].room_id, ROOM);
+        assert!(reports[0].messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_room_id_still_answers() {
+        // A reader waiting for a timeline that never arrives is a pane stuck
+        // on the room before it, which is worse than an empty one.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, "not a room id", sink);
+        let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
+        drop(watch);
+
+        assert_eq!(reports[0].room_id, "not a room id");
+    }
+
+    #[tokio::test]
+    async fn a_message_arriving_in_a_sync_reaches_the_timeline() {
+        // The path that makes this a chat client rather than an archive
+        // viewer, and the one no unit test can reach: a sync response, through
+        // the SDK's update channel, into the list somebody is reading.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        paginating(&server, Vec::new(), None).await;
+        syncing(&server, vec![arriving("$new", "just said", 5_000)]).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client.clone(), ROOM, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        let reports = wait_until(&seen, |reports| {
+            reports
+                .last()
+                .is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+        syncing.abort();
+
+        assert_eq!(bodies(reports.last().unwrap()), vec!["just said"]);
+    }
+
+    #[tokio::test]
+    async fn a_sync_that_says_nothing_about_this_room_does_not_republish_it() {
+        // A sync delivers one update whether or not this room was in it, and
+        // sync fires forever. Republishing on every one of them would wake the
+        // webview twice a minute to hand it the list it already has.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        paginating(&server, vec![said("$1", "first", 1_000)], None).await;
+        syncing(&server, Vec::new()).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client.clone(), ROOM, sink);
+        wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        let after_first = seen.lock().unwrap().len();
+        // Long enough for several more syncs against a mock that answers at
+        // once.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let after_several = seen.lock().unwrap().len();
+        drop(watch);
+        syncing.abort();
+
+        assert_eq!(after_first, after_several, "an idle sync redrew the room");
+    }
+
+    #[tokio::test]
+    async fn asking_for_more_puts_the_older_page_in_front() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        // Scoped, so the second page can replace it. Newest first, and a token
+        // saying there is more behind it.
+        let first = server
+            .mock_room_messages()
+            .expect_any_access_token()
+            .ok(RoomMessagesResponseTemplate::default()
+                .events(vec![raw(said("$2", "second", 2_000))])
+                .end_token("t-older"))
+            .mount_as_scoped()
+            .await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+
+        drop(first);
+        paginating(&server, vec![said("$1", "first", 1_000)], None).await;
+        watch.earlier();
+
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| report.messages.len() == 2)
+        })
+        .await;
+        drop(watch);
+
+        assert_eq!(bodies(settled(&reports).unwrap()), vec!["first", "second"]);
+    }
+
+    #[tokio::test]
+    async fn asking_for_more_at_the_start_of_the_room_asks_nobody() {
+        // The homeserver already said there is nothing older. Asking again
+        // would be a request per press of a control that should not be drawn.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let page = server
+            .mock_room_messages()
+            .expect_any_access_token()
+            .ok(RoomMessagesResponseTemplate::default()
+                .events(vec![raw(said("$1", "first", 1_000))]))
+            .expect(1)
+            .mount_as_scoped()
+            .await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+
+        watch.earlier();
+        watch.earlier();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        drop(watch);
+        // `expect(1)` is checked here: a second request would fail this.
+        drop(page);
+    }
+
+    #[tokio::test]
+    async fn a_page_of_nothing_but_state_events_keeps_looking() {
+        // The beginning of every room is a dozen state events before the first
+        // word. An ask that fetched exactly one page would answer a scroll
+        // with nothing and look broken.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let joins = server
+            .mock_room_messages()
+            .expect_any_access_token()
+            .ok(RoomMessagesResponseTemplate::default()
+                .events(vec![raw(serde_json::json!({
+                    "type": "m.room.member",
+                    "event_id": "$join",
+                    "room_id": ROOM,
+                    "sender": OTHER,
+                    "state_key": OTHER,
+                    "origin_server_ts": 500,
+                    "content": { "membership": "join" },
+                }))])
+                .end_token("t-older"))
+            .up_to_n_times(1)
+            .mount_as_scoped()
+            .await;
+        paginating(&server, vec![said("$1", "first", 1_000)], None).await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+        drop(joins);
+
+        assert_eq!(bodies(settled(&reports).unwrap()), vec!["first"]);
+    }
+
+    #[tokio::test]
+    async fn sending_puts_the_text_on_the_wire() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        // Plain, so the send is not held up trying to establish a megolm
+        // session against a mock with no devices in it. What is being tested
+        // is that the text reaches the wire; whether the SDK encrypts it is
+        // the SDK's own decision from the room's state and its own tests.
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "hello",
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::send(&client, ROOM, "hello").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sending_nothing_never_reaches_the_homeserver() {
+        // Nothing is mounted for a send here, so a request would fail and the
+        // answer would be right for the wrong reason. The point is that the
+        // emptiness is caught first.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let refused = timeline::send(&client, ROOM, "   \n  ").await.unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::EmptyMessage));
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sending_to_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::send(&client, ROOM, "hello").await.unwrap_err();
+
+        assert!(matches!(
+            refused,
+            consort_matrix::Error::NoSuchRoom { ref room_id } if room_id == ROOM
+        ));
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sending_to_something_that_is_not_a_room_id_never_reaches_the_homeserver() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::send(&client, "not a room id", "hello")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::NoSuchRoom { .. }));
+    }
+
+    #[tokio::test]
+    async fn an_image_arrives_as_something_to_draw_rather_than_vanishing() {
+        // The end-to-end half of the unit test on the same rule. Somebody
+        // whose screenshot silently disappeared would send it again.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        paginating(
+            &server,
+            vec![serde_json::json!({
+                "type": "m.room.message",
+                "event_id": "$image",
+                "room_id": ROOM,
+                "sender": OTHER,
+                "origin_server_ts": 1_000,
+                "content": {
+                    "msgtype": "m.image",
+                    "body": "screenshot.png",
+                    "url": "mxc://example.org/abc",
+                },
+            })],
+            None,
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Timeline>();
+        let watch = timeline::watch(client, ROOM, sink);
+        let reports = wait_until(&seen, |reports| {
+            settled(reports).is_some_and(|report| !report.messages.is_empty())
+        })
+        .await;
+        drop(watch);
+
+        assert_eq!(
+            settled(&reports).unwrap().messages[0].kind,
+            MessageKind::Unsupported
+        );
+    }
+}

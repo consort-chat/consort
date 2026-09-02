@@ -1119,6 +1119,154 @@ export function onSelfAudio(
 }
 
 /**
+ * What to call each of these people in this room, by user ID.
+ *
+ * A batch, because a screen of messages is a handful of people saying several
+ * things each. Local on the Rust side: it reads the member store and makes no
+ * request, so this is cheap enough to call whenever the set of senders
+ * changes.
+ *
+ * Somebody the store has never heard of is absent from the map rather than
+ * guessed at, and the caller draws their user ID, which is still something a
+ * person recognises.
+ */
+export function memberNames(
+  roomId: string,
+  userIds: string[],
+): Promise<Record<string, string>> {
+  return invoke<Record<string, string>>("member_names", { roomId, userIds });
+}
+
+/**
+ * What sort of message this is.
+ *
+ * Mirrors `consort_matrix::MessageKind`. Only the three `m.room.message` types
+ * that are text, plus the two ways a message can exist and have no text to
+ * draw. Images and files are not built, and a variant for one would be a
+ * promise the interface cannot keep.
+ */
+export type MessageKind =
+  | "text"
+  | "emote"
+  | "notice"
+  | "undecryptable"
+  | "unsupported";
+
+/** One message in a room. Mirrors `consort_matrix::Message`. */
+export interface Message {
+  /** The event ID. Also the React key, and the deduplication key in Rust. */
+  id: string;
+  /**
+   * Who sent it, as a Matrix user ID.
+   *
+   * Not a display name. A name is per room and changes under a message that
+   * has already been drawn, so names and avatars are asked for separately, by
+   * user ID, the same way the voice roster asks for them.
+   */
+  sender: string;
+  /** `origin_server_ts`, in milliseconds. */
+  at: number;
+  body: string;
+  kind: MessageKind;
+}
+
+/**
+ * Everything currently loaded for one room. Mirrors `consort_matrix::Timeline`.
+ *
+ * One value describes the whole of what is loaded, on the same terms as the
+ * room list: a reader handed one of these has everything it needs to draw, and
+ * never has to patch a copy of its own from a stream of deltas.
+ */
+export interface Timeline {
+  /**
+   * Which room this is.
+   *
+   * Load-bearing rather than informational: this channel keeps its latest
+   * value, and somebody who changes room twice quickly has two timelines in
+   * flight. A reader draws the one whose room it is showing and ignores the
+   * other, which is what the moment between two clicks looks like.
+   *
+   * Empty when no room is open, which is what closing one and signing out both
+   * publish.
+   */
+  roomId: string;
+  /** Oldest first, which is the order they are drawn in. */
+  messages: Message[];
+  /** Whether there is more history to ask for. */
+  moreBefore: boolean;
+  /** Whether a page of history is being fetched right now. */
+  loading: boolean;
+}
+
+/**
+ * Nothing loaded, which is where the pane starts and what closing a room
+ * leaves behind.
+ *
+ * A single frozen instance for the reason [`NOBODY`] is one: a component
+ * falling back to it must not hand React a new object every render.
+ */
+export const NO_TIMELINE: Timeline = Object.freeze({
+  roomId: "",
+  messages: [],
+  moreBefore: false,
+  loading: false,
+});
+
+/**
+ * Listen to the open room's messages.
+ *
+ * One channel rather than one per room, because exactly one room is open at a
+ * time and the value says which. Replayed to a webview that reloaded, unlike
+ * the speaking rings above: a pane that came back empty would stay empty until
+ * somebody else said something, which in a quiet room is never.
+ */
+export function onTimeline(
+  handler: (timeline: Timeline) => void,
+): Promise<UnlistenFn> {
+  return listen<Timeline>("timeline", (event) => handler(event.payload));
+}
+
+/**
+ * Open a room and start watching its messages.
+ *
+ * Answers nothing. What was asked for arrives on the `timeline` channel, along
+ * with every later change to it.
+ *
+ * Safe to call for the room already open: the backend leaves it alone rather
+ * than re-reading it, which matters because the shell re-selects a channel
+ * whenever a room list arrives.
+ */
+export function timelineOpen(roomId: string): Promise<void> {
+  return invoke<void>("timeline_open", { roomId });
+}
+
+/** Stop watching whatever room was open, and clear the pane. */
+export function timelineClose(): Promise<void> {
+  return invoke<void>("timeline_close");
+}
+
+/**
+ * Ask the open room for a page of older messages.
+ *
+ * Answers nothing: the page arrives on the `timeline` channel as a longer
+ * list, with `loading` true in between. Doing nothing is a real outcome, and
+ * what asking at the start of a room's history gets.
+ */
+export function timelineEarlier(): Promise<void> {
+  return invoke<void>("timeline_earlier");
+}
+
+/**
+ * Say something in a room.
+ *
+ * The message appears when the sync brings it round rather than immediately.
+ * There is no local echo yet; see `consort_matrix::timeline` for why.
+ */
+export function timelineSend(roomId: string, body: string): Promise<void> {
+  return invoke<void>("timeline_send", { roomId, body });
+}
+
+/**
  * Nobody is talking, which is where every session starts.
  *
  * A single frozen instance rather than a fresh `new Set()` per default, so a

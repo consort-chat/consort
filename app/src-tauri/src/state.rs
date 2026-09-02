@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
-    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, backup, calls, rooms, sync,
-    verification,
+    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, backup, calls,
+    rooms, sync, timeline, verification,
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -270,6 +270,15 @@ pub struct AppState {
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
+    /// The room whose messages are currently being watched, if any.
+    ///
+    /// One at a time, and replacing it is how a room change is done: dropping
+    /// a [`timeline::Watch`] ends its task, so there is no
+    /// path that leaves two watchers publishing to one channel.
+    ///
+    /// A `std::sync::Mutex`, like the call below and for the same reason:
+    /// nothing here awaits while holding it.
+    timeline: std::sync::Mutex<Option<timeline::Watch>>,
     /// The call thread, once something has asked to join a channel.
     ///
     /// Lazy for the same reason the audio thread is, and more so: it holds a
@@ -323,6 +332,7 @@ impl AppState {
             levels,
             talking: Talking::new(),
             call_audio: Arc::new(std::sync::Mutex::new(None)),
+            timeline: std::sync::Mutex::new(None),
             call: std::sync::Mutex::new(None),
         }
     }
@@ -533,6 +543,68 @@ impl AppState {
 
             events.emit(AppEvent::Call(event));
         }
+    }
+
+    /// Watch `room_id`'s messages, replacing whatever room was being watched.
+    ///
+    /// Idempotent for the room already open, which matters because the shell
+    /// re-selects a channel for reasons that are not a click: a room list
+    /// arriving re-derives the selection. Restarting the watcher for one would
+    /// throw away every page somebody had scrolled back through.
+    ///
+    /// A no-op while signed out. There is nothing to read a room out of, and
+    /// the interface that would draw it is not on screen.
+    pub async fn open_room(&self, room_id: String) {
+        if self
+            .locked_timeline()
+            .as_ref()
+            .is_some_and(|watch| watch.room_id() == room_id)
+        {
+            return;
+        }
+
+        let Some(client) = self.client().await else {
+            return;
+        };
+
+        let events = self.events.clone();
+        // Assigned rather than pushed, so the previous watcher is dropped, and
+        // therefore aborted, by the assignment itself.
+        *self.locked_timeline() = Some(timeline::watch(client, &room_id, move |timeline| {
+            events.emit(AppEvent::Timeline(timeline))
+        }));
+    }
+
+    /// Stop watching whatever room was open, and say so.
+    ///
+    /// The parting word is the point. This channel keeps its latest value for
+    /// a late subscriber, and what it is keeping is somebody's conversation:
+    /// without an empty one to replace it, closing a room leaves it waiting
+    /// for whatever asks to be caught up next.
+    ///
+    /// Also called on sign-out, on the same terms as every other task the
+    /// session owns: the watcher holds a `Client`, so leaving one running
+    /// would keep the previous account's client alive behind the next login.
+    pub fn close_room(&self) {
+        if self.locked_timeline().take().is_some() {
+            self.events.emit(AppEvent::Timeline(Timeline::default()));
+        }
+    }
+
+    /// Ask the open room for a page of older messages.
+    ///
+    /// A no-op when no room is open, which is what a scroll landing at the
+    /// same moment as a room change is.
+    pub fn earlier_messages(&self) {
+        if let Some(watch) = self.locked_timeline().as_ref() {
+            watch.earlier();
+        }
+    }
+
+    fn locked_timeline(&self) -> std::sync::MutexGuard<'_, Option<timeline::Watch>> {
+        self.timeline
+            .lock()
+            .expect("the timeline mutex is never poisoned")
     }
 
     fn locked_call(&self) -> std::sync::MutexGuard<'_, Option<CallBridge>> {
@@ -762,6 +834,11 @@ impl AppState {
         if stop_task(&self.rooms_task).await {
             self.events.emit(AppEvent::Rooms(Rooms::default()));
         }
+
+        // The open room goes the same way, and more urgently: what it retains
+        // is the previous account's conversation, in full, sitting on a
+        // retained channel waiting for the next webview to ask.
+        self.close_room();
 
         // Aborting the sync task means it never runs its own final report, so
         // the last thing the frontend heard was whatever the loop was doing

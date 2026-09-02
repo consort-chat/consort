@@ -15,7 +15,7 @@ use consort_audio::{
 };
 use consort_call::LiveKitTransport;
 use consort_matrix::{
-    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, verification,
+    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
 };
 use serde::Serialize;
 use tauri::State;
@@ -307,6 +307,83 @@ pub async fn member_profile_for(
 ) -> Result<rooms::MemberProfile, CommandError> {
     let client = signed_in_client(state).await?;
     Ok(rooms::member_profile(&client, &room_id, &user_id).await)
+}
+
+/// What to call each of `user_ids` in `room_id`.
+///
+/// A batch rather than one at a time, because a screen of messages is a
+/// handful of people saying several things each, and one read per message from
+/// the same person would be arithmetic nobody asked for.
+///
+/// Local: it reads the member store and makes no request. Somebody the store
+/// has never heard of is absent from the map, and the interface draws their
+/// user ID.
+pub async fn member_names_for(
+    state: &AppState,
+    room_id: String,
+    user_ids: Vec<String>,
+) -> Result<std::collections::BTreeMap<String, String>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::member_names(&client, &room_id, &user_ids).await)
+}
+
+/// Open a room and start watching its messages.
+///
+/// Answers nothing. What was asked for arrives on the `timeline` channel, in
+/// full, along with every later change to it, which is the same shape the room
+/// list uses and for the same reason: a value that is always complete is one a
+/// reader can draw without patching a copy of its own.
+///
+/// Not an error while signed out. The interface that would draw a room is not
+/// on screen then, and a caller asking at that moment is a stale click rather
+/// than something to complain about.
+///
+/// Both kinds of channel come here. A voice channel is an ordinary Matrix room
+/// carrying an ordinary timeline, and the only thing that makes it a voice
+/// channel is one field of its `m.room.create`.
+pub async fn timeline_open_for(state: &AppState, room_id: String) {
+    state.open_room(room_id).await;
+}
+
+/// Stop watching whatever room was open.
+///
+/// What deselecting a channel does. Without it the last room's messages sit on
+/// a retained channel and come back the next time anything asks to be caught
+/// up.
+pub fn timeline_close_for(state: &AppState) {
+    state.close_room();
+}
+
+/// Ask the open room for a page of older messages.
+///
+/// Answers nothing, like opening: the page arrives on the `timeline` channel
+/// as a longer list, with `loading` true in between so a slow homeserver is
+/// distinguishable from a control that did nothing.
+///
+/// Idempotent and infallible. Asking with no room open, or at the start of a
+/// room's history, does nothing rather than complaining: both are what a
+/// scroll that lands at the wrong moment looks like.
+pub fn timeline_earlier_for(state: &AppState) {
+    state.earlier_messages();
+}
+
+/// Say something in a room.
+///
+/// Nothing comes back. The message appears when the sync brings it round,
+/// which is the path every other message in the room takes; see
+/// `consort_matrix::timeline` for why there is no local echo yet.
+///
+/// The two failures worth returning are an empty message and a room this
+/// account is not in, and both are answered before anything reaches the
+/// network.
+pub async fn timeline_send_for(
+    state: &AppState,
+    room_id: String,
+    body: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::send(&client, &room_id, &body).await?;
+    Ok(())
 }
 
 /// What devices this machine has, and which of them are in use.
@@ -862,6 +939,53 @@ pub async fn verification_recovery_exists(
     state: State<'_, AppState>,
 ) -> Result<bool, CommandError> {
     verification_recovery_exists_for(&state).await
+}
+
+/// What to call each of these people in this room.
+///
+/// The names beside messages, asked for in a batch. See `member_names_for`.
+#[tauri::command]
+pub async fn member_names(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_ids: Vec<String>,
+) -> Result<std::collections::BTreeMap<String, String>, CommandError> {
+    member_names_for(&state, room_id, user_ids).await
+}
+
+/// Open a room and watch its messages.
+///
+/// See `timeline_open_for`. What was asked for arrives on the `timeline`
+/// channel rather than as an answer here.
+#[tauri::command]
+pub async fn timeline_open(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<(), CommandError> {
+    timeline_open_for(&state, room_id).await;
+    Ok(())
+}
+
+/// Stop watching whatever room was open.
+#[tauri::command]
+pub fn timeline_close(state: State<'_, AppState>) {
+    timeline_close_for(&state);
+}
+
+/// Ask the open room for a page of older messages.
+#[tauri::command]
+pub fn timeline_earlier(state: State<'_, AppState>) {
+    timeline_earlier_for(&state);
+}
+
+/// Say something in a room.
+#[tauri::command]
+pub async fn timeline_send(
+    state: State<'_, AppState>,
+    room_id: String,
+    body: String,
+) -> Result<(), CommandError> {
+    timeline_send_for(&state, room_id, body).await
 }
 
 /// One room's avatar, as a data URL.
@@ -2733,5 +2857,212 @@ mod against_a_mock_homeserver {
 
         assert_eq!(first.device_id, second.device_id);
         assert_eq!(first.user_id, second.user_id);
+    }
+
+    /// Opening and closing a room, which is the only part of the timeline the
+    /// app half owns.
+    ///
+    /// The reading, the ordering and the paging are `consort_matrix`'s and are
+    /// tested there. What is here is the state machine around one watcher:
+    /// that a room change replaces it rather than adding to it, that
+    /// re-opening the room already open leaves it alone, and that signing out
+    /// takes the previous account's conversation off the retained channel.
+    mod timeline {
+        use super::*;
+        use consort_matrix::Timeline;
+
+        const GENERAL: &str = "!general:example.org";
+        const LOUNGE: &str = "!lounge:example.org";
+
+        /// Every timeline the webview was handed, in order.
+        fn published(sink: &RecordingSink) -> Vec<Timeline> {
+            sink.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    AppEvent::Timeline(timeline) => Some(timeline),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// Wait until `done` holds of what has been published, or give up.
+        async fn until(sink: &Arc<RecordingSink>, done: impl Fn(&[Timeline]) -> bool) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if done(&published(sink)) {
+                    return;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "timed out; saw {:?}",
+                    published(sink)
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+
+        /// A signed-in state whose account is in both rooms above.
+        async fn in_two_rooms(
+            server: &MatrixMockServer,
+        ) -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            mount_login(server).await;
+            let (dir, state, sink) = state();
+            login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+                .await
+                .unwrap();
+            let client = state.client().await.unwrap();
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!lounge:example.org"))
+                .await;
+            server
+                .mock_room_messages()
+                .expect_any_access_token()
+                .ok(matrix_sdk::test_utils::mocks::RoomMessagesResponseTemplate::default())
+                .mount()
+                .await;
+            (dir, state, sink)
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_publishes_it() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+
+            until(&sink, |seen| {
+                seen.iter().any(|timeline| timeline.room_id == GENERAL)
+            })
+            .await;
+        }
+
+        #[tokio::test]
+        async fn opening_a_second_room_replaces_the_first() {
+            // The reason a watcher is held rather than spawned and forgotten.
+            // Two of them publishing to one channel would leave the pane
+            // showing whichever answered last.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            until(&sink, |seen| !seen.is_empty()).await;
+
+            timeline_open_for(&state, LOUNGE.to_owned()).await;
+            until(&sink, |seen| {
+                seen.last()
+                    .is_some_and(|timeline| timeline.room_id == LOUNGE)
+            })
+            .await;
+
+            // Long enough for a watcher that was left running to say
+            // something, which is the failure this is about.
+            let after_the_change = published(&sink).len();
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+            let seen = published(&sink);
+            assert!(
+                seen[after_the_change..]
+                    .iter()
+                    .all(|timeline| timeline.room_id == LOUNGE),
+                "the first room's watcher was still publishing: {seen:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn opening_the_room_already_open_leaves_it_alone() {
+            // The shell re-selects a channel for reasons that are not a click:
+            // a room list arriving re-derives the selection. Restarting the
+            // watcher for one would throw away every page somebody had
+            // scrolled back through.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            until(&sink, |seen| seen.iter().any(|one| !one.loading)).await;
+            let settled = published(&sink).len();
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            assert_eq!(
+                published(&sink).len(),
+                settled,
+                "the room was re-read for a selection that had not changed"
+            );
+        }
+
+        #[tokio::test]
+        async fn closing_the_room_clears_what_a_late_subscriber_would_be_told() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            until(&sink, |seen| !seen.is_empty()).await;
+
+            timeline_close_for(&state);
+            state.resend_state();
+
+            assert!(
+                !published(&sink)
+                    .last()
+                    .is_some_and(|timeline| timeline.room_id == GENERAL),
+                "a closed room was still being handed to a late subscriber"
+            );
+        }
+
+        #[tokio::test]
+        async fn signing_out_takes_the_previous_account_s_conversation_away() {
+            // What is retained here is somebody's messages, in full, waiting
+            // for whatever asks to be caught up next. Signing in as a second
+            // account must not be handed the first account's room.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            until(&sink, |seen| !seen.is_empty()).await;
+
+            state.clear_client().await;
+
+            assert_eq!(
+                published(&sink)
+                    .last()
+                    .map(|timeline| timeline.room_id.clone()),
+                Some(String::new()),
+                "the room was not cleared on the way out"
+            );
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_while_signed_out_says_nothing() {
+            // A stale click, not something to complain about. There is nothing
+            // to read a room out of and no interface to draw it in.
+            let (_dir, state, sink) = state();
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+
+            assert!(published(&sink).is_empty());
+        }
+
+        #[tokio::test]
+        async fn asking_for_more_with_no_room_open_does_nothing() {
+            // What a scroll landing at the same moment as a room change is.
+            let (_dir, state, _sink) = state();
+
+            timeline_earlier_for(&state);
+            timeline_close_for(&state);
+        }
+
+        #[tokio::test]
+        async fn sending_while_signed_out_is_refused_before_anything_is_parsed() {
+            let (_dir, state, _sink) = state();
+
+            let refused = timeline_send_for(&state, GENERAL.to_owned(), "hello".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
     }
 }
