@@ -487,7 +487,11 @@ interface Props {
    * describe does not have to invent an empty set.
    */
   speaking?: ReadonlySet<string>;
+  /** Whoever is signed in, so a person's card can tell when it is about them. */
+  selfId: string;
   onSelect: (id: string) => void;
+  /** Show a room, by ID. Passed to a person's card for its Message button. */
+  onOpenRoom: (roomId: string) => void;
 }
 
 /**
@@ -502,7 +506,9 @@ export function ChannelList({
   selectedId,
   call,
   speaking = NOBODY,
+  selfId,
   onSelect,
+  onOpenRoom,
 }: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
@@ -583,8 +589,10 @@ export function ChannelList({
           key={opened.person.id}
           person={opened.person}
           roomId={opened.roomId}
+          selfId={selfId}
           at={opened.at}
           onClose={() => setOpened(null)}
+          onOpenRoom={onOpenRoom}
         />
       )}
     </div>

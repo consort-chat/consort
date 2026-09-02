@@ -3074,6 +3074,56 @@ mod member_profiles {
     }
 }
 
+/// The room to say something to one person in.
+mod direct_messages {
+    use super::*;
+    use consort_matrix::rooms::direct;
+
+    const OTHER: &str = "@ada:example.org";
+
+    #[tokio::test]
+    async fn somebody_never_messaged_before_gets_a_room_made_for_them() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_that_will_not_make_one_is_an_error_rather_than_a_panic() {
+        // Nothing is mounted, so `createRoom` 404s. A card is not a place to
+        // crash from.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        assert!(direct(&client, OTHER).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_user_id_never_reaches_the_homeserver() {
+        // Nothing is mounted here either, so a request would fail anyway. The
+        // point is that the parse refuses first, with a message about the
+        // person rather than about the network.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = direct(&client, "not a user id")
+            .await
+            .expect_err("a malformed user id has no room");
+
+        assert!(matches!(error, consort_matrix::Error::NoSuchUser { .. }));
+    }
+}
+
 /// One room's messages, wired to a sync loop and a paginating homeserver.
 ///
 /// The ordering, the deduplication and the rules about which events are

@@ -32,6 +32,7 @@
 //! gone out, and the answer is folded into the next one.
 
 mod avatar;
+mod direct;
 pub mod dto;
 mod facts;
 mod hierarchy;
@@ -39,6 +40,7 @@ pub mod profile;
 mod snapshot;
 
 pub use avatar::{avatar, member_avatar};
+pub use direct::direct;
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
 pub use profile::{MemberProfile, Presence, member_profile};
 

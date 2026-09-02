@@ -120,7 +120,7 @@ beforeEach(() => {
 
 /** Render the pane and hand back a way to publish into it. */
 async function pane(channel: Channel = general) {
-  render(<RoomTimeline channel={channel} />);
+  render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={channel} />);
   await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 }
 
@@ -193,7 +193,7 @@ describe("RoomTimeline", () => {
   });
 
   it("closes the room when it goes", async () => {
-    const { unmount } = render(<RoomTimeline channel={general} />);
+    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 
     unmount();
@@ -434,11 +434,11 @@ describe("RoomTimeline", () => {
   it("puts the hash on a text channel and not on a voice one", async () => {
     // The hash is the text channel's, and only the text channel's. It is how
     // every client anybody already uses says which of the two this is.
-    const { unmount } = render(<RoomTimeline channel={general} />);
+    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("#general");
     unmount();
 
-    render(<RoomTimeline channel={lounge} />);
+    render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={lounge} />);
 
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent("Lounge");
@@ -452,7 +452,7 @@ describe("RoomTimeline", () => {
   });
 
   it("draws no subtitle for a room with no topic", async () => {
-    const { container } = render(<RoomTimeline channel={general} />);
+    const { container } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 
     expect(container.querySelector(".timeline__topic")).toBeNull();

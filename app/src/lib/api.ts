@@ -579,6 +579,18 @@ export function memberProfile(userId: string): Promise<MemberProfile> {
 }
 
 /**
+ * The room to say something to one person in, made if there is not one.
+ *
+ * Creates, which is unusual for something a click reaches, and is what every
+ * other client does: most people opening somebody's card have never messaged
+ * them, so a version that only opened an existing room would do nothing for
+ * almost everybody who pressed it.
+ */
+export function directRoom(userId: string): Promise<string> {
+  return invoke<string>("direct_room", { userId });
+}
+
+/**
  * The five things a person can do to a verification flow.
  *
  * All of them take the same pair of identifiers, straight off the event that

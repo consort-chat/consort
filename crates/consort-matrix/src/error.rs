@@ -77,6 +77,14 @@ pub enum Error {
     #[error("this account is not in room {room_id}")]
     NoSuchRoom { room_id: String },
 
+    /// A command named something that is not a Matrix user ID.
+    ///
+    /// Only reachable from a user ID the interface did not get out of a room,
+    /// which today is none of them. Kept because the parse has to answer
+    /// something and a panic is not it.
+    #[error("`{user_id}` is not a Matrix user ID")]
+    NoSuchUser { user_id: String },
+
     /// Somebody pressed send with nothing typed.
     #[error("a message with no text in it")]
     EmptyMessage,
@@ -198,6 +206,9 @@ impl Error {
             }
             Self::CorruptSession(_) | Self::InvalidStoredIdentifier { .. } => {
                 "The saved session was unreadable, so you have been signed out.".to_owned()
+            }
+            Self::NoSuchUser { .. } => {
+                "That is not a Matrix user, so there is nobody to message.".to_owned()
             }
             Self::NoSuchRoom { .. } => {
                 "That room is not one this account is in. It may have been left from another \
@@ -361,6 +372,9 @@ mod tests {
             Error::InvalidStoredIdentifier {
                 field: "user_id",
                 value: "nonsense".to_owned(),
+            },
+            Error::NoSuchUser {
+                user_id: "not a user".to_owned(),
             },
             Error::MediaTooLarge {
                 bytes: 40_000_000,

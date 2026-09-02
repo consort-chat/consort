@@ -385,6 +385,18 @@ pub async fn timeline_send_for(
     Ok(())
 }
 
+/// The room to say something to one person in, made if there is not one.
+///
+/// A create is a side effect, which is unusual for something a click reaches,
+/// and it is the behaviour every other client has: pressing Message on
+/// somebody you have never messaged has to produce a room or the button does
+/// nothing for almost everybody who presses it. See
+/// `consort_matrix::rooms::direct`.
+pub async fn direct_room_for(state: &AppState, user_id: String) -> Result<String, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::direct(&client, &user_id).await?)
+}
+
 /// The bytes of one attachment, by the handle its message carried.
 ///
 /// Raw rather than encoded, and the one command in this file whose answer is
@@ -1003,6 +1015,15 @@ pub async fn timeline_send(
 ///
 /// Answers with an `ArrayBuffer` rather than JSON, which is what a
 /// `tauri::ipc::Response` is for. See `timeline_media_for`.
+/// The room to say something to one person in. See `direct_room_for`.
+#[tauri::command]
+pub async fn direct_room(
+    state: State<'_, AppState>,
+    user_id: String,
+) -> Result<String, CommandError> {
+    direct_room_for(&state, user_id).await
+}
+
 #[tauri::command]
 pub async fn timeline_media(
     state: State<'_, AppState>,
@@ -2713,6 +2734,17 @@ mod against_a_mock_homeserver {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn asking_for_a_direct_message_while_signed_out_says_so() {
+        let (_dir, state, _sink) = state();
+
+        let error = direct_room_for(&state, "@ada:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
     }
 
     #[tokio::test]

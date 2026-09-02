@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   asCommandError,
   audioSettings,
+  directRoom,
   memberProfile,
   setPersonVolume,
   type MemberProfile,
@@ -46,8 +47,16 @@ export interface PersonMenuProps {
    * second request for facts that are on screen behind this panel.
    */
   person: Participant;
-  /** The channel they are in. Half of the key an avatar and a profile take. */
+  /** The channel they are in, which is half of the key their avatar takes. */
   roomId: string;
+  /**
+   * Whoever is signed in, so the card can tell when it is about them.
+   *
+   * The card opens from a name in a room and your own name is one of the names
+   * in it, so without this the Message button would offer to make a
+   * note-to-self room by accident.
+   */
+  selfId: string;
   /**
    * Where to put its top left corner, in viewport coordinates.
    *
@@ -56,6 +65,14 @@ export interface PersonMenuProps {
    */
   at: { x: number; y: number };
   onClose: () => void;
+  /**
+   * Show a room, by ID.
+   *
+   * The card has no idea where a room lives in the rail, and it should not:
+   * the shell owns both selections, and this hands it a room ID and lets it
+   * work out which space that is under.
+   */
+  onOpenRoom: (roomId: string) => void;
 }
 
 /**
@@ -80,10 +97,10 @@ export interface PersonMenuProps {
  * about. A label that is the same for every person is a label carrying no
  * information, and this one was carrying something false while it did it.
  *
- * Messaging is a button that does not work, and it says so rather than being
- * left off. Consort has no message view at all yet, so opening a direct
- * message would put somebody in a room with no way to read or write in it,
- * which is worse than a button that is honest about the state of things.
+ * Messaging is the one thing on it that leaves the card. It opens the direct
+ * message with whoever this is about, making the room if the account has never
+ * had one with them, and hands the room to the shell to select. See
+ * `consort_matrix::rooms::direct` for why it creates rather than refusing.
  *
  * ## Why the volume lives here rather than in the account
  *
@@ -100,10 +117,18 @@ export interface PersonMenuProps {
  * map of profiles through every component between here and the top of the
  * sidebar for the sake of a panel that is closed almost all of the time.
  */
-export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
+export function PersonMenu({
+  person,
+  roomId,
+  selfId,
+  at,
+  onClose,
+  onOpenRoom,
+}: PersonMenuProps) {
   const [percent, setPercent] = useState<number | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [placement, setPlacement] = useState({ left: at.x, top: at.y });
   const menu = useRef<HTMLDivElement | null>(null);
   const slider = useRef<HTMLInputElement | null>(null);
@@ -224,6 +249,27 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
     }, SETTLE_MS);
   }
 
+  /**
+   * Open the direct message with this person.
+   *
+   * The card closes only on success. A failure leaves it up with the reason on
+   * it, because a card that vanished would take the explanation with it and
+   * the press would read as a button that does nothing.
+   */
+  function message() {
+    setOpening(true);
+    setProblem(null);
+    directRoom(userId)
+      .then((roomId) => {
+        onOpenRoom(roomId);
+        onClose();
+      })
+      .catch((raw: unknown) => {
+        setOpening(false);
+        setProblem(asCommandError(raw).message);
+      });
+  }
+
   const states = callStates(person);
 
   return (
@@ -292,23 +338,14 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
         )}
       </dl>
 
-      {/*
-        Disabled and saying why, rather than absent. Somebody looking at a
-        person's card is looking for a way to talk to them, and a card with no
-        such button reads as a feature that was forgotten rather than one that
-        is not built.
-      */}
       <button
         type="button"
         className="person-menu__action"
-        disabled
-        aria-describedby="person-menu-message-note"
+        disabled={person.id === selfId || opening}
+        onClick={message}
       >
         Message
       </button>
-      <p className="person-menu__note" id="person-menu-message-note">
-        Consort cannot show messages yet.
-      </p>
 
       <hr className="person-menu__rule" />
 

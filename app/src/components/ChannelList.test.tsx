@@ -102,6 +102,8 @@ describe("ChannelList", () => {
   it("names the space at the top", () => {
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -115,6 +117,8 @@ describe("ChannelList", () => {
   it("splits text from voice", () => {
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           voice("!b:example.org", "Lounge"),
@@ -134,6 +138,8 @@ describe("ChannelList", () => {
     // separately would not, and the order is MSC1772's rather than ours.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           text("!c:example.org", "zulu"),
           voice("!d:example.org", "Zulu Voice"),
@@ -154,6 +160,8 @@ describe("ChannelList", () => {
     // A "Voice" header over nothing reads as a list that failed to load.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -169,6 +177,8 @@ describe("ChannelList", () => {
   it("says so when a space has no channels at all", () => {
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([])}
         selectedId={null}
         call={IDLE}
@@ -182,6 +192,8 @@ describe("ChannelList", () => {
   it("marks the selected channel as the current one", () => {
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           text("!b:example.org", "random"),
@@ -205,6 +217,8 @@ describe("ChannelList", () => {
     const onSelect = vi.fn();
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -223,6 +237,8 @@ describe("ChannelList", () => {
     const onSelect = vi.fn();
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
         call={IDLE}
@@ -243,6 +259,8 @@ describe("ChannelList", () => {
     // state, so it is on screen before anything is clicked or connected to.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@ada:example.org", "Ada"),
@@ -266,6 +284,8 @@ describe("ChannelList", () => {
     // list move under the pointer every time somebody joined.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@zoe:example.org", "Zoe"),
@@ -289,6 +309,8 @@ describe("ChannelList", () => {
     // presence existed, or every quiet channel gains a gap under it.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -307,6 +329,8 @@ describe("ChannelList", () => {
     const onSelect = vi.fn();
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -330,6 +354,8 @@ describe("ChannelList", () => {
     // only fix that holds, and it is also where every other client puts it.
     const { container } = render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -354,6 +380,8 @@ describe("ChannelList", () => {
     memberAvatar.mockResolvedValue(PNG);
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -380,6 +408,8 @@ describe("ChannelList", () => {
   it("falls back to an initial for somebody with no picture", async () => {
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -398,6 +428,8 @@ describe("ChannelList", () => {
     // The whole reason `name` is nullable rather than defaulting to the id.
     render(
       <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
         call={IDLE}
@@ -425,6 +457,8 @@ describe("ChannelList", () => {
     it("marks the channel it is connected to", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -444,6 +478,8 @@ describe("ChannelList", () => {
     it("marks the channel it is still joining", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -459,6 +495,8 @@ describe("ChannelList", () => {
       // If the two looked the same, clicking elsewhere would read as leaving.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId="!a:example.org"
           call={{
@@ -480,6 +518,8 @@ describe("ChannelList", () => {
     it("puts the reason a join failed beside the channel that refused it", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -501,6 +541,8 @@ describe("ChannelList", () => {
       // channel can be clicked while the first is still connecting.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "failed", roomId: LOUNGE, error: "no voice server" }}
@@ -519,6 +561,8 @@ describe("ChannelList", () => {
       // generation; room state is only right in the oldest.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@stale:example.org", "Stale")])])}
           selectedId={null}
           call={{
@@ -543,6 +587,8 @@ describe("ChannelList", () => {
       // and a glyph with no name on it is nothing either.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -568,6 +614,8 @@ describe("ChannelList", () => {
       // still be listening, somebody deafened is not.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -589,6 +637,8 @@ describe("ChannelList", () => {
     it("shows a clock for somebody who is away", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -616,6 +666,8 @@ describe("ChannelList", () => {
       // person may come back and hear what was said, a deafened one will not.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -646,6 +698,8 @@ describe("ChannelList", () => {
       // a clock beside a person sitting right there.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -667,6 +721,8 @@ describe("ChannelList", () => {
       // headphones beside a person who can hear perfectly well.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -686,6 +742,8 @@ describe("ChannelList", () => {
     it("marks who is talking", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -716,6 +774,8 @@ describe("ChannelList", () => {
       // likely to be looking for the ring as the only one who never gets it.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -739,6 +799,8 @@ describe("ChannelList", () => {
     it("marks nobody when nobody is talking", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -764,6 +826,8 @@ describe("ChannelList", () => {
       // would be wrong for anybody who had in fact muted.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "disconnected" }}
@@ -780,6 +844,8 @@ describe("ChannelList", () => {
     it("leaves every other channel on room state", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([
             voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
             voice("!b:example.org", "Music", [person("@bob:example.org", "Bob")]),
@@ -811,6 +877,8 @@ describe("ChannelList", () => {
       // second ago and put it back when the join lands.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -826,6 +894,8 @@ describe("ChannelList", () => {
     it("marks nothing when there is no call", () => {
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={IDLE}
@@ -843,6 +913,8 @@ describe("ChannelList", () => {
     function inTheCall(people: Participant[]) {
       return (
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -879,6 +951,8 @@ describe("ChannelList", () => {
       // would be drawn identically and only one of them would be true.
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([
             voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
           ])}
@@ -908,6 +982,8 @@ describe("ChannelList", () => {
     function withAda() {
       return (
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -948,6 +1024,8 @@ describe("ChannelList", () => {
       const onSelect = vi.fn();
       render(
         <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{

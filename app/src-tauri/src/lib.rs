@@ -110,6 +110,7 @@ pub fn run() {
             commands::timeline_earlier,
             commands::timeline_send,
             commands::timeline_media,
+            commands::direct_room,
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,

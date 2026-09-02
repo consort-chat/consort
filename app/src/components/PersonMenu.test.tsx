@@ -6,12 +6,14 @@ const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
+const directRoom = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   audioSettings,
   setPersonVolume,
   memberProfile,
   memberAvatar,
+  directRoom,
 }));
 
 import { PersonMenu } from "./PersonMenu";
@@ -39,7 +41,9 @@ const settings: AudioSettings = {
   personVolumes: {},
 };
 
-const ada: Participant = { id: "@ada:example.org", name: "Ada" };
+const ADA_ID = "@ada:example.org";
+
+const ada: Participant = { id: ADA_ID, name: "Ada" };
 
 /** A homeserver that answers, with nothing remarkable to say. */
 const plain: MemberProfile = {
@@ -52,19 +56,28 @@ function open(
   personVolumes: Record<string, number> = {},
   person: Participant = ada,
   profile: MemberProfile = plain,
+  extra: { selfId?: string; onOpenRoom?: (roomId: string) => void } = {},
 ) {
   audioSettings.mockResolvedValue({ ...settings, personVolumes });
   memberProfile.mockResolvedValue(profile);
   const onClose = vi.fn();
+  const onOpenRoom = extra.onOpenRoom ?? vi.fn();
   const { container } = render(
     <PersonMenu
       person={person}
       roomId="!room:example.org"
+      selfId={extra.selfId ?? "@bob:example.org"}
       at={{ x: 40, y: 60 }}
       onClose={onClose}
+      onOpenRoom={onOpenRoom}
     />,
   );
-  return Object.assign(onClose, { container });
+  return Object.assign(onClose, { container, onOpenRoom });
+}
+
+/** The Message button, whatever state it is in. */
+function messageButton() {
+  return screen.getByRole("button", { name: /^message$/i });
 }
 
 /** The one control, once the saved level has been read. */
@@ -78,6 +91,7 @@ describe("PersonMenu", () => {
     setPersonVolume.mockResolvedValue(undefined);
     memberProfile.mockResolvedValue(plain);
     memberAvatar.mockResolvedValue(null);
+    directRoom.mockReset().mockResolvedValue("!dm:example.org");
   });
 
   it("shows the level that was saved for this person", async () => {
@@ -232,8 +246,10 @@ describe("PersonMenu", () => {
       <PersonMenu
         person={ada}
         roomId="!room:example.org"
+        selfId="@bob:example.org"
         at={{ x: 0, y: 0 }}
         onClose={vi.fn()}
+        onOpenRoom={vi.fn()}
       />,
     );
 
@@ -245,6 +261,51 @@ describe("PersonMenu", () => {
     open({}, ada, { ...plain, status: "in a meeting" });
 
     expect(await screen.findByText("in a meeting")).toBeVisible();
+  });
+
+  it("opens the direct message with whoever the card is about", async () => {
+    directRoom.mockResolvedValue("!dm:example.org");
+    const { onOpenRoom } = open();
+
+    await userEvent.click(messageButton());
+
+    await waitFor(() => expect(directRoom).toHaveBeenCalledWith(ADA_ID));
+    await waitFor(() =>
+      expect(onOpenRoom).toHaveBeenCalledWith("!dm:example.org"),
+    );
+  });
+
+  it("closes itself once the room is open", async () => {
+    directRoom.mockResolvedValue("!dm:example.org");
+    const onClose = open();
+
+    await userEvent.click(messageButton());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("says why when the room cannot be opened, rather than closing", async () => {
+    directRoom.mockRejectedValue({
+      message: "That homeserver would not make the room.",
+      detail: "M_FORBIDDEN",
+    });
+    const onClose = open();
+
+    await userEvent.click(messageButton());
+
+    expect(
+      await screen.findByText("That homeserver would not make the room."),
+    ).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("will not message you to yourself", async () => {
+    // Matrix allows a note-to-self room and this is not the place to make one
+    // by accident: the card opens from a name in a room, and your own is one
+    // of the names in it.
+    open({}, ada, plain, { selfId: ADA_ID });
+
+    expect(messageButton()).toBeDisabled();
   });
 
   it("says nothing about what anybody is allowed to do", async () => {
@@ -283,14 +344,11 @@ describe("PersonMenu", () => {
     expect(await screen.findByText("Deafened, Muted, Camera on")).toBeVisible();
   });
 
-  it("offers messaging as a button that says it does not work yet", async () => {
-    // Rather than leaving it off. A card with no way to talk to somebody reads
-    // as a feature that was forgotten rather than one that is not built.
+  it("offers messaging as a button that works", async () => {
     open();
 
-    const message = await screen.findByRole("button", { name: /message/i });
-    expect(message).toBeDisabled();
-    expect(screen.getByText(/cannot show messages yet/i)).toBeVisible();
+    expect(messageButton()).toBeEnabled();
+    expect(screen.queryByText(/cannot show messages yet/i)).toBeNull();
   });
 
   it("keeps the volume slider under the person's details", async () => {
@@ -314,8 +372,10 @@ describe("PersonMenu", () => {
       <PersonMenu
         person={ada}
         roomId="!room:example.org"
+        selfId="@bob:example.org"
         at={{ x: 0, y: 0 }}
         onClose={vi.fn()}
+        onOpenRoom={vi.fn()}
       />,
     );
 

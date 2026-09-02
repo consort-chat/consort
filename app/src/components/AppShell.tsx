@@ -221,6 +221,24 @@ export function AppShell({
    * answer to a click from an interface that may be asking precisely because
    * it has lost track of where it is.
    */
+  /**
+   * Show a room, wherever it lives.
+   *
+   * The rail entry is worked out from the room rather than passed in, because
+   * a caller with a room ID has no reason to know which space it hangs under:
+   * a direct message is under Home, a channel is under whichever space claims
+   * it, and both arrive here the same way. A room in no rail entry at all is a
+   * room this account has just left, and the selection is left where it is.
+   */
+  function openRoom(roomId: string) {
+    const holder = rooms.spaces.find((candidate) =>
+      candidate.channels.some((channel) => channel.id === roomId),
+    );
+    if (holder === undefined) return;
+    setSpaceId(holder.id);
+    setChannelId(roomId);
+  }
+
   function selectChannel(id: string) {
     setChannelId(id);
 
@@ -264,7 +282,9 @@ export function AppShell({
               selectedId={channel?.id ?? null}
               call={call}
               speaking={speaking}
+              selfId={profile.user_id}
               onSelect={selectChannel}
+              onOpenRoom={openRoom}
             />
           )}
         </div>
@@ -361,7 +381,12 @@ export function AppShell({
             <p className="shell__empty-detail">{paneDetail()}</p>
           </div>
         ) : (
-          <RoomTimeline key={channel.id} channel={channel} />
+          <RoomTimeline
+            key={channel.id}
+            channel={channel}
+            selfId={profile.user_id}
+            onOpenRoom={openRoom}
+          />
         )}
       </main>
       </div>

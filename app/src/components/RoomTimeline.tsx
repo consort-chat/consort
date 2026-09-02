@@ -117,7 +117,17 @@ function dateOf(at: number): string {
  * that happens to carry a call, so it has an ordinary timeline sitting beside
  * the call, and there is nothing different to draw.
  */
-export function RoomTimeline({ channel }: { channel: Channel }) {
+export function RoomTimeline({
+  channel,
+  selfId,
+  onOpenRoom,
+}: {
+  channel: Channel;
+  /** Whoever is signed in, so a person's card can tell when it is about them. */
+  selfId: string;
+  /** Show a room, by ID. Passed to a person's card for its Message button. */
+  onOpenRoom: (roomId: string) => void;
+}) {
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const [names, setNames] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState("");
@@ -456,8 +466,10 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
           key={opened.person.id}
           person={opened.person}
           roomId={channel.id}
+          selfId={selfId}
           at={opened.at}
           onClose={() => setOpened(null)}
+          onOpenRoom={onOpenRoom}
         />
       )}
     </section>
