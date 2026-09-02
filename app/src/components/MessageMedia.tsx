@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { asCommandError, timelineMedia, type Media } from "../lib/api";
+import { asCommandError, timelineMedia, type Media, type MessageKind } from "../lib/api";
 import { sizeLabel } from "../lib/labels";
 import "./MessageMedia.css";
 
@@ -11,6 +11,10 @@ import "./MessageMedia.css";
  * this is not another data URL: a photograph is megabytes, and encoding it
  * would add a third to that before this side had to hold it as a string. The
  * blob is let go of when the message leaves the room.
+ *
+ * A file and a voice note are neither: they are a card naming what was sent
+ * and what it weighs, because Consort has no viewer for a spreadsheet and
+ * should not pretend to.
  *
  * ## A picture is fetched, a clip is asked for
  *
@@ -23,15 +27,14 @@ import "./MessageMedia.css";
 export function MessageMedia({
   kind,
   media,
-  name,
 }: {
-  kind: "image" | "video";
+  kind: Extract<MessageKind, "image" | "video" | "file" | "audio">;
   media: Media;
-  name: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [wanted, setWanted] = useState(kind === "image");
+  const name = media.name;
 
   useEffect(() => {
     if (!wanted) return;
@@ -66,6 +69,18 @@ export function MessageMedia({
 
   if (problem !== null) {
     return <p className="media__problem">{problem}</p>;
+  }
+
+  // Neither is played and neither is looked at, so neither is fetched. What
+  // Consort can honestly offer for a spreadsheet is its name and its weight.
+  if (kind === "file" || kind === "audio") {
+    const weight = sizeLabel(media.size);
+    return (
+      <p className="media__file">
+        <span className="media__file-name">{name}</span>
+        {weight !== null && <span className="media__file-size">{weight}</span>}
+      </p>
+    );
   }
 
   if (kind === "video") {

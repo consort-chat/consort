@@ -95,23 +95,72 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
             let info = image.info.as_deref();
             let media = attachment(
                 &image.source,
+                image.filename().to_owned(),
                 info.and_then(|info| info.mimetype.as_deref()),
                 info.and_then(|info| info.size),
                 info.and_then(|info| info.width),
                 info.and_then(|info| info.height),
             );
-            drawable(MessageKind::Image, image.body, media)
+            drawable(
+                MessageKind::Image,
+                image.caption().unwrap_or_default().to_owned(),
+                image.formatted_caption().cloned(),
+                media,
+            )
         }
         MessageType::Video(video) => {
             let info = video.info.as_deref();
             let media = attachment(
                 &video.source,
+                video.filename().to_owned(),
                 info.and_then(|info| info.mimetype.as_deref()),
                 info.and_then(|info| info.size),
                 info.and_then(|info| info.width),
                 info.and_then(|info| info.height),
             );
-            drawable(MessageKind::Video, video.body, media)
+            drawable(
+                MessageKind::Video,
+                video.caption().unwrap_or_default().to_owned(),
+                video.formatted_caption().cloned(),
+                media,
+            )
+        }
+        // Neither is played and neither is looked at. Both are a card that
+        // saves, so both hand over the size to say what it will cost and
+        // nothing about the type: what the sender claims a file is has no
+        // business becoming a content type, and the name already ends in the
+        // extension that says it.
+        MessageType::File(file) => {
+            let media = attachment(
+                &file.source,
+                file.filename().to_owned(),
+                None,
+                file.info.as_deref().and_then(|info| info.size),
+                None,
+                None,
+            );
+            drawable(
+                MessageKind::File,
+                file.caption().unwrap_or_default().to_owned(),
+                file.formatted_caption().cloned(),
+                media,
+            )
+        }
+        MessageType::Audio(audio) => {
+            let media = attachment(
+                &audio.source,
+                audio.filename().to_owned(),
+                None,
+                audio.info.as_deref().and_then(|info| info.size),
+                None,
+                None,
+            );
+            drawable(
+                MessageKind::Audio,
+                audio.caption().unwrap_or_default().to_owned(),
+                audio.formatted_caption().cloned(),
+                media,
+            )
         }
         _ => (
             MessageKind::Unsupported,
@@ -137,13 +186,14 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
     })
 }
 
-/// What the interface needs to fetch and place one attachment.
+/// What the interface needs to fetch, name and place one attachment.
 ///
 /// `None` only when the source cannot be written down, which nothing a
 /// homeserver sends produces: it is a URI or a key, and both are JSON already.
 /// The caller falls back to the line that says this build cannot draw it.
 fn attachment(
     source: &MediaSource,
+    name: String,
     mime: Option<&str>,
     size: Option<UInt>,
     width: Option<UInt>,
@@ -151,9 +201,10 @@ fn attachment(
 ) -> Option<Media> {
     Some(Media {
         source: serde_json::to_string(source).ok()?,
-        // The sender writes this and nothing checks it, and it becomes the
-        // type of a blob in the webview. Anything that is not one of the two
-        // kinds this draws is dropped rather than repeated.
+        name,
+        // The sender writes this and nothing checks it, and it is the type the
+        // webview is handed for playback. Anything that is not one of the two
+        // kinds this plays is dropped rather than repeated.
         mime: mime
             .filter(|mime| mime.starts_with("image/") || mime.starts_with("video/"))
             .map(str::to_owned),
@@ -166,11 +217,12 @@ fn attachment(
 /// An attachment as something to draw, or as the line that says otherwise.
 fn drawable(
     kind: MessageKind,
-    body: String,
+    caption: String,
+    formatted: Option<FormattedBody>,
     media: Option<Media>,
 ) -> (MessageKind, String, Option<FormattedBody>, Option<Media>) {
     match media {
-        Some(media) => (kind, body, None, Some(media)),
+        Some(media) => (kind, caption, formatted, Some(media)),
         None => (
             MessageKind::Unsupported,
             NOT_SUPPORTED.to_owned(),
@@ -349,10 +401,10 @@ mod tests {
         .expect("an image is a message");
 
         assert_eq!(said.kind, MessageKind::Image);
+        let media = said.media.expect("an image has something to fetch");
         // The filename, which is what a reader is told when the picture will
         // not load and what a screen reader is told either way.
-        assert_eq!(said.body, "screenshot.png");
-        let media = said.media.expect("an image has something to fetch");
+        assert_eq!(media.name, "screenshot.png");
         let source =
             serde_json::from_str::<MediaSource>(&media.source).expect("a handle is a source");
         assert!(
@@ -464,19 +516,113 @@ mod tests {
     }
 
     #[test]
-    fn a_file_is_still_the_line_that_says_so() {
-        // Not built, and drawn as itself rather than vanishing: somebody whose
-        // attachment silently disappeared would send it again.
+    fn a_file_is_something_to_save() {
         let said = message(&sent(json!({
             "msgtype": "m.file",
             "body": "accounts.ods",
             "url": "mxc://example.org/sheet",
         })))
-        .expect("a file is still something to draw");
+        .expect("a file is something to draw");
+
+        assert_eq!(said.kind, MessageKind::File);
+        let media = said.media.expect("a file has something to fetch");
+        assert_eq!(media.name, "accounts.ods");
+    }
+
+    #[test]
+    fn a_voice_note_is_a_card_on_the_same_terms() {
+        let said = message(&sent(json!({
+            "msgtype": "m.audio",
+            "body": "voice-message.ogg",
+            "url": "mxc://example.org/spoken",
+            "info": { "mimetype": "audio/ogg", "size": 40_000 },
+        })))
+        .expect("an audio message is something to draw");
+
+        assert_eq!(said.kind, MessageKind::Audio);
+        let media = said.media.expect("audio has something to fetch");
+        assert_eq!(media.name, "voice-message.ogg");
+        assert_eq!(media.size, Some(40_000));
+    }
+
+    #[test]
+    fn a_message_type_this_build_draws_nothing_for_is_still_the_line_that_says_so() {
+        // A location, a widget, somebody's extension. Drawn as itself rather
+        // than vanishing: somebody whose message silently disappeared would
+        // send it again.
+        let said = message(&sent(json!({
+            "msgtype": "m.location",
+            "body": "Here",
+            "geo_uri": "geo:51.5,-0.12",
+        })))
+        .expect("a location is still something to draw");
 
         assert_eq!(said.kind, MessageKind::Unsupported);
         assert_eq!(said.media, None);
         assert!(!said.body.is_empty());
+    }
+
+    #[test]
+    fn the_words_sent_with_a_picture_are_kept() {
+        // What the Lampshade bot does with a link: it uploads the clip and
+        // puts the quoted post in the same event as a caption. Reading `body`
+        // as the filename threw the post away and put it on the card as a
+        // name.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "Look at this",
+            "filename": "screenshot.png",
+            "url": "mxc://example.org/abc",
+        })))
+        .expect("a captioned image is a message");
+
+        assert_eq!(said.body, "Look at this");
+        assert_eq!(said.media.expect("still an image").name, "screenshot.png");
+    }
+
+    #[test]
+    fn a_picture_sent_with_no_words_carries_none() {
+        // `filename` absent means `body` is the filename, which is not a
+        // caption and must not be drawn as one.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "url": "mxc://example.org/abc",
+        })))
+        .expect("an image is a message");
+
+        assert!(said.body.is_empty());
+    }
+
+    #[test]
+    fn a_filename_that_repeats_the_body_is_not_a_caption() {
+        // The other half of the same rule. A client that writes both fields to
+        // the same string has said nothing, and drawing the filename twice is
+        // worse than drawing it once.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "filename": "screenshot.png",
+            "url": "mxc://example.org/abc",
+        })))
+        .expect("an image is a message");
+
+        assert!(said.body.is_empty());
+    }
+
+    #[test]
+    fn a_caption_keeps_the_formatting_it_was_sent_with() {
+        let said = message(&sent(json!({
+            "msgtype": "m.video",
+            "body": "Watch **this**",
+            "filename": "clip.mp4",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "Watch <strong>this</strong>",
+            "url": "mxc://example.org/reel",
+        })))
+        .expect("a captioned video is a message");
+
+        assert_eq!(said.html.as_deref(), Some("Watch <strong>this</strong>"));
     }
 
     #[test]

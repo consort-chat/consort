@@ -313,10 +313,13 @@ describe("RoomTimeline", () => {
     await arrive(
       timeline([
         {
-          ...said("$1", ADA, "screenshot.png"),
+          // Uncaptioned, which is what an image with no `filename` beside its
+          // `body` becomes: the name is on the card, not above the picture.
+          ...said("$1", ADA, ""),
           kind: "image",
           media: {
             source: '{"url":"mxc://example.org/abc"}',
+            name: "screenshot.png",
             mime: "image/png",
             width: 800,
             height: 600,
@@ -331,15 +334,66 @@ describe("RoomTimeline", () => {
     expect(screen.queryByText("screenshot.png")).toBeNull();
   });
 
+  it("draws the words that came with an attachment", async () => {
+    // What the Lampshade bot does with a link: it uploads the clip and puts
+    // the quoted post in the same event as a caption. Drawing only the card
+    // threw the post away.
+    await pane();
+
+    await arrive(
+      timeline([
+        {
+          ...said("$1", ADA, "Bunts (@soylennial): watch it until the end"),
+          kind: "video",
+          media: {
+            source: '{"url":"mxc://example.org/reel"}',
+            name: "video.mp4",
+            size: 4_000_000,
+          },
+        },
+      ]),
+    );
+
+    expect(
+      await screen.findByText("Bunts (@soylennial): watch it until the end"),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /video\.mp4/ })).toBeVisible();
+  });
+
+  it("draws a file as a card naming it rather than as a line of apology", async () => {
+    await pane();
+
+    await arrive(
+      timeline([
+        {
+          ...said("$1", ADA, ""),
+          kind: "file",
+          media: {
+            source: '{"url":"mxc://example.org/sheet"}',
+            name: "accounts.ods",
+            size: 51_200,
+          },
+        },
+      ]),
+    );
+
+    expect(await screen.findByText("accounts.ods")).toBeVisible();
+    expect(screen.queryByText(/cannot show these yet/i)).toBeNull();
+  });
+
   it("offers a clip rather than fetching every one in a room", async () => {
     await pane();
 
     await arrive(
       timeline([
         {
-          ...said("$1", ADA, "clip.mp4"),
+          ...said("$1", ADA, ""),
           kind: "video",
-          media: { source: '{"url":"mxc://example.org/reel"}', size: 12_400_000 },
+          media: {
+            source: '{"url":"mxc://example.org/reel"}',
+            name: "clip.mp4",
+            size: 12_400_000,
+          },
         },
       ]),
     );

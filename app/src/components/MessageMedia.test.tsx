@@ -14,6 +14,7 @@ import type { Media } from "../lib/api";
 
 const PICTURE: Media = {
   source: '{"url":"mxc://example.org/abc"}',
+  name: "screenshot.png",
   mime: "image/png",
   size: 94_600,
   width: 800,
@@ -22,6 +23,7 @@ const PICTURE: Media = {
 
 const CLIP: Media = {
   source: '{"url":"mxc://example.org/reel"}',
+  name: "clip.mp4",
   mime: "video/mp4",
   size: 12_400_000,
   width: 1920,
@@ -51,9 +53,7 @@ beforeEach(() => {
 
 describe("MessageMedia, for a picture", () => {
   it("draws it as soon as the room is drawn", async () => {
-    render(
-      <MessageMedia kind="image" media={PICTURE} name="screenshot.png" />,
-    );
+    render(<MessageMedia kind="image" media={PICTURE} />);
 
     const picture = await screen.findByRole("img", { name: "screenshot.png" });
     expect(picture).toHaveAttribute("src", made[0]);
@@ -62,9 +62,7 @@ describe("MessageMedia, for a picture", () => {
   it("wraps the bytes in the type the sender named", async () => {
     // The browser sniffs a picture either way, and a clip it often does not,
     // so the type is carried through rather than dropped.
-    render(
-      <MessageMedia kind="image" media={PICTURE} name="screenshot.png" />,
-    );
+    render(<MessageMedia kind="image" media={PICTURE} />);
 
     await screen.findByRole("img", { name: "screenshot.png" });
     expect(made[0]).toContain("image/png");
@@ -76,9 +74,7 @@ describe("MessageMedia, for a picture", () => {
     // moving under somebody reading.
     timelineMedia.mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(
-      <MessageMedia kind="image" media={PICTURE} name="screenshot.png" />,
-    );
+    const { container } = render(<MessageMedia kind="image" media={PICTURE} />);
 
     await waitFor(() => expect(timelineMedia).toHaveBeenCalled());
     expect(container.querySelector(".media__frame")).toHaveStyle({
@@ -91,9 +87,7 @@ describe("MessageMedia, for a picture", () => {
       message: "That attachment is too large for Consort to show.",
     });
 
-    render(
-      <MessageMedia kind="image" media={PICTURE} name="screenshot.png" />,
-    );
+    render(<MessageMedia kind="image" media={PICTURE} />);
 
     expect(
       await screen.findByText("That attachment is too large for Consort to show."),
@@ -101,9 +95,7 @@ describe("MessageMedia, for a picture", () => {
   });
 
   it("lets go of the bytes when the message leaves the room", async () => {
-    const { unmount } = render(
-      <MessageMedia kind="image" media={PICTURE} name="screenshot.png" />,
-    );
+    const { unmount } = render(<MessageMedia kind="image" media={PICTURE} />);
     await screen.findByRole("img", { name: "screenshot.png" });
 
     unmount();
@@ -116,14 +108,14 @@ describe("MessageMedia, for a clip", () => {
   it("does not fetch one until somebody asks", async () => {
     // Scrolling back through a room of clips would otherwise be a download of
     // every one of them, and they are the large ones.
-    render(<MessageMedia kind="video" media={CLIP} name="clip.mp4" />);
+    render(<MessageMedia kind="video" media={CLIP} />);
 
     expect(await screen.findByRole("button")).toBeVisible();
     expect(timelineMedia).not.toHaveBeenCalled();
   });
 
   it("says what it is called and what it will cost first", async () => {
-    render(<MessageMedia kind="video" media={CLIP} name="clip.mp4" />);
+    render(<MessageMedia kind="video" media={CLIP} />);
 
     const play = await screen.findByRole("button");
     expect(play).toHaveTextContent("clip.mp4");
@@ -131,9 +123,7 @@ describe("MessageMedia, for a clip", () => {
   });
 
   it("fetches and plays it once asked", async () => {
-    const { container } = render(
-      <MessageMedia kind="video" media={CLIP} name="clip.mp4" />,
-    );
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
 
     await userEvent.click(await screen.findByRole("button"));
 
@@ -146,13 +136,45 @@ describe("MessageMedia, for a clip", () => {
   it("offers the name alone for a clip nobody measured", async () => {
     // `info` is optional off the wire and a bridge that omits it is common.
     render(
-      <MessageMedia
-        kind="video"
-        media={{ source: CLIP.source }}
-        name="clip.mp4"
-      />,
+      <MessageMedia kind="video" media={{ source: CLIP.source, name: "clip.mp4" }} />,
     );
 
     expect(await screen.findByRole("button")).toHaveTextContent("clip.mp4");
+  });
+});
+
+describe("MessageMedia, for a file", () => {
+  it("names a file and what it weighs, and fetches nothing", async () => {
+    // Consort has no viewer for a spreadsheet and should not pretend to. What
+    // it can honestly offer is the name, the size, and a way to save it.
+    render(
+      <MessageMedia
+        kind="file"
+        media={{
+          source: '{"url":"mxc://example.org/sheet"}',
+          name: "accounts.ods",
+          size: 51_200,
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("accounts.ods")).toBeVisible();
+    expect(screen.getByText("51 kB")).toBeVisible();
+    expect(timelineMedia).not.toHaveBeenCalled();
+  });
+
+  it("draws a voice note on the same terms", async () => {
+    render(
+      <MessageMedia
+        kind="audio"
+        media={{
+          source: '{"url":"mxc://example.org/spoken"}',
+          name: "voice-message.ogg",
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("voice-message.ogg")).toBeVisible();
+    expect(timelineMedia).not.toHaveBeenCalled();
   });
 });

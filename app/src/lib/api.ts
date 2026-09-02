@@ -1154,9 +1154,9 @@ export function memberNames(
  * What sort of message this is.
  *
  * Mirrors `consort_matrix::MessageKind`. The three `m.room.message` types that
- * are text, the two that carry something to look at, and the two ways a
- * message can exist with nothing to draw at all. Files and audio are not
- * built, and a variant for one would be a promise the interface cannot keep.
+ * are text, the two that carry something to look at, the two that carry
+ * something to save, and the two ways a message can exist with nothing to draw
+ * at all.
  */
 export type MessageKind =
   | "text"
@@ -1164,6 +1164,8 @@ export type MessageKind =
   | "notice"
   | "image"
   | "video"
+  | "file"
+  | "audio"
   | "undecryptable"
   | "unsupported";
 
@@ -1184,12 +1186,20 @@ export interface Media {
    */
   source: string;
   /**
+   * The file's own name: `filename` where the sender wrote one, `body` where
+   * they did not.
+   *
+   * What a card is labelled with, what a save dialog opens on, and what a
+   * screen reader is told when the picture will not load.
+   */
+  name: string;
+  /**
    * What the sender said the bytes are, when they said something worth
    * repeating.
    *
-   * It becomes the type of the blob the bytes are wrapped in, so Rust keeps it
-   * only when it names an image or a video. Absent for an attachment whose
-   * sender said nothing, which a blob survives: the browser sniffs.
+   * The type the element is handed for playback, so Rust keeps it only when it
+   * names an image or a video. Always absent for a file and a voice note,
+   * which are saved rather than played.
    */
   mime?: string;
   /** How many bytes the sender said it is, for saying what a clip will cost. */
@@ -1220,7 +1230,14 @@ export interface Message {
   sender: string;
   /** `origin_server_ts`, in milliseconds. */
   at: number;
-  /** What it says, with no formatting. Drawn when there is no `html`. */
+  /**
+   * What it says, with no formatting. Drawn when there is no `html`.
+   *
+   * Empty for an attachment nobody captioned, which is most of them. The
+   * filename is on `media.name` and deliberately not here: a line reading
+   * "screenshot.png" above the screenshot is what somebody sent a picture to
+   * avoid.
+   */
   body: string;
   /**
    * What it says as HTML, when the sender sent formatting.

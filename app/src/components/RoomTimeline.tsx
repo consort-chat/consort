@@ -20,6 +20,7 @@ import {
   NO_TIMELINE,
   type Channel,
   type Message,
+  type MessageKind,
   type Participant,
   type Timeline,
 } from "../lib/api";
@@ -96,6 +97,22 @@ function timeOf(at: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/**
+ * Which of the four attachment kinds a message is.
+ *
+ * A message carrying `media` is always one of them, and the fallback is a
+ * picture because that is the one whose failure is visible: a card drawn where
+ * a photograph should be is obvious, and a photograph drawn where a card
+ * should be is a broken image.
+ */
+function attachmentKind(
+  kind: MessageKind,
+): "image" | "video" | "file" | "audio" {
+  return kind === "video" || kind === "file" || kind === "audio"
+    ? kind
+    : "image";
 }
 
 /** The whole date, for the tooltip a clock time is not enough for. */
@@ -364,19 +381,30 @@ export function RoomTimeline({
                   </time>
                 </p>
                 {one.messages.map((message) =>
-                  /*
-                    An attachment is drawn instead of its body rather than
-                    beside it. The body of an image is its filename, and a line
-                    reading "screenshot.png" above the screenshot is the thing
-                    somebody sent a picture to avoid.
-                  */
                   message.media !== undefined ? (
-                    <MessageMedia
-                      key={message.id}
-                      kind={message.kind === "video" ? "video" : "image"}
-                      media={message.media}
-                      name={message.body}
-                    />
+                    /*
+                      The attachment, and under it whatever words were sent
+                      with it. The filename is on the card rather than above
+                      the picture: a line reading "screenshot.png" over the
+                      screenshot is what somebody sent a picture to avoid. A
+                      caption is a different thing and is drawn, which is how
+                      a bot's quoted post survives the clip it came with.
+                    */
+                    <div key={message.id} className="timeline__attachment">
+                      <MessageMedia
+                        kind={attachmentKind(message.kind)}
+                        media={message.media}
+                      />
+                      {message.body !== "" && (
+                        <div className="timeline__body" data-selectable>
+                          {message.html === undefined ? (
+                            message.body
+                          ) : (
+                            <FormattedBody html={message.html} />
+                          )}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     /*
                       A `div` rather than a `p`, because a formatted body can be

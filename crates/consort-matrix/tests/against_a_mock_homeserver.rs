@@ -3683,13 +3683,14 @@ mod timeline {
 
         let drawn = &settled(&reports).unwrap().messages[0];
         assert_eq!(drawn.kind, MessageKind::Image);
-        assert_eq!(drawn.body, "screenshot.png");
+        let media = drawn
+            .media
+            .as_ref()
+            .expect("an image must reach the interface with something to fetch it by");
+        assert_eq!(media.name, "screenshot.png");
         assert!(
-            drawn
-                .media
-                .as_ref()
-                .is_some_and(|media| media.source.contains("mxc://example.org/abc")),
-            "an image must reach the interface with something to fetch it by"
+            media.source.contains("mxc://example.org/abc"),
+            "the handle must name the picture it was made from"
         );
     }
 

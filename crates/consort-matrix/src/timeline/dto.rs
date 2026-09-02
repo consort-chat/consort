@@ -67,6 +67,11 @@ pub struct Message {
     ///
     /// The plaintext fallback every message carries, and the only thing to
     /// draw when `html` is `None`.
+    ///
+    /// Empty for an attachment nobody captioned, which is most of them. The
+    /// filename lives on [`Media::name`] and is deliberately not here: a line
+    /// reading "screenshot.png" above the screenshot is the thing somebody
+    /// sent a picture to avoid.
     pub body: String,
     /// What it says as HTML, when the sender sent formatting.
     ///
@@ -110,13 +115,24 @@ pub struct Media {
     /// already holds. Nothing reads it on that side: it goes back to Rust as
     /// it arrived.
     pub source: String,
+    /// The file's own name.
+    ///
+    /// `filename` where the sender wrote one and `body` where they did not,
+    /// which is the rule the specification gives for media captions. It is
+    /// what a card is labelled with, what a save dialog opens on, and what a
+    /// screen reader is told when the picture will not load.
+    pub name: String,
     /// What the sender said the bytes are, when they said something this build
     /// would repeat.
     ///
-    /// Kept only when it names an image or a video, because it becomes the
-    /// type of a blob in the webview and the sender writes it. It is a hint
-    /// for playback rather than a fact: what actually arrives is sniffed in
-    /// Rust and refused if it is neither.
+    /// Kept only when it names an image or a video, because it is the type
+    /// the webview is handed for playback and the sender writes it: anything
+    /// else here would be a way to have a browser treat somebody's attachment
+    /// as a document. It is a hint rather than a fact, and what actually
+    /// arrives is sniffed in Rust.
+    ///
+    /// So a file and a voice note carry none. Neither is played, only saved,
+    /// and the name already ends in the extension that says what it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime: Option<String>,
     /// How many bytes the sender said it is.
@@ -140,9 +156,8 @@ pub struct Media {
 /// What sort of message this is.
 ///
 /// The three `m.room.message` types that are text, the two that carry
-/// something to look at, and the two ways a message can exist with nothing to
-/// draw at all. Files and audio are deliberately absent: they are not built,
-/// and a variant for one would be a promise the interface cannot keep.
+/// something to look at, the two that carry something to save, and the two
+/// ways a message can exist with nothing to draw at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MessageKind {
@@ -155,6 +170,17 @@ pub enum MessageKind {
     Notice,
     /// `m.image`. Its `media` says where the picture is.
     Image,
+    /// `m.file`. Its `media` says where the file is.
+    ///
+    /// Drawn as a card that saves rather than as anything to look at. Consort
+    /// has no viewer for a spreadsheet and should not pretend to.
+    File,
+    /// `m.audio`. A card that saves, on exactly the same terms as a file.
+    ///
+    /// Separate from one only because the interface says "voice note" rather
+    /// than "file" when it knows, and because playing one is the obvious next
+    /// thing and will want its own variant when it lands.
+    Audio,
     /// `m.video`. Its `media` says where the clip is.
     ///
     /// Separate from an image rather than folded in with it, because the two
@@ -168,9 +194,9 @@ pub enum MessageKind {
     /// it, and the difference matters: one is a key that has not arrived and
     /// the other is nobody talking.
     Undecryptable,
-    /// A message body this build cannot render, such as an image or a file.
+    /// A message body this build cannot render, such as a location.
     ///
     /// Also drawn rather than skipped, and for the same reason. Somebody whose
-    /// screenshot silently vanished has no way to know it was ever sent.
+    /// message silently vanished has no way to know it was ever sent.
     Unsupported,
 }

@@ -205,6 +205,16 @@
 }
 
 /*
+  An attachment and whatever was said with it, as one message. The card brings
+  its own top margin, so this only has to keep the caption under it.
+*/
+.timeline__attachment + .timeline__attachment,
+.timeline__attachment + .timeline__body,
+.timeline__body + .timeline__attachment {
+  margin-top: var(--space-2);
+}
+
+/*
   Two things one person said in the same breath. They share a byline, so this
   gap has to be smaller than the one between groups and larger than the gap
   between two lines of a single message, or six sentences in a row read as one
