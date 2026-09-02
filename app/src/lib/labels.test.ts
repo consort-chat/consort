@@ -4,7 +4,6 @@ import {
   elapsedLabel,
   presenceLabel,
   sizeLabel,
-  standingLabel,
 } from "./labels";
 
 /** An arbitrary fixed "now", so nothing here depends on the clock. */
@@ -48,18 +47,6 @@ describe("presenceLabel", () => {
     expect(presenceLabel("idle")).toBe("Idle");
     expect(presenceLabel("offline")).toBe("Offline");
     expect(presenceLabel("unknown")).toBe("Status unknown");
-  });
-});
-
-describe("standingLabel", () => {
-  it("names the two standings that change what somebody can do", () => {
-    expect(standingLabel("admin")).toBe("Admin");
-    expect(standingLabel("moderator")).toBe("Moderator");
-  });
-
-  it("says nothing about an ordinary member", () => {
-    // A badge on everybody is a badge that says nothing.
-    expect(standingLabel("member")).toBeNull();
   });
 });
 

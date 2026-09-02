@@ -542,15 +542,15 @@ export function memberAvatar(
  */
 export type Presence = "online" | "idle" | "offline" | "unknown";
 
-/** What somebody is allowed to do in a room, at the granularity a person cares about. */
-export type Standing = "admin" | "moderator" | "member";
-
 /**
- * What can be said about one person in one room beyond their name.
+ * What can be said about one person beyond their name.
  *
  * Nothing here duplicates the roster: who they are, what they are called,
  * whether they are muted and when they joined the call all arrive with the
  * channel and are on screen before this is asked for.
+ *
+ * Not per room. Everything on it belongs to the person rather than to where
+ * they are standing, which is what is left after the power level came off.
  */
 export interface MemberProfile {
   presence: Presence;
@@ -564,22 +564,18 @@ export interface MemberProfile {
    * heard from.
    */
   lastActiveAgo: number | null;
-  standing: Standing;
 }
 
 /**
- * What can be said about one person in one room beyond their name.
+ * What can be said about one person beyond their name.
  *
  * One request to the homeserver, made when a person's card opens and never on
  * the way to drawing a roster. It does not fail: every part of it degrades to
  * "nothing known" on its own, because none of these facts is worth a dialog in
  * front of somebody who clicked a name out of curiosity.
  */
-export function memberProfile(
-  roomId: string,
-  userId: string,
-): Promise<MemberProfile> {
-  return invoke<MemberProfile>("member_profile", { roomId, userId });
+export function memberProfile(userId: string): Promise<MemberProfile> {
+  return invoke<MemberProfile>("member_profile", { userId });
 }
 
 /**

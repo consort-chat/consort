@@ -294,7 +294,7 @@ pub async fn member_avatar_for(
     Ok(rooms::member_avatar(&client, &room_id, &user_id).await)
 }
 
-/// What can be said about one person in one room beyond their name.
+/// What can be said about one person beyond their name.
 ///
 /// One request to the homeserver, made when somebody opens a person's card and
 /// never on the way to drawing a roster. It cannot fail: presence is off on
@@ -302,11 +302,10 @@ pub async fn member_avatar_for(
 /// of curiosity would be worse than the word "unknown".
 pub async fn member_profile_for(
     state: &AppState,
-    room_id: String,
     user_id: String,
 ) -> Result<rooms::MemberProfile, CommandError> {
     let client = signed_in_client(state).await?;
-    Ok(rooms::member_profile(&client, &room_id, &user_id).await)
+    Ok(rooms::member_profile(&client, &user_id).await)
 }
 
 /// What to call each of `user_ids` in `room_id`.
@@ -1040,17 +1039,15 @@ pub async fn member_avatar(
     member_avatar_for(&state, room_id, user_id).await
 }
 
-/// What can be said about one person in one room beyond their name.
+/// What can be said about one person beyond their name.
 ///
-/// Asked for when somebody opens a person's card under a voice channel. See
-/// `member_profile_for`.
+/// Asked for when somebody opens a person's card. See `member_profile_for`.
 #[tauri::command]
 pub async fn member_profile(
     state: State<'_, AppState>,
-    room_id: String,
     user_id: String,
 ) -> Result<rooms::MemberProfile, CommandError> {
-    member_profile_for(&state, room_id, user_id).await
+    member_profile_for(&state, user_id).await
 }
 
 /// Verify this session with the account's recovery key.

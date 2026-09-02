@@ -40,7 +40,7 @@ mod snapshot;
 
 pub use avatar::{avatar, member_avatar};
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
-pub use profile::{MemberProfile, Presence, Standing, member_profile};
+pub use profile::{MemberProfile, Presence, member_profile};
 
 use std::collections::BTreeMap;
 use std::time::Duration;

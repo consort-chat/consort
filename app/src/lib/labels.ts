@@ -8,7 +8,7 @@
  * reloaded by React Fast Refresh, which silently turns every edit into a full
  * page reload.
  */
-import type { Call, Channel, Connection, Presence, Standing } from "./api";
+import type { Call, Channel, Connection, Presence } from "./api";
 
 /**
  * One short phrase per connection state.
@@ -135,24 +135,6 @@ export function presenceLabel(presence: Presence): string {
       return "Offline";
     case "unknown":
       return "Status unknown";
-  }
-}
-
-/**
- * What to call somebody's standing, or nothing for an ordinary member.
- *
- * `null` rather than "Member", because a badge on everybody is a badge that
- * says nothing. The label exists to mark the two cases that change what a
- * person can do to you.
- */
-export function standingLabel(standing: Standing): string | null {
-  switch (standing) {
-    case "admin":
-      return "Admin";
-    case "moderator":
-      return "Moderator";
-    case "member":
-      return null;
   }
 }
 

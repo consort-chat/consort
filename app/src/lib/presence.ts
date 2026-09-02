@@ -19,44 +19,45 @@
  * reading would be motion in the corner of the eye for no gain.
  */
 import { asCommandError, memberProfile, type Presence } from "./api";
-import { memberKey } from "./avatars";
 
-/** What is known about each person, keyed by [`memberKey`]. */
+/** What is known about each person, keyed by user id. */
 const known = new Map<string, Presence>();
 
 /** Asks in flight, so three dots about one person make one request. */
 const asking = new Map<string, Promise<Presence>>();
 
 /** What is already known about somebody, without asking. */
-export function cachedPresence(key: string): Presence | undefined {
-  return known.get(key);
+export function cachedPresence(userId: string): Presence | undefined {
+  return known.get(userId);
 }
 
 /**
- * Where one person is, in one room.
+ * Where one person is.
+ *
+ * Keyed by the person alone, unlike an avatar, because presence is account
+ * wide: somebody is not online in one room and away in another.
  *
  * Never rejects. "Unknown" is a real state with its own drawing, so a
  * homeserver that refuses to answer and a homeserver that answers "nobody
  * would say" reach the interface as the same thing.
  */
-export function presenceFor(roomId: string, userId: string): Promise<Presence> {
-  const key = memberKey(roomId, userId);
-  const existing = asking.get(key);
+export function presenceFor(userId: string): Promise<Presence> {
+  const existing = asking.get(userId);
   if (existing) return existing;
 
-  const request = memberProfile(roomId, userId)
+  const request = memberProfile(userId)
     .then((profile) => profile.presence)
     .catch((raw: unknown) => {
-      console.error("could not read a presence", key, asCommandError(raw).detail);
+      console.error("could not read a presence", userId, asCommandError(raw).detail);
       return "unknown" as const;
     })
     .then((presence) => {
-      known.set(key, presence);
-      asking.delete(key);
+      known.set(userId, presence);
+      asking.delete(userId);
       return presence;
     });
 
-  asking.set(key, request);
+  asking.set(userId, request);
   return request;
 }
 

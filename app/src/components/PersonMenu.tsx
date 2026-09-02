@@ -8,7 +8,7 @@ import {
   type MemberProfile,
   type Participant,
 } from "../lib/api";
-import { elapsedLabel, presenceLabel, standingLabel } from "../lib/labels";
+import { elapsedLabel, presenceLabel } from "../lib/labels";
 import { RoomAvatar } from "./RoomAvatar";
 import "./PersonMenu.css";
 
@@ -67,12 +67,18 @@ export interface PersonMenuProps {
  * ## What is on it, and what is deliberately not
  *
  * Everything drawn here is something a server or a call actually said.
- * Presence comes from the homeserver, standing from the room's power levels,
- * the join time from the SFU's own record, and the call state from the roster
- * this panel was opened out of. Nothing is inferred and nothing is invented:
- * where the answer is not known the card says so, because most homeservers
- * have presence switched off and a card that quietly drew "Offline" for that
- * would be putting a grey dot on somebody sitting right there.
+ * Presence comes from the homeserver, the join time from the SFU's own record,
+ * and the call state from the roster this panel was opened out of. Nothing is
+ * inferred and nothing is invented: where the answer is not known the card
+ * says so, because most homeservers have presence switched off and a card that
+ * quietly drew "Offline" for that would be putting a grey dot on somebody
+ * sitting right there.
+ *
+ * A power level is deliberately not on it. The card used to badge one, and it
+ * read "Admin" for everybody, because a room whose `m.room.power_levels` has
+ * never been fetched hands back the creator's level for whoever is asked
+ * about. A label that is the same for every person is a label carrying no
+ * information, and this one was carrying something false while it did it.
  *
  * Messaging is a button that does not work, and it says so rather than being
  * left off. Consort has no message view at all yet, so opening a direct
@@ -134,7 +140,7 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
   useEffect(() => {
     let cancelled = false;
 
-    void memberProfile(roomId, userId)
+    void memberProfile(userId)
       .then((profile) => {
         if (cancelled) return;
         setProfile(profile);
@@ -144,7 +150,7 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
     return () => {
       cancelled = true;
     };
-  }, [roomId, userId]);
+  }, [userId]);
 
   // Escape and a click elsewhere both close it, which is what every menu on
   // every platform does. `pointerdown` rather than `click`, so that the card
@@ -218,7 +224,6 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
     }, SETTLE_MS);
   }
 
-  const standing = profile === null ? null : standingLabel(profile.standing);
   const states = callStates(person);
 
   return (
@@ -246,10 +251,6 @@ export function PersonMenu({ person, roomId, at, onClose }: PersonMenuProps) {
           <p className="person-menu__id">{person.id}</p>
         </div>
       </div>
-
-      {standing !== null && (
-        <p className="person-menu__badge">{standing}</p>
-      )}
 
       <dl className="person-menu__facts">
         <div className="person-menu__fact">

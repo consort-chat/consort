@@ -327,7 +327,7 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                   name={who}
                   className="timeline__face"
                 />
-                <PresenceDot roomId={channel.id} userId={one.sender} />
+                <PresenceDot userId={one.sender} />
               </button>
               <div className="timeline__said">
                 <p className="timeline__byline">

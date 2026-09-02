@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { memberKey } from "../lib/avatars";
 import { presenceLabel } from "../lib/labels";
 import { cachedPresence, presenceFor } from "../lib/presence";
 import type { Presence } from "../lib/api";
@@ -18,28 +17,21 @@ import "./PresenceDot.css";
  * The word lives on the pointer. A colour means nothing on its own, and a
  * label beside every avatar would be a second name down the length of a room.
  */
-export function PresenceDot({
-  roomId,
-  userId,
-}: {
-  roomId: string;
-  userId: string;
-}) {
-  const key = memberKey(roomId, userId);
+export function PresenceDot({ userId }: { userId: string }) {
   const [presence, setPresence] = useState<Presence | null>(
-    () => cachedPresence(key) ?? null,
+    () => cachedPresence(userId) ?? null,
   );
 
   useEffect(() => {
     let cancelled = false;
-    void presenceFor(roomId, userId).then((answer) => {
+    void presenceFor(userId).then((answer) => {
       if (!cancelled) setPresence(answer);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [key, roomId, userId]);
+  }, [userId]);
 
   if (presence === null || presence === "unknown") return null;
 

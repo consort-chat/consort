@@ -46,7 +46,6 @@ const plain: MemberProfile = {
   presence: "online",
   status: null,
   lastActiveAgo: null,
-  standing: "member",
 };
 
 function open(
@@ -57,7 +56,7 @@ function open(
   audioSettings.mockResolvedValue({ ...settings, personVolumes });
   memberProfile.mockResolvedValue(profile);
   const onClose = vi.fn();
-  render(
+  const { container } = render(
     <PersonMenu
       person={person}
       roomId="!room:example.org"
@@ -65,7 +64,7 @@ function open(
       onClose={onClose}
     />,
   );
-  return onClose;
+  return Object.assign(onClose, { container });
 }
 
 /** The one control, once the saved level has been read. */
@@ -248,18 +247,15 @@ describe("PersonMenu", () => {
     expect(await screen.findByText("in a meeting")).toBeVisible();
   });
 
-  it("badges the standings that change what somebody can do", async () => {
-    open({}, ada, { ...plain, standing: "moderator" });
-
-    expect(await screen.findByText("Moderator")).toBeVisible();
-  });
-
-  it("puts no badge on an ordinary member", async () => {
-    // A badge on everybody is a badge that says nothing.
-    open({}, ada, { ...plain, standing: "member" });
+  it("says nothing about what anybody is allowed to do", async () => {
+    // It used to badge a power level and it read "Admin" for everybody,
+    // because a room whose power levels have never been fetched hands back
+    // the creator's. A card that labels everybody identically is a card
+    // saying nothing, and it was saying something false while it did it.
+    const { container } = open();
     await slider();
 
-    expect(screen.queryByText("Member")).toBeNull();
+    expect(container.querySelector(".person-menu__badge")).toBeNull();
   });
 
   it("says how long they have been in the call", async () => {

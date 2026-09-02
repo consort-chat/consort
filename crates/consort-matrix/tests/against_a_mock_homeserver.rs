@@ -2959,10 +2959,9 @@ mod call_readiness {
 /// cannot check, because there is nothing to degrade from without a server.
 mod member_profiles {
     use super::*;
-    use consort_matrix::rooms::{Presence, Standing, member_profile};
+    use consort_matrix::rooms::{Presence, member_profile};
 
     const OTHER: &str = "@ada:example.org";
-    const ROOM: &str = "!room:example.org";
 
     /// Answer the presence endpoint for `OTHER` with `response`.
     async fn presence(server: &MatrixMockServer, response: wiremock::ResponseTemplate) {
@@ -2993,7 +2992,7 @@ mod member_profiles {
         )
         .await;
 
-        let profile = member_profile(&client, ROOM, OTHER).await;
+        let profile = member_profile(&client, OTHER).await;
 
         assert_eq!(profile.presence, Presence::Online);
         assert_eq!(profile.status.as_deref(), Some("in a meeting"));
@@ -3012,7 +3011,7 @@ mod member_profiles {
         )
         .await;
 
-        let profile = member_profile(&client, ROOM, OTHER).await;
+        let profile = member_profile(&client, OTHER).await;
 
         assert_eq!(profile.presence, Presence::Idle);
     }
@@ -3034,7 +3033,7 @@ mod member_profiles {
         )
         .await;
 
-        let profile = member_profile(&client, ROOM, OTHER).await;
+        let profile = member_profile(&client, OTHER).await;
 
         assert_eq!(profile.presence, Presence::Unknown);
         assert_eq!(profile.status, None);
@@ -3054,23 +3053,10 @@ mod member_profiles {
         )
         .await;
 
-        let profile = member_profile(&client, ROOM, OTHER).await;
+        let profile = member_profile(&client, OTHER).await;
 
         assert_eq!(profile.presence, Presence::Offline);
         assert_eq!(profile.status, None);
-    }
-
-    #[tokio::test]
-    async fn somebody_in_no_room_this_session_knows_is_an_ordinary_member() {
-        // No power levels to read, so no evidence of authority, which is
-        // exactly what an ordinary member looks like.
-        let server = MatrixMockServer::new().await;
-        let (_dir, client) = signed_in(&server).await;
-        presence(&server, saying(serde_json::json!({ "presence": "online" }))).await;
-
-        let profile = member_profile(&client, ROOM, OTHER).await;
-
-        assert_eq!(profile.standing, Standing::Member);
     }
 
     #[tokio::test]
@@ -3081,22 +3067,10 @@ mod member_profiles {
         let server = MatrixMockServer::new().await;
         let (_dir, client) = signed_in(&server).await;
 
-        let profile = member_profile(&client, ROOM, "not a user id").await;
+        let profile = member_profile(&client, "not a user id").await;
 
         assert_eq!(profile.presence, Presence::Unknown);
-        assert_eq!(profile.standing, Standing::Member);
-    }
-
-    #[tokio::test]
-    async fn something_that_is_not_a_room_id_is_still_an_ordinary_member() {
-        let server = MatrixMockServer::new().await;
-        let (_dir, client) = signed_in(&server).await;
-        presence(&server, saying(serde_json::json!({ "presence": "online" }))).await;
-
-        let profile = member_profile(&client, "not a room id", OTHER).await;
-
-        assert_eq!(profile.standing, Standing::Member);
-        assert_eq!(profile.presence, Presence::Online);
+        assert_eq!(profile.last_active_ago, None);
     }
 }
 

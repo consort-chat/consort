@@ -12,11 +12,10 @@ import { PresenceDot } from "./PresenceDot";
 import { resetPresenceCache } from "../lib/presence";
 import type { MemberProfile, Presence } from "../lib/api";
 
-const GENERAL = "!general:example.org";
 const ADA = "@ada:example.org";
 
 function profile(presence: Presence): MemberProfile {
-  return { presence, status: null, lastActiveAgo: null, standing: "member" };
+  return { presence, status: null, lastActiveAgo: null };
 }
 
 beforeEach(() => {
@@ -26,7 +25,7 @@ beforeEach(() => {
 
 describe("PresenceDot", () => {
   it("says where somebody is once the homeserver has answered", async () => {
-    render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    render(<PresenceDot userId={ADA} />);
 
     expect(await screen.findByRole("img", { name: "Online" })).toBeVisible();
   });
@@ -35,7 +34,7 @@ describe("PresenceDot", () => {
     // A coloured circle means nothing on its own. The pointer is where the
     // word lives, because a label beside every avatar would be a second name
     // down the whole room.
-    render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    render(<PresenceDot userId={ADA} />);
 
     expect(await screen.findByTitle("Online")).toBeVisible();
   });
@@ -43,7 +42,7 @@ describe("PresenceDot", () => {
   it("colours itself by the state rather than by a class per case", async () => {
     memberProfile.mockResolvedValue(profile("idle"));
 
-    render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    render(<PresenceDot userId={ADA} />);
 
     expect(await screen.findByTitle("Idle")).toHaveAttribute(
       "data-presence",
@@ -57,7 +56,7 @@ describe("PresenceDot", () => {
     // right there is worse than no dot.
     memberProfile.mockResolvedValue(profile("unknown"));
 
-    const { container } = render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    const { container } = render(<PresenceDot userId={ADA} />);
 
     await waitFor(() => expect(memberProfile).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
@@ -68,7 +67,7 @@ describe("PresenceDot", () => {
     // would read the first colour, and it was never a claim about anybody.
     memberProfile.mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    const { container } = render(<PresenceDot userId={ADA} />);
 
     expect(container).toBeEmptyDOMElement();
   });
@@ -78,9 +77,9 @@ describe("PresenceDot", () => {
     // message would be a burst of requests for one answer.
     render(
       <>
-        <PresenceDot roomId={GENERAL} userId={ADA} />
-        <PresenceDot roomId={GENERAL} userId={ADA} />
-        <PresenceDot roomId={GENERAL} userId={ADA} />
+        <PresenceDot userId={ADA} />
+        <PresenceDot userId={ADA} />
+        <PresenceDot userId={ADA} />
       </>,
     );
 
@@ -91,7 +90,7 @@ describe("PresenceDot", () => {
   it("says nothing rather than failing when the ask does", async () => {
     memberProfile.mockRejectedValue(new Error("no"));
 
-    const { container } = render(<PresenceDot roomId={GENERAL} userId={ADA} />);
+    const { container } = render(<PresenceDot userId={ADA} />);
 
     await waitFor(() => expect(memberProfile).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
