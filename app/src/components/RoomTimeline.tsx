@@ -11,6 +11,7 @@ import { channelLabel } from "../lib/labels";
 import {
   asCommandError,
   memberNames,
+  onThread,
   onTimeline,
   resendState,
   timelineClose,
@@ -77,6 +78,13 @@ export function RoomTimeline({
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   /*
+    Which thread has been asked for and not yet arrived. `threadOpen` answers
+    immediately, because it is a message to the room's watcher in Rust rather
+    than a fetch, so the command settling says nothing about whether the panel
+    is there. What does is the panel's own channel, below.
+  */
+  const [opening, setOpening] = useState<string | null>(null);
+  /*
     Whose card is open, and where it was asked for. One at a time, for the
     reason the sidebar has the same rule: two cards about two people are two
     volume sliders somebody has to tell apart by the heading.
@@ -118,6 +126,28 @@ export function RoomTimeline({
       });
     };
   }, [channel.id]);
+
+  /*
+    A second listener on the thread channel, which the panel also holds. Not a
+    duplicate of its job: the panel draws the thread and this only wants to
+    know that one arrived, so the reply count somebody pressed can stop
+    turning. Cleared on any thread rather than on a matching one, which is the
+    condition that cannot stick: opening always ends in a publish, and two
+    quick presses would otherwise leave the first turning for ever.
+  */
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten = onThread(() => {
+      if (!cancelled) setOpening(null);
+    });
+
+    return () => {
+      cancelled = true;
+      void unlisten.then((stop) => {
+        stop();
+      });
+    };
+  }, []);
 
   // Separate from the subscription above, so that switching rooms does not
   // close the one being opened: this runs only when the component itself goes.
@@ -264,7 +294,13 @@ export function RoomTimeline({
           known={known}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
-          onOpenThread={(rootId) => void threadOpen(rootId).catch(() => {})}
+          openingId={opening}
+          onOpenThread={(rootId) => {
+            setOpening(rootId);
+            // Cleared here as well as on the channel, because a command that
+            // failed publishes nothing and the control would keep turning.
+            void threadOpen(rootId).catch(() => setOpening(null));
+          }}
         />
       </div>
 

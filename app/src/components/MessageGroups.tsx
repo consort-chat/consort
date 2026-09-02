@@ -148,6 +148,7 @@ export function MessageGroups({
   selfId,
   known,
   container,
+  openingId,
   onAbout,
   onOpenThread,
 }: {
@@ -182,6 +183,14 @@ export function MessageGroups({
    * same component beside the room, and a root message is in both.
    */
   container?: RefObject<HTMLElement | null>;
+  /**
+   * The thread that has been asked for and has not arrived, if any.
+   *
+   * Its control stops taking presses and turns instead. Opening one is a
+   * message to Rust that answers before the panel exists, so without this a
+   * press looks like nothing happened and invites another.
+   */
+  openingId?: string | null;
   /** Open somebody's card, at the point that was clicked. */
   onAbout: (person: Participant, at: { x: number; y: number }) => void;
   /**
@@ -405,6 +414,8 @@ export function MessageGroups({
                           data-participated={String(
                             message.thread.participated,
                           )}
+                          data-opening={String(openingId === message.id)}
+                          disabled={openingId === message.id}
                           onClick={() => onOpenThread(message.id)}
                         >
                           {message.thread.count}{" "}

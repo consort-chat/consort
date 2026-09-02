@@ -16,9 +16,15 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 // For the dot on a sender's picture, and for the card, which asks the same
 // thing when it opens.
 const memberProfile = vi.hoisted(() => vi.fn());
+// The pane watches the thread channel as well, so that a pressed reply count
+// can stop turning when the panel it asked for is actually there.
+const onThread = vi.hoisted(() => vi.fn());
+const threadOpen = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
+  onThread,
+  threadOpen,
   timelineOpen,
   timelineClose,
   timelineEarlier,
@@ -34,7 +40,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { RoomTimeline } from "./RoomTimeline";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
-import type { Channel, Message, Timeline } from "../lib/api";
+import type { Channel, Message, Thread, Timeline } from "../lib/api";
 
 const GENERAL = "!general:example.org";
 const ADA = "@ada:example.org";
@@ -78,11 +84,19 @@ function timeline(messages: Message[], rest: Partial<Timeline> = {}): Timeline {
 
 /** Whatever the component subscribed with, so a test can publish to it. */
 let publish: (timeline: Timeline) => void;
+/** The same, for the thread channel. */
+let publishThread: (thread: Thread | null) => void;
 
 beforeEach(() => {
   resetAvatarCache();
   resetPresenceCache();
   publish = () => {};
+  publishThread = () => {};
+  onThread.mockReset().mockImplementation((handler: (t: Thread | null) => void) => {
+    publishThread = handler;
+    return Promise.resolve(() => {});
+  });
+  threadOpen.mockReset().mockResolvedValue(undefined);
   onTimeline.mockReset().mockImplementation((handler: (t: Timeline) => void) => {
     publish = handler;
     return Promise.resolve(() => {});
@@ -585,5 +599,62 @@ describe("RoomTimeline", () => {
 
     const group = await screen.findByRole("article");
     expect(within(group).getByRole("time")).toBeVisible();
+  });
+});
+
+describe("opening a thread", () => {
+  const withThread = (): Message => ({
+    ...said("$1", ADA, "the question"),
+    thread: { count: 3, participated: false },
+  });
+
+  it("stops taking presses until the panel is there", async () => {
+    // The command that opens one answers immediately: it is a message to the
+    // room's watcher, and the panel appears when the watcher publishes. A
+    // control that stayed pressable in between invites a second press at a
+    // thread that is already on its way.
+    await pane();
+    await arrive(timeline([withThread()]));
+
+    const pill = screen.getByRole("button", { name: /3 replies/i });
+    await userEvent.click(pill);
+
+    expect(threadOpen).toHaveBeenCalledWith("$1");
+    expect(screen.getByRole("button", { name: /3 replies/i })).toBeDisabled();
+  });
+
+  it("takes presses again once one has arrived", async () => {
+    await pane();
+    await arrive(timeline([withThread()]));
+    await userEvent.click(screen.getByRole("button", { name: /3 replies/i }));
+
+    await act(async () => {
+      publishThread({
+        roomId: GENERAL,
+        rootId: "$1",
+        messages: [],
+        moreBefore: false,
+      });
+    });
+
+    expect(
+      screen.getByRole("button", { name: /3 replies/i }),
+    ).not.toBeDisabled();
+  });
+
+  it("takes presses again when the panel says there is nothing to show", async () => {
+    // A thread that could not be read publishes nothing rather than nothing at
+    // all, so the control cannot be left turning for ever.
+    await pane();
+    await arrive(timeline([withThread()]));
+    await userEvent.click(screen.getByRole("button", { name: /3 replies/i }));
+
+    await act(async () => {
+      publishThread(null);
+    });
+
+    expect(
+      screen.getByRole("button", { name: /3 replies/i }),
+    ).not.toBeDisabled();
   });
 });

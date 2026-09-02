@@ -424,6 +424,40 @@
 }
 
 /*
+  Asked for, and not here yet. The ring turns in place of nothing happening:
+  opening a thread is a message to Rust that answers before the panel exists,
+  so a control that stayed pressable read as a press that missed.
+*/
+.timeline__thread[data-opening="true"] {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.timeline__thread[data-opening="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-right: var(--space-1);
+  border: 2px solid currentcolor;
+  /* The gap is what makes a ring look like it is turning at all. */
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -1px;
+  animation: timeline-waiting 900ms linear infinite;
+}
+
+/*
+  Still a ring, and still there, but still. The same rule the waiting message
+  follows, and for the same reason.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .timeline__thread[data-opening="true"]::before {
+    animation: none;
+  }
+}
+
+/*
   A formatted body brings its own structure, so the newline-preserving
   whitespace that plain text needs would double every break in it.
 */
