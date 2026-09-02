@@ -153,6 +153,13 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    /// The permission bits on `path`.
+    ///
+    /// Unix only, like every test that reads one. Windows has no mode bits,
+    /// `write_private` makes no claim about them there, and a helper compiled
+    /// for a platform where nothing calls it is a build failure rather than
+    /// dead code.
+    #[cfg(unix)]
     fn mode_of(path: &Path) -> u32 {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
