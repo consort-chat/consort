@@ -46,7 +46,7 @@ use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
 };
 
-use crate::timeline::dto::{Media, Message, MessageKind};
+use crate::timeline::dto::{Media, Message, MessageKind, ThreadSummary};
 
 /// What this build says instead of an encrypted message it has no key for.
 ///
@@ -186,6 +186,14 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
             .filter(|formatted| formatted.format == MessageFormat::Html)
             .map(|formatted| formatted.body),
         media,
+        thread: said.unsigned.relations.thread.map(|bundle| ThreadSummary {
+            // Saturating rather than fallible. The count is the homeserver's
+            // own tally, and a thread long enough to overflow this is one
+            // nobody is reaching the end of, so a badge that has stopped
+            // counting beats a message that failed to draw.
+            count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
+            participated: bundle.current_user_participated,
+        }),
         kind,
     })
 }
@@ -262,6 +270,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         body: NO_KEY.to_owned(),
         html: None,
         media: None,
+        thread: None,
         kind: MessageKind::Undecryptable,
     })
 }
@@ -292,6 +301,37 @@ mod tests {
             "origin_server_ts": 1_700_000_000_000u64,
             "content": content,
         }))
+    }
+
+    /// The same, with the homeserver's own aggregations attached.
+    fn sent_with_unsigned(content: Value, unsigned: Value) -> TimelineEvent {
+        event(json!({
+            "type": "m.room.message",
+            "event_id": "$one:example.org",
+            "sender": "@ada:example.org",
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": content,
+            "unsigned": unsigned,
+        }))
+    }
+
+    /// What a homeserver bundles onto a message somebody has replied to.
+    fn thread_bundle(count: u64, participated: bool) -> Value {
+        json!({
+            "m.relations": {
+                "m.thread": {
+                    "latest_event": {
+                        "type": "m.room.message",
+                        "event_id": "$last:example.org",
+                        "sender": "@grace:example.org",
+                        "origin_server_ts": 1_700_000_100_000u64,
+                        "content": { "msgtype": "m.text", "body": "the last word" },
+                    },
+                    "count": count,
+                    "current_user_participated": participated,
+                }
+            }
+        })
     }
 
     fn text(body: &str) -> Value {
@@ -689,6 +729,44 @@ mod tests {
         .expect("a captioned video is a message");
 
         assert_eq!(said.html.as_deref(), Some("Watch <strong>this</strong>"));
+    }
+
+    #[test]
+    fn a_message_with_replies_says_how_many() {
+        // Counted by the homeserver and bundled onto the message, so a room
+        // knows which of its messages are threads without asking about any of
+        // them one at a time.
+        let said = message(&sent_with_unsigned(
+            text("what shall we call it"),
+            thread_bundle(3, true),
+        ))
+        .expect("a text message is a message");
+
+        let thread = said.thread.expect("the bundle names a thread");
+        assert_eq!(thread.count, 3);
+        assert!(thread.participated);
+    }
+
+    #[test]
+    fn a_thread_nobody_here_joined_says_so() {
+        let said = message(&sent_with_unsigned(
+            text("what shall we call it"),
+            thread_bundle(1, false),
+        ))
+        .expect("a text message is a message");
+
+        assert!(!said.thread.expect("the bundle names a thread").participated);
+    }
+
+    #[test]
+    fn a_message_nobody_replied_to_carries_no_thread() {
+        // Absent rather than a count of zero. A message with no thread is not
+        // a thread with nothing in it, and drawing "0 replies" under every
+        // line in a room would say so on every one of them.
+        assert_eq!(
+            message(&sent(text("hello"))).expect("a message").thread,
+            None
+        );
     }
 
     #[test]

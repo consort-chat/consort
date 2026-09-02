@@ -1290,7 +1290,30 @@ export interface Message {
    * Present for an `image` or a `video` and for nothing else.
    */
   media?: Media;
+  /**
+   * The thread hanging off it, when anybody has replied in one.
+   *
+   * Absent rather than a count of zero for a message nobody has replied to. A
+   * message with no thread is not a thread with nothing in it, and drawing
+   * "0 replies" under every line in a room would say so on every one of them.
+   */
+  thread?: ThreadSummary;
   kind: MessageKind;
+}
+
+/**
+ * What is known about a thread without opening it.
+ *
+ * Mirrors `consort_matrix::ThreadSummary`. The homeserver counts this and
+ * bundles it onto the message the thread hangs from, so a room learns which of
+ * its messages are threads while it is being drawn rather than by asking about
+ * each one.
+ */
+export interface ThreadSummary {
+  /** How many replies are in it. */
+  count: number;
+  /** Whether the person signed in here has said anything in it. */
+  participated: boolean;
 }
 
 /**

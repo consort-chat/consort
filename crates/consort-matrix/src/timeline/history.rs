@@ -143,6 +143,7 @@ mod tests {
             body: body.to_owned(),
             html: None,
             media: None,
+            thread: None,
             kind: MessageKind::Text,
         }
     }

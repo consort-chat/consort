@@ -95,7 +95,29 @@ pub struct Message {
     /// shape they will be, and the interface asks for them one at a time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<Media>,
+    /// The thread hanging off it, when anybody has replied in one.
+    ///
+    /// `None` rather than a count of zero for a message nobody has replied to,
+    /// because a message with no thread is not a thread with nothing in it and
+    /// the interface has to be able to tell the two apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadSummary>,
     pub kind: MessageKind,
+}
+
+/// What is known about a thread without opening it.
+///
+/// The homeserver counts this and bundles it onto the message the thread hangs
+/// from, so a room learns which of its messages are threads while it is being
+/// drawn rather than by asking about each one. In an encrypted room the bundle
+/// arrives with the encrypted message and is decrypted alongside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummary {
+    /// How many replies are in it.
+    pub count: u32,
+    /// Whether the person signed in here has said anything in it.
+    pub participated: bool,
 }
 
 /// Where an attachment's bytes are, and what shape they will be drawn at.
