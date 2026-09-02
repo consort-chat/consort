@@ -104,7 +104,33 @@
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
+  font: inherit;
   font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.media__file:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.media__file:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  Where it went, which is the whole answer somebody wants after choosing a
+  folder. Not a toast: it belongs to the message it came from, and a message
+  scrolled past should take its own receipt with it.
+*/
+.media__saved {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
 }
 
 .media__file-name {

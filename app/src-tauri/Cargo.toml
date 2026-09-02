@@ -52,6 +52,13 @@ base64 = "0.22"
 # session file, and the cross-process lock means the second simply fails. See
 # the comment at the plugin registration in lib.rs.
 tauri-plugin-single-instance = "2"
+# The native Save As window, for writing an attachment somewhere. Called from
+# Rust only, so the webview gains no capability from it: the frontend still
+# cannot reach the filesystem, and asking to save is a command like any other.
+#
+# `xdg-portal` rather than the GTK dialog, so the window is the desktop's own
+# and a sandboxed install gets a portal it can actually write through.
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

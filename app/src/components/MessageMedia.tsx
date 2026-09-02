@@ -1,6 +1,12 @@
 import { useState } from "react";
 
-import { mediaUrl, type Media, type MessageKind } from "../lib/api";
+import {
+  asCommandError,
+  mediaUrl,
+  saveAttachment,
+  type Media,
+  type MessageKind,
+} from "../lib/api";
 import { sizeLabel } from "../lib/labels";
 import "./MessageMedia.css";
 
@@ -25,7 +31,8 @@ import "./MessageMedia.css";
  * The card says what it is called and what it will cost before anybody commits.
  *
  * A file and a voice note are neither. Consort has no viewer for a spreadsheet
- * and should not pretend to, so both are a card naming what was sent.
+ * and should not pretend to, so both are a card that names what was sent and
+ * opens the desktop's Save As window when it is pressed.
  */
 export function MessageMedia({
   kind,
@@ -35,15 +42,45 @@ export function MessageMedia({
   media: Media;
 }) {
   const [playing, setPlaying] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
   const source = mediaUrl(media.source);
   const weight = sizeLabel(media.size);
 
+  /**
+   * Write it wherever the person chooses.
+   *
+   * Silent when they close the window without choosing. That is a change of
+   * mind rather than a failure, and reporting it would be telling somebody off
+   * for one.
+   */
+  function save() {
+    setProblem(null);
+    saveAttachment(media.source, media.name)
+      .then((path) => {
+        if (path !== null) setSaved(path);
+      })
+      .catch((raw: unknown) => {
+        setProblem(asCommandError(raw).message);
+      });
+  }
+
   if (kind === "file" || kind === "audio") {
     return (
-      <p className="media__file">
-        <span className="media__file-name">{media.name}</span>
-        {weight !== null && <span className="media__file-size">{weight}</span>}
-      </p>
+      <>
+        <button type="button" className="media__file" onClick={save}>
+          <span className="media__file-name">{media.name}</span>
+          {weight !== null && (
+            <span className="media__file-size">{weight}</span>
+          )}
+        </button>
+        {saved !== null && <p className="media__saved">Saved to {saved}</p>}
+        {problem !== null && (
+          <p className="media__problem" role="alert">
+            {problem}
+          </p>
+        )}
+      </>
     );
   }
 

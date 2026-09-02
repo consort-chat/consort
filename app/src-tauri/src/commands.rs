@@ -397,6 +397,15 @@ pub async fn direct_room_for(state: &AppState, user_id: String) -> Result<String
     Ok(rooms::direct(&client, &user_id).await?)
 }
 
+/// One attachment's bytes, to be written wherever somebody chooses.
+///
+/// Split from the dialog and the write so the fetch is testable: `AppHandle`
+/// only exists inside a running application, and so does a Save As window.
+pub async fn attachment_bytes_for(state: &AppState, handle: &str) -> Result<Vec<u8>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(timeline::bytes(&client, handle).await?)
+}
+
 /// One attachment as something to draw, by the handle its message carried.
 ///
 /// Not a command. It is what the `consortmedia` scheme in `lib.rs` answers a
@@ -1010,6 +1019,55 @@ pub async fn timeline_send(
     body: String,
 ) -> Result<(), CommandError> {
     timeline_send_for(&state, room_id, body).await
+}
+
+/// Write one attachment wherever somebody chooses, and say where that was.
+///
+/// `None` when the Save As window was closed without choosing, which is not a
+/// failure and must not be drawn as one.
+///
+/// The bytes are fetched before the window opens rather than after it closes.
+/// A picture is already held by the scheme that drew it, so the ordinary case
+/// costs nothing, and it means a homeserver that has lost the file says so
+/// before somebody has picked a folder for it.
+#[tauri::command]
+pub async fn timeline_media_save(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source: String,
+    name: String,
+) -> Result<Option<String>, CommandError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let bytes = attachment_bytes_for(&state, &source).await?;
+
+    // The dialog answers on a thread of its own, so the command waits on a
+    // channel rather than blocking the runtime it is running on.
+    let (chosen, wait) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&name)
+        .save_file(move |path| {
+            let _ = chosen.send(path);
+        });
+
+    // The sender is dropped without sending only if the plugin drops the
+    // callback, which is a dialog that never opened. Read as a cancellation,
+    // because from where somebody is sitting that is what it was.
+    let Ok(Some(path)) = wait.await else {
+        return Ok(None);
+    };
+    let Some(path) = path.into_path().ok() else {
+        return Ok(None);
+    };
+
+    std::fs::write(&path, &bytes).map_err(|error| CommandError {
+        message: "Consort could not write that file. Check the folder is one you can write to."
+            .to_owned(),
+        detail: format!("writing {}: {error}", path.display()),
+    })?;
+
+    Ok(Some(path.display().to_string()))
 }
 
 /// The room to say something to one person in. See `direct_room_for`.
@@ -2730,6 +2788,15 @@ mod against_a_mock_homeserver {
         let error = direct_room_for(&state, "@ada:example.org".to_owned())
             .await
             .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_to_save_an_attachment_while_signed_out_says_so() {
+        let (_dir, state, _sink) = state();
+
+        let error = attachment_bytes_for(&state, "{}").await.unwrap_err();
 
         assert!(!error.message().is_empty());
     }

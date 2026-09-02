@@ -1354,6 +1354,24 @@ export function timelineSend(roomId: string, body: string): Promise<void> {
 }
 
 /**
+ * Write one attachment wherever the person chooses, and say where that was.
+ *
+ * Opens the desktop's own Save As window. It is opened from Rust rather than
+ * from here, which is why this is a command and not a link: the webview has no
+ * filesystem capability at all, and a page that could write files would be a
+ * much larger promise than a save button.
+ *
+ * Resolves to `null` when the window was closed without choosing, which is not
+ * a failure and must not be drawn as one.
+ */
+export function saveAttachment(
+  source: string,
+  name: string,
+): Promise<string | null> {
+  return invoke<string | null>("timeline_media_save", { source, name });
+}
+
+/**
  * Where to point an `img` or a `video` at one attachment.
  *
  * Not a command, and deliberately: this is a string, so drawing a picture is
