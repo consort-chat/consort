@@ -63,7 +63,9 @@ at whatever homeserver you already run.
   message cannot bring markup of its own into the window. Links are drawn but
   do not open yet.
 - A card about whoever said something, from their name or their face in the
-  timeline, and the same card a name in a voice channel opens.
+  timeline, and the same card a name in a voice channel opens. A dot on the
+  face says whether they are here, when the homeserver will say; most have
+  presence switched off, and no dot is drawn rather than a grey one.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.

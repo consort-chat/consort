@@ -25,6 +25,7 @@ import {
 } from "../lib/api";
 import { FormattedBody } from "./FormattedBody";
 import { PersonMenu } from "./PersonMenu";
+import { PresenceDot } from "./PresenceDot";
 import { RoomAvatar } from "./RoomAvatar";
 import "./RoomTimeline.css";
 
@@ -312,6 +313,7 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                   name={who}
                   className="timeline__face"
                 />
+                <PresenceDot roomId={channel.id} userId={one.sender} />
               </button>
               <div className="timeline__said">
                 <p className="timeline__byline">

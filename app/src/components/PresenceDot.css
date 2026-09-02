@@ -1,0 +1,29 @@
+/*
+  A dot on the corner of a picture, and the same three colours the card uses.
+  Mint is reserved for voice and presence, and this is presence.
+
+  The ring is the surface behind the avatar rather than a border: a coloured
+  circle sitting directly on a photograph is unreadable against half of them,
+  and a hole punched in the picture reads at any size.
+*/
+.presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--surface-base);
+  border-radius: 50%;
+}
+
+.presence[data-presence="online"] {
+  background: var(--mint);
+}
+
+.presence[data-presence="idle"] {
+  background: var(--amber);
+}
+
+.presence[data-presence="offline"] {
+  background: var(--text-muted);
+}

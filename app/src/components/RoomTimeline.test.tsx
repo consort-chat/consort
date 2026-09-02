@@ -13,6 +13,9 @@ const resendState = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
 const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
+// For the dot on a sender's picture, and for the card, which asks the same
+// thing when it opens.
+const memberProfile = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -26,10 +29,12 @@ vi.mock("../lib/api", async (importOriginal) => ({
   resendState,
   audioSettings,
   setPersonVolume,
+  memberProfile,
 }));
 
 import { RoomTimeline, group } from "./RoomTimeline";
 import { resetAvatarCache } from "../lib/avatars";
+import { resetPresenceCache } from "../lib/presence";
 import type { Channel, Message, Timeline } from "../lib/api";
 
 const GENERAL = "!general:example.org";
@@ -77,6 +82,7 @@ let publish: (timeline: Timeline) => void;
 
 beforeEach(() => {
   resetAvatarCache();
+  resetPresenceCache();
   publish = () => {};
   onTimeline.mockReset().mockImplementation((handler: (t: Timeline) => void) => {
     publish = handler;
@@ -96,6 +102,12 @@ beforeEach(() => {
     personVolumes: {},
   });
   setPersonVolume.mockReset().mockResolvedValue(undefined);
+  memberProfile.mockReset().mockResolvedValue({
+    presence: "online",
+    status: null,
+    lastActiveAgo: null,
+    standing: "member",
+  });
 });
 
 /** Render the pane and hand back a way to publish into it. */
@@ -273,6 +285,33 @@ describe("RoomTimeline", () => {
     await arrive(timeline([said("$1", ADA, "hello")]));
 
     expect(await screen.findByText(ADA)).toBeVisible();
+  });
+
+  it("says where a sender is, beside their picture", async () => {
+    // Answering the question a byline raises and a name does not: is the
+    // person who said this here now.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    expect(await screen.findByRole("img", { name: "Online" })).toBeVisible();
+  });
+
+  it("says nothing about where a sender is when the homeserver will not", async () => {
+    // The ordinary case, because presence is off on most homeservers. A grey
+    // dot on somebody sitting right there would be worse than no dot.
+    memberProfile.mockResolvedValue({
+      presence: "unknown",
+      status: null,
+      lastActiveAgo: null,
+      standing: "member",
+    });
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await screen.findByText("hello");
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("asks for every sender at once rather than one per message", async () => {

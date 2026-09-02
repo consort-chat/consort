@@ -98,8 +98,11 @@
   A control, drawn as the picture it wraps. The button is here for the click
   and the keyboard rather than for the eye, so it contributes no box of its
   own and leaves the avatar occupying the column exactly as it did.
+
+  Positioned, because the presence dot hangs off its corner.
 */
 .timeline__face-button {
+  position: relative;
   display: block;
   padding: 0;
   border: 0;
