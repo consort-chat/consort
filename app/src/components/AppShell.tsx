@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   HOME_ID,
@@ -24,7 +24,11 @@ import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
 import { SidebarToggle } from "./SidebarToggle";
 import { SpaceRail } from "./SpaceRail";
-import { ThreadPanel } from "./ThreadPanel";
+import {
+  ThreadPanel,
+  clampThreadWidth,
+  defaultThreadWidth,
+} from "./ThreadPanel";
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";
 import { VerificationFlowPanel } from "./VerificationFlow";
@@ -191,6 +195,19 @@ export function AppShell({
     not hide, which is the pane.
   */
   const [folded, setFolded] = useState(false);
+  /*
+    How wide the thread panel is. Here rather than in the panel, because the
+    panel draws nothing while none is open: a width it owned would go back to
+    the default every time somebody shut a thread.
+  */
+  const [threadWidth, setThreadWidth] = useState(defaultThreadWidth);
+
+  // So a panel dragged wide on a large window is not wider than a small one.
+  useEffect(() => {
+    const settle = () => setThreadWidth(clampThreadWidth);
+    window.addEventListener("resize", settle);
+    return () => window.removeEventListener("resize", settle);
+  }, []);
 
   /*
     Both selections are derived rather than trusted. A space can be left and a
@@ -421,7 +438,12 @@ export function AppShell({
         messages somebody opened it to compare against. It draws nothing at all
         while none is open, so the track it sits in costs nothing.
       */}
-      <ThreadPanel selfId={profile.user_id} onOpenRoom={openRoom} />
+      <ThreadPanel
+        selfId={profile.user_id}
+        onOpenRoom={openRoom}
+        width={threadWidth}
+        onResize={setThreadWidth}
+      />
       </div>
 
       {settingsOpen && (

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -64,10 +64,20 @@ beforeEach(() => {
     publish = handler;
     return Promise.resolve(() => {});
   });
+  resized.mockReset();
 });
 
+const resized = vi.fn();
+
 function draw() {
-  return render(<ThreadPanel selfId={ADA} onOpenRoom={vi.fn()} />);
+  return render(
+    <ThreadPanel
+      selfId={ADA}
+      onOpenRoom={vi.fn()}
+      width={400}
+      onResize={resized}
+    />,
+  );
 }
 
 async function opened(thread: Thread | null = OPEN) {
@@ -274,5 +284,69 @@ describe("ThreadPanel", () => {
     // The count, not the composer's own Reply, which is how anything gets
     // said in here.
     expect(screen.queryByRole("button", { name: /\d+ repl/i })).toBeNull();
+  });
+});
+
+describe("the panel's width", () => {
+  it("is drawn at whatever it was given", async () => {
+    const { container } = render(
+      <ThreadPanel
+        selfId={ADA}
+        onOpenRoom={vi.fn()}
+        width={480}
+        onResize={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(onThread).toHaveBeenCalled());
+    await act(async () => {
+      publish(OPEN);
+    });
+
+    expect(container.querySelector(".thread")).toHaveStyle({ width: "480px" });
+  });
+
+  it("widens when the grip is dragged towards the conversation", async () => {
+    await opened();
+
+    const grip = screen.getByRole("separator", { name: /resize/i });
+    fireEvent.pointerDown(grip, { clientX: 900 });
+    fireEvent.pointerMove(window, { clientX: 800 });
+
+    // Dragging left takes width from the room and gives it to the panel.
+    expect(resized).toHaveBeenLastCalledWith(500);
+  });
+
+  it("stops listening once the pointer is let go", async () => {
+    await opened();
+
+    const grip = screen.getByRole("separator", { name: /resize/i });
+    fireEvent.pointerDown(grip, { clientX: 900 });
+    fireEvent.pointerUp(window, { clientX: 900 });
+    resized.mockClear();
+    fireEvent.pointerMove(window, { clientX: 700 });
+
+    expect(resized).not.toHaveBeenCalled();
+  });
+
+  it("moves with the arrow keys, so a mouse is not the only way", async () => {
+    await opened();
+    const grip = screen.getByRole("separator", { name: /resize/i });
+    grip.focus();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(resized).toHaveBeenLastCalledWith(416);
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(resized).toHaveBeenLastCalledWith(384);
+  });
+
+  it("refuses to be dragged narrower than a conversation reads at", async () => {
+    await opened();
+
+    const grip = screen.getByRole("separator", { name: /resize/i });
+    fireEvent.pointerDown(grip, { clientX: 900 });
+    fireEvent.pointerMove(window, { clientX: 2_000 });
+
+    expect(resized).toHaveBeenLastCalledWith(300);
   });
 });

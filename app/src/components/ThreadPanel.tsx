@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import {
   asCommandError,
@@ -13,6 +20,45 @@ import {
 import { MessageGroups, group } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
 import "./ThreadPanel.css";
+
+/**
+ * The narrowest the panel may be dragged, in pixels.
+ *
+ * A thread is a conversation, and a column narrower than this is one word per
+ * line with a picture squeezed into the middle of it.
+ */
+const NARROWEST = 300;
+
+/** The most of the window a thread may take. */
+const MOST = 0.6;
+
+/** How far one press of an arrow key moves the edge, in pixels. */
+const STEP = 16;
+
+/**
+ * The width a thread opens at: three tenths of the window.
+ *
+ * Proportional rather than fixed, because the fixed 340px it used to be was a
+ * strip on a large screen and half of a small one. Clamped on the way out for
+ * the same reason it is clamped on the way in.
+ */
+export function defaultThreadWidth(): number {
+  return clampThreadWidth(Math.round(window.innerWidth * 0.3));
+}
+
+/**
+ * A width the panel may actually be.
+ *
+ * Exported because the shell holds the number, so that a panel closed and
+ * reopened is the width it was left at, and the shell has to re-clamp when the
+ * window is made smaller than the panel.
+ */
+export function clampThreadWidth(width: number): number {
+  const most = Math.round(window.innerWidth * MOST);
+  // The minimum last, so a window too small for both still leaves a readable
+  // column rather than a sliver.
+  return Math.max(NARROWEST, Math.min(width, most));
+}
 
 /**
  * One thread, beside the room it came out of.
@@ -30,11 +76,17 @@ import "./ThreadPanel.css";
 export function ThreadPanel({
   selfId,
   onOpenRoom,
+  width,
+  onResize,
 }: {
   /** Whoever is signed in, so a person's card can tell when it is about them. */
   selfId: string;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
+  /** How wide to draw, in pixels. Held by the shell, so a shut panel keeps it. */
+  width: number;
+  /** Report a width the grip was dragged or nudged to. Already clamped. */
+  onResize: (width: number) => void;
 }) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -120,6 +172,43 @@ export function ThreadPanel({
     return new Map(everything.map((message) => [message.id, message]));
   }, [thread?.root, thread?.messages]);
 
+  /**
+   * Follow the pointer until it is let go.
+   *
+   * On `window` rather than through `setPointerCapture`, which jsdom does not
+   * implement, so a drag would be the one thing here no test could reach.
+   * Capture would also be the wrong shape: what is being dragged is the edge
+   * of the panel, not the seven pixels the hand landed on.
+   */
+  function grab(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const from = event.clientX;
+    const started = width;
+
+    const move = (moved: PointerEvent) => {
+      // The panel is on the right, so the pointer moving left widens it.
+      onResize(clampThreadWidth(started + (from - moved.clientX)));
+    };
+    const drop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", drop);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", drop);
+  }
+
+  /** The same edge, for a keyboard. A splitter only a mouse can move is half a
+   * control. */
+  function nudge(event: KeyboardEvent<HTMLDivElement>) {
+    const by =
+      event.key === "ArrowLeft" ? STEP : event.key === "ArrowRight" ? -STEP : 0;
+    if (by === 0) return;
+
+    event.preventDefault();
+    onResize(clampThreadWidth(width + by));
+  }
+
   if (thread === null) return null;
 
   /*
@@ -147,7 +236,23 @@ export function ThreadPanel({
   }
 
   return (
-    <aside className="thread" aria-label="Thread">
+    <aside className="thread" aria-label="Thread" style={{ width }}>
+      {/*
+        The edge, as something to take hold of. A separator rather than a
+        button, because that is what it is, and focusable so the arrows work.
+      */}
+      <div
+        className="thread__grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the thread panel"
+        aria-valuenow={width}
+        aria-valuemin={NARROWEST}
+        aria-valuemax={Math.round(window.innerWidth * MOST)}
+        tabIndex={0}
+        onPointerDown={grab}
+        onKeyDown={nudge}
+      />
       <div className="thread__head">
         <h2 className="thread__name">Thread</h2>
         <button
