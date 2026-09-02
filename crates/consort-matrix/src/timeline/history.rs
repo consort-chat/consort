@@ -101,6 +101,7 @@ mod tests {
             sender: "@ada:example.org".to_owned(),
             at: 1_000,
             body: body.to_owned(),
+            html: None,
             kind: MessageKind::Text,
         }
     }

@@ -63,8 +63,26 @@ pub struct Message {
     /// whatever their machine says and a room with one badly set clock in it
     /// would draw one person's messages in the wrong century.
     pub at: u64,
-    /// What it says.
+    /// What it says, with no formatting.
+    ///
+    /// The plaintext fallback every message carries, and the only thing to
+    /// draw when `html` is `None`.
     pub body: String,
+    /// What it says as HTML, when the sender sent formatting.
+    ///
+    /// `formatted_body` off the wire, verbatim, and only when `format` said
+    /// `org.matrix.custom.html`. `None` for the messages nobody formatted,
+    /// which is most of them.
+    ///
+    /// Deliberately not sanitised here, and nothing downstream may put it in a
+    /// document. `FormattedBody` in the webview parses it into an inert
+    /// document and rebuilds it out of an allow-list of elements it knows, so
+    /// a tag that is not on that list is dropped rather than trusted.
+    /// Sanitising here as well would be a second copy of that list to keep in
+    /// step with the first, and the one that is not the renderer is the one
+    /// that would go stale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
     pub kind: MessageKind,
 }
 

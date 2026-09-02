@@ -37,7 +37,7 @@
 //! things to be looking at.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
-use matrix_sdk::ruma::events::room::message::{MessageType, Relation};
+use matrix_sdk::ruma::events::room::message::{MessageFormat, MessageType, Relation};
 use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
 };
@@ -81,11 +81,13 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
         return None;
     }
 
-    let (kind, body) = match said.content.msgtype {
-        MessageType::Text(text) => (MessageKind::Text, text.body),
-        MessageType::Emote(emote) => (MessageKind::Emote, emote.body),
-        MessageType::Notice(notice) => (MessageKind::Notice, notice.body),
-        _ => (MessageKind::Unsupported, NOT_SUPPORTED.to_owned()),
+    // All three text types carry a `formatted_body`, and reading it for one of
+    // them is how a bot's links arrive as literal angle brackets.
+    let (kind, body, formatted) = match said.content.msgtype {
+        MessageType::Text(text) => (MessageKind::Text, text.body, text.formatted),
+        MessageType::Emote(emote) => (MessageKind::Emote, emote.body, emote.formatted),
+        MessageType::Notice(notice) => (MessageKind::Notice, notice.body, notice.formatted),
+        _ => (MessageKind::Unsupported, NOT_SUPPORTED.to_owned(), None),
     };
 
     Some(Message {
@@ -93,6 +95,12 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
         sender: said.sender.to_string(),
         at: said.origin_server_ts.0.into(),
         body,
+        // `format` is an open string, and anything other than the one the
+        // specification defines is somebody's extension that this build has no
+        // way to read. The plaintext fallback is what it is for.
+        html: formatted
+            .filter(|formatted| formatted.format == MessageFormat::Html)
+            .map(|formatted| formatted.body),
         kind,
     })
 }
@@ -115,6 +123,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
             .ok()
             .flatten()?,
         body: NO_KEY.to_owned(),
+        html: None,
         kind: MessageKind::Undecryptable,
     })
 }
@@ -159,6 +168,75 @@ mod tests {
         assert_eq!(said.body, "hello");
         assert_eq!(said.at, 1_700_000_000_000);
         assert_eq!(said.kind, MessageKind::Text);
+    }
+
+    #[test]
+    fn a_formatted_message_keeps_the_html_the_sender_meant() {
+        // The whole of what markdown is for. `body` is the plaintext fallback
+        // and carries the hashes somebody typed; a client that drew only that
+        // shows them their own syntax back.
+        let said = message(&sent(json!({
+            "msgtype": "m.text",
+            "body": "### Heading",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "<h3>Heading</h3>",
+        })))
+        .expect("a formatted message is a message");
+
+        assert_eq!(said.body, "### Heading");
+        assert_eq!(said.html.as_deref(), Some("<h3>Heading</h3>"));
+    }
+
+    #[test]
+    fn a_message_nobody_formatted_carries_no_html() {
+        assert_eq!(
+            message(&sent(text("hello"))).and_then(|said| said.html),
+            None
+        );
+    }
+
+    #[test]
+    fn a_format_this_build_does_not_know_is_left_for_the_fallback() {
+        // `format` is an open string and `org.matrix.custom.html` is the only
+        // value the specification gives. Anything else is somebody's
+        // extension, and `body` is what the specification says to draw
+        // instead.
+        let said = message(&sent(json!({
+            "msgtype": "m.text",
+            "body": "plain enough",
+            "format": "org.example.rtf",
+            "formatted_body": "{\\rtf1}",
+        })))
+        .expect("an unknown format is still a message");
+
+        assert_eq!(said.html, None);
+        assert_eq!(said.body, "plain enough");
+    }
+
+    #[test]
+    fn an_emote_and_a_notice_carry_their_formatting_too() {
+        // Three message types have a `formatted_body` and reading it for one
+        // of them is how a bot's links end up as literal angle brackets.
+        let emote = message(&sent(json!({
+            "msgtype": "m.emote",
+            "body": "waves *slowly*",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "waves <em>slowly</em>",
+        })))
+        .expect("an emote is a message");
+        let notice = message(&sent(json!({
+            "msgtype": "m.notice",
+            "body": "build **failed**",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "build <strong>failed</strong>",
+        })))
+        .expect("a notice is a message");
+
+        assert_eq!(emote.html.as_deref(), Some("waves <em>slowly</em>"));
+        assert_eq!(
+            notice.html.as_deref(),
+            Some("build <strong>failed</strong>")
+        );
     }
 
     #[test]

@@ -1166,7 +1166,17 @@ export interface Message {
   sender: string;
   /** `origin_server_ts`, in milliseconds. */
   at: number;
+  /** What it says, with no formatting. Drawn when there is no `html`. */
   body: string;
+  /**
+   * What it says as HTML, when the sender sent formatting.
+   *
+   * Straight off the wire and never sanitised, here or in Rust. It goes to
+   * `FormattedBody`, which parses it into a document that is never attached to
+   * the page and rebuilds it from an allow-list of elements. Nothing else may
+   * touch it, and nothing at all may hand it to `dangerouslySetInnerHTML`.
+   */
+  html?: string;
   kind: MessageKind;
 }
 

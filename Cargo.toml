@@ -30,6 +30,11 @@ matrix-sdk = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "3
     "sqlite",
     "rustls-aws-lc-rs",
     "automatic-room-key-forwarding",
+    # Turns what somebody typed into the HTML that rides beside it. Nothing
+    # here parses markdown itself: ruma decides what counts as formatting and
+    # returns nothing at all for text that has none, so a plain sentence stays
+    # a plain sentence on the wire.
+    "markdown",
 ] }
 
 # The same rev, resolved from the same git source, so this is the crate

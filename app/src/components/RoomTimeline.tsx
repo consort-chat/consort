@@ -23,6 +23,7 @@ import {
   type Participant,
   type Timeline,
 } from "../lib/api";
+import { FormattedBody } from "./FormattedBody";
 import { PersonMenu } from "./PersonMenu";
 import { RoomAvatar } from "./RoomAvatar";
 import "./RoomTimeline.css";
@@ -327,16 +328,29 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                   </time>
                 </p>
                 {one.messages.map((message) => (
-                  <p
+                  /*
+                    A `div` rather than a `p`, because a formatted body can be a
+                    heading or a list and a paragraph may hold neither. One
+                    element for both kinds beats two that have to be kept
+                    looking alike.
+                  */
+                  <div
                     key={message.id}
-                    className="timeline__body"
+                    className={
+                      message.html === undefined
+                        ? "timeline__body"
+                        : "timeline__body timeline__body--rich"
+                    }
                     data-kind={message.kind}
                     title={dateOf(message.at)}
                   >
-                    {message.kind === "emote"
-                      ? `${who} ${message.body}`
-                      : message.body}
-                  </p>
+                    {message.kind === "emote" && `${who} `}
+                    {message.html === undefined ? (
+                      message.body
+                    ) : (
+                      <FormattedBody html={message.html} />
+                    )}
+                  </div>
                 ))}
               </div>
             </article>

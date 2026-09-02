@@ -182,6 +182,127 @@
   overflow-wrap: anywhere;
 }
 
+/*
+  A formatted body brings its own structure, so the newline-preserving
+  whitespace that plain text needs would double every break in it.
+*/
+.timeline__body--rich {
+  white-space: normal;
+}
+
+/*
+  Headings inside a message, not headings of the page. A room where somebody
+  wrote "###" should read as emphasis in a conversation rather than as a title
+  three times the size of the name above it, so the scale is compressed and the
+  weight does the work.
+*/
+.timeline__body--rich :is(h1, h2, h3, h4, h5, h6) {
+  margin: var(--space-3) 0 var(--space-1);
+  color: var(--text-primary);
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.timeline__body--rich h1 {
+  font-size: var(--text-lg);
+}
+
+.timeline__body--rich :is(h2, h3) {
+  font-size: var(--text-base);
+}
+
+.timeline__body--rich :is(h4, h5, h6) {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* The first thing in a message never needs space above it. */
+.timeline__body--rich > :first-child {
+  margin-top: 0;
+}
+
+.timeline__body--rich > :last-child {
+  margin-bottom: 0;
+}
+
+.timeline__body--rich p {
+  margin: 0 0 var(--space-2);
+}
+
+.timeline__body--rich :is(ul, ol) {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-6);
+}
+
+.timeline__body--rich li {
+  margin: var(--space-1) 0;
+}
+
+.timeline__body--rich blockquote {
+  margin: var(--space-2) 0;
+  padding: var(--space-1) var(--space-3);
+  border-left: 2px solid var(--line-strong);
+  color: var(--text-muted);
+}
+
+.timeline__body--rich code {
+  padding: 0.1em 0.35em;
+  background: var(--surface-void);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.timeline__body--rich pre {
+  margin: var(--space-2) 0;
+  padding: var(--space-3);
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  /* A pasted stack trace is wider than the pane and must not widen it. */
+  overflow-x: auto;
+}
+
+/* The block already has the box, so the run inside it does not need a second. */
+.timeline__body--rich pre code {
+  padding: 0;
+  background: none;
+}
+
+.timeline__body--rich hr {
+  margin: var(--space-3) 0;
+  border: 0;
+  border-top: 1px solid var(--line-subtle);
+}
+
+.timeline__body--rich table {
+  margin: var(--space-2) 0;
+  border-collapse: collapse;
+  /* Same reason as the code block. */
+  display: block;
+  overflow-x: auto;
+}
+
+.timeline__body--rich :is(th, td) {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line-subtle);
+  text-align: left;
+}
+
+/*
+  Violet rather than mint. Mint is reserved for voice and presence, and a room
+  full of links wearing it would leave the speaking ring saying nothing.
+
+  Underlined rather than coloured alone: this one does not go anywhere yet, and
+  the underline is what says it is a link at all without promising a
+  destination.
+*/
+.timeline__body--rich a {
+  color: var(--violet-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* An action rather than speech, which is the whole point of the type. */
 .timeline__body[data-kind="emote"] {
   color: var(--text-primary);

@@ -3541,6 +3541,43 @@ mod timeline {
     }
 
     #[tokio::test]
+    async fn sending_markdown_puts_the_formatting_on_the_wire_beside_the_text() {
+        // What "###" in the box has to become. The plain body is kept as the
+        // fallback every client without HTML draws, and the formatting rides
+        // beside it; sending only the first is what made a heading arrive as
+        // three hashes.
+        //
+        // The HTML itself is not asserted. Which tags pulldown-cmark emits is
+        // ruma's business and it has its own tests for it; what is ours is
+        // that the format is declared and the source survives as the fallback.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "### Heading",
+                "format": "org.matrix.custom.html",
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::send(&client, ROOM, "### Heading").await.unwrap();
+    }
+
+    #[tokio::test]
     async fn sending_nothing_never_reaches_the_homeserver() {
         // Nothing is mounted for a send here, so a request would fail and the
         // answer would be right for the wrong reason. The point is that the

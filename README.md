@@ -56,6 +56,12 @@ at whatever homeserver you already run.
   session has no key for is drawn as a message it cannot read rather than left
   out: a gap that says nothing about itself cannot be told apart from a quiet
   room. Scrolling back asks the homeserver for more.
+- Markdown, both ways. What you type is read as markdown and sent with the
+  formatting beside the plain text, so it arrives formatted in Element too, and
+  what arrives formatted is drawn that way here. The HTML is never handed to
+  the browser's parser: it is rebuilt from an allow-list of elements, so a
+  message cannot bring markup of its own into the window. Links are drawn but
+  do not open yet.
 - A card about whoever said something, from their name or their face in the
   timeline, and the same card a name in a voice channel opens.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
@@ -64,8 +70,10 @@ at whatever homeserver you already run.
 
 ## What does not work yet
 
-Threads, edits, reactions, replies drawn as replies, redactions, formatting,
-attachments, read receipts and typing notifications. A message sent from here
+Threads, edits, reactions, replies drawn as replies, redactions, inline
+images, attachments, read receipts and typing notifications. Links in a message
+are drawn but go nowhere, because opening one outside the window needs a Tauri
+plugin this build does not grant. A message sent from here
 appears when the sync brings it back rather than immediately, because there is
 no local echo yet. See [the roadmap](#roadmap).
 

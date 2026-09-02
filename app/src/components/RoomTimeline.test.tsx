@@ -182,6 +182,36 @@ describe("RoomTimeline", () => {
     expect(bodies.map((one) => one.textContent)).toEqual(["first", "second"]);
   });
 
+  it("draws the formatting a message was sent with", async () => {
+    // What was wrong before markdown: somebody typing a heading was shown
+    // their own hashes back.
+    await pane();
+
+    await arrive(
+      timeline([
+        {
+          ...said("$1", ADA, "### Heading"),
+          html: "<h3>Heading</h3>",
+        },
+      ]),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Heading" }),
+    ).toBeVisible();
+    expect(screen.queryByText("### Heading")).toBeNull();
+  });
+
+  it("draws the plain text of a message nobody formatted", async () => {
+    // Most messages, and the reason the plain body is still the fallback: a
+    // sentence with an asterisk in it is a sentence.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "2 * 3 * 4")]));
+
+    expect(await screen.findByText("2 * 3 * 4")).toBeVisible();
+  });
+
   it("names the sender rather than printing their user ID", async () => {
     await pane();
 

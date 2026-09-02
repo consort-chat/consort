@@ -310,6 +310,11 @@ impl Loaded {
 
 /// Say something in a room.
 ///
+/// Read as markdown, which is what every client somebody is arriving from
+/// does. The text is sent as the plaintext fallback either way; formatting is
+/// added beside it only when there was some, so a sentence with a stray
+/// asterisk in it goes out as the sentence.
+///
 /// Encrypted or not according to the room, because the SDK decides that from
 /// the room's own state rather than from anything a caller passes.
 ///
@@ -331,6 +336,7 @@ pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
         room_id: room_id.to_owned(),
     })?;
 
-    room.send(RoomMessageEventContent::text_plain(body)).await?;
+    room.send(RoomMessageEventContent::text_markdown(body))
+        .await?;
     Ok(())
 }

@@ -1,0 +1,93 @@
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+
+import { FormattedBody } from "./FormattedBody";
+
+/** The rendered elements, so a test can ask what actually reached the page. */
+function body(html: string): HTMLElement {
+  const { container } = render(<FormattedBody html={html} />);
+  return container;
+}
+
+describe("FormattedBody", () => {
+  it("draws a heading as a heading rather than as its own syntax", () => {
+    // The complaint this exists for. Somebody typing "### Heading" was shown
+    // the hashes back.
+    render(<FormattedBody html="<h3>Heading</h3>" />);
+
+    expect(screen.getByRole("heading", { name: "Heading" })).toBeVisible();
+  });
+
+  it("draws emphasis, strength and code", () => {
+    const rendered = body(
+      "<p><em>soft</em> <strong>loud</strong> <code>terse</code></p>",
+    );
+
+    expect(rendered.querySelector("em")).toHaveTextContent("soft");
+    expect(rendered.querySelector("strong")).toHaveTextContent("loud");
+    expect(rendered.querySelector("code")).toHaveTextContent("terse");
+  });
+
+  it("draws a list as a list", () => {
+    render(<FormattedBody html="<ul><li>one</li><li>two</li></ul>" />);
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("keeps the words inside an element it does not know", () => {
+    // Nothing an allow-list has never heard of is drawn, but the text in it is
+    // still what somebody said, and silently swallowing a sentence is worse
+    // than drawing it without its box.
+    render(<FormattedBody html="<details><summary>still said</summary></details>" />);
+
+    expect(screen.getByText("still said")).toBeVisible();
+  });
+
+  it("puts no script in the document, whatever the message said", () => {
+    // The reason this component builds elements itself instead of handing the
+    // string to `dangerouslySetInnerHTML`. Nothing here is ever parsed into
+    // the live document, so there is no arrangement of tags that runs.
+    const rendered = body(
+      '<p>hello</p><script>window.pwned = true</script><img src="x" onerror="window.pwned = true">',
+    );
+
+    expect(rendered.querySelector("script")).toBeNull();
+    expect(rendered.querySelector("img")).toBeNull();
+    expect((window as unknown as { pwned?: boolean }).pwned).toBeUndefined();
+  });
+
+  it("draws an ordinary link, and refuses to be navigated by it", () => {
+    // The webview has one page in it and no way back. Until opening a link
+    // outside the application is built, a link that went anywhere would be a
+    // one-way trip out of Consort.
+    const rendered = body('<p><a href="https://example.org/x">there</a></p>');
+    const link = rendered.querySelector("a");
+
+    expect(link).toHaveAttribute("href", "https://example.org/x");
+    const clicked = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link?.dispatchEvent(clicked);
+    expect(clicked.defaultPrevented).toBe(true);
+  });
+
+  it("drops the address of a link that is not one to a page", () => {
+    // `javascript:` is the obvious one, and the click above is not the only
+    // way an anchor is followed.
+    const rendered = body('<p><a href="javascript:alert(1)">press</a></p>');
+
+    expect(rendered.querySelector("a")).not.toHaveAttribute("href");
+    expect(screen.getByText("press")).toBeVisible();
+  });
+
+  it("draws a quote and a code block", () => {
+    const rendered = body(
+      "<blockquote><p>said before</p></blockquote><pre><code>cargo test</code></pre>",
+    );
+
+    expect(rendered.querySelector("blockquote")).toHaveTextContent("said before");
+    expect(rendered.querySelector("pre")).toHaveTextContent("cargo test");
+  });
+
+  it("draws nothing at all for nothing at all", () => {
+    expect(body("").textContent).toBe("");
+  });
+});
