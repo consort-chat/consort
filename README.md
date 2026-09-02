@@ -135,8 +135,8 @@ Arch is the distro this is developed on, so it is the one most likely to work.
 `pnpm tauri build` writes a `.deb` and an `.rpm` to `target/release/bundle/`:
 
 ```sh
-sudo apt install ./target/release/bundle/deb/Consort_0.1.2_amd64.deb
-sudo dnf install ./target/release/bundle/rpm/Consort-0.1.2-1.x86_64.rpm
+sudo apt install ./target/release/bundle/deb/Consort_0.1.3_amd64.deb
+sudo dnf install ./target/release/bundle/rpm/Consort-0.1.3-1.x86_64.rpm
 ```
 
 Both are built and installed locally. Neither is signed, and neither is served

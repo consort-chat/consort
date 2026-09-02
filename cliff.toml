@@ -1,0 +1,70 @@
+# What writes CHANGELOG.md, from the commit messages themselves.
+#
+# The messages are already the record: this repository writes a subject line
+# that says what changed and a body that says why, so the changelog is a
+# selection and a grouping rather than a second telling. Nothing here rewrites
+# a subject, which is why the groups read the way the commits do.
+#
+# Run it through the release recipe rather than by hand:
+#
+#     git cliff --tag v0.1.3 --output CHANGELOG.md
+#
+# `--tag` is what puts the commits since the last tag under the version about
+# to exist, because the tag is made after this file is written.
+
+[changelog]
+header = """
+# Changelog
+
+What changed in each release, taken from the commit messages. Consort is
+pre-1.0 and its versions say so: anything can move between minor versions,
+and the patch number is where most of the work has landed so far.\
+"""
+body = """
+
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }}{% if timestamp %} ({{ timestamp | date(format="%Y-%m-%d") }}){% endif %}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}\
+{% endfor %}\
+"""
+footer = ""
+# Off, because the blank line before each version heading is part of the
+# template rather than an accident of it.
+trim = false
+
+[git]
+conventional_commits = true
+# Anything that is not a conventional commit is somebody's merge or a
+# one-off, and neither belongs in a list of what changed.
+filter_unconventional = true
+protect_breaking_commits = true
+filter_commits = true
+split_commits = false
+topo_order = false
+sort_commits = "oldest"
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Faster" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  # The release commit, the formatting pass and the CI wiring are how the
+  # repository is kept rather than what it does.
+  { message = "^chore", skip = true },
+  { message = "^style", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^test", skip = true },
+  { message = "^build", skip = true },
+]
+
+# Every tag this project has made. Nothing else is a version.
+tag_pattern = "v[0-9]*"

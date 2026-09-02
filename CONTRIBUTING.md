@@ -151,6 +151,27 @@ chore: bump the pinned toolchain
 Subject in the imperative, under about 72 characters. Body for the why, wrapped,
 if the subject does not cover it.
 
+They are also the changelog. `CHANGELOG.md` is generated from them with
+[git-cliff](https://git-cliff.org), which is why the type and the scope matter
+beyond tidiness: a commit that is not a conventional one is left out of the
+release notes entirely.
+
+## Releasing
+
+Four files carry the version and none of them reads another: `Cargo.toml`,
+`app/package.json`, `app/src-tauri/tauri.conf.json`, and the placeholder in
+`packaging/aur/PKGBUILD` that makepkg overwrites. Set all four, then:
+
+```sh
+git cliff --tag v0.1.3 --output CHANGELOG.md
+git commit -am "chore(release): 0.1.3"
+git tag -a v0.1.3 -m "0.1.3"
+```
+
+`--tag` is needed because the tag does not exist yet: without it everything
+since the last release lands under an "Unreleased" heading. `cliff.toml` says
+which commit types are listed and which are kept out.
+
 ## Licence
 
 Consort is AGPL-3.0-only, inherited from `matrix-rust-rtc`. By contributing you
