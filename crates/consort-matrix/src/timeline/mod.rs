@@ -46,10 +46,16 @@ pub use dto::{Media, Message, MessageKind, Timeline};
 pub use history::History;
 pub use media::media;
 
+use std::collections::HashMap;
+
+use futures_util::StreamExt;
+use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::RoomId;
 use matrix_sdk::ruma::api::Direction;
+use matrix_sdk::ruma::events::AnySyncTimelineEvent;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::{Client, Room};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -137,6 +143,15 @@ where
         // Subscribed before the first page is read, so a message sent between
         // the two is not lost between them.
         let mut updates = client.subscribe_to_all_room_updates();
+        // The same reasoning, for keys. A key that lands while the first page
+        // is decrypting would otherwise be missed, and missing one leaves a
+        // message waiting for a key this session already holds.
+        //
+        // `None` before the crypto machine exists, which for a signed-in
+        // client it always does. Nothing waits on a stream that is not there:
+        // an unreadable message stays unreadable, which is what happened
+        // before any of this.
+        let mut rekeyed = client.encryption().room_keys_received_stream().await;
 
         let Ok(parsed) = RoomId::parse(&watching) else {
             tracing::warn!(room_id = %watching, "asked to watch something that is not a room");
@@ -177,8 +192,7 @@ where
                             // whether or not this room was in it.
                             continue;
                         };
-                        let arrived: Vec<Message> =
-                            joined.timeline.events.iter().filter_map(facts::message).collect();
+                        let arrived = loaded.read(&joined.timeline.events);
                         if loaded.history.arrived(arrived) {
                             loaded.publish(&on_change);
                         }
@@ -192,6 +206,35 @@ where
                     }
                     Err(RecvError::Closed) => break,
                 },
+                // `Pin::as_mut` on an `Option` is not a thing, so the arm is
+                // guarded instead: with no stream there is nothing to poll and
+                // the other two arms carry on.
+                keys = async { rekeyed.as_mut().expect("guarded").next().await },
+                    if rekeyed.is_some() =>
+                {
+                    match keys {
+                        // The room is checked here rather than in the loop
+                        // body because a key for somewhere else is the
+                        // ordinary case: every room on the account shares this
+                        // one stream.
+                        Some(Ok(keys)) => {
+                            if keys.iter().any(|key| key.room_id == parsed)
+                                && loaded.reread(&room).await
+                            {
+                                loaded.publish(&on_change);
+                            }
+                        }
+                        // Too many keys at once, which a session catching up
+                        // after a long absence produces. Nothing is retried
+                        // for the batch that was dropped, so a message may
+                        // stay waiting until the room is reopened, which is
+                        // where this started.
+                        Some(Err(missed)) => {
+                            tracing::debug!(%missed, room_id = %watching, "fell behind the arriving keys");
+                        }
+                        None => rekeyed = None,
+                    }
+                }
             }
         }
     });
@@ -210,6 +253,13 @@ where
 struct Loaded {
     room_id: String,
     history: History,
+    /// The events this session could not read, by event ID.
+    ///
+    /// Held as the JSON they arrived as, which is what `decrypt_event` takes,
+    /// and dropped as each one opens. An encrypted room that has been quiet
+    /// holds nothing here at all; one this session arrived late to holds a
+    /// screenful, which is the case this exists for.
+    waiting: HashMap<String, Raw<AnySyncTimelineEvent>>,
     /// Where the next backwards page starts, or `None` before the first one.
     from: Option<String>,
     /// Whether the homeserver still has older messages.
@@ -223,6 +273,7 @@ impl Loaded {
         Self {
             room_id,
             history: History::new(),
+            waiting: HashMap::new(),
             from: None,
             // Assumed until the homeserver says otherwise, because the first
             // page has not been asked for yet and "no more history" is a
@@ -290,11 +341,74 @@ impl Loaded {
         // to be turned round. Getting this wrong reverses every page while
         // leaving the pages themselves in order, which reads as a conversation
         // that almost makes sense.
-        let older: Vec<Message> = page.chunk.iter().rev().filter_map(facts::message).collect();
+        let page: Vec<TimelineEvent> = page.chunk.into_iter().rev().collect();
+        let older = self.read(&page);
         let drawable = !older.is_empty();
         self.history.backfilled(older);
 
         !drawable && self.more_before
+    }
+
+    /// One batch of events as messages, remembering the ones with no key.
+    ///
+    /// The remembering is the whole reason this is not a `filter_map` at the
+    /// two call sites. An event that arrives unreadable is drawn as a wait,
+    /// and the wait can only be redeemed by something holding the ciphertext
+    /// until the key turns up.
+    fn read(&mut self, events: &[TimelineEvent]) -> Vec<Message> {
+        events
+            .iter()
+            .filter_map(|event| {
+                let message = facts::message(event)?;
+                if event.kind.is_utd() {
+                    self.waiting.insert(message.id.clone(), event.raw().clone());
+                }
+                Some(message)
+            })
+            .collect()
+    }
+
+    /// Try every message this session had no key for again.
+    ///
+    /// Answered on the watcher's own task, in order with the pages and the
+    /// syncs, so a retry cannot interleave with a backfill writing into the
+    /// same history.
+    ///
+    /// Reports whether anything on screen changed. A key usually opens nothing
+    /// here: it is one stream for the whole account, and most keys are for
+    /// rooms nobody is looking at.
+    async fn reread(&mut self, room: &Room) -> bool {
+        let held: Vec<(String, Raw<AnySyncTimelineEvent>)> = self
+            .waiting
+            .iter()
+            .map(|(id, raw)| (id.clone(), raw.clone()))
+            .collect();
+
+        let mut changed = false;
+        for (id, raw) in held {
+            // Cast unchecked because it is the same JSON either way: this is
+            // the raw event as the homeserver sent it, and it reached here
+            // only by having been an `m.room.encrypted` nothing could open.
+            let Ok(event) = room.decrypt_event(raw.cast_ref_unchecked(), None).await else {
+                continue;
+            };
+            if event.kind.is_utd() {
+                // This key was for a different session. Kept, because the one
+                // that opens it may still arrive.
+                continue;
+            }
+
+            self.waiting.remove(&id);
+            changed |= match facts::message(&event) {
+                Some(message) => self.history.replace(message),
+                // It opened, and it is a reaction or a thread reply, which are
+                // not drawn. The wait has to go: a placeholder for something
+                // that was never a message would sit there forever.
+                None => self.history.forget(&id),
+            };
+        }
+
+        changed
     }
 
     fn publish<F>(&self, on_change: &F)
@@ -341,4 +455,87 @@ pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
     room.send(RoomMessageEventContent::text_markdown(body))
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use matrix_sdk::deserialized_responses::{UnableToDecryptInfo, UnableToDecryptReason};
+    use serde_json::json;
+
+    /// An ordinary message, as a homeserver sends it.
+    fn readable(id: &str) -> TimelineEvent {
+        TimelineEvent::from_plaintext(
+            Raw::new(&json!({
+                "type": "m.room.message",
+                "event_id": id,
+                "sender": "@ada:example.org",
+                "origin_server_ts": 1_700_000_000_000u64,
+                "content": { "msgtype": "m.text", "body": "hello" },
+            }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked(),
+        )
+    }
+
+    /// An encrypted message this session has no key for.
+    fn sealed(id: &str) -> TimelineEvent {
+        TimelineEvent::from_utd(
+            Raw::new(&json!({
+                "type": "m.room.encrypted",
+                "event_id": id,
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1_700_000_000_000u64,
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgAEnB...",
+                    "session_id": "session",
+                },
+            }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("session".to_owned()),
+                reason: UnableToDecryptReason::MissingMegolmSession {
+                    withheld_code: None,
+                },
+            },
+        )
+    }
+
+    #[test]
+    fn an_unreadable_event_is_kept_so_a_key_has_something_to_open() {
+        let mut loaded = Loaded::new("!room:example.org".to_owned());
+
+        loaded.read(&[sealed("$sealed:example.org")]);
+
+        assert!(loaded.waiting.contains_key("$sealed:example.org"));
+    }
+
+    #[test]
+    fn a_readable_event_is_not_held_on_to() {
+        // The ciphertext is the only reason to keep one, and a message that
+        // arrived readable has none. A room that has been open all day should
+        // not be holding a copy of everything said in it.
+        let mut loaded = Loaded::new("!room:example.org".to_owned());
+
+        loaded.read(&[readable("$said:example.org")]);
+
+        assert!(loaded.waiting.is_empty());
+    }
+
+    #[test]
+    fn reading_a_batch_still_answers_with_every_message_in_it() {
+        let mut loaded = Loaded::new("!room:example.org".to_owned());
+
+        let messages = loaded.read(&[readable("$one:example.org"), sealed("$two:example.org")]);
+
+        assert_eq!(
+            messages
+                .iter()
+                .map(|said| said.id.as_str())
+                .collect::<Vec<_>>(),
+            ["$one:example.org", "$two:example.org"]
+        );
+    }
 }

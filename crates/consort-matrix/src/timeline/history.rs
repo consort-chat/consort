@@ -88,6 +88,46 @@ impl History {
         self.messages.splice(..0, fresh);
         true
     }
+
+    /// Swap a message already held for a new reading of the same event.
+    ///
+    /// What a room key arriving does to the messages this session could not
+    /// read when they came in. In place, so a message that was drawn as a wait
+    /// becomes what it says without moving: the conversation around it is
+    /// already on somebody's screen, and reordering under them would be worse
+    /// than the wait.
+    ///
+    /// Reports whether anything changed, so a key for a session none of these
+    /// messages used does not republish a timeline nobody's copy differs from.
+    /// An unheld event is not an error: a key can arrive for a room while a
+    /// different one is open.
+    pub fn replace(&mut self, message: Message) -> bool {
+        let Some(held) = self.messages.iter_mut().find(|held| held.id == message.id) else {
+            return false;
+        };
+        if *held == message {
+            return false;
+        }
+
+        *held = message;
+        true
+    }
+
+    /// Stop drawing an event, without forgetting that it was seen.
+    ///
+    /// The other half of [`replace`](Self::replace). An event this session
+    /// could not read is drawn as a wait, and when the key arrives some of
+    /// them turn out to be reactions or thread replies, which are not drawn at
+    /// all. Leaving the wait there would keep a placeholder for something that
+    /// was never a message.
+    ///
+    /// The ID stays in `seen`, so a backfill that carries the event again does
+    /// not draw it a second time.
+    pub fn forget(&mut self, event_id: &str) -> bool {
+        let before = self.messages.len();
+        self.messages.retain(|held| held.id != event_id);
+        self.messages.len() != before
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +153,77 @@ mod tests {
             .iter()
             .map(|message| message.body.as_str())
             .collect()
+    }
+
+    #[test]
+    fn a_message_re_read_takes_the_place_of_the_old_one() {
+        // What a room key arriving does. The wait becomes the sentence,
+        // without the conversation around it moving.
+        let mut history = History::new();
+        history.arrived(vec![
+            said("$1", "one"),
+            said("$2", "waiting"),
+            said("$3", "three"),
+        ]);
+
+        assert!(history.replace(said("$2", "the actual message")));
+
+        assert_eq!(bodies(&history), ["one", "the actual message", "three"]);
+    }
+
+    #[test]
+    fn re_reading_an_event_nobody_holds_changes_nothing() {
+        // Ordinary rather than an error: a key can arrive for a room while a
+        // different one is open.
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+
+        assert!(!history.replace(said("$2", "two")));
+
+        assert_eq!(bodies(&history), ["one"]);
+    }
+
+    #[test]
+    fn re_reading_an_event_to_the_same_answer_is_not_news() {
+        // A key that opens nothing new is the ordinary case for every key
+        // after the first, and republishing on each one would redraw the room
+        // for nothing.
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+
+        assert!(!history.replace(said("$1", "one")));
+    }
+
+    #[test]
+    fn an_event_that_turns_out_not_to_be_a_message_stops_being_drawn() {
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one"), said("$2", "waiting")]);
+
+        assert!(history.forget("$2"));
+
+        assert_eq!(bodies(&history), ["one"]);
+    }
+
+    #[test]
+    fn forgetting_an_event_twice_is_only_news_once() {
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+        history.forget("$1");
+
+        assert!(!history.forget("$1"));
+    }
+
+    #[test]
+    fn a_forgotten_event_is_not_drawn_again_by_a_backfill() {
+        // It was dropped because it is not a message, and a page of history
+        // that carries it again has not changed that.
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+        history.forget("$1");
+
+        history.backfilled(vec![said("$1", "one")]);
+
+        assert!(history.messages().is_empty());
     }
 
     #[test]
