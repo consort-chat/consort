@@ -596,6 +596,27 @@ fn audio_tone_play_for(
     state.play_test_tone(backends, device);
 }
 
+/// Play the microphone back, so somebody can hear what they are sending.
+///
+/// The same two devices `audio_test_start_for` and `audio_tone_play_for`
+/// resolve, resolved the same way, because the question is what this machine
+/// would send out of this microphone through these speakers.
+fn audio_monitor_start_for(
+    state: &AppState,
+    host: &dyn AudioDevices,
+    backends: impl FnOnce() -> Backends,
+) {
+    let (device, gate) = microphone_to_open(state, host);
+    let output = speakers_to_open(state, host);
+
+    state.start_monitor(backends, device, gate, output);
+}
+
+/// Stop playing the microphone back.
+fn audio_monitor_stop_for(state: &AppState) {
+    state.stop_monitor();
+}
+
 /// Cut the chime short.
 fn audio_tone_stop_for(state: &AppState) {
     state.stop_test_tone();
@@ -794,6 +815,16 @@ pub fn audio_tone_play(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn audio_tone_stop(state: State<'_, AppState>) {
     audio_tone_stop_for(&state);
+}
+
+#[tauri::command]
+pub fn audio_monitor_start(state: State<'_, AppState>) {
+    audio_monitor_start_for(&state, &CpalHost, cpal_backends);
+}
+
+#[tauri::command]
+pub fn audio_monitor_stop(state: State<'_, AppState>) {
+    audio_monitor_stop_for(&state);
 }
 
 #[tauri::command]
@@ -1827,6 +1858,57 @@ mod tests {
             audio_event(&sink, |event| {
                 matches!(event, consort_audio::AudioEvent::ToneStopped)
             });
+        }
+
+        #[test]
+        fn listening_opens_an_output_and_the_microphone_with_it() {
+            // There is nothing to listen to otherwise, and the claim on the
+            // microphone is the one the meter beside the button already holds.
+            let (_dir, state, sink) = observable_state();
+
+            audio_monitor_start_for(&state, &Fake, fake_backends);
+
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::MonitorStarted { .. })
+            });
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::Started { .. })
+            });
+        }
+
+        #[test]
+        fn stopping_listening_keeps_the_microphone_open() {
+            // The meter beside the button is still being watched. Closing the
+            // settings screen is what releases the device.
+            let (_dir, state, sink) = observable_state();
+            audio_monitor_start_for(&state, &Fake, fake_backends);
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::MonitorStarted { .. })
+            });
+
+            audio_monitor_stop_for(&state);
+
+            audio_event(&sink, |event| {
+                matches!(event, consort_audio::AudioEvent::MonitorStopped)
+            });
+            assert!(
+                !sink.events().iter().any(|event| matches!(
+                    event,
+                    crate::events::AppEvent::Audio(consort_audio::AudioEvent::Stopped)
+                )),
+                "stopping the playback closed the microphone the meter is on"
+            );
+        }
+
+        #[test]
+        fn stopping_listening_that_never_started_is_not_an_error() {
+            // Which closing the settings screen does, whether or not anybody
+            // pressed the button.
+            let (_dir, state, sink) = observable_state();
+
+            audio_monitor_stop_for(&state);
+
+            assert!(sink.events().is_empty());
         }
 
         #[test]

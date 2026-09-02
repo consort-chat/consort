@@ -135,6 +135,18 @@ impl AudioBridge {
             thread.stop_call();
         }
     }
+
+    pub fn start_monitor(&self, device: Option<String>) {
+        if let Some(thread) = &self.thread {
+            thread.start_monitor(device);
+        }
+    }
+
+    pub fn stop_monitor(&self) {
+        if let Some(thread) = &self.thread {
+            thread.stop_monitor();
+        }
+    }
 }
 
 impl Drop for AudioBridge {

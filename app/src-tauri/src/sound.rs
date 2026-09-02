@@ -153,6 +153,31 @@ impl Sound {
         self.with_running(AudioBridge::stop_tone);
     }
 
+    /// Play the microphone back, so somebody can hear what they are sending.
+    ///
+    /// Opens the microphone as well, under the settings screen's own claim on
+    /// it, because there is nothing to listen to otherwise. That claim is the
+    /// one the meter already holds while the screen is open, so in practice
+    /// this only opens the output.
+    pub fn start_monitor(
+        &self,
+        backends: impl FnOnce() -> Backends,
+        device: Option<String>,
+        gate: GateConfig,
+        output: Option<String>,
+    ) {
+        self.open(backends, device, gate, |demand| demand.test = true);
+        self.with_running(|bridge| bridge.start_monitor(output));
+    }
+
+    /// Stop playing the microphone back.
+    ///
+    /// Leaves the microphone open. The meter beside this button is still being
+    /// watched, and the settings screen closing is what releases it.
+    pub fn stop_monitor(&self) {
+        self.with_running(AudioBridge::stop_monitor);
+    }
+
     /// Record a reason to have the microphone open, and open it if what is
     /// being asked for is not already running.
     ///

@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   asCommandError,
   audioDevices,
+  audioMonitorStart,
+  audioMonitorStop,
   audioSettings,
   audioTestStart,
   audioTestStop,
@@ -212,6 +214,15 @@ export function VoiceVideoSection({
   const [settings, setSettings] = useState<AudioSettings | null>(null);
   const [meter, setMeter] = useState<Meter>(SILENT);
   const [chime, setChime] = useState<Chime>(QUIET);
+  /*
+    Whether the microphone is being played back, and out of what.
+
+    Read off the events rather than set on the press, for the reason every
+    other control here is: what is drawn should be what the audio thread did,
+    not what it was asked to do. A press that reached a machine with no working
+    output leaves this off and puts the reason on screen.
+  */
+  const [listening, setListening] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
   /*
@@ -310,6 +321,17 @@ export function VoiceVideoSection({
           break;
         case "toneFailed":
           setChime(QUIET);
+          setProblem(activity.error);
+          break;
+        case "monitorStarted":
+          setProblem(null);
+          setListening(activity.device);
+          break;
+        case "monitorStopped":
+          setListening(null);
+          break;
+        case "monitorFailed":
+          setListening(null);
           setProblem(activity.error);
           break;
       }
@@ -549,6 +571,21 @@ export function VoiceVideoSection({
     });
   }
 
+  /**
+   * Start or stop playing the microphone back.
+   *
+   * Nothing is set here either. The button follows `listening`, which comes
+   * off the audio thread's own events, so a press that reached a machine with
+   * no working output leaves the button where it was and puts the reason on
+   * screen.
+   */
+  function listen() {
+    const ask = listening === null ? audioMonitorStart : audioMonitorStop;
+    ask().catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
   return (
     <div className="voice">
       {/*
@@ -599,6 +636,37 @@ export function VoiceVideoSection({
           </DevicePicker>
         </>
       )}
+
+      <div className="voice-field">
+        <span className="voice-field__label">Mic test</span>
+        <LevelMeter
+          level={meter.level}
+          open={meter.open}
+          running={meter.running}
+          voiceActivity={settings?.gate.voiceActivity ?? true}
+        />
+        {meter.device !== null && (
+          <p className="voice-field__note">Recording from {meter.device}.</p>
+        )}
+        {/*
+          The other half of the meter. A bar says the gate opened; this says
+          what came out of it, which is the only way to hear a threshold set
+          too high clipping the front of every sentence.
+        */}
+        <button
+          type="button"
+          className="voice-field__check"
+          aria-pressed={listening !== null}
+          onClick={listen}
+        >
+          {listening === null ? "Listen" : "Stop listening"}
+        </button>
+        <p className="voice-field__note">
+          {listening === null
+            ? "Play your microphone back through your speakers, exactly as a call would carry it: gated, denoised, and delayed by the same fraction of a second."
+            : `Playing back through ${listening}. Use headphones, or your microphone will hear this and go round again.`}
+        </p>
+      </div>
 
       {settings !== null && (
         <div className="voice-field">
@@ -812,18 +880,6 @@ export function VoiceVideoSection({
         </div>
       )}
 
-      <div className="voice-field">
-        <span className="voice-field__label">Mic test</span>
-        <LevelMeter
-          level={meter.level}
-          open={meter.open}
-          running={meter.running}
-          voiceActivity={settings?.gate.voiceActivity ?? true}
-        />
-        {meter.device !== null && (
-          <p className="voice-field__note">Recording from {meter.device}.</p>
-        )}
-      </div>
     </div>
   );
 }

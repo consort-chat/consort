@@ -67,7 +67,23 @@ pub enum AudioEvent {
     CallAudioFailed { error: String },
     /// The call is no longer being played.
     CallAudioStopped,
+    /// The microphone is being played back on this output.
+    MonitorStarted { device: String },
+    /// The microphone could not be played back.
+    ///
+    /// Its own event rather than [`Self::CallAudioFailed`], which the shell
+    /// raises a banner for: this is a settings screen asking a question, not a
+    /// call nobody can hear.
+    MonitorFailed { error: String },
+    /// The microphone is no longer being played back.
+    MonitorStopped,
 }
+
+/// Who the monitor's own voice is, in the mixer.
+///
+/// Any key would do. This one is never anybody's Matrix ID, and the monitor
+/// has a mixer to itself, so nothing can collide with it.
+const MONITOR: &str = "you";
 
 /// Where gated audio goes while a call is running.
 ///
@@ -125,6 +141,16 @@ enum Message {
         voices: Voices,
     },
     StopCall,
+    /// Open an output and play this microphone back through it.
+    ///
+    /// Its own message rather than a `PlayCall` with a mixer the caller feeds,
+    /// because what goes into it is the gate's output, which only this thread
+    /// has. A caller would have to install a sink that reached back into a
+    /// mixer it also held, which is two halves of one thing in two places.
+    StartMonitor {
+        device: Option<String>,
+    },
+    StopMonitor,
     /// The chime handed its last sample to the device, posted by the backend's
     /// realtime callback.
     ///
@@ -232,6 +258,20 @@ impl AudioThread {
         self.send(Message::StopCall);
     }
 
+    /// Play this microphone back, so somebody can hear what they are sending.
+    ///
+    /// What comes out is the gate's own output: denoised, gated, pre-roll and
+    /// all. That is the point, and it is why this is not simply a second
+    /// capture stream.
+    pub fn start_monitor(&self, device: Option<String>) {
+        self.send(Message::StartMonitor { device });
+    }
+
+    /// Stop playing this microphone back.
+    pub fn stop_monitor(&self) {
+        self.send(Message::StopMonitor);
+    }
+
     fn send(&self, message: Message) {
         // A closed channel means the thread is already gone, which is only
         // reachable if it panicked. Nothing useful can be done about it from
@@ -287,6 +327,11 @@ fn run(
     // that testing the speakers during a call neither interrupts it nor is
     // interrupted by it.
     let mut call: Option<Box<dyn PlaybackStream>> = None;
+    // The same again, for the settings screen playing the microphone back, and
+    // with the mixer it is fed through. A third stream rather than borrowing
+    // the call's, because monitoring during a call would otherwise put one
+    // voice into everybody else's mix.
+    let mut monitor: Option<(Box<dyn PlaybackStream>, Voices)> = None;
     // Which chime is playing. Bumped on every start and every stop, so an
     // ending reported by a chime that has already been replaced or cancelled
     // arrives carrying a number nothing matches any more and is dropped.
@@ -385,6 +430,44 @@ fn run(
                     tracing::info!(device = %stream.device_name(), "gave the call output back");
                 }
                 if events.send(AudioEvent::CallAudioStopped).is_err() {
+                    break;
+                }
+            }
+
+            Message::StartMonitor { device } => {
+                // Dropped first, for the reason every other stream is: two
+                // claims on one device is a failure nothing explains.
+                monitor = None;
+
+                let voices = Voices::new();
+                match playback.play_call(device.as_deref(), voices.clone()) {
+                    Ok(stream) => {
+                        let event = AudioEvent::MonitorStarted {
+                            device: stream.device_name().to_owned(),
+                        };
+                        monitor = Some((stream, voices));
+                        if events.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        if events
+                            .send(AudioEvent::MonitorFailed {
+                                error: error.to_string(),
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            Message::StopMonitor => {
+                if let Some((stream, _)) = monitor.take() {
+                    tracing::info!(device = %stream.device_name(), "stopped playing the microphone back");
+                }
+                if events.send(AudioEvent::MonitorStopped).is_err() {
                     break;
                 }
             }
@@ -490,10 +573,18 @@ fn run(
                 // thinks of the frame in front of it, and a bar lagging a
                 // person's own voice is the one thing on this screen somebody
                 // would notice.
-                if let Some((published, open)) = state.pre_roll.step(&state.gated, decision)
-                    && let Some(sink) = publishing.as_mut()
-                {
-                    sink(published, open);
+                if let Some((published, open)) = state.pre_roll.step(&state.gated, decision) {
+                    if let Some(sink) = publishing.as_mut() {
+                        sink(published, open);
+                    }
+                    // Only while the gate is open, because that is the whole
+                    // question being asked: what leaves this machine, not what
+                    // the microphone hears. Somebody who turns voice activity
+                    // off hears themselves continuously, which is also the
+                    // truth about what they are sending.
+                    if open && let Some((_, voices)) = monitor.as_ref() {
+                        voices.hear(MONITOR, published);
+                    }
                 }
 
                 // Metered on the captured frame, not on the gate's output. A

@@ -193,6 +193,8 @@ pub fn run() {
             commands::audio_test_stop,
             commands::audio_tone_play,
             commands::audio_tone_stop,
+            commands::audio_monitor_start,
+            commands::audio_monitor_stop,
             commands::call_connect,
             commands::call_disconnect,
             commands::call_set_muted,

@@ -391,6 +391,22 @@ impl AppState {
         self.sound.stop_tone();
     }
 
+    /// Play the microphone back through the chosen output.
+    pub fn start_monitor(
+        &self,
+        backends: impl FnOnce() -> Backends,
+        device: Option<String>,
+        gate: GateConfig,
+        output: Option<String>,
+    ) {
+        self.sound.start_monitor(backends, device, gate, output);
+    }
+
+    /// Stop playing the microphone back, leaving the microphone open.
+    pub fn stop_monitor(&self) {
+        self.sound.stop_monitor();
+    }
+
     /// Join the voice channel in `room_id`, starting the call thread on first
     /// use.
     ///

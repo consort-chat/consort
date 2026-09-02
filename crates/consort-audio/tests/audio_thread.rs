@@ -820,3 +820,105 @@ fn changing_microphone_mid_call_keeps_publishing() {
          the gap"
     );
 }
+
+#[test]
+fn the_monitor_plays_the_microphone_back_through_an_output() {
+    let log = Log::default();
+    let mut capture = FakeCapture::new(&log);
+    capture.frames = 40;
+    let playback = FakePlayback::new(&log);
+    let voices = Arc::clone(&playback.voices);
+    let (audio, events, _) = thread_with(capture, playback);
+
+    audio.start_monitor(Some("Speakers".to_owned()));
+    assert!(matches!(
+        next_state_change(&events),
+        AudioEvent::MonitorStarted { device } if device == "Speakers"
+    ));
+
+    capture_a_device(&audio, &events, "Yeti");
+
+    let held = voices
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("an output was opened");
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while std::time::Instant::now() < deadline && held.waiting("you") == 0 {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        held.waiting("you") > 0,
+        "what somebody hears has to be what the gate is putting out, or the \
+         button is a different question from the one it asks"
+    );
+}
+
+#[test]
+fn the_monitor_is_a_stream_of_its_own_rather_than_the_call_s() {
+    // Monitoring during a call would otherwise put one voice into everybody
+    // else's mix, which is the opposite of what the button is for.
+    let log = Log::default();
+    let (audio, events, _) = thread_with(FakeCapture::new(&log), FakePlayback::new(&log));
+
+    audio.play_call(Some("Speakers".to_owned()), Voices::new());
+    next_state_change(&events);
+    audio.start_monitor(Some("Speakers".to_owned()));
+    next_state_change(&events);
+    audio.stop_monitor();
+    assert!(matches!(
+        next_state_change(&events),
+        AudioEvent::MonitorStopped
+    ));
+
+    // The call's output is still open: only the monitor's was given up.
+    assert_eq!(
+        log_of(&log)
+            .iter()
+            .filter(|line| line.as_str() == "silence Speakers")
+            .count(),
+        1,
+        "stopping the monitor must not take the call's output with it"
+    );
+}
+
+#[test]
+fn a_monitor_that_cannot_open_says_so_rather_than_going_quiet() {
+    let log = Log::default();
+    let mut playback = FakePlayback::new(&log);
+    playback.broken = Some("Broken".to_owned());
+    let (audio, events, _) = thread_with(FakeCapture::new(&log), playback);
+
+    audio.start_monitor(Some("Broken".to_owned()));
+
+    assert!(matches!(
+        next_state_change(&events),
+        AudioEvent::MonitorFailed { .. }
+    ));
+}
+
+#[test]
+fn asking_to_monitor_twice_leaves_one_stream_open() {
+    let log = Log::default();
+    let (audio, events, _) = thread_with(FakeCapture::new(&log), FakePlayback::new(&log));
+
+    audio.start_monitor(Some("Speakers".to_owned()));
+    next_state_change(&events);
+    audio.start_monitor(Some("Speakers".to_owned()));
+    next_state_change(&events);
+    audio.stop_monitor();
+    next_state_change(&events);
+
+    assert_eq!(
+        log_of(&log),
+        vec![
+            "call Speakers",
+            "silence Speakers",
+            "call Speakers",
+            "silence Speakers"
+        ],
+        "the first stream has to be given up before the second is opened, or \
+         a device that allows one claim refuses the second for no visible \
+         reason"
+    );
+}

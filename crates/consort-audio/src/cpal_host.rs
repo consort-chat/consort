@@ -478,14 +478,17 @@ mod tests {
                 AudioEvent::Started { device } => println!("capturing from {device}"),
                 AudioEvent::Failed { error } => panic!("could not capture: {error}"),
                 AudioEvent::Stopped => break,
-                // Nothing here plays a tone or joins a call, so none of
-                // these can arrive.
+                // Nothing here plays a tone, joins a call or listens to
+                // itself, so none of these can arrive.
                 AudioEvent::ToneStarted { .. }
                 | AudioEvent::ToneStopped
                 | AudioEvent::ToneFailed { .. }
                 | AudioEvent::CallAudioStarted { .. }
                 | AudioEvent::CallAudioFailed { .. }
-                | AudioEvent::CallAudioStopped => {}
+                | AudioEvent::CallAudioStopped
+                | AudioEvent::MonitorStarted { .. }
+                | AudioEvent::MonitorFailed { .. }
+                | AudioEvent::MonitorStopped => {}
                 AudioEvent::Level(reading) => {
                     readings += 1;
                     let bar = "#".repeat((reading.level * 40.0) as usize);

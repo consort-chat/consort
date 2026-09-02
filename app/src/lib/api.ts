@@ -878,7 +878,10 @@ export type AudioActivity =
   | { state: "toneFailed"; error: string }
   | { state: "callAudioStarted"; device: string }
   | { state: "callAudioStopped" }
-  | { state: "callAudioFailed"; error: string };
+  | { state: "callAudioFailed"; error: string }
+  | { state: "monitorStarted"; device: string }
+  | { state: "monitorStopped" }
+  | { state: "monitorFailed"; error: string };
 
 /**
  * What this machine has, and which of it is in use.
@@ -967,6 +970,30 @@ export function audioTonePlay(): Promise<void> {
 /** Cut the chime short. Safe to call when nothing is playing. */
 export function audioToneStop(): Promise<void> {
   return invoke<void>("audio_tone_stop");
+}
+
+/**
+ * Play this microphone back through the chosen output.
+ *
+ * What comes out is the gate's own output: denoised, gated, pre-roll and all,
+ * which is exactly what a call would carry. That is the point, and it is why
+ * this is not a second capture stream.
+ *
+ * Opens the microphone as well if it is not already open, which on the
+ * settings screen it always is: the meter has it.
+ */
+export function audioMonitorStart(): Promise<void> {
+  return invoke<void>("audio_monitor_start");
+}
+
+/**
+ * Stop playing the microphone back.
+ *
+ * Leaves the microphone open, because the meter beside the button is still
+ * being watched. Safe to call when nothing is playing.
+ */
+export function audioMonitorStop(): Promise<void> {
+  return invoke<void>("audio_monitor_stop");
 }
 
 /**

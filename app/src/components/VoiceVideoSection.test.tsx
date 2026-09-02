@@ -9,6 +9,8 @@ const audioTestStart = vi.hoisted(() => vi.fn());
 const audioTestStop = vi.hoisted(() => vi.fn());
 const audioTonePlay = vi.hoisted(() => vi.fn());
 const audioToneStop = vi.hoisted(() => vi.fn());
+const audioMonitorStart = vi.hoisted(() => vi.fn());
+const audioMonitorStop = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
@@ -20,6 +22,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioTestStop,
   audioTonePlay,
   audioToneStop,
+  audioMonitorStart,
+  audioMonitorStop,
   onAudio,
 }));
 
@@ -81,6 +85,8 @@ describe("VoiceVideoSection", () => {
     audioTestStop.mockReset().mockResolvedValue(undefined);
     audioTonePlay.mockReset().mockResolvedValue(undefined);
     audioToneStop.mockReset().mockResolvedValue(undefined);
+    audioMonitorStart.mockReset().mockResolvedValue(undefined);
+    audioMonitorStop.mockReset().mockResolvedValue(undefined);
     unlisten.mockReset();
     onAudio.mockReset().mockImplementation((handler) => {
       emit = handler;
@@ -296,7 +302,9 @@ describe("VoiceVideoSection", () => {
     render(<VoiceVideoSection />);
     await screen.findByLabelText(/output device/i);
 
-    expect(screen.queryByText(/through/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/^(Playing|Played) through/),
+    ).not.toBeInTheDocument();
   });
 
   it("reports an output that would not play rather than staying silent", async () => {
@@ -825,5 +833,76 @@ describe("VoiceVideoSection", () => {
     render(<VoiceVideoSection />);
 
     expect(await screen.findByRole("alert")).toBeVisible();
+  });
+
+  it("plays the microphone back when asked", async () => {
+    // The other half of the meter. A bar says the gate opened; this is the
+    // only way to hear a threshold set too high clipping the front of every
+    // sentence.
+    render(<VoiceVideoSection />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /^listen$/i }));
+
+    expect(audioMonitorStart).toHaveBeenCalled();
+  });
+
+  it("says where it is playing back, once the thread says so", async () => {
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "monitorStarted", device: "Built-in Speakers" });
+
+    expect(
+      await screen.findByRole("button", { name: /stop listening/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Playing back through Built-in Speakers/),
+    ).toBeVisible();
+  });
+
+  it("warns about the feedback loop it is one press away from", async () => {
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "monitorStarted", device: "Built-in Speakers" });
+
+    expect(
+      await screen.findByText(/Use headphones, or your microphone will hear/),
+    ).toBeVisible();
+  });
+
+  it("stops playing back when asked again", async () => {
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+    push({ state: "monitorStarted", device: "Built-in Speakers" });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /stop listening/i }),
+    );
+
+    expect(audioMonitorStop).toHaveBeenCalled();
+  });
+
+  it("leaves the button alone when the machine will not play it back", async () => {
+    // The button follows the audio thread rather than the press, so a machine
+    // with no working output leaves it where it was and says why.
+    render(<VoiceVideoSection />);
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+
+    push({ state: "monitorFailed", error: "there is no audio output device" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /no audio output device/,
+    );
+    expect(screen.getByRole("button", { name: /^listen$/i })).toBeVisible();
+  });
+
+  it("reports a listen command that never reached the backend", async () => {
+    audioMonitorStart.mockRejectedValue({ message: "no sound", detail: "no sound" });
+    render(<VoiceVideoSection />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /^listen$/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no sound/);
   });
 });
