@@ -11,6 +11,7 @@ import {
 import { channelLabel } from "../lib/labels";
 import { PersonMenu } from "./PersonMenu";
 import { RoomAvatar } from "./RoomAvatar";
+import { SidebarToggle } from "./SidebarToggle";
 import "./ChannelList.css";
 
 /**
@@ -492,6 +493,8 @@ interface Props {
   onSelect: (id: string) => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
+  /** Fold this column away. The control that brings it back is elsewhere. */
+  onFold: () => void;
 }
 
 /**
@@ -509,6 +512,7 @@ export function ChannelList({
   selfId,
   onSelect,
   onOpenRoom,
+  onFold,
 }: Props) {
   const text = space.channels.filter((channel) => channel.kind === "text");
   const voice = space.channels.filter((channel) => channel.kind === "voice");
@@ -552,6 +556,7 @@ export function ChannelList({
         <h2 className="channels__space" title={space.name}>
           {space.name}
         </h2>
+        <SidebarToggle folded={false} onToggle={onFold} />
       </header>
 
       {space.channels.length === 0 ? (

@@ -15,12 +15,17 @@
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
   padding: var(--space-3) var(--space-4);
   background: var(--surface-base);
   border-bottom: 1px solid var(--line-subtle);
 }
 
 .channels__space {
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   font-size: var(--text-base);

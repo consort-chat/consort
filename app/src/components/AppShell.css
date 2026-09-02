@@ -23,6 +23,15 @@
 }
 
 /*
+  Folded, the channel column is nothing at all rather than narrow. The rail
+  stays, which is what keeps the folded state navigable: spaces are still one
+  click away and the control that unfolds is in the pane's own header.
+*/
+.shell[data-sidebar="folded"] {
+  grid-template-columns: 72px 0 minmax(0, 1fr) auto;
+}
+
+/*
   The channel column is itself a two-row grid: the list scrolls, the user panel
   does not. `minmax(0, 1fr)` on the first row for the same reason as above, and
   because without it a long list makes the row taller than the column instead
@@ -40,6 +49,8 @@
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
   min-height: 0;
+  /* So a zero-width track holds nothing rather than spilling into the pane. */
+  overflow: hidden;
   background: var(--surface-base);
   border-right: 1px solid var(--line-subtle);
 }
@@ -65,6 +76,7 @@
   another one at the bottom.
 */
 .shell__main {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -102,6 +114,17 @@
   gap: var(--space-1);
   padding: var(--space-6);
   text-align: center;
+}
+
+/*
+  Pinned to the corner rather than centred with the words, because it is
+  furniture and they are the message. `place-content: center` above is what
+  puts the pane's contents in the middle, and this steps out of that.
+*/
+.shell__unfold {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
 }
 
 /*

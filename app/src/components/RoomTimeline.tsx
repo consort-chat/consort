@@ -25,6 +25,7 @@ import {
 } from "../lib/api";
 import { MessageGroups, group } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
+import { SidebarToggle } from "./SidebarToggle";
 import "./RoomTimeline.css";
 
 /**
@@ -55,12 +56,20 @@ export function RoomTimeline({
   channel,
   selfId,
   onOpenRoom,
+  onUnfold,
 }: {
   channel: Channel;
   /** Whoever is signed in, so a person's card can tell when it is about them. */
   selfId: string;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
+  /**
+   * Bring the channel list back, when it has been folded away.
+   *
+   * Absent while it is on screen, because the control that folds it lives in
+   * its own header and two of them would be one job with two answers.
+   */
+  onUnfold?: () => void;
 }) {
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -194,6 +203,10 @@ export function RoomTimeline({
   return (
     <section className="timeline" aria-label={`Messages in ${name}`}>
       <div className="timeline__head">
+        {onUnfold !== undefined && (
+          <SidebarToggle folded onToggle={onUnfold} />
+        )}
+        <div className="timeline__titles">
         <h1 className="timeline__name">
           {channel.kind === "voice" ? name : `#${name}`}
         </h1>
@@ -208,6 +221,7 @@ export function RoomTimeline({
             {channel.topic}
           </p>
         )}
+        </div>
       </div>
 
       <div

@@ -169,6 +169,56 @@ describe("AppShell", () => {
     memberNames.mockReset().mockResolvedValue({});
   });
 
+  it("folds the channel list away, and back", async () => {
+    const rooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!general:example.org", "general")],
+        },
+      ],
+    };
+    const { container } = shell({ rooms });
+    await userEvent.click(await screen.findByRole("button", { name: /general/i }));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /hide the channel list/i }),
+    );
+
+    expect(container.querySelector(".shell")).toHaveAttribute(
+      "data-sidebar",
+      "folded",
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /show the channel list/i }),
+    );
+
+    expect(container.querySelector(".shell")).not.toHaveAttribute(
+      "data-sidebar",
+    );
+  });
+
+  it("can be unfolded before any channel has been picked", async () => {
+    // The empty pane has no room header to hang the control on, so it carries
+    // its own. Without it, folding the list before choosing a channel is a
+    // one-way door.
+    const { container } = shell();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /hide the channel list/i }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /show the channel list/i }),
+    );
+
+    expect(container.querySelector(".shell")).not.toHaveAttribute(
+      "data-sidebar",
+    );
+  });
+
   it("keeps the session's identifiers out of the room, and in settings", async () => {
     // They were printed under the message pane while there was nothing else
     // to put there. A room is not a debug panel, and every one of them is two

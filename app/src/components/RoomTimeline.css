@@ -39,10 +39,21 @@
   chat client puts one.
 */
 .timeline__head {
+  display: flex;
   flex: none;
+  gap: var(--space-3);
+  align-items: center;
   min-width: 0;
   padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--line-subtle);
+}
+
+/*
+  The name and the topic, as one block, so the control that unfolds the channel
+  list sits beside both rather than beside the name with the topic under it.
+*/
+.timeline__titles {
+  min-width: 0;
 }
 
 /*

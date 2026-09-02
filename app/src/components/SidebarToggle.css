@@ -1,0 +1,35 @@
+/*
+  Quiet until it is wanted. It sits in a header beside a name that is the thing
+  being read, and a control drawn at the same weight would compete with it.
+*/
+.sidebar-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-toggle:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.sidebar-toggle__glyph {
+  width: 16px;
+  height: 16px;
+}

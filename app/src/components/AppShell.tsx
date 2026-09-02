@@ -22,6 +22,7 @@ import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
 import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
+import { SidebarToggle } from "./SidebarToggle";
 import { SpaceRail } from "./SpaceRail";
 import { ThreadPanel } from "./ThreadPanel";
 import { UserPanel } from "./UserPanel";
@@ -184,6 +185,12 @@ export function AppShell({
   const [spaceId, setSpaceId] = useState(HOME_ID);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /*
+    Whether the channel list is folded away. Here rather than in the list,
+    because the control that brings it back has to be somewhere the folding did
+    not hide, which is the pane.
+  */
+  const [folded, setFolded] = useState(false);
 
   /*
     Both selections are derived rather than trusted. A space can be left and a
@@ -268,7 +275,11 @@ export function AppShell({
         or a screen reader reaching a channel list that is still rendered
         behind a full-screen panel.
       */}
-      <div className="shell" inert={settingsOpen}>
+      <div
+        className="shell"
+        inert={settingsOpen}
+        {...(folded ? { "data-sidebar": "folded" } : {})}
+      >
       <SpaceRail
         spaces={rooms.spaces}
         selectedId={space?.id ?? HOME_ID}
@@ -286,6 +297,7 @@ export function AppShell({
               selfId={profile.user_id}
               onSelect={selectChannel}
               onOpenRoom={openRoom}
+              onFold={() => setFolded(true)}
             />
           )}
         </div>
@@ -378,6 +390,16 @@ export function AppShell({
         */}
         {channel === null ? (
           <div className="shell__empty">
+            {/*
+              Its own copy of the control, because this pane has no header to
+              put one in. Folding the list before picking a channel would
+              otherwise be a one-way door.
+            */}
+            {folded && (
+              <div className="shell__unfold">
+                <SidebarToggle folded onToggle={() => setFolded(false)} />
+              </div>
+            )}
             <h1 className="shell__empty-headline">{paneHeadline(channel)}</h1>
             <p className="shell__empty-detail">{paneDetail()}</p>
           </div>
@@ -387,6 +409,7 @@ export function AppShell({
             channel={channel}
             selfId={profile.user_id}
             onOpenRoom={openRoom}
+            {...(folded ? { onUnfold: () => setFolded(false) } : {})}
           />
         )}
       </main>

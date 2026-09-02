@@ -104,6 +104,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -119,6 +120,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           voice("!b:example.org", "Lounge"),
@@ -140,6 +142,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           text("!c:example.org", "zulu"),
           voice("!d:example.org", "Zulu Voice"),
@@ -162,6 +165,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -179,6 +183,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([])}
         selectedId={null}
         call={IDLE}
@@ -194,6 +199,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           text("!b:example.org", "random"),
@@ -219,6 +225,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -239,6 +246,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
         call={IDLE}
@@ -261,6 +269,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@ada:example.org", "Ada"),
@@ -286,6 +295,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@zoe:example.org", "Zoe"),
@@ -311,6 +321,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -331,6 +342,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -356,6 +368,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -382,6 +395,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -410,6 +424,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -430,6 +445,7 @@ describe("ChannelList", () => {
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
         call={IDLE}
@@ -459,6 +475,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -480,6 +497,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -497,6 +515,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId="!a:example.org"
           call={{
@@ -520,6 +539,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -543,6 +563,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "failed", roomId: LOUNGE, error: "no voice server" }}
@@ -563,6 +584,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@stale:example.org", "Stale")])])}
           selectedId={null}
           call={{
@@ -589,6 +611,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -616,6 +639,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -639,6 +663,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -668,6 +693,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -700,6 +726,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -723,6 +750,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -744,6 +772,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -776,6 +805,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -801,6 +831,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -828,6 +859,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "disconnected" }}
@@ -846,6 +878,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([
             voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
             voice("!b:example.org", "Music", [person("@bob:example.org", "Bob")]),
@@ -879,6 +912,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -896,6 +930,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={IDLE}
@@ -915,6 +950,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -953,6 +989,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([
             voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
           ])}
@@ -984,6 +1021,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -1026,6 +1064,7 @@ describe("ChannelList", () => {
         <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
