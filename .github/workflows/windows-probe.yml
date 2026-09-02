@@ -47,8 +47,12 @@ jobs:
         with:
           node-version: 24
 
+      # `corepack enable` and nothing else. `corepack prepare --activate` reads
+      # a `packageManager` field that this repository does not have, and the
+      # Windows runner starts in the repository root where there is no
+      # manifest at all for it to look in.
       - name: Enable pnpm
-        run: corepack enable && corepack prepare --activate
+        run: corepack enable pnpm
 
       - name: Install dependencies
         working-directory: app
