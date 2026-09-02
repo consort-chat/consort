@@ -9,6 +9,7 @@ import {
 } from "../lib/api";
 import { sizeLabel } from "../lib/labels";
 import { canPlay } from "../lib/playable";
+import { ImageViewer } from "./ImageViewer";
 import { MediaControls } from "./MediaControls";
 import "./MessageMedia.css";
 
@@ -56,6 +57,7 @@ export function MessageMedia({
   media: Media;
 }) {
   const [playing, setPlaying] = useState(false);
+  const [opened, setOpened] = useState(false);
   const [undecodable, setUndecodable] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -168,10 +170,25 @@ export function MessageMedia({
     );
   }
 
+  /*
+    A button rather than an `img` with a click handler, so the picture is
+    reachable from the keyboard and announces itself as something that opens.
+    In a room capped at 480 by 340, a screenshot of anything with words in it
+    cannot be read until it is opened.
+  */
   return (
-    <div className="media__frame" style={shapeOf(media)}>
-      <img className="media__image" src={source} alt={media.name} />
-    </div>
+    <>
+      <button
+        type="button"
+        className="media__frame"
+        style={shapeOf(media)}
+        aria-label={`Open ${media.name}`}
+        onClick={() => setOpened(true)}
+      >
+        <img className="media__image" src={source} alt={media.name} />
+      </button>
+      {opened && <ImageViewer media={media} onClose={() => setOpened(false)} />}
+    </>
   );
 }
 

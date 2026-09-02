@@ -69,6 +69,18 @@ describe("MessageMedia, for a picture", () => {
     });
   });
 
+  it("opens it full size when it is pressed", async () => {
+    // In a room capped at 480 by 340, a screenshot of anything with words in
+    // it cannot be read until it is opened.
+    render(<MessageMedia kind="image" media={PICTURE} />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /open screenshot\.png/i }),
+    );
+
+    expect(screen.getByRole("dialog", { name: "screenshot.png" })).toBeVisible();
+  });
+
   it("leaves the frame to be sized by what arrives when nobody measured it", () => {
     // `info` is optional off the wire. Guessing a ratio would be worse than
     // the jump: a tall picture drawn in a wide box moves twice.

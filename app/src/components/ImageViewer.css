@@ -1,0 +1,137 @@
+/*
+  A picture over the whole window.
+
+  Darker than the settings backdrop, because what is on top of it is a
+  photograph rather than a panel and anything lighter competes with it.
+*/
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  background: oklch(8% 0.01 285 / 0.92);
+}
+
+/*
+  Fills the backdrop and centres the picture in it, so the space either side of
+  a tall one is still somewhere a press closes from.
+*/
+.viewer__pane {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: var(--space-12) var(--space-6);
+}
+
+/*
+  Scaled to fit rather than to fill. A picture smaller than the window is drawn
+  at its own size: blowing a 200px avatar up to fill a monitor makes a mess of
+  it and answers a question nobody asked.
+*/
+.viewer__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.viewer__button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  background: oklch(16% 0.018 285 / 0.72);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.viewer__button:hover {
+  background: var(--surface-overlay);
+}
+
+.viewer__button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.viewer__button[aria-pressed="true"] {
+  background: var(--violet);
+  border-color: var(--violet);
+}
+
+/* Top left, which is where a window's close is on this desktop. */
+.viewer__close {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+}
+
+.viewer__tools {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  gap: var(--space-2);
+}
+
+/*
+  What is known about the picture, over the bottom of it rather than beside it,
+  so opening this never resizes what is being looked at.
+*/
+.viewer__facts {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  display: grid;
+  gap: var(--space-1);
+  max-width: min(520px, calc(100% - var(--space-12)));
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: oklch(16% 0.018 285 / 0.92);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  transform: translateX(-50%);
+}
+
+.viewer__fact {
+  display: flex;
+  gap: var(--space-4);
+  justify-content: space-between;
+  font-size: var(--text-xs);
+}
+
+.viewer__fact dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.viewer__fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.viewer__note {
+  position: absolute;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  max-width: calc(100% - var(--space-8));
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+  background: oklch(16% 0.018 285 / 0.92);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.viewer__note--warn {
+  color: var(--amber);
+}
