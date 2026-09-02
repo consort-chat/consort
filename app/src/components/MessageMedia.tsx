@@ -175,17 +175,25 @@ export function MessageMedia({
     reachable from the keyboard and announces itself as something that opens.
     In a room capped at 480 by 340, a screenshot of anything with words in it
     cannot be read until it is opened.
+
+    The measurements go on the picture rather than on the frame around it.
+    See `MessageMedia.css` for what putting them on the frame did.
   */
   return (
     <>
       <button
         type="button"
         className="media__frame"
-        style={shapeOf(media)}
         aria-label={`Open ${media.name}`}
         onClick={() => setOpened(true)}
       >
-        <img className="media__image" src={source} alt={media.name} />
+        <img
+          className="media__image"
+          src={source}
+          alt={media.name}
+          width={media.width}
+          height={media.height}
+        />
       </button>
       {opened && <ImageViewer media={media} onClose={() => setOpened(false)} />}
     </>
@@ -193,11 +201,14 @@ export function MessageMedia({
 }
 
 /**
- * The space to hold while the bytes are on their way.
+ * The shape of the card a clip waits behind.
  *
- * Empty for an attachment whose sender said nothing about its shape, which
- * leaves the frame sized by what arrives. Guessing a ratio would be worse than
- * the jump: a tall picture drawn in a wide box moves twice.
+ * Empty for a clip whose sender said nothing about its shape, which leaves the
+ * card at its minimum height. Guessing a ratio would be worse than the jump: a
+ * tall clip drawn in a wide box moves twice.
+ *
+ * Only the clip's card takes this. A picture carries its measurements on the
+ * `img` itself.
  */
 function shapeOf(media: Media): { aspectRatio?: string } {
   if (media.width === undefined || media.height === undefined) return {};

@@ -61,12 +61,27 @@ describe("MessageMedia, for a picture", () => {
   it("holds the space it will take before the bytes land", () => {
     // Otherwise every picture that loads shoves the conversation below it
     // downwards, which in a room that follows the bottom is the whole view
-    // moving under somebody reading.
+    // moving under somebody reading. On the picture rather than on the frame,
+    // so the browser derives the ratio the way it does for every other image
+    // on the web.
+    render(<MessageMedia kind="image" media={PICTURE} />);
+
+    const picture = screen.getByRole("img", { name: "screenshot.png" });
+    expect(picture).toHaveAttribute("width", "800");
+    expect(picture).toHaveAttribute("height", "600");
+  });
+
+  it("sizes the picture from the picture rather than from its frame", () => {
+    // The frame is a button, and a button is sized by its contents. A frame
+    // that took its shape from an `aspect-ratio` while its contents took
+    // their size from a percentage of the frame gave each layout pass a
+    // slightly larger answer than the last, and the picture crept outwards
+    // for as long as the room was open.
     const { container } = render(<MessageMedia kind="image" media={PICTURE} />);
 
-    expect(container.querySelector(".media__frame")).toHaveStyle({
-      aspectRatio: "800 / 600",
-    });
+    expect(container.querySelector(".media__frame")).not.toHaveAttribute(
+      "style",
+    );
   });
 
   it("opens it full size when it is pressed", async () => {
@@ -81,19 +96,19 @@ describe("MessageMedia, for a picture", () => {
     expect(screen.getByRole("dialog", { name: "screenshot.png" })).toBeVisible();
   });
 
-  it("leaves the frame to be sized by what arrives when nobody measured it", () => {
+  it("leaves the shape to what arrives when nobody measured it", () => {
     // `info` is optional off the wire. Guessing a ratio would be worse than
     // the jump: a tall picture drawn in a wide box moves twice.
-    const { container } = render(
+    render(
       <MessageMedia
         kind="image"
         media={{ source: PICTURE.source, name: "screenshot.png" }}
       />,
     );
 
-    expect(container.querySelector(".media__frame")).not.toHaveStyle({
-      aspectRatio: "800 / 600",
-    });
+    const picture = screen.getByRole("img", { name: "screenshot.png" });
+    expect(picture).not.toHaveAttribute("width");
+    expect(picture).not.toHaveAttribute("height");
   });
 });
 
