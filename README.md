@@ -56,6 +56,8 @@ at whatever homeserver you already run.
   session has no key for is drawn as a message it cannot read rather than left
   out: a gap that says nothing about itself cannot be told apart from a quiet
   room. Scrolling back asks the homeserver for more.
+- A card about whoever said something, from their name or their face in the
+  timeline, and the same card a name in a voice channel opens.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.

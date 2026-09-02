@@ -94,10 +94,34 @@
   align-items: start;
 }
 
+/*
+  A control, drawn as the picture it wraps. The button is here for the click
+  and the keyboard rather than for the eye, so it contributes no box of its
+  own and leaves the avatar occupying the column exactly as it did.
+*/
+.timeline__face-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+
+.timeline__face-button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .timeline__face {
   width: 36px;
   height: 36px;
   border-radius: 50%;
+  transition: opacity var(--duration-fast) var(--ease-out-expo);
+}
+
+.timeline__face-button:hover .timeline__face {
+  opacity: 0.8;
 }
 
 .timeline__said {
@@ -111,10 +135,31 @@
   margin: 0 0 var(--space-1);
 }
 
+/*
+  The same, for the name. Underlined on hover rather than recoloured: the
+  byline is what a reader scans down a room, and a colour that changed under
+  the pointer would make one message look unlike the rest of them.
+*/
 .timeline__who {
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--text-primary);
+  font-family: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
+  cursor: pointer;
+}
+
+.timeline__who:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.timeline__who:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-focus);
 }
 
 .timeline__at {

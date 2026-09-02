@@ -10,6 +10,9 @@ const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
+// For the card a name opens, which reads its own saved volume.
+const audioSettings = vi.hoisted(() => vi.fn());
+const setPersonVolume = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -21,6 +24,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberNames,
   memberAvatar,
   resendState,
+  audioSettings,
+  setPersonVolume,
 }));
 
 import { RoomTimeline, group } from "./RoomTimeline";
@@ -76,6 +81,13 @@ beforeEach(() => {
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada", [BOB]: "Bob" });
   memberAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
+  audioSettings.mockReset().mockResolvedValue({
+    input: null,
+    output: null,
+    gate: { open: -40, close: -50, hold: 200 },
+    personVolumes: {},
+  });
+  setPersonVolume.mockReset().mockResolvedValue(undefined);
 });
 
 /** Render the pane and hand back a way to publish into it. */
@@ -351,6 +363,44 @@ describe("RoomTimeline", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     expect(timelineSend).not.toHaveBeenCalled();
+  });
+
+  it("opens a card about whoever is being read when their name is pressed", async () => {
+    // The same card a name in a voice channel opens. Somebody reading a room
+    // and wondering who just said something should not have to find them in
+    // the sidebar first, and they may not be in a call to be found in.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ada" }));
+
+    expect(await screen.findByRole("dialog", { name: "Ada" })).toBeVisible();
+  });
+
+  it("opens it from the face as well as the name", async () => {
+    // Two targets for one thing, because both are what a hand goes for and
+    // the avatar is the larger of them.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Ada's picture" }),
+    );
+
+    expect(await screen.findByRole("dialog", { name: "Ada" })).toBeVisible();
+  });
+
+  it("opens the card for a sender the room has no name for", async () => {
+    // Their user ID is what the byline draws, so it is also what the card is
+    // about. A control that only works for people with a display name is a
+    // control that fails on exactly the person somebody wanted to look up.
+    memberNames.mockResolvedValue({});
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await userEvent.click(await screen.findByRole("button", { name: ADA }));
+
+    expect(await screen.findByRole("dialog", { name: ADA })).toBeVisible();
   });
 
   it("draws the clock time beside a group", async () => {

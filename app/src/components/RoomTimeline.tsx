@@ -20,8 +20,10 @@ import {
   NO_TIMELINE,
   type Channel,
   type Message,
+  type Participant,
   type Timeline,
 } from "../lib/api";
+import { PersonMenu } from "./PersonMenu";
 import { RoomAvatar } from "./RoomAvatar";
 import "./RoomTimeline.css";
 
@@ -118,6 +120,15 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /*
+    Whose card is open, and where it was asked for. One at a time, for the
+    reason the sidebar has the same rule: two cards about two people are two
+    volume sliders somebody has to tell apart by the heading.
+  */
+  const [opened, setOpened] = useState<{
+    person: Participant;
+    at: { x: number; y: number };
+  } | null>(null);
 
   const scroller = useRef<HTMLDivElement>(null);
   /*
@@ -266,42 +277,71 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
           </p>
         )}
 
-        {groups.map((one) => (
-          <article
-            className="timeline__group"
-            key={one.id}
-            aria-label={`${names[one.sender] ?? one.sender} at ${timeOf(one.at)}`}
-          >
-            <RoomAvatar
-              roomId={channel.id}
-              userId={one.sender}
-              name={names[one.sender] ?? one.sender}
-              className="timeline__face"
-            />
-            <div className="timeline__said">
-              <p className="timeline__byline">
-                <span className="timeline__who">
-                  {names[one.sender] ?? one.sender}
-                </span>
-                <time className="timeline__at" dateTime={new Date(one.at).toISOString()}>
-                  {timeOf(one.at)}
-                </time>
-              </p>
-              {one.messages.map((message) => (
-                <p
-                  key={message.id}
-                  className="timeline__body"
-                  data-kind={message.kind}
-                  title={dateOf(message.at)}
-                >
-                  {message.kind === "emote"
-                    ? `${names[message.sender] ?? message.sender} ${message.body}`
-                    : message.body}
+        {groups.map((one) => {
+          // Their display name if the room has told us one, and their user ID
+          // if it has not. Whichever it is, it is what the byline draws, what
+          // the group announces itself as, and what the card is about.
+          const who = names[one.sender] ?? one.sender;
+          const about = (event: { clientX: number; clientY: number }) =>
+            setOpened({
+              person: { id: one.sender, name: who },
+              at: { x: event.clientX, y: event.clientY },
+            });
+
+          return (
+            <article
+              className="timeline__group"
+              key={one.id}
+              aria-label={`${who} at ${timeOf(one.at)}`}
+            >
+              {/*
+                Two controls opening one card. The face is the larger target and
+                the name is the one being read, and a hand goes for either.
+              */}
+              <button
+                type="button"
+                className="timeline__face-button"
+                aria-haspopup="dialog"
+                aria-label={`${who}'s picture`}
+                onClick={about}
+              >
+                <RoomAvatar
+                  roomId={channel.id}
+                  userId={one.sender}
+                  name={who}
+                  className="timeline__face"
+                />
+              </button>
+              <div className="timeline__said">
+                <p className="timeline__byline">
+                  <button
+                    type="button"
+                    className="timeline__who"
+                    aria-haspopup="dialog"
+                    onClick={about}
+                  >
+                    {who}
+                  </button>
+                  <time className="timeline__at" dateTime={new Date(one.at).toISOString()}>
+                    {timeOf(one.at)}
+                  </time>
                 </p>
-              ))}
-            </div>
-          </article>
-        ))}
+                {one.messages.map((message) => (
+                  <p
+                    key={message.id}
+                    className="timeline__body"
+                    data-kind={message.kind}
+                    title={dateOf(message.at)}
+                  >
+                    {message.kind === "emote"
+                      ? `${who} ${message.body}`
+                      : message.body}
+                  </p>
+                ))}
+              </div>
+            </article>
+          );
+        })}
       </div>
 
       {problem !== null && (
@@ -344,6 +384,21 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
           Send
         </button>
       </form>
+
+      {/*
+        Outside the scrolling list rather than in the group that opened it, so
+        that it survives its own row being scrolled away and so that one is
+        open at a time.
+      */}
+      {opened !== null && (
+        <PersonMenu
+          key={opened.person.id}
+          person={opened.person}
+          roomId={channel.id}
+          at={opened.at}
+          onClose={() => setOpened(null)}
+        />
+      )}
     </section>
   );
 }
