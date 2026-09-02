@@ -1,23 +1,16 @@
 /*
   A picture in a conversation, in a frame that is exactly the size of it.
 
-  The frame sets no shape of its own, and that is load-bearing rather than
-  tidy. It used to fix its own with `aspect-ratio` while the picture inside it
-  took its height as a percentage of that shape, and a button lays its
-  contents out before it knows its own height, so each pass fed the previous
-  pass's answer back in. The picture grew a pixel at a time for as long as the
-  room stayed open, and faster while the window was being dragged, because
-  dragging is what forces the passes. The cap belongs on the picture, below,
-  where nothing reads it back.
+  The frame decides the box and the picture fills it. One direction, which is
+  the whole point: this has been broken twice by making it two.
 
-  `fit-content` so the frame is the picture's own size, and the 480 lives here
-  rather than on the picture. A frame is sized from what its contents ask for,
-  and a `min()` holding a percentage cannot be resolved while that is being
-  worked out, so the whole cap was ignored and the picture asked for its full
-  size: the frame took the width of the column and left the picture in the
-  corner of it. The absolute cap belongs where it can be read without knowing
-  anything, and the percentage belongs on the picture below, where by then the
-  frame has a width to be a percentage of.
+  `MessageMedia.tsx` writes the width here as `min(100%, Npx)` whenever the
+  sender measured the picture, where N already accounts for the 480 cap, the
+  picture's own width and the 340 height cap. It overrides the `fit-content`
+  below, which is left for the pictures nobody measured. The 480 is written
+  twice on purpose: `WIDEST` in the component and here for the case the
+  component cannot answer, and the two can only agree because N is never
+  larger.
 */
 .media__frame {
   display: block;
@@ -47,16 +40,21 @@
 }
 
 /*
-  Short enough that one screenshot does not push the message under it off the
-  bottom of a room somebody is reading. The width cap is on the frame above;
-  this fills whatever that settled on. The ratio comes from the `width` and
-  `height` the sender measured, which the browser reads off the element itself,
-  so the right box is held before a byte of the picture has arrived.
+  Whatever the frame settled on, and a height that follows from it.
+
+  `height: auto` is the load-bearing half. The `width` and `height` attributes
+  the sender's measurements go on are presentational hints that set both CSS
+  properties, so capping the width without releasing the height gave a picture
+  two independent sizes and no ratio between them: in the thread panel, whose
+  column is narrower than the cap, a landscape screenshot came out portrait.
+  With the height free, the browser derives it from those same attributes
+  before a byte has arrived, which is what stops a loading picture shoving the
+  conversation downwards.
 */
 .media__image {
   display: block;
-  max-width: 100%;
-  max-height: 340px;
+  width: 100%;
+  height: auto;
   transition: opacity var(--duration-fast) ease;
 }
 

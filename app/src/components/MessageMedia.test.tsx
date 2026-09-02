@@ -71,13 +71,73 @@ describe("MessageMedia, for a picture", () => {
     expect(picture).toHaveAttribute("height", "600");
   });
 
-  it("sizes the picture from the picture rather than from its frame", () => {
+  it("gives the frame the whole box, so nothing reads a size back", () => {
     // The frame is a button, and a button is sized by its contents. A frame
     // that took its shape from an `aspect-ratio` while its contents took
     // their size from a percentage of the frame gave each layout pass a
     // slightly larger answer than the last, and the picture crept outwards
-    // for as long as the room was open.
+    // for as long as the room was open. A width that is worked out from the
+    // measurements alone cannot do that: nothing in it depends on what the
+    // frame ends up being.
+    //
+    // 340 * 800 / 600 is 453, which is under the 480 cap, so that is what a
+    // picture this shape may use.
     const { container } = render(<MessageMedia kind="image" media={PICTURE} />);
+
+    expect(container.querySelector(".media__frame")).toHaveStyle({
+      width: "min(100%, 453px)",
+    });
+  });
+
+  it("keeps a tall picture's shape rather than squashing it to fit", () => {
+    // The bug this replaces. `width`/`height` on an `img` are presentational
+    // hints setting both CSS properties, so a 340px height cap and a 100%
+    // width cap both landed and neither axis was left to follow the other.
+    // In the thread panel, which is narrower still, a landscape screenshot
+    // came out portrait.
+    const { container } = render(
+      <MessageMedia
+        kind="image"
+        media={{ ...PICTURE, width: 800, height: 1200 }}
+      />,
+    );
+
+    // 340 * 800 / 1200, so 340 tall is exactly what it will be.
+    expect(container.querySelector(".media__frame")).toHaveStyle({
+      width: "min(100%, 227px)",
+    });
+  });
+
+  it("holds a wide picture to the width a room can spare", () => {
+    const { container } = render(<MessageMedia kind="image" media={CLIP} />);
+
+    expect(container.querySelector(".media__frame")).toHaveStyle({
+      width: "min(100%, 480px)",
+    });
+  });
+
+  it("never draws a picture larger than it was sent", () => {
+    const { container } = render(
+      <MessageMedia
+        kind="image"
+        media={{ ...PICTURE, width: 120, height: 90 }}
+      />,
+    );
+
+    expect(container.querySelector(".media__frame")).toHaveStyle({
+      width: "min(100%, 120px)",
+    });
+  });
+
+  it("leaves the frame to hug the picture when nobody measured it", () => {
+    // Nothing knows the shape until the bytes arrive, and the stylesheet's
+    // own cap is what holds it in the meantime.
+    const { container } = render(
+      <MessageMedia
+        kind="image"
+        media={{ source: PICTURE.source, name: "screenshot.png" }}
+      />,
+    );
 
     expect(container.querySelector(".media__frame")).not.toHaveAttribute(
       "style",

@@ -176,14 +176,16 @@ export function MessageMedia({
     In a room capped at 480 by 340, a screenshot of anything with words in it
     cannot be read until it is opened.
 
-    The measurements go on the picture rather than on the frame around it.
-    See `MessageMedia.css` for what putting them on the frame did.
+    The frame carries the whole box and the picture fills it, which is one
+    direction and cannot loop. See `boxOf` below, and `MessageMedia.css` for
+    what the other direction did.
   */
   return (
     <>
       <button
         type="button"
         className="media__frame"
+        style={boxOf(media)}
         aria-label={`Open ${media.name}`}
         onClick={() => setOpened(true)}
       >
@@ -198,6 +200,45 @@ export function MessageMedia({
       {opened && <ImageViewer media={media} onClose={() => setOpened(false)} />}
     </>
   );
+}
+
+/** The widest a picture may be drawn in a room, in pixels. */
+const WIDEST = 480;
+
+/**
+ * The tallest a picture may be drawn, in pixels.
+ *
+ * Short enough that one screenshot does not push the message under it off the
+ * bottom of a room somebody is reading.
+ */
+const TALLEST = 340;
+
+/**
+ * How wide to draw a picture's frame.
+ *
+ * Every term but the percentage is worked out here, because a percentage is
+ * the one thing only the browser can resolve and mixing the two is what broke
+ * this twice. A `min()` holding a percentage cannot be resolved while a
+ * shrink-to-fit box is being worked out, so the whole cap was dropped and the
+ * frame took the width of the column; and a frame that fixed its own shape
+ * while the picture inside took a percentage of that fed each layout pass the
+ * previous pass's answer, which is the picture that grew a pixel at a time.
+ *
+ * The number is the smallest of three: the cap a room can spare, the picture's
+ * own width so nothing is drawn larger than it was sent, and the width that
+ * keeps it inside `TALLEST`. The percentage is what keeps it inside a narrow
+ * column, which in the thread panel is most of them.
+ *
+ * Empty when the sender said nothing about the shape, which leaves the frame
+ * hugging whatever arrives under the stylesheet's own cap. Guessing a ratio
+ * would be worse than the jump.
+ */
+function boxOf(media: Media): { width?: string } {
+  const { width, height } = media;
+  if (width === undefined || height === undefined || height === 0) return {};
+
+  const room = Math.min(WIDEST, width, Math.round((TALLEST * width) / height));
+  return { width: `min(100%, ${room}px)` };
 }
 
 /**
