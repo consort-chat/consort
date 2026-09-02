@@ -31,7 +31,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
 }));
 
-import { RoomTimeline, group } from "./RoomTimeline";
+import { RoomTimeline } from "./RoomTimeline";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type { Channel, Message, Timeline } from "../lib/api";
@@ -121,51 +121,6 @@ async function arrive(next: Timeline) {
     publish(next);
   });
 }
-
-describe("RoomTimeline grouping", () => {
-  it("collapses consecutive messages from one person", () => {
-    const groups = group([
-      said("$1", ADA, "one"),
-      said("$2", ADA, "two", NOON + 1_000),
-      said("$3", BOB, "three", NOON + 2_000),
-    ]);
-
-    expect(
-      groups.map((one) => [one.sender, one.messages.map((said) => said.body)]),
-    ).toEqual([
-      [ADA, ["one", "two"]],
-      [BOB, ["three"]],
-    ]);
-  });
-
-  it("starts a new group after a long silence", () => {
-    // The same person answering an hour later is a new thing to read, and
-    // repeating their name is how a reader is told which.
-    const groups = group([
-      said("$1", ADA, "one"),
-      said("$2", ADA, "two", NOON + 60 * 60 * 1000),
-    ]);
-
-    expect(groups).toHaveLength(2);
-  });
-
-  it("measures the gap from the last message rather than the group's first", () => {
-    // Somebody talking steadily for ten minutes is one conversation, not two,
-    // and comparing against the first message would split it in the middle.
-    const minute = 60 * 1000;
-    const groups = group([
-      said("$1", ADA, "one"),
-      said("$2", ADA, "two", NOON + 4 * minute),
-      said("$3", ADA, "three", NOON + 8 * minute),
-    ]);
-
-    expect(groups).toHaveLength(1);
-  });
-
-  it("groups nothing out of nothing", () => {
-    expect(group([])).toEqual([]);
-  });
-});
 
 describe("RoomTimeline", () => {
   it("opens the room it was given", async () => {

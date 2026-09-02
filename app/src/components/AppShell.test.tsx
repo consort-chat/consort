@@ -15,6 +15,7 @@ const roomAvatar = vi.hoisted(() => vi.fn());
 // nothing anybody awaits, which surfaces as an unhandled rejection attributed
 // to whichever test happened to be running.
 const onTimeline = vi.hoisted(() => vi.fn());
+const onThread = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
@@ -29,6 +30,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onAudio,
   logout,
   onTimeline,
+  onThread,
   timelineOpen,
   timelineClose,
   timelineEarlier,
@@ -159,6 +161,7 @@ describe("AppShell", () => {
     logout.mockReset().mockResolvedValue(undefined);
     roomAvatar.mockReset().mockResolvedValue(null);
     onTimeline.mockReset().mockResolvedValue(() => {});
+    onThread.mockReset().mockResolvedValue(() => {});
     timelineOpen.mockReset().mockResolvedValue(undefined);
     timelineClose.mockReset().mockResolvedValue(undefined);
     timelineEarlier.mockReset().mockResolvedValue(undefined);

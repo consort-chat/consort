@@ -18,6 +18,7 @@ const onVerificationFlow = vi.hoisted(() =>
 );
 const onKeyBackup = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
 const onRooms = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
+const onThread = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
 const resendState = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("./lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lib/api")>()),
@@ -30,6 +31,7 @@ vi.mock("./lib/api", async (importOriginal) => ({
   onVerificationFlow,
   onKeyBackup,
   onRooms,
+  onThread,
   resendState,
 }));
 

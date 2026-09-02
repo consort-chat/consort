@@ -34,6 +34,7 @@ const verificationRecover = vi.hoisted(() => vi.fn());
 // nothing anybody awaits, which surfaces as an unhandled rejection attributed
 // to whichever test happened to be running.
 const onTimeline = vi.hoisted(() => vi.fn());
+const onThread = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
@@ -64,6 +65,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   verificationOtherSessionsExist,
   verificationRecoveryExists,
   onTimeline,
+  onThread,
   timelineOpen,
   timelineClose,
   timelineEarlier,
@@ -191,6 +193,7 @@ function resetApiMocks() {
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
   onTimeline.mockReset().mockResolvedValue(() => {});
+  onThread.mockReset().mockResolvedValue(() => {});
   timelineOpen.mockReset().mockResolvedValue(undefined);
   timelineClose.mockReset().mockResolvedValue(undefined);
   timelineEarlier.mockReset().mockResolvedValue(undefined);
@@ -563,7 +566,10 @@ describe("SignedIn verification state", () => {
 
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
 
-    await waitFor(() => expect(resendState).toHaveBeenCalledTimes(1));
+    // Called rather than called once. The thread panel catches itself up too,
+    // on its own subscription, and this test is about the order rather than
+    // the count: the assertion that matters is the one inside the mock.
+    await waitFor(() => expect(resendState).toHaveBeenCalled());
   });
 
   it("does not ask to be caught up if it unmounted while subscribing", async () => {

@@ -23,6 +23,7 @@ import { ChannelList } from "./ChannelList";
 import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
 import { SpaceRail } from "./SpaceRail";
+import { ThreadPanel } from "./ThreadPanel";
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";
 import { VerificationFlowPanel } from "./VerificationFlow";
@@ -389,6 +390,15 @@ export function AppShell({
           />
         )}
       </main>
+
+      {/*
+        A column of its own rather than something over the room, and a sibling
+        of the pane rather than a child of it: a thread is read alongside the
+        conversation it came out of, and one drawn on top would cover the
+        messages somebody opened it to compare against. It draws nothing at all
+        while none is open, so the track it sits in costs nothing.
+      */}
+      <ThreadPanel selfId={profile.user_id} onOpenRoom={openRoom} />
       </div>
 
       {settingsOpen && (

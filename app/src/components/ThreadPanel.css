@@ -1,0 +1,91 @@
+/*
+  A thread, in a column of its own beside the room.
+
+  Fixed rather than proportional. The room is what somebody is reading and the
+  thread is what they stepped aside into, so this takes a known slice and gives
+  the rest back; a panel sized as a fraction of the window would take half a
+  small one.
+*/
+.thread {
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  min-height: 0;
+  background: var(--surface-base);
+  border-left: 1px solid var(--line-subtle);
+}
+
+/* The room's own header height, so the two line up across the rule. */
+.thread__head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.thread__name {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.thread__close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.thread__close:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.thread__close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.thread__scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  padding: var(--space-4) var(--space-6);
+  overflow-y: auto;
+}
+
+/*
+  The message the thread hangs from, marked off from the replies. It is what
+  they are about rather than the first of them, and a root that looked like a
+  reply would read as a conversation starting halfway through.
+*/
+.thread__root {
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.thread__more {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}

@@ -10,10 +10,14 @@
   `1fr` refuses to shrink below the intrinsic width of its contents, so one
   long unbroken string, a room ID for instance, would push the whole layout
   wider than the window and put a horizontal scrollbar on the app.
+
+  The fourth column is the thread panel, and `auto` because it is usually not
+  there at all: the panel draws nothing while no thread is open, and a track
+  with nothing in it takes no width.
 */
 .shell {
   display: grid;
-  grid-template-columns: 72px 240px minmax(0, 1fr);
+  grid-template-columns: 72px 240px minmax(0, 1fr) auto;
   height: 100%;
   background: var(--surface-base);
 }
