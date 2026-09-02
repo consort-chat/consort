@@ -233,6 +233,21 @@ function accountPanel(): Promise<HTMLElement> {
   return screen.findByRole("group", { name: "Account" });
 }
 
+/**
+ * Wait for the verification banner to leave, which is what being verified
+ * looks like now.
+ *
+ * The anchor several tests below used to have was the banner's own "This
+ * session is verified.", and a verified session says nothing at all.
+ */
+async function gone(): Promise<void> {
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("status", { name: "Session verification" }),
+    ).not.toBeInTheDocument(),
+  );
+}
+
 describe("SignedIn", () => {
   beforeEach(() => {
     resetApiMocks();
@@ -508,15 +523,27 @@ describe("SignedIn verification state", () => {
     expect(screen.getByText(/encrypted calls/i)).toBeVisible();
   });
 
-  it("says the session is verified once it is", async () => {
+  it("says nothing at all once the session is verified", async () => {
+    // The banner is a warning, and a warning that sits on screen permanently
+    // saying everything is fine is a strip of the window somebody stops
+    // reading. Verified is the ordinary state and wants no words.
     render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
     await waitFor(() => expect(onVerification).toHaveBeenCalled());
 
+    act(() => verificationHandler()({ state: "unverified" }));
+    expect(
+      await screen.findByText("This session is not verified."),
+    ).toBeVisible();
+
     act(() => verificationHandler()({ state: "verified" }));
 
-    expect(await screen.findByText("This session is verified.")).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("status", { name: "Session verification" }),
+      ).not.toBeInTheDocument(),
+    );
     expect(
-      screen.queryByText("This session is not verified."),
+      screen.queryByText("This session is verified."),
     ).not.toBeInTheDocument();
   });
 
@@ -665,7 +692,7 @@ describe("SignedIn starting a verification", () => {
 
     act(() => verificationHandler()({ state: "verified" }));
 
-    await screen.findByText("This session is verified.");
+    await gone();
     expect(
       screen.queryByRole("button", { name: /verify this session/i }),
     ).not.toBeInTheDocument();
@@ -1003,7 +1030,7 @@ describe("SignedIn verifying with a recovery key", () => {
 
     act(() => verificationHandler()({ state: "verified" }));
 
-    await screen.findByText("This session is verified.");
+    await gone();
     expect(screen.queryByLabelText(/recovery key/i)).not.toBeInTheDocument();
   });
 });

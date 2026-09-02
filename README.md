@@ -23,9 +23,10 @@ at whatever homeserver you already run.
   in your system keyring.
 - Cross-signing is bootstrapped on first login, which the voice layer will
   require later (MSC4153 only accepts media keys from cross-signed devices).
-- The signed-in screen says whether the sync loop is connected and whether this
-  session is verified, and says "checking" rather than guessing while it does
-  not know.
+- The signed-in screen says whether the sync loop is connected, and says so
+  about verification only while there is something to say: a session that is
+  not verified, or one nothing has looked at yet, gets a banner, and a verified
+  one gets no words at all.
 - Emoji verification, in both directions. Press "Verify this session" here, or
   start one from Element or another Consort on the same account. Either way you
   compare the seven pictures and this session becomes verified, which is what

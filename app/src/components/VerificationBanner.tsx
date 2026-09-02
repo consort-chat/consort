@@ -23,6 +23,13 @@ import "./VerificationBanner.css";
  * and this is the one piece of the interface that tells somebody their
  * messages cannot be decrypted. It does not get folded into a corner because
  * the layout has one.
+ *
+ * A verified session draws nothing. This is a warning, and a warning that is
+ * permanently on screen saying everything is fine is a strip of the window
+ * somebody learns to skip, which is the strip the real warning has to appear
+ * in. `unknown` still speaks, because it is not the same claim: it is the
+ * launch state, it says only that nothing has looked yet, and going quiet for
+ * it would render "not known" as "fine".
  */
 export function VerificationBanner({
   state,
@@ -97,12 +104,12 @@ export function VerificationBanner({
       .finally(() => setPending(false));
   }
 
+  if (state === "verified") return null;
+
   const headline =
-    state === "verified"
-      ? "This session is verified."
-      : state === "unverified"
-        ? "This session is not verified."
-        : "Checking whether this session is verified.";
+    state === "unverified"
+      ? "This session is not verified."
+      : "Checking whether this session is verified.";
 
   return (
     <section
