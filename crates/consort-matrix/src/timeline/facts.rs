@@ -58,7 +58,7 @@ use crate::timeline::dto::{Media, Message, MessageKind};
 const NO_KEY: &str = "Waiting for the key to this message.";
 
 /// What this build says instead of a message it cannot draw.
-const NOT_SUPPORTED: &str = "A file or image. Consort cannot show these yet.";
+const NOT_SUPPORTED: &str = "A message Consort cannot draw.";
 
 /// One event as a message, or `None` when it is not one to draw.
 pub fn message(event: &TimelineEvent) -> Option<Message> {

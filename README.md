@@ -9,9 +9,9 @@ down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
 > **Status: early.** Consort signs you in, remembers you, verifies itself,
-> draws your rooms, joins voice channels, and reads and sends text in a room.
-> Threads, edits, reactions and attachments are not built, and the README will
-> stop saying this when they land.
+> draws your rooms, joins voice channels, and reads and sends text and
+> attachments in a room. Threads, edits, reactions and sending an attachment
+> are not built, and the README will stop saying this when they land.
 
 ---
 
@@ -66,11 +66,14 @@ at whatever homeserver you already run.
   timeline, and the same card a name in a voice channel opens. A dot on the
   face says whether they are here, when the homeserver will say; most have
   presence switched off, and no dot is drawn rather than a grey one.
-- Pictures and clips. An image is drawn in the room as soon as the room is, and
-  a video waits for somebody to ask for it, because scrolling back through a
-  room of them should not download every one. Encrypted rooms work the same
-  way: the file is decrypted here and never becomes a string on its way to the
-  window.
+- Attachments. A picture is drawn in the room as soon as the room is and opens
+  full size when you press it; a clip waits behind its own thumbnail, because
+  scrolling back through a room of them should not download every one. Both
+  come from a scheme served by Rust that answers range requests, so a clip can
+  be seeked and neither is ever held in the window as a string. A file or a
+  voice note is a card that opens your desktop's Save As window. Whatever words
+  were sent with any of them are drawn underneath. Encrypted rooms work the
+  same way: the file is decrypted here.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.
@@ -78,12 +81,18 @@ at whatever homeserver you already run.
 ## What does not work yet
 
 Threads, edits, reactions, replies drawn as replies, redactions, sending an
-attachment, files and audio as anything but a line saying so, read receipts and
-typing notifications. Links in a message are drawn but go nowhere, because
-opening one outside the window needs a Tauri plugin this build does not grant.
-A message this session has no key for stays that way until the room is
-reopened. A message sent from here appears when the sync brings it back rather
-than immediately, because there is no local echo yet.
+attachment, playing a voice note, read receipts and typing notifications. Links
+in a message are drawn but go nowhere, because opening one outside the window
+needs a Tauri plugin this build does not grant. A message sent from here
+appears when the sync brings it back rather than immediately, because there is
+no local echo yet.
+
+Playing a clip needs codecs this application does not ship. Consort renders
+through WebKitGTK, which decodes through GStreamer, so an mp4 needs an H.264
+and an AAC decoder to be installed on the machine. Where they are missing the
+clip says so and offers to save itself instead of showing you a garbled
+picture. On Arch that is `gst-libav`, `gst-plugins-ugly` and `gst-plugins-bad`;
+on Debian and Fedora the equivalent `gstreamer1.0-libav` packages.
 See [the roadmap](#roadmap).
 
 ---
@@ -135,8 +144,8 @@ Arch is the distro this is developed on, so it is the one most likely to work.
 `pnpm tauri build` writes a `.deb` and an `.rpm` to `target/release/bundle/`:
 
 ```sh
-sudo apt install ./target/release/bundle/deb/Consort_0.1.3_amd64.deb
-sudo dnf install ./target/release/bundle/rpm/Consort-0.1.3-1.x86_64.rpm
+sudo apt install ./target/release/bundle/deb/Consort_0.1.4_amd64.deb
+sudo dnf install ./target/release/bundle/rpm/Consort-0.1.4-1.x86_64.rpm
 ```
 
 Both are built and installed locally. Neither is signed, and neither is served
@@ -555,7 +564,8 @@ whether a model wrote them or you did.
 | Audio device pickers, a level meter and an output test | working |
 | RNNoise voice activity detection with hysteresis gating | working |
 | Reading and sending text in a room | working |
-| Threads, edits, reactions and attachments | planned |
+| Reading attachments, and saving them anywhere | working |
+| Threads, edits, reactions and sending attachments | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 
 "Working" is doing some work in that first row, and it is not a synonym for
@@ -567,8 +577,8 @@ session you cannot verify is an account rather than a usable client.
 It is doing some work in the text row too. A room's messages are drawn, in
 order, with names and avatars, and typing into the box sends one. What is not
 there is everything a conversation grows once it is busy: threads, edits,
-reactions, attachments, and a reply drawn as a reply rather than as quoted
-text.
+reactions, sending an attachment, and a reply drawn as a reply rather than as
+quoted text.
 
 ## Known limitations
 

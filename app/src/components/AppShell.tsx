@@ -150,12 +150,12 @@ interface Props {
  * one click from being joined. The first two are fixed width and the third
  * takes what is left, so the furniture stays put when the window changes size.
  *
- * The main pane is empty on purpose. Text messaging is not built, and a pane
- * full of placeholder chrome would imply otherwise. What it does hold is
- * everything that has to be said about the session itself: a verification
- * flow in progress, whether this session is verified, whether room keys
- * survive it, and where the access token ended up. None of that fits in a
- * sixty pixel strip, which is why none of it is in one.
+ * The main pane holds the selected room, and above it whatever has to be said
+ * about the session itself: a verification flow in progress, whether this
+ * session is verified, whether room keys survive it, and where the access
+ * token ended up. None of that fits in a sixty pixel strip, which is why none
+ * of it is in one, and none of it is drawn at all when there is nothing to
+ * say: an empty box still takes the space around it.
  */
 export function AppShell({
   profile,
