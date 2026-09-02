@@ -41,10 +41,12 @@ pub mod dto;
 mod facts;
 mod history;
 mod media;
+mod thread;
 
-pub use dto::{Media, Message, MessageKind, Timeline};
+pub use dto::{Media, Message, MessageKind, Thread, ThreadSummary, Timeline};
 pub use history::History;
 pub use media::{Attachment, bytes, media};
+pub use thread::thread;
 
 use std::collections::HashMap;
 

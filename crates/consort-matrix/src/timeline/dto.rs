@@ -44,6 +44,40 @@ pub struct Timeline {
     pub loading: bool,
 }
 
+/// One thread as it is currently loaded, oldest reply first.
+///
+/// Its own value rather than a field on [`Timeline`], because a thread is open
+/// or it is not: a room whose panel is shut should not be carrying a copy of
+/// somebody's last conversation, and a reader that has just been handed a room
+/// should not have to work out whether the thread attached to it is still the
+/// one being looked at.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Thread {
+    /// The room the thread is in, on the same terms as [`Timeline::room_id`].
+    pub room_id: String,
+    /// The event ID of the message the thread hangs from.
+    ///
+    /// Load-bearing for the same reason as `room_id`: opening one thread and
+    /// then another puts two of these in flight, and the reader draws the one
+    /// whose root it asked for.
+    pub root_id: String,
+    /// The message it hangs from, drawn at the top of the panel.
+    ///
+    /// `None` when the homeserver would not hand it over, which a redaction
+    /// and a missing key both look like. The replies are still worth reading,
+    /// so a thread with no root is drawn rather than refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<Message>,
+    /// The replies, oldest first, which is the order they are drawn in.
+    pub messages: Vec<Message>,
+    /// Whether there are older replies than the ones here.
+    ///
+    /// The homeserver is asked for the recent end of a long thread, so this is
+    /// how the panel says the top of what it is showing is not the beginning.
+    pub more_before: bool,
+}
+
 /// One message in a room.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -3777,4 +3777,168 @@ mod timeline {
             assert!(timeline::media(&client, HANDLE).await.is_err());
         }
     }
+    /// Reading one thread out of a room.
+    ///
+    /// The whole of this is network shaped: a `/relations` page for the
+    /// replies and a `/event` fetch for the message they hang from. Neither
+    /// can be reached from a unit test, and both are where the mistakes are.
+    mod threads {
+        use super::*;
+        use matrix_sdk::test_utils::mocks::RoomRelationsResponseTemplate;
+
+        const ROOT: &str = "$root:example.org";
+
+        /// A reply in the thread rooted at [`ROOT`].
+        fn reply(id: &str, body: &str, at: u64) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.message",
+                "event_id": id,
+                "room_id": ROOM,
+                "sender": OTHER,
+                "origin_server_ts": at,
+                "content": {
+                    "msgtype": "m.text",
+                    "body": body,
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": ROOT,
+                    },
+                },
+            })
+        }
+
+        /// Answer `/relations` with `chunk` and an optional token for the page
+        /// behind it.
+        async fn mount_relations(
+            server: &MatrixMockServer,
+            chunk: Vec<serde_json::Value>,
+            prev_batch: Option<&str>,
+        ) {
+            let mut template = RoomRelationsResponseTemplate::default()
+                .events(chunk.into_iter().map(raw).collect::<Vec<_>>());
+            if let Some(token) = prev_batch {
+                template = template.prev_batch(token);
+            }
+            server
+                .mock_room_relations()
+                .expect_any_access_token()
+                .ok(template)
+                .mount()
+                .await;
+        }
+
+        /// Answer `/event` with the message the thread hangs from.
+        async fn mount_root(server: &MatrixMockServer) {
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(said(ROOT, "what shall we call it", 1_000)).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+        }
+
+        #[tokio::test]
+        async fn a_thread_comes_back_oldest_first() {
+            // The homeserver is asked backwards, so that a long thread hands
+            // back its recent end rather than its beginning. What is drawn
+            // reads downwards like every other conversation, so the order is
+            // turned round here rather than in the interface.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            mount_root(&server).await;
+            mount_relations(
+                &server,
+                vec![
+                    reply("$b:example.org", "second", 3_000),
+                    reply("$a:example.org", "first", 2_000),
+                ],
+                None,
+            )
+            .await;
+
+            let thread = timeline::thread(&client, ROOM, ROOT).await.unwrap();
+
+            let bodies: Vec<&str> = thread.messages.iter().map(|m| m.body.as_str()).collect();
+            assert_eq!(bodies, vec!["first", "second"]);
+        }
+
+        #[tokio::test]
+        async fn a_thread_carries_the_message_it_hangs_from() {
+            // Fetched rather than taken from the room, because a thread can be
+            // opened from a message the room has since scrolled past.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            mount_root(&server).await;
+            mount_relations(&server, vec![reply("$a:example.org", "first", 2_000)], None).await;
+
+            let thread = timeline::thread(&client, ROOM, ROOT).await.unwrap();
+
+            let root = thread.root.expect("the root was fetched");
+            assert_eq!(root.id, ROOT);
+            assert_eq!(root.body, "what shall we call it");
+            assert_eq!(thread.root_id, ROOT);
+            assert_eq!(thread.room_id, ROOM);
+        }
+
+        #[tokio::test]
+        async fn a_thread_longer_than_one_page_says_there_is_more() {
+            // Otherwise a long thread quietly draws its recent end as though
+            // that were the whole of it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            mount_root(&server).await;
+            mount_relations(
+                &server,
+                vec![reply("$a:example.org", "first", 2_000)],
+                Some("t-earlier"),
+            )
+            .await;
+
+            let thread = timeline::thread(&client, ROOM, ROOT).await.unwrap();
+
+            assert!(thread.more_before);
+        }
+
+        #[tokio::test]
+        async fn a_thread_whose_root_cannot_be_fetched_is_still_a_thread() {
+            // A redacted root, or one this session has no key for. The replies
+            // are readable and are what somebody opened the panel to read.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            mount_relations(&server, vec![reply("$a:example.org", "first", 2_000)], None).await;
+
+            let thread = timeline::thread(&client, ROOM, ROOT).await.unwrap();
+
+            assert!(thread.root.is_none());
+            assert_eq!(thread.messages.len(), 1);
+        }
+
+        #[tokio::test]
+        async fn something_that_is_not_a_room_id_is_refused_rather_than_fetched() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+
+            let error = timeline::thread(&client, "not a room id", ROOT)
+                .await
+                .unwrap_err();
+
+            assert!(!error.user_message().is_empty());
+        }
+    }
 }

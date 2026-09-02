@@ -85,6 +85,14 @@ pub enum Error {
     #[error("`{user_id}` is not a Matrix user ID")]
     NoSuchUser { user_id: String },
 
+    /// A command named something that is not a Matrix event ID.
+    ///
+    /// Only reachable from an event ID the interface did not get out of a
+    /// message, which today is none of them. Kept for the same reason as
+    /// [`Self::NoSuchUser`]: the parse has to answer something.
+    #[error("`{event_id}` is not a Matrix event ID")]
+    NoSuchEvent { event_id: String },
+
     /// Somebody pressed send with nothing typed.
     #[error("a message with no text in it")]
     EmptyMessage,
@@ -213,6 +221,10 @@ impl Error {
             Self::NoSuchRoom { .. } => {
                 "That room is not one this account is in. It may have been left from another \
                  session."
+                    .to_owned()
+            }
+            Self::NoSuchEvent { .. } => {
+                "That message is not one Consort can find, so its thread cannot be opened."
                     .to_owned()
             }
             Self::EmptyMessage => "There is nothing to send.".to_owned(),

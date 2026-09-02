@@ -60,8 +60,30 @@ const NO_KEY: &str = "Waiting for the key to this message.";
 /// What this build says instead of a message it cannot draw.
 const NOT_SUPPORTED: &str = "A message Consort cannot draw.";
 
-/// One event as a message, or `None` when it is not one to draw.
+/// Where the message being read is going to be drawn.
+///
+/// The only thing it decides is what to do with a thread reply, which belongs
+/// in exactly one of the two and would be a conversation happening twice if it
+/// were drawn in both.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// The room's own timeline.
+    Room,
+    /// One thread inside it.
+    Thread,
+}
+
+/// One event as a message in a room, or `None` when it is not one to draw.
 pub fn message(event: &TimelineEvent) -> Option<Message> {
+    read(event, Reading::Room)
+}
+
+/// One event as a message in a thread, or `None` when it is not one to draw.
+pub fn in_thread(event: &TimelineEvent) -> Option<Message> {
+    read(event, Reading::Thread)
+}
+
+fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
     if event.kind.is_utd() {
         return undecryptable(event);
     }
@@ -75,14 +97,17 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
         return None;
     };
 
-    // Before the body is read, because a thread reply has one and drawing it
+    // Before the body is read, because both of these have one and drawing it
     // is the thing being avoided. `Reply` is deliberately not matched: see the
     // header.
-    if matches!(
-        said.content.relates_to,
-        Some(Relation::Thread(_) | Relation::Replacement(_))
-    ) {
-        return None;
+    match said.content.relates_to {
+        // An edit, wherever it turns up. It carries the replacement text and
+        // nothing here can attach it to the message it replaces.
+        Some(Relation::Replacement(_)) => return None,
+        // In the room it is half of a conversation happening elsewhere. In the
+        // thread it is the conversation.
+        Some(Relation::Thread(_)) if reading == Reading::Room => return None,
+        _ => {}
     }
 
     // All three text types carry a `formatted_body`, and reading it for one of
@@ -767,6 +792,39 @@ mod tests {
             message(&sent(text("hello"))).expect("a message").thread,
             None
         );
+    }
+
+    #[test]
+    fn a_thread_reply_is_kept_when_the_thread_is_what_is_being_read() {
+        let threaded = sent(json!({
+            "msgtype": "m.text",
+            "body": "in the thread",
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+            },
+        }));
+
+        assert_eq!(
+            in_thread(&threaded).expect("a reply is the thread").body,
+            "in the thread"
+        );
+    }
+
+    #[test]
+    fn an_edit_is_left_out_of_a_thread_too() {
+        // It carries the replacement text, and a panel that drew it would show
+        // a second copy of a sentence somebody corrected.
+        let edit = sent(json!({
+            "msgtype": "m.text",
+            "body": "* corrected",
+            "m.relates_to": {
+                "rel_type": "m.replace",
+                "event_id": "$earlier:example.org",
+            },
+        }));
+
+        assert_eq!(in_thread(&edit), None);
     }
 
     #[test]
