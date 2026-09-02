@@ -399,6 +399,24 @@ pub async fn timeline_send_for(
     Ok(())
 }
 
+/// Say something in a thread.
+///
+/// The same as saying something in the room, with the relation that puts it in
+/// the thread rather than under it. `latest_id` is the last thing the panel is
+/// showing, and it only decorates the reply fallback a client that knows
+/// nothing about threads draws.
+pub async fn thread_send_for(
+    state: &AppState,
+    room_id: String,
+    root_id: String,
+    latest_id: String,
+    body: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::send_in_thread(&client, &room_id, &root_id, &latest_id, &body).await?;
+    Ok(())
+}
+
 /// The room to say something to one person in, made if there is not one.
 ///
 /// A create is a side effect, which is unusual for something a click reaches,
@@ -1091,6 +1109,18 @@ pub async fn timeline_send(
     body: String,
 ) -> Result<(), CommandError> {
     timeline_send_for(&state, room_id, body).await
+}
+
+/// See `thread_send_for`.
+#[tauri::command]
+pub async fn thread_send(
+    state: State<'_, AppState>,
+    room_id: String,
+    root_id: String,
+    latest_id: String,
+    body: String,
+) -> Result<(), CommandError> {
+    thread_send_for(&state, room_id, root_id, latest_id, body).await
 }
 
 /// Write one attachment wherever somebody chooses, and say where that was.
@@ -3343,6 +3373,23 @@ mod against_a_mock_homeserver {
                 threads(&sink).last().is_some_and(Option::is_none),
                 "the panel was not shut with the room"
             );
+        }
+
+        #[tokio::test]
+        async fn replying_in_a_thread_while_signed_out_is_refused_first() {
+            let (_dir, state, _sink) = state();
+
+            let refused = thread_send_for(
+                &state,
+                GENERAL.to_owned(),
+                "$root:example.org".to_owned(),
+                "$last:example.org".to_owned(),
+                "hello".to_owned(),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(!refused.message.is_empty());
         }
 
         #[tokio::test]

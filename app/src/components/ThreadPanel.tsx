@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  asCommandError,
   memberNames,
   onThread,
   resendState,
   threadOpen,
+  threadSend,
   type Participant,
   type Thread,
 } from "../lib/api";
@@ -40,6 +42,9 @@ export function ThreadPanel({
     person: Participant;
     at: { x: number; y: number };
   } | null>(null);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,6 +110,30 @@ export function ThreadPanel({
 
   if (thread === null) return null;
 
+  /*
+    What the reply is answering, for the fallback a client with no idea about
+    threads draws. The last thing said in the thread, or the message it hangs
+    from when nobody has said anything yet.
+  */
+  const answering = thread.messages.at(-1)?.id ?? thread.rootId;
+
+  async function reply() {
+    if (thread === null || draft.trim() === "" || sending) return;
+
+    setSending(true);
+    setProblem(null);
+    try {
+      await threadSend(thread.roomId, thread.rootId, answering, draft);
+      // Cleared only once the homeserver has it. A box that empties on a send
+      // that failed loses what somebody wrote.
+      setDraft("");
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <aside className="thread" aria-label="Thread">
       <div className="thread__head">
@@ -154,6 +183,47 @@ export function ThreadPanel({
           onAbout={(person, at) => setOpened({ person, at })}
         />
       </div>
+
+      {problem !== null && (
+        <p className="thread__problem" role="alert">
+          {problem}
+        </p>
+      )}
+
+      <form
+        className="thread__composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void reply();
+        }}
+      >
+        <label className="thread__label" htmlFor="thread-draft">
+          Reply in this thread
+        </label>
+        <textarea
+          id="thread-draft"
+          className="thread__draft"
+          rows={1}
+          value={draft}
+          placeholder="Reply in this thread"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter sends and Shift+Enter breaks the line, the same as the
+            // room's box. Two boxes on one screen behaving differently is
+            // worse than either behaviour on its own.
+            if (event.key !== "Enter" || event.shiftKey) return;
+            event.preventDefault();
+            void reply();
+          }}
+        />
+        <button
+          type="submit"
+          className="thread__send"
+          disabled={draft.trim() === "" || sending}
+        >
+          Reply
+        </button>
+      </form>
 
       {opened !== null && (
         <PersonMenu

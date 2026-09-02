@@ -1466,6 +1466,23 @@ export function threadOpen(rootId: string | null): Promise<void> {
 }
 
 /**
+ * Say something in a thread.
+ *
+ * `latestId` is the last reply the panel is showing, or the root when it is
+ * showing none. It only decorates the reply fallback a client that knows
+ * nothing about threads draws, so a stale one changes nothing about which
+ * thread the message lands in.
+ */
+export function threadSend(
+  roomId: string,
+  rootId: string,
+  latestId: string,
+  body: string,
+): Promise<void> {
+  return invoke<void>("thread_send", { roomId, rootId, latestId, body });
+}
+
+/**
  * Say something in a room.
  *
  * The message appears when the sync brings it round rather than immediately.

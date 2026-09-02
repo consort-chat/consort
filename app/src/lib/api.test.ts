@@ -33,6 +33,7 @@ import {
   onAudio,
   onThread,
   threadOpen,
+  threadSend,
   resendState,
   roomAvatar,
   setAudioSettings,
@@ -255,6 +256,22 @@ describe("threads", () => {
 
     expect(invoke).toHaveBeenCalledWith("thread_open", {
       rootId: "$root:example.org",
+    });
+  });
+
+  it("names the thread a reply belongs in and what it is answering", async () => {
+    await threadSend(
+      "!general:example.org",
+      "$root:example.org",
+      "$last:example.org",
+      "Consort",
+    );
+
+    expect(invoke).toHaveBeenCalledWith("thread_send", {
+      roomId: "!general:example.org",
+      rootId: "$root:example.org",
+      latestId: "$last:example.org",
+      body: "Consort",
     });
   });
 

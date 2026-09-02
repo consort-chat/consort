@@ -183,6 +183,7 @@ pub fn run() {
             commands::timeline_close,
             commands::timeline_earlier,
             commands::thread_open,
+            commands::thread_send,
             commands::timeline_send,
             commands::direct_room,
             commands::timeline_media_save,

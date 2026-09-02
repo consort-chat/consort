@@ -3602,6 +3602,88 @@ mod timeline {
     }
 
     #[tokio::test]
+    async fn a_reply_in_a_thread_says_which_thread_it_is_in() {
+        // Without the relation it is an ordinary message in the room, which
+        // is the one thing somebody typing into a thread panel did not mean.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "Consort",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    // The fallback a client that knows nothing about threads
+                    // draws, which is why it points at the last thing said
+                    // rather than at the root.
+                    "is_falling_back": true,
+                    "m.in_reply_to": { "event_id": "$last:example.org" },
+                },
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::send_in_thread(
+            &client,
+            ROOM,
+            "$root:example.org",
+            "$last:example.org",
+            "Consort",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reply_with_nothing_in_it_never_reaches_the_homeserver() {
+        // The same rule the room's composer has. Nothing is mounted, so a send
+        // that got past this would fail loudly rather than quietly pass.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::send_in_thread(
+            &client,
+            ROOM,
+            "$root:example.org",
+            "$last:example.org",
+            "   ",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_reply_to_something_that_is_not_an_event_is_refused() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let refused = timeline::send_in_thread(&client, ROOM, "not an event", "$l", "hello")
+            .await
+            .unwrap_err();
+
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
     async fn sending_nothing_never_reaches_the_homeserver() {
         // Nothing is mounted for a send here, so a request would fail and the
         // answer would be right for the wrong reason. The point is that the

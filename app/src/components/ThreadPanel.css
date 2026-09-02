@@ -89,3 +89,83 @@
   font-size: var(--text-xs);
   text-align: center;
 }
+
+.thread__problem {
+  flex: none;
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-6);
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.thread__composer {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: end;
+  padding: 0 var(--space-6) var(--space-4);
+}
+
+/*
+  Present for a screen reader and not for the eye, because the box carries the
+  same words as a placeholder and reading them twice is noise.
+*/
+.thread__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.thread__draft {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  /*
+    Grows with what is typed, up to a point, then scrolls. The cap is lower
+    than the room's: this column is narrow, and a box that took half of it
+    would leave the thread it is answering off the top of the panel.
+  */
+  field-sizing: content;
+  max-height: 25vh;
+  resize: none;
+}
+
+.thread__draft:focus-visible {
+  outline: none;
+  border-color: var(--violet);
+  box-shadow: var(--shadow-focus);
+}
+
+.thread__send {
+  padding: var(--space-2) var(--space-3);
+  background: var(--violet);
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.thread__send:hover:not(:disabled) {
+  background: var(--violet-hover);
+}
+
+.thread__send:active:not(:disabled) {
+  background: var(--violet-press);
+}
+
+.thread__send:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

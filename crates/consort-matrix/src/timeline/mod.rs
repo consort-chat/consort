@@ -53,11 +53,12 @@ use std::collections::HashMap;
 use futures_util::StreamExt;
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
-use matrix_sdk::ruma::RoomId;
 use matrix_sdk::ruma::api::Direction;
 use matrix_sdk::ruma::events::AnySyncTimelineEvent;
-use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
+use matrix_sdk::ruma::events::room::message::{Relation, RoomMessageEventContent};
 use matrix_sdk::ruma::serde::Raw;
+use matrix_sdk::ruma::{EventId, OwnedEventId, RoomId};
 use matrix_sdk::{Client, Room};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -609,23 +610,61 @@ impl Loaded {
 /// sync brings it back, which is the same path every other message in the room
 /// takes. See the module header for why there is no local echo.
 pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
+    let content = written(body)?;
+    room_of(client, room_id)?.send(content).await?;
+    Ok(())
+}
+
+/// Say something in a thread.
+///
+/// `latest_id` is the last thing said in the thread as far as the caller
+/// knows, and it goes on the reply fallback rather than on the relation
+/// itself. A client that understands threads reads `event_id` and puts this in
+/// the right conversation; one that does not sees an ordinary reply pointing
+/// at whatever was being answered, which is the whole reason the fallback is
+/// there. Stale is harmless: nothing about which thread this belongs to
+/// depends on it.
+pub async fn send_in_thread(
+    client: &Client,
+    room_id: &str,
+    root_id: &str,
+    latest_id: &str,
+    body: &str,
+) -> Result<()> {
+    let mut content = written(body)?;
+    let root = event_id_of(root_id)?;
+    let latest = event_id_of(latest_id)?;
+    content.relates_to = Some(Relation::Thread(ThreadRelation::plain(root, latest)));
+
+    room_of(client, room_id)?.send(content).await?;
+    Ok(())
+}
+
+/// What was typed, as something to send.
+fn written(body: &str) -> Result<RoomMessageEventContent> {
     // Trimmed before it is judged empty, so that a stray newline from a text
     // area is not a message. Sent untrimmed is not an option either: leading
     // spaces in a pasted code block are the message.
     if body.trim().is_empty() {
         return Err(Error::EmptyMessage);
     }
+    Ok(RoomMessageEventContent::text_markdown(body))
+}
 
+/// The room this account is in, by ID.
+fn room_of(client: &Client, room_id: &str) -> Result<Room> {
     let parsed = RoomId::parse(room_id).map_err(|_| Error::NoSuchRoom {
         room_id: room_id.to_owned(),
     })?;
-    let room = client.get_room(&parsed).ok_or_else(|| Error::NoSuchRoom {
+    client.get_room(&parsed).ok_or_else(|| Error::NoSuchRoom {
         room_id: room_id.to_owned(),
-    })?;
+    })
+}
 
-    room.send(RoomMessageEventContent::text_markdown(body))
-        .await?;
-    Ok(())
+fn event_id_of(event_id: &str) -> Result<OwnedEventId> {
+    EventId::parse(event_id).map_err(|_| Error::NoSuchEvent {
+        event_id: event_id.to_owned(),
+    })
 }
 
 #[cfg(test)]

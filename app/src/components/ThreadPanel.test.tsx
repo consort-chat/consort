@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const onThread = vi.hoisted(() => vi.fn());
 const threadOpen = vi.hoisted(() => vi.fn());
+const threadSend = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onThread,
   threadOpen,
+  threadSend,
   resendState,
   memberNames,
   memberAvatar,
@@ -55,6 +57,7 @@ beforeEach(() => {
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada" });
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
+  threadSend.mockReset().mockResolvedValue(undefined);
   audioSettings.mockReset().mockResolvedValue({ people: {} });
   setPersonVolume.mockReset().mockResolvedValue(undefined);
   onThread.mockReset().mockImplementation((handler: typeof publish) => {
@@ -183,6 +186,82 @@ describe("ThreadPanel", () => {
     expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
+  it("replies into the thread it is showing", async () => {
+    await opened();
+
+    await userEvent.type(screen.getByRole("textbox"), "Consort");
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await waitFor(() =>
+      expect(threadSend).toHaveBeenCalledWith(
+        GENERAL,
+        "$root:example.org",
+        "$a:example.org",
+        "Consort",
+      ),
+    );
+  });
+
+  it("answers the root itself when nothing has been replied yet", async () => {
+    // The fallback has to point at something, and in an empty thread the only
+    // thing said so far is the message it hangs from.
+    await opened({ ...OPEN, messages: [] });
+
+    await userEvent.type(screen.getByRole("textbox"), "first");
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await waitFor(() =>
+      expect(threadSend).toHaveBeenCalledWith(
+        GENERAL,
+        "$root:example.org",
+        "$root:example.org",
+        "first",
+      ),
+    );
+  });
+
+  it("keeps what was typed when the send failed", async () => {
+    // Retyping a message is the one thing an interface must never ask for.
+    threadSend.mockRejectedValue({ message: "The homeserver refused that." });
+    await opened();
+
+    await userEvent.type(screen.getByRole("textbox"), "Consort");
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(
+      await screen.findByText("The homeserver refused that."),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("Consort");
+  });
+
+  it("empties the box once the homeserver has it", async () => {
+    await opened();
+
+    await userEvent.type(screen.getByRole("textbox"), "Consort");
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+  });
+
+  it("sends nothing when nothing has been typed", async () => {
+    await opened();
+
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(threadSend).not.toHaveBeenCalled();
+  });
+
+  it("sends on Enter and breaks the line on Shift+Enter", async () => {
+    await opened();
+    const box = screen.getByRole("textbox");
+
+    await userEvent.type(box, "one{Shift>}{Enter}{/Shift}two");
+    expect(threadSend).not.toHaveBeenCalled();
+
+    await userEvent.type(box, "{Enter}");
+    await waitFor(() => expect(threadSend).toHaveBeenCalled());
+  });
+
   it("offers no way further in, because there is nowhere further to go", async () => {
     // Every message here is already in the thread being read.
     await opened({
@@ -192,6 +271,8 @@ describe("ThreadPanel", () => {
       ],
     });
 
-    expect(screen.queryByRole("button", { name: /repl/i })).toBeNull();
+    // The count, not the composer's own Reply, which is how anything gets
+    // said in here.
+    expect(screen.queryByRole("button", { name: /\d+ repl/i })).toBeNull();
   });
 });

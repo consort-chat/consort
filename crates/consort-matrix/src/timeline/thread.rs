@@ -17,15 +17,15 @@
 //! asked about. What comes back is turned round before it is handed on, so the
 //! panel draws downwards like every other conversation.
 
+use matrix_sdk::Client;
 use matrix_sdk::room::{IncludeRelations, RelationsOptions};
+use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::api::Direction;
 use matrix_sdk::ruma::events::relation::RelationType;
-use matrix_sdk::ruma::{EventId, RoomId, UInt};
-use matrix_sdk::{Client, Room};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::timeline::dto::Thread;
-use crate::timeline::facts;
+use crate::timeline::{event_id_of, facts, room_of};
 
 /// How many replies one page holds.
 ///
@@ -37,9 +37,7 @@ const PAGE: u32 = 50;
 /// Everything currently readable in the thread hanging from `root_id`.
 pub async fn thread(client: &Client, room_id: &str, root_id: &str) -> Result<Thread> {
     let room = room_of(client, room_id)?;
-    let root_event_id = EventId::parse(root_id).map_err(|_| Error::NoSuchEvent {
-        event_id: root_id.to_owned(),
-    })?;
+    let root_event_id = event_id_of(root_id)?;
 
     // Fetched rather than taken from the room's own timeline, because a thread
     // can be opened from a message that has since scrolled out of what is
@@ -79,15 +77,5 @@ pub async fn thread(client: &Client, room_id: &str, root_id: &str) -> Result<Thr
         root,
         messages,
         more_before: relations.prev_batch_token.is_some(),
-    })
-}
-
-/// The room this account is in, by ID.
-fn room_of(client: &Client, room_id: &str) -> Result<Room> {
-    let parsed = RoomId::parse(room_id).map_err(|_| Error::NoSuchRoom {
-        room_id: room_id.to_owned(),
-    })?;
-    client.get_room(&parsed).ok_or_else(|| Error::NoSuchRoom {
-        room_id: room_id.to_owned(),
     })
 }
