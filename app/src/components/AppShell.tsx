@@ -343,26 +343,6 @@ export function AppShell({
         ) : (
           <RoomTimeline key={channel.id} channel={channel} />
         )}
-
-        {/*
-          Not decoration. The device ID is the value you need when checking
-          cross-signing state or matching this session in a homeserver's device
-          list, and that is exactly what the next milestone gets debugged with.
-        */}
-        <dl className="shell__facts">
-          <div>
-            <dt>User ID</dt>
-            <dd data-selectable>{profile.user_id}</dd>
-          </div>
-          <div>
-            <dt>Device</dt>
-            <dd data-selectable>{profile.device_id}</dd>
-          </div>
-          <div>
-            <dt>Homeserver</dt>
-            <dd data-selectable>{profile.homeserver}</dd>
-          </div>
-        </dl>
       </main>
       </div>
 

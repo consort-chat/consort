@@ -99,40 +99,6 @@
   font-size: var(--text-sm);
 }
 
-.shell__facts {
-  display: grid;
-  gap: 1px;
-  margin: 0;
-  overflow: hidden;
-  background: var(--line-subtle);
-  border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-md);
-}
-
-.shell__facts > div {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: baseline;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface-raised);
-}
-
-.shell__facts dt {
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.shell__facts dd {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
-}
-
 /*
   The fallback notice. Deliberately quiet: it is information, not a failure,
   and styling it as a warning would make a working install look broken.

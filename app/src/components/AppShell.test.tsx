@@ -166,6 +166,21 @@ describe("AppShell", () => {
     memberNames.mockReset().mockResolvedValue({});
   });
 
+  it("keeps the session's identifiers out of the room, and in settings", async () => {
+    // They were printed under the message pane while there was nothing else
+    // to put there. A room is not a debug panel, and every one of them is two
+    // clicks away under My Account, which is where somebody looking for their
+    // device ID goes.
+    shell();
+
+    expect(screen.queryByText("ABCDEFGH")).not.toBeInTheDocument();
+    expect(screen.queryByText("https://example.org")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /user settings/i }));
+
+    expect(await screen.findByText("ABCDEFGH")).toBeVisible();
+  });
+
   it("opens settings from the gear on the user strip", async () => {
     shell();
 

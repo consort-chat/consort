@@ -226,8 +226,7 @@ const fileFallback: TokenStorage = {
  * It used to be this screen's `h1`, and several tests below used that heading
  * as their "the signed-in screen has rendered" anchor. A thirty-two pixel
  * strip in a corner is not a page heading, so the anchor is the labelled group
- * instead. `within` matters: the user ID is also printed among the session
- * facts, so a bare text query would find two of it.
+ * instead.
  */
 function accountPanel(): Promise<HTMLElement> {
   return screen.findByRole("group", { name: "Account" });
@@ -270,19 +269,6 @@ describe("SignedIn", () => {
     expect(
       within(await accountPanel()).getByText("@bob:example.org"),
     ).toBeVisible();
-  });
-
-  it("prints the device ID, which is what you need for verification", async () => {
-    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
-
-    expect(await screen.findByText("HZTIUXZKUU")).toBeVisible();
-  });
-
-  it("prints the user ID and homeserver", async () => {
-    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
-
-    expect(await screen.findByText("@bob:example.org")).toBeVisible();
-    expect(screen.getByText("https://example.org/")).toBeVisible();
   });
 
   it("builds the avatar initial from the name, without the sigil", async () => {
