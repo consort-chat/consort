@@ -46,12 +46,12 @@ use crate::timeline::dto::{Message, MessageKind};
 
 /// What this build says instead of an encrypted message it has no key for.
 ///
-/// Written for a person, like every other user-facing string in this crate.
-/// It says what happened and whose problem it is, because the two most likely
-/// causes are a device that has not been verified and a sender who was offline
-/// when the key went out, and neither is something the reader did.
-const NO_KEY: &str =
-    "This message cannot be read. The key for it has not reached this session yet.";
+/// Short on purpose. A room that was busy while this session was away is a
+/// screen full of these, and a screen full of sentences beginning "cannot"
+/// reads as a broken client rather than as what it is. A key that has not
+/// arrived is a wait, so this says it is waiting and leaves it there; the
+/// interface draws something turning beside it.
+const NO_KEY: &str = "Waiting for the key to this message.";
 
 /// What this build says instead of a message it cannot draw.
 const NOT_SUPPORTED: &str = "A file or image. Consort cannot show these yet.";
@@ -423,6 +423,43 @@ mod tests {
         assert_eq!(said.sender, "@bob:example.org");
         assert_eq!(said.at, 1_700_000_000_000);
         assert!(!said.body.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_message_reads_as_a_wait_rather_than_a_failure() {
+        // A room that was quiet while this session was away is a screen full
+        // of these, and a screen full of sentences beginning "cannot" reads as
+        // a broken client. What it is is a key that has not arrived yet, and
+        // one short line says so without filling the room with it.
+        let encrypted = TimelineEvent::from_utd(
+            Raw::new(&json!({
+                "type": "m.room.encrypted",
+                "event_id": "$sealed:example.org",
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1_700_000_000_000u64,
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgAEnB...",
+                    "session_id": "session",
+                },
+            }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("session".to_owned()),
+                reason: matrix_sdk::deserialized_responses::UnableToDecryptReason::MissingMegolmSession {
+                    withheld_code: None,
+                },
+            },
+        );
+
+        let body = message(&encrypted)
+            .expect("an unreadable message is still a message")
+            .body;
+
+        assert!(body.contains("Waiting"), "{body}");
+        assert!(!body.to_lowercase().contains("cannot"), "{body}");
+        assert!(body.len() < 40, "{body}");
     }
 
     #[test]

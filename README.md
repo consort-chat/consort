@@ -53,9 +53,9 @@ at whatever homeserver you already run.
   person on two devices appears once.
 - Reading and sending text in a room. Consecutive messages from one person are
   drawn as one, emotes and notices are drawn as themselves, and a message this
-  session has no key for is drawn as a message it cannot read rather than left
-  out: a gap that says nothing about itself cannot be told apart from a quiet
-  room. Scrolling back asks the homeserver for more.
+  session has no key for is drawn as one still waiting for its key rather than
+  left out: a gap that says nothing about itself cannot be told apart from a
+  quiet room. Scrolling back asks the homeserver for more.
 - Markdown, both ways. What you type is read as markdown and sent with the
   formatting beside the plain text, so it arrives formatted in Element too, and
   what arrives formatted is drawn that way here. The HTML is never handed to

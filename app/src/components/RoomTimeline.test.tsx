@@ -331,14 +331,14 @@ describe("RoomTimeline", () => {
         {
           id: "$1",
           sender: ADA,
-          body: "This message cannot be read.",
+          body: "Waiting for the key to this message.",
           at: NOON,
           kind: "undecryptable",
         },
       ]),
     );
 
-    expect(await screen.findByText(/cannot be read/i)).toBeVisible();
+    expect(await screen.findByText(/waiting for the key/i)).toBeVisible();
   });
 
   it("puts the hash on a text channel and not on a voice one", async () => {

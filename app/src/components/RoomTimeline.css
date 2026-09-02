@@ -342,8 +342,45 @@
   font-style: italic;
 }
 
+/*
+  A wait, drawn as one. A room that was busy while this session was away is a
+  screen full of these, and twelve boxed sentences read as twelve errors; a
+  short line with something turning beside it reads as what it is, which is a
+  key that has not arrived yet.
+*/
 .timeline__body[data-kind="undecryptable"] {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
   border-left-color: var(--amber);
+}
+
+.timeline__body[data-kind="undecryptable"]::before {
+  content: "";
+  flex: none;
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid var(--amber);
+  /* The gap is what makes a ring look like it is turning at all. */
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: timeline-waiting 900ms linear infinite;
+}
+
+@keyframes timeline-waiting {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/*
+  Still a ring, and still amber, but still. Something spinning forever in the
+  corner of the eye is exactly what this setting exists to turn off.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .timeline__body[data-kind="undecryptable"]::before {
+    animation: none;
+  }
 }
 
 .timeline__problem {
