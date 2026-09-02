@@ -131,6 +131,12 @@ fn speaking_sink(
 /// lives on a thread of its own and only the handle is here.
 pub struct AppState {
     client: RwLock<Option<Client>>,
+    /// The attachments the media scheme is holding.
+    ///
+    /// Here rather than in `media.rs` because a range request arrives outside
+    /// any command, so the protocol handler reaches it the same way a command
+    /// reaches everything else: through the managed state.
+    media: Mutex<crate::media::Cache>,
     store: SessionStore,
     /// Held for the duration of a login or a logout.
     ///
@@ -312,6 +318,7 @@ impl AppState {
 
         Self {
             client: RwLock::new(None),
+            media: Mutex::new(crate::media::Cache::new()),
             store,
             auth_gate: Mutex::new(()),
             refresh_task: Mutex::new(None),
@@ -691,6 +698,11 @@ impl AppState {
     /// The signed-in client, if there is one.
     pub async fn client(&self) -> Option<Client> {
         self.client.read().await.clone()
+    }
+
+    /// The attachments held for the media scheme.
+    pub fn media_cache(&self) -> &Mutex<crate::media::Cache> {
+        &self.media
     }
 
     /// Adopt a signed-in client, and start the background work that goes with

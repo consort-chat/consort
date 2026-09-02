@@ -13,6 +13,7 @@ mod call;
 mod commands;
 mod ears;
 mod events;
+mod media;
 mod renderer;
 mod settings;
 mod sound;
@@ -26,6 +27,61 @@ use consort_matrix::SessionStore;
 use tauri::{Manager, WindowEvent};
 
 use crate::state::AppState;
+
+/// Answer one request on the attachment scheme.
+///
+/// Held bytes first, because a media element asks for one file in a few
+/// hundred ranges and each one would otherwise be a download and a decryption
+/// of the whole thing.
+///
+/// Every refusal is a status and a sentence rather than a panic. This runs
+/// outside any command, so there is nothing above it to catch anything, and
+/// what a broken request should produce is a broken picture rather than a
+/// window that goes away.
+async fn serve(
+    app: &tauri::AppHandle,
+    path: &str,
+    range: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::StatusCode;
+
+    let Some(handle) = media::handle(path) else {
+        return media::refuse(StatusCode::BAD_REQUEST, "not an attachment handle");
+    };
+    let state = app.state::<AppState>();
+
+    // Its own statement so the guard is dropped before the fetch below, which
+    // is a homeserver round trip and must not be made holding the cache.
+    let cached = state.media_cache().lock().await.get(&handle);
+    let held = match cached {
+        Some(held) => held,
+        None => {
+            let attachment = match commands::attachment_for(&state, &handle).await {
+                Ok(attachment) => attachment,
+                Err(error) => {
+                    tracing::warn!(detail = error.detail(), "could not serve an attachment");
+                    return media::refuse(StatusCode::NOT_FOUND, error.message());
+                }
+            };
+            let held = std::sync::Arc::new(media::Held {
+                mime: attachment.mime,
+                bytes: attachment.bytes,
+            });
+            state
+                .media_cache()
+                .lock()
+                .await
+                .insert(handle, held.clone());
+            held
+        }
+    };
+
+    media::respond(
+        &held.bytes,
+        held.mime,
+        media::wanted(range, held.bytes.len() as u64),
+    )
+}
 
 /// Start the application.
 pub fn run() {
@@ -70,6 +126,24 @@ pub fn run() {
     }
 
     builder
+        // Attachments, in ranges, so a clip can be seeked and a picture never
+        // becomes a string. See `media.rs` for why this is not a blob and what
+        // is in the URL. Asynchronous because answering means a homeserver
+        // fetch and a decryption, and a synchronous handler would do both on
+        // the thread drawing the window.
+        .register_asynchronous_uri_scheme_protocol(media::SCHEME, |context, request, responder| {
+            let app = context.app_handle().clone();
+            let range = request
+                .headers()
+                .get(tauri::http::header::RANGE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let path = request.uri().path().to_owned();
+
+            tauri::async_runtime::spawn(async move {
+                responder.respond(serve(&app, &path, range.as_deref()).await);
+            });
+        })
         .setup(|app| {
             let data_dir = resolve_data_dir(app.handle())?;
             let store = SessionStore::new(&data_dir);
@@ -109,7 +183,6 @@ pub fn run() {
             commands::timeline_close,
             commands::timeline_earlier,
             commands::timeline_send,
-            commands::timeline_media,
             commands::direct_room,
             commands::audio_devices,
             commands::audio_settings,

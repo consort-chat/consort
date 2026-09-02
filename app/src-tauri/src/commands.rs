@@ -36,10 +36,10 @@ pub struct CommandError {
 
 /// Read accessors for the two halves.
 ///
-/// Test-only. In the application both fields cross the IPC boundary by
-/// serialisation and are never read from Rust, so exposing them outside a test
-/// build would be API nobody calls.
-#[cfg(test)]
+/// Almost everything that produces one of these hands it straight across the
+/// IPC boundary, where both fields go out by serialisation. The exception is
+/// the attachment scheme in `lib.rs`, which answers with a status and a
+/// sentence rather than with JSON and so has to read them.
 impl CommandError {
     /// What the UI will render.
     pub fn message(&self) -> &str {
@@ -397,16 +397,17 @@ pub async fn direct_room_for(state: &AppState, user_id: String) -> Result<String
     Ok(rooms::direct(&client, &user_id).await?)
 }
 
-/// The bytes of one attachment, by the handle its message carried.
+/// One attachment as something to draw, by the handle its message carried.
 ///
-/// Raw rather than encoded, and the one command in this file whose answer is
-/// not JSON: a photograph is megabytes and base64 would add a third to that
-/// before the webview had to hold it as a string. See
-/// `consort_matrix::timeline::media` for what is refused and why it is refused
-/// on this side.
-pub async fn timeline_media_for(state: &AppState, source: String) -> Result<Vec<u8>, CommandError> {
+/// Not a command. It is what the `consortmedia` scheme in `lib.rs` answers a
+/// range request with, and it lives here so that the client lookup and the
+/// error mapping are the same ones every command uses.
+pub async fn attachment_for(
+    state: &AppState,
+    handle: &str,
+) -> Result<timeline::Attachment, CommandError> {
     let client = signed_in_client(state).await?;
-    Ok(timeline::media(&client, &source).await?)
+    Ok(timeline::media(&client, handle).await?)
 }
 
 /// What devices this machine has, and which of them are in use.
@@ -1011,10 +1012,6 @@ pub async fn timeline_send(
     timeline_send_for(&state, room_id, body).await
 }
 
-/// The bytes of one attachment, by the handle its message carried.
-///
-/// Answers with an `ArrayBuffer` rather than JSON, which is what a
-/// `tauri::ipc::Response` is for. See `timeline_media_for`.
 /// The room to say something to one person in. See `direct_room_for`.
 #[tauri::command]
 pub async fn direct_room(
@@ -1022,16 +1019,6 @@ pub async fn direct_room(
     user_id: String,
 ) -> Result<String, CommandError> {
     direct_room_for(&state, user_id).await
-}
-
-#[tauri::command]
-pub async fn timeline_media(
-    state: State<'_, AppState>,
-    source: String,
-) -> Result<tauri::ipc::Response, CommandError> {
-    timeline_media_for(&state, source)
-        .await
-        .map(tauri::ipc::Response::new)
 }
 
 /// One room's avatar, as a data URL.
@@ -2751,9 +2738,7 @@ mod against_a_mock_homeserver {
     async fn asking_for_an_attachment_while_signed_out_says_so() {
         let (_dir, state, _sink) = state();
 
-        let error = timeline_media_for(&state, "{}".to_owned())
-            .await
-            .unwrap_err();
+        let error = attachment_for(&state, "{}").await.unwrap_err();
 
         assert!(!error.message().is_empty());
     }
@@ -2769,9 +2754,7 @@ mod against_a_mock_homeserver {
             .await
             .unwrap();
 
-        let error = timeline_media_for(&state, "nonsense".to_owned())
-            .await
-            .unwrap_err();
+        let error = attachment_for(&state, "nonsense").await.unwrap_err();
 
         assert!(!error.message().is_empty());
     }

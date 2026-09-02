@@ -1178,7 +1178,7 @@ export type MessageKind =
  */
 export interface Media {
   /**
-   * An opaque handle, to be handed back to `timelineMedia` unread.
+   * An opaque handle, to be handed to `mediaUrl` unread.
    *
    * Nothing on this side parses it, and nothing on this side should: it is the
    * event's own media source, which in an encrypted room carries the file's
@@ -1354,20 +1354,34 @@ export function timelineSend(roomId: string, body: string): Promise<void> {
 }
 
 /**
- * The bytes of one attachment, by the handle its message carried.
+ * Where to point an `img` or a `video` at one attachment.
  *
- * The one command that answers with an `ArrayBuffer` rather than JSON. A
- * photograph is megabytes, and encoding it would add a third to that before
- * this side had to hold it as a string, so the bytes cross as bytes and become
- * a blob here.
+ * Not a command, and deliberately: this is a string, so drawing a picture is
+ * an attribute rather than a request that resolves a render later. What
+ * answers the request is the `consortmedia` scheme in `app/src-tauri/src/lib.rs`,
+ * which serves the bytes in ranges so a clip can start before it has all of
+ * them and can be seeked once it has.
  *
- * Rejects for an attachment larger than Consort will carry and for one whose
- * bytes turn out to be neither a picture nor a clip. Both are decided in Rust,
- * where the bytes are: this side cannot decline something already handed to
- * it, and the type an event claims is written by whoever sent it.
+ * The handle goes in the path base64 encoded, because it is JSON and a path
+ * cannot hold quotes and braces as themselves. `app/src-tauri/src/media.rs`
+ * decodes it, and both sides have a test pinning one literal so a change to
+ * either encoding fails loudly rather than becoming a 400 for every
+ * attachment.
  */
-export function timelineMedia(source: string): Promise<ArrayBuffer> {
-  return invoke<ArrayBuffer>("timeline_media", { source });
+export function mediaUrl(handle: string): string {
+  // Through UTF-8 rather than straight into `btoa`, which throws on anything
+  // outside Latin-1. Nothing a homeserver puts in a media source is, but a
+  // string that throws on one message in ten thousand is worse than four
+  // lines.
+  const bytes = new TextEncoder().encode(handle);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+
+  const base64 = btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+  return `consortmedia://localhost/${base64}`;
 }
 
 /**

@@ -1,28 +1,31 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-import { asCommandError, timelineMedia, type Media, type MessageKind } from "../lib/api";
+import { mediaUrl, type Media, type MessageKind } from "../lib/api";
 import { sizeLabel } from "../lib/labels";
 import "./MessageMedia.css";
 
 /**
- * The picture or the clip hanging off one message.
+ * The picture, the clip or the file hanging off one message.
  *
- * The bytes arrive as bytes and become a blob here, which is the whole reason
- * this is not another data URL: a photograph is megabytes, and encoding it
- * would add a third to that before this side had to hold it as a string. The
- * blob is let go of when the message leaves the room.
+ * Nothing here fetches anything. An attachment has a URL on the `consortmedia`
+ * scheme, which Rust answers in ranges, so pointing an element at one is an
+ * attribute rather than a request: the picture is drawn by the browser's own
+ * loader and the clip is streamed and seeked by the media element, neither of
+ * them holding the file in JavaScript.
  *
- * A file and a voice note are neither: they are a card naming what was sent
- * and what it weighs, because Consort has no viewer for a spreadsheet and
- * should not pretend to.
+ * That is what replaced the blob 0.1.3 built. A blob answers no range request,
+ * so a clip could not begin until every byte had crossed the IPC boundary and
+ * could not be seeked once it had, and the whole file was then held twice.
  *
- * ## A picture is fetched, a clip is asked for
+ * ## A picture is drawn, a clip is asked for
  *
  * A picture is drawn as soon as the room is, because that is what a picture in
  * a conversation is for. A clip waits: scrolling back through a room of them
- * would otherwise be a download of every one, and they are the large ones. The
- * button says what it is called and what it will cost before anybody commits
- * to it.
+ * would otherwise start a download of every one, and they are the large ones.
+ * The card says what it is called and what it will cost before anybody commits.
+ *
+ * A file and a voice note are neither. Consort has no viewer for a spreadsheet
+ * and should not pretend to, so both are a card naming what was sent.
  */
 export function MessageMedia({
   kind,
@@ -31,83 +34,37 @@ export function MessageMedia({
   kind: Extract<MessageKind, "image" | "video" | "file" | "audio">;
   media: Media;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [wanted, setWanted] = useState(kind === "image");
-  const name = media.name;
+  const [playing, setPlaying] = useState(false);
+  const source = mediaUrl(media.source);
+  const weight = sizeLabel(media.size);
 
-  useEffect(() => {
-    if (!wanted) return;
-
-    let live = true;
-    let held: string | null = null;
-
-    void timelineMedia(media.source)
-      .then((bytes) => {
-        // The type the sender named, which Rust kept only if it named a
-        // picture or a clip. A browser sniffs a picture without it and often
-        // will not play a clip without it.
-        const fresh = URL.createObjectURL(
-          new Blob([bytes], { type: media.mime ?? "" }),
-        );
-        if (!live) {
-          URL.revokeObjectURL(fresh);
-          return;
-        }
-        held = fresh;
-        setUrl(fresh);
-      })
-      .catch((raw: unknown) => {
-        if (live) setProblem(asCommandError(raw).message);
-      });
-
-    return () => {
-      live = false;
-      if (held !== null) URL.revokeObjectURL(held);
-    };
-  }, [wanted, media.source, media.mime]);
-
-  if (problem !== null) {
-    return <p className="media__problem">{problem}</p>;
-  }
-
-  // Neither is played and neither is looked at, so neither is fetched. What
-  // Consort can honestly offer for a spreadsheet is its name and its weight.
   if (kind === "file" || kind === "audio") {
-    const weight = sizeLabel(media.size);
     return (
       <p className="media__file">
-        <span className="media__file-name">{name}</span>
+        <span className="media__file-name">{media.name}</span>
         {weight !== null && <span className="media__file-size">{weight}</span>}
       </p>
     );
   }
 
   if (kind === "video") {
-    if (!wanted) {
-      const weight = sizeLabel(media.size);
-      return (
-        <button
-          type="button"
-          className="media__play"
-          onClick={() => setWanted(true)}
-        >
-          <span className="media__play-name">{name}</span>
-          {weight !== null && <span className="media__play-size">{weight}</span>}
-        </button>
-      );
-    }
-
-    return url === null ? (
-      <p className="media__waiting">Loading {name}...</p>
+    return playing ? (
+      <video className="media__video" src={source} controls autoPlay />
     ) : (
-      <video className="media__video" src={url} controls autoPlay />
+      <button
+        type="button"
+        className="media__play"
+        onClick={() => setPlaying(true)}
+      >
+        <span className="media__play-name">{media.name}</span>
+        {weight !== null && <span className="media__play-size">{weight}</span>}
+      </button>
     );
   }
 
   return (
     <div className="media__frame" style={shapeOf(media)}>
-      {url !== null && <img className="media__image" src={url} alt={name} />}
+      <img className="media__image" src={source} alt={media.name} />
     </div>
   );
 }

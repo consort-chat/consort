@@ -923,6 +923,7 @@ dependencies = [
 name = "consort-app"
 version = "0.1.3"
 dependencies = [
+ "base64 0.22.1",
  "consort-audio",
  "consort-call",
  "consort-matrix",

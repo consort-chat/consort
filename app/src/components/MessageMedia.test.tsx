@@ -1,16 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const timelineMedia = vi.hoisted(() => vi.fn());
-
-vi.mock("../lib/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/api")>()),
-  timelineMedia,
-}));
+import { describe, expect, it } from "vitest";
 
 import { MessageMedia } from "./MessageMedia";
-import type { Media } from "../lib/api";
+import { mediaUrl, type Media } from "../lib/api";
 
 const PICTURE: Media = {
   source: '{"url":"mxc://example.org/abc"}',
@@ -30,124 +23,89 @@ const CLIP: Media = {
   height: 1080,
 };
 
-/**
- * jsdom implements neither half of the blob URL pair, and both are the whole
- * point of this component: the bytes never become a string.
- */
-const made: string[] = [];
-const revoked: string[] = [];
-
-beforeEach(() => {
-  made.length = 0;
-  revoked.length = 0;
-  URL.createObjectURL = vi.fn((blob: Blob) => {
-    const url = `blob:${blob.type || "none"}/${made.length}`;
-    made.push(url);
-    return url;
-  });
-  URL.revokeObjectURL = vi.fn((url: string) => {
-    revoked.push(url);
-  });
-  timelineMedia.mockReset().mockResolvedValue(new ArrayBuffer(8));
-});
-
 describe("MessageMedia, for a picture", () => {
-  it("draws it as soon as the room is drawn", async () => {
+  it("draws it as soon as the room is drawn", () => {
     render(<MessageMedia kind="image" media={PICTURE} />);
 
-    const picture = await screen.findByRole("img", { name: "screenshot.png" });
-    expect(picture).toHaveAttribute("src", made[0]);
+    expect(screen.getByRole("img", { name: "screenshot.png" })).toHaveAttribute(
+      "src",
+      mediaUrl(PICTURE.source),
+    );
   });
 
-  it("wraps the bytes in the type the sender named", async () => {
-    // The browser sniffs a picture either way, and a clip it often does not,
-    // so the type is carried through rather than dropped.
-    render(<MessageMedia kind="image" media={PICTURE} />);
-
-    await screen.findByRole("img", { name: "screenshot.png" });
-    expect(made[0]).toContain("image/png");
-  });
-
-  it("holds the space it will take before the bytes land", async () => {
+  it("holds the space it will take before the bytes land", () => {
     // Otherwise every picture that loads shoves the conversation below it
     // downwards, which in a room that follows the bottom is the whole view
     // moving under somebody reading.
-    timelineMedia.mockReturnValue(new Promise(() => {}));
-
     const { container } = render(<MessageMedia kind="image" media={PICTURE} />);
 
-    await waitFor(() => expect(timelineMedia).toHaveBeenCalled());
     expect(container.querySelector(".media__frame")).toHaveStyle({
       aspectRatio: "800 / 600",
     });
   });
 
-  it("says so rather than leaving a gap when it will not load", async () => {
-    timelineMedia.mockRejectedValue({
-      message: "That attachment is too large for Consort to show.",
+  it("leaves the frame to be sized by what arrives when nobody measured it", () => {
+    // `info` is optional off the wire. Guessing a ratio would be worse than
+    // the jump: a tall picture drawn in a wide box moves twice.
+    const { container } = render(
+      <MessageMedia
+        kind="image"
+        media={{ source: PICTURE.source, name: "screenshot.png" }}
+      />,
+    );
+
+    expect(container.querySelector(".media__frame")).not.toHaveStyle({
+      aspectRatio: "800 / 600",
     });
-
-    render(<MessageMedia kind="image" media={PICTURE} />);
-
-    expect(
-      await screen.findByText("That attachment is too large for Consort to show."),
-    ).toBeVisible();
-  });
-
-  it("lets go of the bytes when the message leaves the room", async () => {
-    const { unmount } = render(<MessageMedia kind="image" media={PICTURE} />);
-    await screen.findByRole("img", { name: "screenshot.png" });
-
-    unmount();
-
-    expect(revoked).toEqual([made[0]]);
   });
 });
 
 describe("MessageMedia, for a clip", () => {
-  it("does not fetch one until somebody asks", async () => {
-    // Scrolling back through a room of clips would otherwise be a download of
-    // every one of them, and they are the large ones.
-    render(<MessageMedia kind="video" media={CLIP} />);
+  it("draws no player until somebody asks", () => {
+    // Scrolling back through a room of clips would otherwise start a download
+    // of every one of them, and they are the large ones.
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
 
-    expect(await screen.findByRole("button")).toBeVisible();
-    expect(timelineMedia).not.toHaveBeenCalled();
+    expect(screen.getByRole("button")).toBeVisible();
+    expect(container.querySelector("video")).toBeNull();
   });
 
-  it("says what it is called and what it will cost first", async () => {
+  it("says what it is called and what it will cost first", () => {
     render(<MessageMedia kind="video" media={CLIP} />);
 
-    const play = await screen.findByRole("button");
+    const play = screen.getByRole("button");
     expect(play).toHaveTextContent("clip.mp4");
     expect(play).toHaveTextContent("12.4 MB");
   });
 
-  it("fetches and plays it once asked", async () => {
+  it("points the player at the attachment once asked", async () => {
     const { container } = render(<MessageMedia kind="video" media={CLIP} />);
 
-    await userEvent.click(await screen.findByRole("button"));
+    await userEvent.click(screen.getByRole("button"));
 
-    await waitFor(() => expect(timelineMedia).toHaveBeenCalledWith(CLIP.source));
-    await waitFor(() =>
-      expect(container.querySelector("video")).toHaveAttribute("src", made[0]),
+    expect(container.querySelector("video")).toHaveAttribute(
+      "src",
+      mediaUrl(CLIP.source),
     );
   });
 
-  it("offers the name alone for a clip nobody measured", async () => {
-    // `info` is optional off the wire and a bridge that omits it is common.
+  it("offers the name alone for a clip nobody measured", () => {
     render(
-      <MessageMedia kind="video" media={{ source: CLIP.source, name: "clip.mp4" }} />,
+      <MessageMedia
+        kind="video"
+        media={{ source: CLIP.source, name: "clip.mp4" }}
+      />,
     );
 
-    expect(await screen.findByRole("button")).toHaveTextContent("clip.mp4");
+    expect(screen.getByRole("button")).toHaveTextContent("clip.mp4");
   });
 });
 
 describe("MessageMedia, for a file", () => {
-  it("names a file and what it weighs, and fetches nothing", async () => {
+  it("names a file and what it weighs, and points nothing at it", () => {
     // Consort has no viewer for a spreadsheet and should not pretend to. What
     // it can honestly offer is the name, the size, and a way to save it.
-    render(
+    const { container } = render(
       <MessageMedia
         kind="file"
         media={{
@@ -158,12 +116,12 @@ describe("MessageMedia, for a file", () => {
       />,
     );
 
-    expect(await screen.findByText("accounts.ods")).toBeVisible();
+    expect(screen.getByText("accounts.ods")).toBeVisible();
     expect(screen.getByText("51 kB")).toBeVisible();
-    expect(timelineMedia).not.toHaveBeenCalled();
+    expect(container.querySelector("img, video")).toBeNull();
   });
 
-  it("draws a voice note on the same terms", async () => {
+  it("draws a voice note on the same terms", () => {
     render(
       <MessageMedia
         kind="audio"
@@ -174,7 +132,6 @@ describe("MessageMedia, for a file", () => {
       />,
     );
 
-    expect(await screen.findByText("voice-message.ogg")).toBeVisible();
-    expect(timelineMedia).not.toHaveBeenCalled();
+    expect(screen.getByText("voice-message.ogg")).toBeVisible();
   });
 });

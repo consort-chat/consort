@@ -3730,16 +3730,29 @@ mod timeline {
 
         #[tokio::test]
         async fn a_picture_comes_back_as_the_bytes_it_was_sent_as() {
-            // Byte for byte, and not encoded on the way. The interface makes a
-            // blob out of these, which is the whole reason they are not a data
-            // URL like an avatar.
+            // Byte for byte, and under the type its bytes say it is rather
+            // than the one the sender claimed.
             let server = MatrixMockServer::new().await;
             let (_dir, client) = signed_in(&server).await;
             mount_download(&server, PNG).await;
 
-            let bytes = timeline::media(&client, HANDLE).await.unwrap();
+            let drawn = timeline::media(&client, HANDLE).await.unwrap();
 
-            assert_eq!(bytes, PNG);
+            assert_eq!(drawn.bytes, PNG);
+            assert_eq!(drawn.mime, "image/png");
+        }
+
+        #[tokio::test]
+        async fn something_that_is_not_media_is_still_something_to_save() {
+            // The other way out. A spreadsheet is a perfectly good thing to
+            // write to disk, and saving is the only thing offered for one.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            mount_download(&server, b"id,total\n1,2\n").await;
+
+            let saved = timeline::bytes(&client, HANDLE).await.unwrap();
+
+            assert_eq!(saved, b"id,total\n1,2\n");
         }
 
         #[tokio::test]

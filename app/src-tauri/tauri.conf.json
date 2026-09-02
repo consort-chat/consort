@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; base-uri 'self'; form-action 'none'"
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: consortmedia: http://consortmedia.localhost; media-src 'self' consortmedia: http://consortmedia.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {

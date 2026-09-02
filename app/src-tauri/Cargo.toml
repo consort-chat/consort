@@ -45,6 +45,9 @@ consort-audio = { path = "../../crates/consort-audio" }
 consort-call = { path = "../../crates/consort-call" }
 consort-matrix = { path = "../../crates/consort-matrix" }
 tauri = { version = "2", features = [] }
+# For the attachment scheme's URLs. The handle a message carries is JSON, and a
+# path cannot hold quotes and braces as themselves.
+base64 = "0.22"
 # One Consort per machine. Two would share one SQLite crypto store and one
 # session file, and the cross-process lock means the second simply fails. See
 # the comment at the plugin registration in lib.rs.

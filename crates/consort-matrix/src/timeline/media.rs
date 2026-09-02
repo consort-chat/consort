@@ -9,21 +9,18 @@
 //! SDK keeps what it fetches in the same SQLite directory as everything else,
 //! so scrolling back past a picture a second time costs nothing.
 //!
-//! ## Why the bytes are not encoded here
+//! ## Two ways out, because there are two things to do with an attachment
 //!
-//! An avatar comes back as a data URL because it is a few kilobytes and it
-//! lands in an `img` tag. These are not: a phone photograph is megabytes and a
-//! clip is tens of them, and base64 adds a third to that before the webview
-//! has to hold it as a string. So this hands back the bytes as they are, the
-//! command wraps them in a `tauri::ipc::Response`, and the interface makes a
-//! blob out of what arrives.
+//! [`media`] is for drawing one, and it sniffs: the type an event claims is
+//! written by whoever sent it, so what comes back is decided by the bytes and
+//! anything that is neither a picture nor a clip is refused. [`bytes`] is for
+//! saving one, and it does not sniff, because a spreadsheet is a perfectly
+//! good thing to write to disk and refusing it would be refusing the only
+//! thing Consort offers to do with it.
 //!
-//! ## What is refused, and why here rather than there
-//!
-//! Anything past [`MAX_BYTES`], and anything whose bytes are neither a picture
-//! nor a clip. Both checks are on this side of the boundary because this is
-//! where the bytes are: the webview cannot decline something it has already
-//! been handed, and the type an event claims is written by whoever sent it.
+//! Both are bounded by [`MAX_BYTES`], and the bound is here rather than in the
+//! webview because this is where the bytes are: nothing downstream can decline
+//! what it has already been handed.
 
 use matrix_sdk::Client;
 use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
@@ -32,25 +29,47 @@ use matrix_sdk::ruma::events::room::MediaSource;
 use crate::error::{Error, Result};
 use crate::media::{image_type, video_type};
 
-/// The most attachment data worth carrying into the webview.
+/// The most attachment data worth holding at once.
 ///
-/// One of these is held in memory whole, twice over for a moment: once in Rust
-/// and once as the blob the interface builds from it. That is affordable for
-/// the photographs and short clips people paste into a conversation and it is
-/// not affordable without a bound, which is what this is.
+/// matrix-sdk has no range-aware download, so one of these arrives whole and
+/// is held whole while it is being served or written. That is affordable for
+/// anything anybody pastes into a conversation and it is not affordable
+/// without a bound, which is what this is.
 ///
-/// Generous rather than tuned. It is a ceiling on the absurd, and the thing
-/// that keeps it from being reached casually is that clips are fetched only
-/// when somebody asks for one.
-const MAX_BYTES: usize = 32 * 1024 * 1024;
+/// Far larger than the 32 MiB this carried in 0.1.3, because the bytes no
+/// longer cross the IPC boundary as one message and no longer become a second
+/// copy in the webview. It is a ceiling on the absurd rather than a judgement
+/// about what a clip weighs.
+const MAX_BYTES: usize = 512 * 1024 * 1024;
 
-/// The bytes of one attachment, by the handle its message carried.
+/// One attachment, and what its bytes actually are.
+///
+/// The type is sniffed rather than repeated off the event, so it is safe to
+/// serve as a content type: a sender who called their upload `text/html`
+/// cannot have a page treat it as one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    /// A media type from the short list in [`crate::media`], never the
+    /// sender's word for it.
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+/// One attachment as something to draw, by the handle its message carried.
 ///
 /// The handle is the event's own `MediaSource`, which is why this works the
 /// same for an encrypted room: the SDK decrypts the file with the key that
 /// travelled inside the handle, and nothing here has to know which kind it
 /// was holding.
-pub async fn media(client: &Client, handle: &str) -> Result<Vec<u8>> {
+pub async fn media(client: &Client, handle: &str) -> Result<Attachment> {
+    drawable(bytes(client, handle).await?)
+}
+
+/// One attachment's bytes, whatever they are.
+///
+/// No sniffing, because the only thing offered for a file is saving it and a
+/// spreadsheet is a perfectly good thing to write to disk.
+pub async fn bytes(client: &Client, handle: &str) -> Result<Vec<u8>> {
     let source: MediaSource = serde_json::from_str(handle).map_err(|error| {
         // Only reachable by handing back something this build never wrote.
         tracing::warn!(%error, "asked for an attachment by a handle that is not one");
@@ -68,14 +87,6 @@ pub async fn media(client: &Client, handle: &str) -> Result<Vec<u8>> {
         )
         .await?;
 
-    drawable(bytes)
-}
-
-/// The bytes, if they are something the interface can be handed.
-///
-/// Separate from the fetch so that both rules can be driven without a
-/// homeserver, which is the only part of the above worth testing.
-fn drawable(bytes: Vec<u8>) -> Result<Vec<u8>> {
     if bytes.len() > MAX_BYTES {
         return Err(Error::MediaTooLarge {
             bytes: bytes.len(),
@@ -83,15 +94,23 @@ fn drawable(bytes: Vec<u8>) -> Result<Vec<u8>> {
         });
     }
 
-    if image_type(&bytes).is_none() && video_type(&bytes).is_none() {
+    Ok(bytes)
+}
+
+/// The bytes as something to draw, or the refusal saying they are not.
+///
+/// Separate from the fetch so the rule can be driven without a homeserver,
+/// which is the only part of the above worth testing.
+fn drawable(bytes: Vec<u8>) -> Result<Attachment> {
+    let Some(mime) = image_type(&bytes).or_else(|| video_type(&bytes)) else {
         tracing::warn!(
             bytes = bytes.len(),
             "an attachment came back as neither a picture nor a clip"
         );
         return Err(Error::UndrawableMedia);
-    }
+    };
 
-    Ok(bytes)
+    Ok(Attachment { mime, bytes })
 }
 
 #[cfg(test)]
@@ -105,18 +124,21 @@ mod tests {
 
     #[test]
     fn a_picture_comes_back_as_it_arrived() {
-        // Byte for byte. Anything else here would be a second encoding of
-        // something the webview is about to decode again.
+        // Byte for byte, under the type the bytes say it is rather than the
+        // one the sender claimed.
         let bytes = png();
 
-        assert_eq!(drawable(bytes.clone()).expect("a png is drawable"), bytes);
+        let drawn = drawable(bytes.clone()).expect("a png is drawable");
+
+        assert_eq!(drawn.bytes, bytes);
+        assert_eq!(drawn.mime, "image/png");
     }
 
     #[test]
     fn a_clip_is_drawable_too() {
         let mp4 = b"\0\0\0\x20ftypisom\0\0\x02\0".to_vec();
 
-        assert!(drawable(mp4).is_ok());
+        assert_eq!(drawable(mp4).expect("an mp4 is drawable").mime, "video/mp4");
     }
 
     #[test]
@@ -127,26 +149,6 @@ mod tests {
         let error = drawable(b"<!doctype html>".to_vec()).expect_err("html is not media");
 
         assert!(matches!(error, Error::UndrawableMedia));
-    }
-
-    #[test]
-    fn an_attachment_past_the_cap_is_refused_before_it_is_looked_at() {
-        // Refused on size, so the sniffing below it never runs on something
-        // this large.
-        let mut huge = vec![0u8; MAX_BYTES + 1];
-        huge[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-
-        let error = drawable(huge).expect_err("too large is too large");
-
-        assert!(matches!(error, Error::MediaTooLarge { .. }));
-    }
-
-    #[test]
-    fn an_attachment_at_exactly_the_cap_is_still_drawn() {
-        let mut big = vec![0u8; MAX_BYTES];
-        big[..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-
-        assert!(drawable(big).is_ok());
     }
 
     #[test]

@@ -44,7 +44,7 @@ mod media;
 
 pub use dto::{Media, Message, MessageKind, Timeline};
 pub use history::History;
-pub use media::media;
+pub use media::{Attachment, bytes, media};
 
 use std::collections::HashMap;
 

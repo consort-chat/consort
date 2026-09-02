@@ -16,9 +16,6 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 // For the dot on a sender's picture, and for the card, which asks the same
 // thing when it opens.
 const memberProfile = vi.hoisted(() => vi.fn());
-// For an attachment, which is fetched one at a time like an avatar.
-const timelineMedia = vi.hoisted(() => vi.fn());
-
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
@@ -32,7 +29,6 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioSettings,
   setPersonVolume,
   memberProfile,
-  timelineMedia,
 }));
 
 import { RoomTimeline, group } from "./RoomTimeline";
@@ -111,11 +107,6 @@ beforeEach(() => {
     lastActiveAgo: null,
     standing: "member",
   });
-  timelineMedia.mockReset().mockResolvedValue(new ArrayBuffer(8));
-  // jsdom implements neither half of the blob URL pair, and both are how an
-  // attachment reaches the page at all.
-  URL.createObjectURL = vi.fn(() => "blob:attachment");
-  URL.revokeObjectURL = vi.fn();
 });
 
 /** Render the pane and hand back a way to publish into it. */
@@ -399,7 +390,6 @@ describe("RoomTimeline", () => {
     );
 
     expect(await screen.findByRole("button", { name: /clip\.mp4/ })).toBeVisible();
-    expect(timelineMedia).not.toHaveBeenCalled();
   });
 
   it("says nothing about where a sender is when the homeserver will not", async () => {

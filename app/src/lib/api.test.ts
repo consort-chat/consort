@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import {
   asCommandError,
   audioDevices,
+  mediaUrl,
   callConnect,
   callDisconnect,
   callRoomId,
@@ -693,5 +694,24 @@ describe("the call commands", () => {
       LOUNGE,
     );
     expect(callRoomId({ state: "disconnected" })).toBeNull();
+  });
+
+  it("addresses an attachment at the path Rust decodes", () => {
+    // The literal is the contract, and `media.rs` has the same one in a test
+    // reading it back. Changing either encoding has to fail on both sides
+    // rather than becoming a 400 for every attachment in every room.
+    expect(
+      mediaUrl('{"url":"mxc://example.org/abc","key":{"k":"a+b/c"}}'),
+    ).toBe(
+      "consortmedia://localhost/eyJ1cmwiOiJteGM6Ly9leGFtcGxlLm9yZy9hYmMiLCJrZXkiOnsiayI6ImErYi9jIn19",
+    );
+  });
+
+  it("uses no character a path would have to escape", () => {
+    const url = mediaUrl('{"url":"mxc://example.org/a?b&c"}');
+
+    expect(url.slice("consortmedia://localhost/".length)).toMatch(
+      /^[A-Za-z0-9_-]+$/,
+    );
   });
 });
