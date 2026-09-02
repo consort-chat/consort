@@ -714,6 +714,109 @@ describe("VoiceVideoSection", () => {
     ).not.toBeChecked();
   });
 
+  it("offers the gate thresholds at what was saved", async () => {
+    // The controls the SFU's detector used to make unnecessary. Nothing about
+    // a threshold is guessable from outside somebody's own room, so the answer
+    // is to hand them the number rather than to pick a better one.
+    render(<VoiceVideoSection />);
+
+    expect(
+      await screen.findByRole("slider", { name: /starts sending at/i }),
+    ).toHaveValue("60");
+    expect(
+      await screen.findByRole("slider", { name: /stops sending below/i }),
+    ).toHaveValue("30");
+    expect(
+      await screen.findByRole("slider", { name: /keeps sending for/i }),
+    ).toHaveValue("300");
+    expect(
+      await screen.findByRole("slider", { name: /ignores sounds under/i }),
+    ).toHaveValue("2");
+  });
+
+  it("hides the gate thresholds when the gate is off", async () => {
+    // They are what it is tuned with and it ignores every one of them when it
+    // is off, so drawing them would be four controls that do nothing.
+    audioSettings.mockResolvedValue({
+      ...defaults,
+      gate: { ...defaults.gate, voiceActivity: false },
+    });
+
+    render(<VoiceVideoSection />);
+    await screen.findByRole("switch", { name: /voice activity/i });
+
+    expect(
+      screen.queryByRole("slider", { name: /starts sending at/i }),
+    ).toBeNull();
+  });
+
+  it("writes a loosened threshold back as a fraction", async () => {
+    // Drawn as a percentage because that is what somebody choosing one can
+    // reason about; stored as the 0 to 1 the model reports.
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /starts sending at/i,
+    });
+
+    fireEvent.change(slider, { target: { value: "45" } });
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    expect(setAudioSettings).toHaveBeenCalledWith({
+      ...defaults,
+      gate: { ...defaults.gate, openAt: 0.45 },
+    });
+  });
+
+  it("writes once for a threshold dragged across the range", async () => {
+    render(<VoiceVideoSection />);
+    const slider = await screen.findByRole("slider", {
+      name: /keeps sending for/i,
+    });
+
+    for (const value of ["400", "500", "600"]) {
+      fireEvent.change(slider, { target: { value } });
+    }
+
+    await waitFor(() => expect(setAudioSettings).toHaveBeenCalled());
+    expect(setAudioSettings).toHaveBeenCalledTimes(1);
+    expect(setAudioSettings).toHaveBeenCalledWith({
+      ...defaults,
+      gate: { ...defaults.gate, holdMs: 600 },
+    });
+  });
+
+  it("pushes the closing threshold down rather than letting it pass the opening one", async () => {
+    // Above it the pair stops being hysteresis: the gate opens and shuts on
+    // one wavering score several times a second, which is the exact stutter
+    // the two thresholds exist to prevent.
+    render(<VoiceVideoSection />);
+    const opens = await screen.findByRole("slider", {
+      name: /starts sending at/i,
+    });
+
+    fireEvent.change(opens, { target: { value: "20" } });
+
+    expect(
+      await screen.findByRole("slider", { name: /stops sending below/i }),
+    ).toHaveValue("20");
+  });
+
+  it("pulls the opening threshold up when the closing one is raised past it", async () => {
+    // The same rule from the other side. Whichever slider was not just moved
+    // is the one that gives way, so both of them move rather than one of them
+    // refusing to.
+    render(<VoiceVideoSection />);
+    const closes = await screen.findByRole("slider", {
+      name: /stops sending below/i,
+    });
+
+    fireEvent.change(closes, { target: { value: "80" } });
+
+    expect(
+      await screen.findByRole("slider", { name: /starts sending at/i }),
+    ).toHaveValue("80");
+  });
+
   it("survives the device list failing to load", async () => {
     // A rejected command must not take the panel with it. The section is
     // reachable from a strip somebody clicks by accident.

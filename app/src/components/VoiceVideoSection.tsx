@@ -11,6 +11,7 @@ import {
   onAudio,
   setAudioSettings,
   type AudioDeviceList,
+  FRAME_MS,
   type AudioSettings,
   type GateConfig,
 } from "../lib/api";
@@ -132,12 +133,26 @@ function VolumeSlider({
   percent,
   onChange,
   describedBy,
+  min = 0,
+  max = 100,
+  step = 1,
+  format = (value: number) => `${value}%`,
 }: {
   id: string;
   label: string;
   percent: number;
   onChange: (percent: number) => void;
   describedBy?: string;
+  /**
+   * The range and the readout, for the gate sliders below.
+   *
+   * Defaulted to a percentage because that is what every volume here is, so
+   * the four call sites that are volumes say nothing about any of this.
+   */
+  min?: number;
+  max?: number;
+  step?: number;
+  format?: (value: number) => string;
 }) {
   return (
     <div className="voice-volume">
@@ -148,9 +163,9 @@ function VolumeSlider({
         id={id}
         className="voice-volume__slider"
         type="range"
-        min={0}
-        max={100}
-        step={1}
+        min={min}
+        max={max}
+        step={step}
         value={percent}
         aria-describedby={describedBy}
         onChange={(event) => onChange(Number(event.target.value))}
@@ -160,7 +175,7 @@ function VolumeSlider({
         and a second reading of the same number is noise. This is for the eye.
       */}
       <output className="voice-volume__value" htmlFor={id} aria-hidden="true">
-        {percent}%
+        {format(percent)}
       </output>
     </div>
   );
@@ -436,6 +451,44 @@ export function VoiceVideoSection() {
     }, 150);
   }
 
+  /**
+   * The same as [`slide`], for a slider that is part of the gate.
+   *
+   * Two functions rather than one taking both shapes, for the reason `reset`
+   * and `retune` are two: a gate patch and a top-level one merge at different
+   * depths, and a single function taking either would take a shape nobody can
+   * read.
+   *
+   * `closeAt` is held at or below `openAt` here rather than left to the
+   * person dragging. Above it the two thresholds stop being hysteresis: the
+   * gate opens and shuts on the same wavering score several times a second,
+   * which is the exact stutter the pair exists to prevent, and no arrangement
+   * of the two sliders makes it a useful thing to ask for.
+   */
+  function slideGate(patch: Partial<GateConfig>) {
+    const current = saved.current;
+    if (current === null) return;
+
+    const gate = { ...current.gate, ...patch };
+    if (gate.closeAt > gate.openAt) {
+      // Whichever one was not just moved gives way, so dragging either of them
+      // pushes the other rather than refusing to move.
+      if (patch.openAt === undefined) gate.openAt = gate.closeAt;
+      else gate.closeAt = gate.openAt;
+    }
+
+    const next: AudioSettings = { ...current, gate };
+    setSettings(next);
+    saved.current = next;
+    pending.current = next;
+
+    if (writing.current !== null) clearTimeout(writing.current);
+    writing.current = setTimeout(() => {
+      writing.current = null;
+      void flush();
+    }, 150);
+  }
+
   async function retune(patch: Partial<GateConfig>) {
     const current = saved.current;
     if (current === null) return;
@@ -547,6 +600,80 @@ export function VoiceVideoSection() {
             Send audio only while you are speaking. Turn it off to transmit
             continuously, background noise included.
           </p>
+          {/*
+            Only while the gate is on, because these four are what it is tuned
+            with and it ignores every one of them when it is off. Drawing them
+            there would be four controls that do nothing.
+
+            Live: the gate is retuned where it stands rather than restarted, so
+            the meter above keeps moving and simply starts behaving
+            differently, which is the clearest demonstration of what a
+            threshold is.
+          */}
+          {settings.gate.voiceActivity && (
+            <>
+              <VolumeSlider
+                id="voice-gate-open"
+                label="Starts sending at"
+                percent={Math.round(settings.gate.openAt * 100)}
+                describedBy="voice-gate-open-note"
+                onChange={(percent) => slideGate({ openAt: percent / 100 })}
+              />
+              <p className="voice-field__note" id="voice-gate-open-note">
+                How sure Consort has to be that the sound is a voice before it
+                sends anything. Lower it if the beginnings of your words are
+                being cut off, or if a quiet microphone is not opening the gate
+                at all. Raise it if a fan or a keyboard is being sent as speech.
+              </p>
+              <VolumeSlider
+                id="voice-gate-close"
+                label="Stops sending below"
+                percent={Math.round(settings.gate.closeAt * 100)}
+                describedBy="voice-gate-close-note"
+                onChange={(percent) => slideGate({ closeAt: percent / 100 })}
+              />
+              <p className="voice-field__note" id="voice-gate-close-note">
+                Kept below the value above, and the gap between them is what
+                stops a score hovering on the line from chattering the gate
+                open and shut mid-word. Widen the gap if that is what you are
+                hearing.
+              </p>
+              <VolumeSlider
+                id="voice-gate-hold"
+                label="Keeps sending for"
+                percent={settings.gate.holdMs}
+                min={0}
+                max={2000}
+                step={50}
+                format={(ms) => `${ms} ms`}
+                describedBy="voice-gate-hold-note"
+                onChange={(ms) => slideGate({ holdMs: ms })}
+              />
+              <p className="voice-field__note" id="voice-gate-hold-note">
+                How long the gate stays open after you stop. Long enough to
+                carry the pause between two words, short enough that the room
+                is not sent afterwards.
+              </p>
+              <VolumeSlider
+                id="voice-gate-attack"
+                label="Ignores sounds under"
+                percent={settings.gate.attackFrames}
+                min={1}
+                max={10}
+                step={1}
+                format={(frames) => `${frames * FRAME_MS} ms`}
+                describedBy="voice-gate-attack-note"
+                onChange={(frames) => slideGate({ attackFrames: frames })}
+              />
+              <p className="voice-field__note" id="voice-gate-attack-note">
+                A door or a cough is louder than a voice and much shorter, so
+                the gate waits to be sure. Nothing is lost while it waits:
+                those frames are held back and sent once it opens, which is why
+                raising this cuts out taps without clipping your first
+                syllable.
+              </p>
+            </>
+          )}
         </div>
       )}
 

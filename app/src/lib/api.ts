@@ -737,6 +737,16 @@ export interface AudioDeviceReport {
  * voice sitting near it opens and shuts the gate every few frames, which
  * clips the start of every other word.
  */
+/**
+ * How long one frame of audio is, in milliseconds.
+ *
+ * Mirrors `consort_audio::FRAME_MS`, which is fixed by RNNoise: it scores 480
+ * samples at a time and the capture runs at 48 kHz. Here only so that
+ * `attackFrames` can be drawn as a duration, because a count of frames is not
+ * a thing anybody choosing a threshold can reason about.
+ */
+export const FRAME_MS = 10;
+
 export interface GateConfig {
   /** Speech probability at which the gate opens. */
   openAt: number;
