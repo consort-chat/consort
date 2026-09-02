@@ -34,6 +34,14 @@
   --mint-glow: oklch(84% 0.13 168 / 0.35);
   /* Not yet failed, not yet fine. The reconnecting state and nothing else. */
   --amber: oklch(80% 0.15 75);
+  /*
+    Somebody said your name. Its own hue rather than the amber above, which is
+    a state the connection is in, and rather than the mint, which is voice.
+    A mention is neither, and a room where three colours mean three things only
+    works while each of them means one.
+  */
+  --gold: oklch(82% 0.14 92);
+  --gold-surface: oklch(27% 0.045 92);
   --danger: oklch(64% 0.19 22);
   --danger-surface: oklch(30% 0.08 22);
 

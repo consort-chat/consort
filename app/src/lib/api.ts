@@ -1303,6 +1303,14 @@ export interface Message {
    */
   replyTo?: string;
   /**
+   * Who this message names, as Matrix user IDs.
+   *
+   * `m.mentions` off the wire, so a sender that does not send it names nobody.
+   * Absent rather than empty for the messages that name nobody, which is most
+   * of them.
+   */
+  mentions?: string[];
+  /**
    * The thread hanging off it, when anybody has replied in one.
    *
    * Absent rather than a count of zero for a message nobody has replied to. A

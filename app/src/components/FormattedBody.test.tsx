@@ -90,4 +90,44 @@ describe("FormattedBody", () => {
   it("draws nothing at all for nothing at all", () => {
     expect(body("").textContent).toBe("");
   });
+
+  it("keeps the @ on somebody's name", () => {
+    // The sender writes the pill as a matrix.to link whose text is the display
+    // name, so "bragoodle" arrived where "@bragoodle" was meant. The at sign
+    // is what says the word is a person rather than a noun.
+    const rendered = body(
+      '<p>ask <a href="https://matrix.to/#/@bragoodle:example.org">bragoodle</a></p>',
+    );
+
+    expect(rendered.querySelector("a")).toHaveTextContent("@bragoodle");
+  });
+
+  it("does not double the @ on a name that already has one", () => {
+    const rendered = body(
+      '<p><a href="https://matrix.to/#/@ada:example.org">@ada:example.org</a></p>',
+    );
+
+    expect(rendered.querySelector("a")).toHaveTextContent("@ada:example.org");
+    expect(rendered.querySelector("a")?.textContent).not.toContain("@@");
+  });
+
+  it("draws a mention as a mention rather than as a destination", () => {
+    const rendered = body(
+      '<p><a href="https://matrix.to/#/@ada:example.org">Ada</a></p>',
+    );
+
+    expect(rendered.querySelector("a")).toHaveClass("timeline__mention");
+  });
+
+  it("leaves a link to a room alone", () => {
+    // A matrix.to link can name a room or an event as well as a person, and
+    // neither of those wants an at sign in front of it.
+    const rendered = body(
+      '<p><a href="https://matrix.to/#/!general:example.org">general</a></p>',
+    );
+
+    const link = rendered.querySelector("a");
+    expect(link).toHaveTextContent("general");
+    expect(link).not.toHaveClass("timeline__mention");
+  });
 });

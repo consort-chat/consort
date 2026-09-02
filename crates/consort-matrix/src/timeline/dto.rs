@@ -149,6 +149,18 @@ pub struct Message {
     /// in a thread panel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
+    /// Who this message names, as Matrix user IDs.
+    ///
+    /// `m.mentions` off the wire and nothing else. A client that does not send
+    /// it names nobody here, which is the honest answer: the alternative is
+    /// searching the body for somebody's display name, and a sentence that
+    /// merely contains a name is not a message about them.
+    ///
+    /// The `room` flag beside them is deliberately not read. An @room is about
+    /// everybody, so lighting one person's copy of it would say something
+    /// untrue about the other twenty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<String>,
     pub kind: MessageKind,
 }
 

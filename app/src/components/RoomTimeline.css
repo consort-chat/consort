@@ -242,6 +242,37 @@
 }
 
 /*
+  Somebody said your name.
+
+  A band down the left and a lift in the background, which is how every client
+  that does this marks it, and quiet enough that a busy room does not read as a
+  page of warnings. The message keeps its own layout: this is a mark on it
+  rather than a different kind of thing.
+*/
+.timeline__message[data-mentions-me="true"] {
+  padding: var(--space-1) var(--space-3);
+  background: var(--gold-surface);
+  border-left: 3px solid var(--gold);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/*
+  A person's name inside a message.
+
+  Drawn as a name rather than as a destination: no underline, because pressing
+  it goes nowhere, and a tinted pill rather than link colour, so the word reads
+  as somebody rather than as somewhere.
+*/
+.timeline__mention {
+  padding: 0.05em 0.3em;
+  background: var(--violet-glow);
+  border-radius: var(--radius-sm);
+  color: var(--violet-hover);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/*
   The message being answered, above the answer.
 
   Its own row rather than the blockquote the sender's fallback produced. That

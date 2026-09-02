@@ -145,6 +145,7 @@ mod tests {
             media: None,
             thread: None,
             reply_to: None,
+            mentions: Vec::new(),
             kind: MessageKind::Text,
         }
     }

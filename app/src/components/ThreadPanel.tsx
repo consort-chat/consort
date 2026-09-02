@@ -173,6 +173,7 @@ export function ThreadPanel({
               groups={root}
               names={names}
               roomId={thread.roomId}
+              selfId={selfId}
               known={known}
               container={scroller}
               onAbout={(person, at) => setOpened({ person, at })}
@@ -194,6 +195,7 @@ export function ThreadPanel({
           groups={replies}
           names={names}
           roomId={thread.roomId}
+          selfId={selfId}
           known={known}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}

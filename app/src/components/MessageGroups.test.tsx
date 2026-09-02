@@ -55,6 +55,7 @@ function draw(
       groups={group(messages)}
       names={{ [ADA]: "Ada" }}
       roomId={GENERAL}
+      selfId={BOB}
       known={known(messages)}
       onAbout={vi.fn()}
       onOpenThread={onOpenThread}
@@ -252,6 +253,7 @@ describe("a reply", () => {
         groups={group(messages)}
         names={{ [ADA]: "Ada" }}
         roomId={GENERAL}
+        selfId={BOB}
         known={known(messages)}
         container={{ current: box }}
         onAbout={vi.fn()}
@@ -298,5 +300,36 @@ describe("a reply", () => {
     expect(
       screen.getByRole("button", { name: /go to ada's message/i }),
     ).toHaveTextContent("screenshot.png");
+  });
+});
+
+describe("a mention", () => {
+  it("marks a message that names whoever is signed in", () => {
+    const { container } = draw([
+      said("$1", ADA, "bob: have a look", NOON, { mentions: [BOB] }),
+    ]);
+
+    expect(container.querySelector('[data-message-id="$1"]')).toHaveAttribute(
+      "data-mentions-me",
+      "true",
+    );
+  });
+
+  it("leaves a message that names somebody else alone", () => {
+    const { container } = draw([
+      said("$1", ADA, "ada: have a look", NOON, { mentions: [ADA] }),
+    ]);
+
+    expect(
+      container.querySelector('[data-message-id="$1"]'),
+    ).not.toHaveAttribute("data-mentions-me");
+  });
+
+  it("leaves a message that names nobody alone", () => {
+    const { container } = draw([said("$1", ADA, "morning")]);
+
+    expect(
+      container.querySelector('[data-message-id="$1"]'),
+    ).not.toHaveAttribute("data-mentions-me");
   });
 });

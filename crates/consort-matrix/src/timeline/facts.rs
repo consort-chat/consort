@@ -121,6 +121,17 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
     // is the thing being avoided. `Reply` is deliberately not matched: see the
     // header.
     let reply_to = answering(said.content.relates_to.as_ref());
+    let mentions = said
+        .content
+        .mentions
+        .map(|mentions| {
+            mentions
+                .user_ids
+                .into_iter()
+                .map(|user| user.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
 
     match said.content.relates_to {
         // An edit, wherever it turns up. It carries the replacement text and
@@ -250,6 +261,7 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
             participated: bundle.current_user_participated,
         }),
         reply_to,
+        mentions,
         kind,
     })
 }
@@ -370,6 +382,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         media: None,
         thread: None,
         reply_to: None,
+        mentions: Vec::new(),
         kind: MessageKind::Undecryptable,
     })
 }
@@ -1186,5 +1199,41 @@ mod tests {
         // A homeserver sending something this build cannot parse must not take
         // the room's whole timeline with it.
         assert_eq!(message(&event(json!({ "type": "m.room.message" }))), None);
+    }
+
+    #[test]
+    fn a_message_says_who_it_names() {
+        let said = sent(json!({
+            "msgtype": "m.text",
+            "body": "bragoodle: have a look",
+            "m.mentions": { "user_ids": ["@bragoodle:example.org"] },
+        }));
+
+        assert_eq!(
+            message(&said).map(|said| said.mentions),
+            Some(vec!["@bragoodle:example.org".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_message_naming_nobody_names_nobody() {
+        let said = sent(json!({ "msgtype": "m.text", "body": "morning" }));
+
+        assert_eq!(message(&said).map(|said| said.mentions), Some(vec![]));
+    }
+
+    #[test]
+    fn a_room_mention_is_not_a_person() {
+        // `m.mentions` carries a `room` flag beside the user IDs, and an @room
+        // is a different thing to draw: it is about everybody, so lighting one
+        // person's copy of it would be a lie about the other twenty. Nothing
+        // reads it yet, and nothing invents a user ID for it.
+        let said = sent(json!({
+            "msgtype": "m.text",
+            "body": "@room the server is going down",
+            "m.mentions": { "room": true },
+        }));
+
+        assert_eq!(message(&said).map(|said| said.mentions), Some(vec![]));
     }
 }

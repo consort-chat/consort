@@ -54,6 +54,25 @@ const DRAWN: Record<string, string> = {
  */
 const REACHABLE = ["http:", "https:", "mailto:"];
 
+/**
+ * Whether an address names a person, and the fragment says which.
+ *
+ * A `matrix.to` link is how every client writes a mention, and the same shape
+ * also names rooms and events, which the sigil tells apart: `@` is somebody,
+ * `!` and `#` are a room, and `$` is a message. Only the first is a mention.
+ */
+function mentioned(raw: string | null): boolean {
+  if (raw === null) return false;
+  try {
+    const address = new URL(raw);
+    return (
+      address.hostname === "matrix.to" && address.hash.startsWith("#/@")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** An address worth putting on an anchor, or nothing. */
 function reachable(raw: string | null): string | undefined {
   if (raw === null) return undefined;
@@ -82,16 +101,31 @@ function draw(node: Node, key: string): ReactNode {
   if (tag === undefined) return children;
 
   if (tag === "a") {
+    const href = node.getAttribute("href");
+    /*
+      A mention is drawn as a name rather than as a destination, because that
+      is what it is: pressing it goes nowhere, and an underlined blue word
+      promises otherwise.
+
+      The at sign is put back when the sender left it off, which every client
+      does: the pill's text is the display name, so "bragoodle" arrives where
+      "@bragoodle" was meant and the word reads as a noun.
+    */
+    const mention = mentioned(href);
+    const named = mention && !(node.textContent ?? "").startsWith("@");
+
     return (
       <a
         key={key}
-        href={reachable(node.getAttribute("href"))}
+        className={mention ? "timeline__mention" : undefined}
+        href={reachable(href)}
         // The webview holds one page and has no way back to it. Following a
         // link would replace Consort with a website and strand whoever
         // clicked. Opening one outside the application needs a Tauri plugin
         // and so a capability this build does not grant.
         onClick={(event) => event.preventDefault()}
       >
+        {named && "@"}
         {children}
       </a>
     );

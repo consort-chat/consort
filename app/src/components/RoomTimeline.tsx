@@ -260,6 +260,7 @@ export function RoomTimeline({
           groups={groups}
           names={names}
           roomId={channel.id}
+          selfId={selfId}
           known={known}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}

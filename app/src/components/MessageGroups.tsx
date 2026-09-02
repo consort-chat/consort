@@ -145,6 +145,7 @@ export function MessageGroups({
   groups,
   names,
   roomId,
+  selfId,
   known,
   container,
   onAbout,
@@ -154,6 +155,14 @@ export function MessageGroups({
   /** Display names by user ID, for whoever the room has told us about. */
   names: Record<string, string>;
   roomId: string;
+  /**
+   * Whoever is signed in, so a message naming them can be marked.
+   *
+   * The comparison is here rather than in Rust because it is a question about
+   * the reader rather than about the message, and the message is the same one
+   * for everybody in the room.
+   */
+  selfId: string;
   /**
    * The messages a reply may point at, by event ID.
    *
@@ -295,6 +304,9 @@ export function MessageGroups({
                     key={message.id}
                     className="timeline__message"
                     data-message-id={message.id}
+                    {...(message.mentions?.includes(selfId)
+                      ? { "data-mentions-me": "true" }
+                      : {})}
                   >
                     {message.replyTo !== undefined &&
                       (answered === undefined ? (
