@@ -53,15 +53,18 @@
 /*
   Flex rather than a grid with named rows. The pane holds either one child or
   two depending on whether the session has anything to announce, and a template
-  of three rows charged a gap for the row that was never filled: that gap was
-  the empty band under the composer.
+  of three rows charged a gap for the row that was never filled.
+
+  No padding of its own. What is in here is a room, and a room's header, list
+  and composer each hold their own, so the list can scroll the full height of
+  the pane rather than under a strip of dead space at the top and above
+  another one at the bottom.
 */
 .shell__main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-4);
   min-width: 0;
-  padding: var(--space-6);
   overflow-y: auto;
 }
 
@@ -82,6 +85,7 @@
   flex: none;
   gap: var(--space-4);
   justify-items: start;
+  padding: var(--space-4) var(--space-6) 0;
 }
 
 /*
@@ -92,6 +96,7 @@
   display: grid;
   place-content: center;
   gap: var(--space-1);
+  padding: var(--space-6);
   text-align: center;
 }
 
