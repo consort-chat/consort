@@ -9,9 +9,10 @@ down. There is no proprietary backend, and there is no Consort server. Point it
 at whatever homeserver you already run.
 
 > **Status: early.** Consort signs you in, remembers you, verifies itself,
-> draws your rooms, joins voice channels, and reads and sends text and
-> attachments in a room. Threads, edits, reactions and sending an attachment
-> are not built, and the README will stop saying this when they land.
+> draws your rooms, joins voice channels, reads and sends text in a room,
+> reads attachments, and reads and writes threads. Edits, reactions and
+> sending an attachment are not built, and the README will stop saying this
+> when they land.
 
 ---
 
@@ -74,14 +75,23 @@ at whatever homeserver you already run.
   voice note is a card that opens your desktop's Save As window. Whatever words
   were sent with any of them are drawn underneath. Encrypted rooms work the
   same way: the file is decrypted here.
+- Threads. A message somebody has replied to says how many replies it has, and
+  pressing the message opens them in a panel down the side of the window,
+  where you can read the thread and add to it. The count is the homeserver's
+  own tally and rides on the message, so a room knows which of its messages are
+  threads while it is being drawn rather than by asking about each one. Thread
+  replies stay out of the room's own timeline, which is where every other
+  client puts them and why a room does not read as two conversations at once.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Threads, edits, reactions, replies drawn as replies, redactions, sending an
-attachment, playing a voice note, read receipts and typing notifications. Links
+Edits, reactions, replies drawn as replies, redactions, sending an attachment,
+playing a voice note, read receipts and typing notifications. A thread longer
+than fifty replies shows its recent end and says so rather than loading the
+rest. Links
 in a message are drawn but go nowhere, because opening one outside the window
 needs a Tauri plugin this build does not grant. A message sent from here
 appears when the sync brings it back rather than immediately, because there is
@@ -565,7 +575,8 @@ whether a model wrote them or you did.
 | RNNoise voice activity detection with hysteresis gating | working |
 | Reading and sending text in a room | working |
 | Reading attachments, and saving them anywhere | working |
-| Threads, edits, reactions and sending attachments | planned |
+| Reading and replying in threads | working |
+| Edits, reactions and sending attachments | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 
 "Working" is doing some work in that first row, and it is not a synonym for

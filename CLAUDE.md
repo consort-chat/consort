@@ -7,8 +7,8 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 Consort is a desktop Matrix chat client in Rust and Tauri, aimed at voice-first
 team chat. Today it does authentication, session verification (emoji and
 recovery key), room key backup, the room list, voice over MatrixRTC and
-LiveKit, and reading and sending text in a room. Threads, edits, reactions and
-attachments are not built.
+LiveKit, reading and sending text in a room, attachments, and threads. Edits
+and reactions are not built.
 
 ## Layout
 
