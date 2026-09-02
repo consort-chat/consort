@@ -10,14 +10,19 @@
   dragging is what forces the passes. The cap belongs on the picture, below,
   where nothing reads it back.
 
-  `fit-content` so the frame is the picture's own size. A block button would
-  stretch the border and the backing across the whole column and leave the
-  picture sitting in the corner of it.
+  `fit-content` so the frame is the picture's own size, and the 480 lives here
+  rather than on the picture. A frame is sized from what its contents ask for,
+  and a `min()` holding a percentage cannot be resolved while that is being
+  worked out, so the whole cap was ignored and the picture asked for its full
+  size: the frame took the width of the column and left the picture in the
+  corner of it. The absolute cap belongs where it can be read without knowing
+  anything, and the percentage belongs on the picture below, where by then the
+  frame has a width to be a percentage of.
 */
 .media__frame {
   display: block;
   width: fit-content;
-  max-width: 100%;
+  max-width: min(480px, 100%);
   margin-top: var(--space-2);
   padding: 0;
   overflow: hidden;
@@ -42,15 +47,15 @@
 }
 
 /*
-  Capped in both directions. Wide enough to be worth looking at and short
-  enough that one screenshot does not push the message under it off the bottom
-  of a room somebody is reading. The ratio comes from the `width` and `height`
-  the sender measured, which the browser reads off the element itself, so the
-  right box is held before a byte of the picture has arrived.
+  Short enough that one screenshot does not push the message under it off the
+  bottom of a room somebody is reading. The width cap is on the frame above;
+  this fills whatever that settled on. The ratio comes from the `width` and
+  `height` the sender measured, which the browser reads off the element itself,
+  so the right box is held before a byte of the picture has arrived.
 */
 .media__image {
   display: block;
-  max-width: min(480px, 100%);
+  max-width: 100%;
   max-height: 340px;
   transition: opacity var(--duration-fast) ease;
 }
