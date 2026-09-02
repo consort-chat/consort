@@ -70,6 +70,11 @@ not yet trust, and it is deliberate rather than something going wrong. Once
 somebody approves one, your later pull requests run without waiting. Nothing is
 required from you but patience on the first one.
 
+`.github/workflows/release.yml` is separate and runs on a pushed `v*` tag: it
+writes that release's notes with git-cliff and attaches a Windows installer
+built from the tagged commit. It also takes a tag by hand, so a release made
+before it existed can be given both without moving anything.
+
 ## What makes a change easy to accept
 
 **One thing per pull request.** A fix plus an unrelated refactor is two pull

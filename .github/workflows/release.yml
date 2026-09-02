@@ -1,0 +1,160 @@
+# What a tag turns into.
+#
+# Pushing `v*` writes the release notes and attaches a Windows installer to
+# them. Nothing here is run by hand and nothing here decides a version: the
+# version is already in the tag, and `scripts/release.sh` is what chose it.
+#
+# ## Backfilling
+#
+# `workflow_dispatch` takes a tag, so a release that was made before this file
+# existed can be given its notes and its installer without moving anything. The
+# notes job is idempotent for exactly that reason: it adds a release when there
+# is none and leaves an existing one alone.
+#
+# ## Cost
+#
+# Free, and only because both runners are standard and the repository is
+# public. A larger runner is billed on a public repository like any other, so
+# neither job may move to one.
+#
+# ## The installer is not signed
+#
+# Windows SmartScreen will warn about it on first run, and there is no way
+# around that short of a code-signing certificate. The README says so where
+# somebody downloading it will read it.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing tag to build and write notes for.
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 3
+  RUSTUP_MAX_RETRIES: 3
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    name: Notes
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.which.outputs.tag }}
+      version: ${{ steps.which.outputs.version }}
+    steps:
+      - name: Which tag
+        id: which
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.which.outputs.tag }}
+          # git-cliff reads the whole history and every tag to work out where
+          # this release starts. A shallow clone gives it one commit and it
+          # writes an empty changelog rather than failing.
+          fetch-depth: 0
+
+      # The published binary rather than an action wrapping it, pinned by
+      # version and checked against the checksum the release publishes. One
+      # fewer third party with a step in this workflow, and the same binary the
+      # release script runs locally.
+      - name: Install git-cliff
+        env:
+          CLIFF: 2.14.1
+          SHA512: bb40f68e752db1a32526c43e0108e8eff785f7c24c67024cffe1c316e034372975fd78c9af8e9a48148235aad15c9a103f1a5b490c282f1db09a7a793794b69f
+        run: |
+          set -euo pipefail
+          archive="git-cliff-${CLIFF}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSfL --retry 3 \
+            "https://github.com/orhun/git-cliff/releases/download/v${CLIFF}/${archive}" \
+            -o "$archive"
+          echo "${SHA512}  ${archive}" | sha512sum --check --strict
+          tar -xzf "$archive"
+          sudo install "git-cliff-${CLIFF}/git-cliff" /usr/local/bin/git-cliff
+
+      # The section for this tag alone. `--strip all` drops the file's own
+      # header and footer; the sed drops the version heading the body template
+      # writes, which the release page is already titled with.
+      - name: Write the notes
+        run: |
+          set -euo pipefail
+          git cliff --latest --strip all | sed '0,/^## /{/^## /d}' > NOTES.md
+          cat NOTES.md
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.which.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already has a release. Leaving its notes alone."
+            exit 0
+          fi
+          # Everything below 1.0 is a pre-release, which is what v0.1.0 and
+          # v0.1.1 already say about themselves.
+          prerelease=""
+          case "$TAG" in v0.*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file NOTES.md \
+            $prerelease
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    needs: notes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.notes.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # `corepack enable pnpm` and nothing else. `corepack prepare --activate`
+      # reads a `packageManager` field this repository does not have, and the
+      # runner starts in the root where there is no manifest at all.
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Install dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--bundles nsis` is not optional: tauri.conf.json pins `targets` to the
+      # two Linux ones, and without an override this tries to build a .deb on
+      # Windows. The frontend is not built separately either, because
+      # `beforeBuildCommand` is already `pnpm build`.
+      - name: Build the installer
+        working-directory: app
+        run: pnpm tauri build --bundles nsis
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.notes.outputs.tag }}
+          VERSION: ${{ needs.notes.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe"
+          test -f "$exe"
+          gh release upload "$TAG" "$exe" --clobber

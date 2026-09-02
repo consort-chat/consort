@@ -109,10 +109,23 @@ See [the roadmap](#roadmap).
 
 ## Installing
 
-Nothing is released yet. There are no signed binaries and no package
-repository, so every route below builds from source. See
+There is a Windows installer, and nothing else is packaged. Every Linux route
+below builds from source, and no binary anywhere is signed. See
 [Known limitations](#known-limitations) before you install this on a machine
 you care about.
+
+### Windows
+
+Every tag carries `Consort_<version>_x64-setup.exe` on its
+[release page](https://github.com/consort-chat/consort/releases), built by CI
+on a clean runner from the tagged commit.
+
+It is not signed, because a code-signing certificate costs money this project
+does not have. SmartScreen will therefore say "Windows protected your PC" the
+first time it runs, and getting past it means pressing "More info" and then
+"Run anyway". That warning is about the absence of a signature and not about
+anything the installer does, and the only way to tell those apart is to check
+the download against the SHA-256 GitHub prints beside the asset.
 
 ### Arch Linux
 
