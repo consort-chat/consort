@@ -1,0 +1,103 @@
+/*
+  The bar under a clip.
+
+  Its own row rather than floating over the picture. A clip in a conversation
+  is small, and a control laid over one covers the thing being watched.
+*/
+.controls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-top: none;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.controls__button {
+  flex: none;
+  padding: 2px var(--space-1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.controls__button:hover {
+  color: var(--text-primary);
+}
+
+.controls__button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* Tabular, so the bar does not jump sideways once a second while it plays. */
+.controls__time {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.controls__scrub {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.controls__scrub:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.controls__scrub::-webkit-slider-runnable-track {
+  height: 3px;
+  background: var(--surface-void);
+  border-radius: 999px;
+}
+
+.controls__scrub::-moz-range-track {
+  height: 3px;
+  background: var(--surface-void);
+  border-radius: 999px;
+}
+
+.controls__scrub::-webkit-slider-thumb {
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  appearance: none;
+  background: var(--violet);
+  border: none;
+  border-radius: 50%;
+}
+
+.controls__scrub::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  background: var(--violet);
+  border: none;
+  border-radius: 50%;
+}
+
+.controls__scrub:focus-visible {
+  outline: none;
+}
+
+.controls__scrub:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--shadow-focus);
+}
+
+.controls__scrub:focus-visible::-moz-range-thumb {
+  box-shadow: var(--shadow-focus);
+}

@@ -22,30 +22,40 @@
   object-fit: contain;
 }
 
+/* The picture and its bar, as one block, so the bar is exactly as wide. */
+.media__player {
+  max-width: min(480px, 100%);
+  margin-top: var(--space-2);
+}
+
 .media__video {
   display: block;
-  max-width: min(480px, 100%);
+  width: 100%;
   max-height: 340px;
-  margin-top: var(--space-2);
   background: var(--surface-void);
   border: 1px solid var(--line-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 
 /*
-  What stands in for a clip until somebody asks for it. Sized like a control
-  rather than like a picture, because that is what it is: nothing has been
-  downloaded yet and pretending otherwise with a large empty rectangle would
-  read as a clip that failed to load.
+  What stands in for a clip until somebody asks for it: the still the sender
+  uploaded with it, a play mark over the middle, and the name and weight along
+  the bottom. Sized like the clip will be, so pressing it does not move the
+  conversation underneath.
+
+  A clip whose sender uploaded no still gets the same box with nothing in it,
+  which is the dark rectangle every player shows before it starts.
 */
 .media__play {
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  max-width: 100%;
+  position: relative;
+  display: block;
+  width: min(480px, 100%);
+  max-height: 340px;
+  min-height: 96px;
   margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-raised);
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface-void);
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
@@ -53,12 +63,6 @@
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
-  transition: background var(--duration-fast) ease;
-}
-
-.media__play:hover {
-  background: var(--surface-overlay);
-  color: var(--text-primary);
 }
 
 .media__play:focus-visible {
@@ -66,7 +70,60 @@
   box-shadow: var(--shadow-focus);
 }
 
+.media__poster {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.media__play:hover .media__poster {
+  opacity: 0.8;
+}
+
+/*
+  Over the middle of the still. Its own disc rather than a bare glyph, because
+  a triangle laid on a photograph is invisible against half of them.
+*/
+.media__play-mark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding-left: 3px;
+  color: var(--text-primary);
+  background: oklch(16% 0.018 285 / 0.72);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: background var(--duration-fast) ease;
+}
+
+.media__play:hover .media__play-mark {
+  background: oklch(16% 0.018 285 / 0.88);
+}
+
+/*
+  Along the bottom of the still, on a gradient rather than a bar, so a name
+  over a bright photograph is still readable and a name over a dark one does
+  not have a box drawn round it for nothing.
+*/
+.media__play-name,
+.media__play-size {
+  position: absolute;
+  bottom: 0;
+  padding: var(--space-4) var(--space-3) var(--space-2);
+  color: var(--text-primary);
+  background: linear-gradient(transparent, oklch(16% 0.018 285 / 0.85));
+}
+
 .media__play-name {
+  left: 0;
+  max-width: 70%;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -74,10 +131,23 @@
 }
 
 .media__play-size {
-  flex: none;
-  color: var(--text-muted);
+  right: 0;
+  color: var(--text-secondary);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
+}
+
+/*
+  Why a clip is a save card rather than a player. Quiet, because it is an
+  explanation rather than a failure: the attachment is fine and this machine
+  is missing a decoder for it.
+*/
+.media__note {
+  max-width: 46ch;
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
 }
 
 .media__waiting,

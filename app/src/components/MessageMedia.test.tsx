@@ -1,8 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveAttachment = vi.hoisted(() => vi.fn());
+const canPlay = vi.hoisted(() => vi.fn());
+vi.mock("../lib/playable", () => ({ canPlay }));
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   saveAttachment,
@@ -37,6 +39,13 @@ const SHEET: Media = {
 
 beforeEach(() => {
   saveAttachment.mockReset().mockResolvedValue("/home/ada/accounts.ods");
+  // The real one reads WebKitGTK's GStreamer registry, which is the whole
+  // point of it and exactly what jsdom cannot have.
+  canPlay.mockReset().mockReturnValue("yes");
+  // jsdom implements none of the media element's methods, and the control bar
+  // drives all of them.
+  HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+  HTMLMediaElement.prototype.pause = vi.fn();
 });
 
 describe("MessageMedia, for a picture", () => {
@@ -94,6 +103,31 @@ describe("MessageMedia, for a clip", () => {
     expect(play).toHaveTextContent("12.4 MB");
   });
 
+  it("draws the still the sender sent with it", () => {
+    // A black rectangle and a filename says almost nothing about what is in a
+    // clip, and the still is a few kilobytes against tens of megabytes.
+    const { container } = render(
+      <MessageMedia
+        kind="video"
+        media={{ ...CLIP, thumbnail: '{"url":"mxc://example.org/still"}' }}
+      />,
+    );
+
+    expect(container.querySelector(".media__poster")).toHaveAttribute(
+      "src",
+      mediaUrl('{"url":"mxc://example.org/still"}'),
+    );
+  });
+
+  it("draws an empty frame for a clip nobody sent a still with", () => {
+    // Inventing one would mean fetching the clip to make it, which is the
+    // download the card exists to postpone.
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
+
+    expect(container.querySelector(".media__poster")).toBeNull();
+    expect(screen.getByRole("button", { name: /play clip\.mp4/i })).toBeVisible();
+  });
+
   it("points the player at the attachment once asked", async () => {
     const { container } = render(<MessageMedia kind="video" media={CLIP} />);
 
@@ -114,6 +148,69 @@ describe("MessageMedia, for a clip", () => {
     );
 
     expect(screen.getByRole("button")).toHaveTextContent("clip.mp4");
+  });
+
+  it("draws its own controls rather than the platform's", async () => {
+    // What WebKitGTK draws for `controls` is its own shadow DOM: a fullscreen
+    // button in the top left of the picture, a speaker in the top right, and
+    // a bar that says "Error". It looks nothing like a browser's because the
+    // browser here is not the one anybody has seen.
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
+
+    await userEvent.click(screen.getByRole("button"));
+
+    expect(container.querySelector("video")).not.toHaveAttribute("controls");
+    expect(screen.getByRole("slider", { name: /position in clip/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /play clip\.mp4/i })).toBeVisible();
+  });
+
+  it("offers a save card instead of a player this machine cannot use", () => {
+    // A player that cannot play is worse than no player. Asked before the
+    // element is drawn, so a room of clips on a machine with no H.264 decoder
+    // says so rather than showing a garbled picture with "Error" in a corner.
+    canPlay.mockReturnValue("no");
+
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
+
+    expect(screen.getByText(/no decoder for this clip/i)).toBeVisible();
+    expect(screen.getByText(/gst-libav/)).toBeVisible();
+    expect(container.querySelector("video")).toBeNull();
+  });
+
+  it("saves a clip it cannot play, which is the thing that does work", async () => {
+    canPlay.mockReturnValue("no");
+    saveAttachment.mockResolvedValue("/home/ada/clip.mp4");
+    render(<MessageMedia kind="video" media={CLIP} />);
+
+    await userEvent.click(screen.getByRole("button"));
+
+    await waitFor(() =>
+      expect(saveAttachment).toHaveBeenCalledWith(CLIP.source, "clip.mp4"),
+    );
+  });
+
+  it("gives the player its go when nobody can say whether it will work", async () => {
+    // A clip whose sender named no type, or a container with no representative
+    // codecs. Refusing on a shrug would refuse clips that play.
+    canPlay.mockReturnValue("unknown");
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
+
+    await userEvent.click(screen.getByRole("button"));
+
+    expect(container.querySelector("video")).not.toBeNull();
+  });
+
+  it("falls back to the save card when the player errors anyway", async () => {
+    // The probe guesses at what is inside a container, so it can be wrong.
+    // This is the other half, and it costs nothing to have both.
+    const { container } = render(<MessageMedia kind="video" media={CLIP} />);
+    await userEvent.click(screen.getByRole("button"));
+
+    const video = container.querySelector("video");
+    expect(video).not.toBeNull();
+    fireEvent.error(video as HTMLVideoElement);
+
+    expect(await screen.findByText(/no decoder for this clip/i)).toBeVisible();
   });
 });
 

@@ -1194,6 +1194,15 @@ export interface Media {
    */
   name: string;
   /**
+   * A second handle, for the still the sender uploaded beside a clip.
+   *
+   * What the card draws before anybody has asked for the clip, so the thing
+   * being decided on is the picture rather than the filename. Absent for the
+   * senders who upload no still, and always absent for anything that is not a
+   * clip.
+   */
+  thumbnail?: string;
+  /**
    * What the sender said the bytes are, when they said something worth
    * repeating.
    *

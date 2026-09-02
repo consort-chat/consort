@@ -122,6 +122,19 @@ pub struct Media {
     /// what a card is labelled with, what a save dialog opens on, and what a
     /// screen reader is told when the picture will not load.
     pub name: String,
+    /// A second handle, for the still the sender uploaded beside a clip.
+    ///
+    /// A clip is not fetched until somebody asks for one, so without this
+    /// there is nothing to draw where it will be: a black rectangle and a
+    /// filename, which says almost nothing about what is in it. The thumbnail
+    /// is a few kilobytes and is drawn straight away, so what somebody decides
+    /// on is the picture rather than the name.
+    ///
+    /// Absent for the senders who upload no thumbnail, which is plenty of
+    /// them, and always absent for anything that is not a clip: a picture is
+    /// its own thumbnail, and there is nothing to look at in a spreadsheet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thumbnail: Option<String>,
     /// What the sender said the bytes are, when they said something this build
     /// would repeat.
     ///

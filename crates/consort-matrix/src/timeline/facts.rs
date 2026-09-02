@@ -96,6 +96,7 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
             let media = attachment(
                 &image.source,
                 image.filename().to_owned(),
+                None,
                 info.and_then(|info| info.mimetype.as_deref()),
                 info.and_then(|info| info.size),
                 info.and_then(|info| info.width),
@@ -113,6 +114,7 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
             let media = attachment(
                 &video.source,
                 video.filename().to_owned(),
+                info.and_then(|info| info.thumbnail_source.as_ref()),
                 info.and_then(|info| info.mimetype.as_deref()),
                 info.and_then(|info| info.size),
                 info.and_then(|info| info.width),
@@ -135,6 +137,7 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
                 &file.source,
                 file.filename().to_owned(),
                 None,
+                None,
                 file.info.as_deref().and_then(|info| info.size),
                 None,
                 None,
@@ -150,6 +153,7 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
             let media = attachment(
                 &audio.source,
                 audio.filename().to_owned(),
+                None,
                 None,
                 audio.info.as_deref().and_then(|info| info.size),
                 None,
@@ -194,6 +198,7 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
 fn attachment(
     source: &MediaSource,
     name: String,
+    thumbnail: Option<&MediaSource>,
     mime: Option<&str>,
     size: Option<UInt>,
     width: Option<UInt>,
@@ -202,6 +207,11 @@ fn attachment(
     Some(Media {
         source: serde_json::to_string(source).ok()?,
         name,
+        // A handle like the one above and on the same terms, so a thumbnail in
+        // an encrypted room carries its own key. Dropped rather than raised if
+        // it will not serialise: the card falls back to the filename, which is
+        // what it did before there was a thumbnail at all.
+        thumbnail: thumbnail.and_then(|source| serde_json::to_string(source).ok()),
         // The sender writes this and nothing checks it, and it is the type the
         // webview is handed for playback. Anything that is not one of the two
         // kinds this plays is dropped rather than repeated.
@@ -481,6 +491,62 @@ mod tests {
             matches!(source, MediaSource::Encrypted(_)),
             "an encrypted image must not lose its key on the way to the interface"
         );
+    }
+
+    #[test]
+    fn a_clip_carries_its_thumbnail_as_a_second_handle() {
+        // A clip is not fetched until somebody asks for one, so this is the
+        // only thing there is to draw in its place. Without it the card is a
+        // black rectangle and a filename.
+        let said = message(&sent(json!({
+            "msgtype": "m.video",
+            "body": "clip.mp4",
+            "url": "mxc://example.org/reel",
+            "info": {
+                "mimetype": "video/mp4",
+                "thumbnail_url": "mxc://example.org/still",
+                "thumbnail_info": { "mimetype": "image/jpeg", "w": 320, "h": 180 },
+            },
+        })))
+        .expect("a video is a message");
+
+        let thumbnail = said
+            .media
+            .expect("a video has something to fetch")
+            .thumbnail
+            .expect("this one has a still as well");
+
+        assert!(
+            thumbnail.contains("mxc://example.org/still"),
+            "the thumbnail handle must name the still it was made from"
+        );
+    }
+
+    #[test]
+    fn a_clip_with_no_thumbnail_carries_none() {
+        // Plenty of senders upload no still, and inventing one would mean
+        // fetching the clip to make it, which is the download the card exists
+        // to postpone.
+        let said = message(&sent(json!({
+            "msgtype": "m.video",
+            "body": "clip.mp4",
+            "url": "mxc://example.org/reel",
+        })))
+        .expect("a video is a message");
+
+        assert_eq!(said.media.expect("still a video").thumbnail, None);
+    }
+
+    #[test]
+    fn a_picture_is_its_own_thumbnail() {
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "url": "mxc://example.org/abc",
+        })))
+        .expect("an image is a message");
+
+        assert_eq!(said.media.expect("still an image").thumbnail, None);
     }
 
     #[test]
