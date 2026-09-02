@@ -4,7 +4,54 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.1.4 (2026-09-02)
+
+### Added
+
+- **timeline:** Put the room's topic under its name
+- **person:** Open a direct message from somebody's card
+- **timeline:** Keep the words that came with an attachment
+- **media:** Serve attachments over a scheme that can seek
+- **timeline:** Save an attachment where you want it
+- **timeline:** Show a clip's thumbnail, and say when it cannot be played
+- **timeline:** Open a picture full size
+- **settings:** Hear what your microphone is sending
+
+### Documentation
+
+- Say what attachments do now, and what codecs they need
+
+### Faster
+
+- **settings:** Stop device enumeration freezing the window
+
+### Fixed
+
+- **shell:** Give the pane back the space empty banners were holding
+- **person:** Stop the card claiming everybody is an admin
+- **timeline:** Re-read a message once its key arrives
+
 ## 0.1.3 (2026-09-02)
+
+### Added
+
+- **voice:** Light the rings from the audio we already handle
+- **voice:** Put the gate's thresholds on sliders
+- **timeline:** Read and send text in a room
+- **timeline:** Open a person's card from their name or their face
+- **timeline:** Read and write markdown
+- **timeline:** Say whether the person who said something is here
+- **timeline:** Draw the pictures and clips a room carries
+
+### Fixed
+
+- **app:** Take the older WebKit renderer when NVIDIA is loaded
+- **app:** Say nothing about a session that is verified
+- **app:** Keep the session's identifiers out of the room
+- **timeline:** Read a message as text rather than as a control
+- **timeline:** A message with no key yet is waiting, not broken
+
+## 0.1.1 (2026-09-01)
 
 ### Added
 
@@ -18,13 +65,6 @@ and the patch number is where most of the work has landed so far.
 - Give the spoken notifications something to say
 - Make a call adjustable, and say what it can see
 - **voice:** Let one person be turned up to 250%
-- **voice:** Light the rings from the audio we already handle
-- **voice:** Put the gate's thresholds on sliders
-- **timeline:** Read and send text in a room
-- **timeline:** Open a person's card from their name or their face
-- **timeline:** Read and write markdown
-- **timeline:** Say whether the person who said something is here
-- **timeline:** Draw the pictures and clips a room carries
 
 ### Documentation
 
@@ -52,11 +92,6 @@ and the patch number is where most of the work has landed so far.
 - **audio:** Clamp a stored person volume to the ceiling
 - **rooms:** Cap the avatar bytes turned into a data URL
 - **call:** Stop a forged notice from putting an icon beside somebody
-- **app:** Take the older WebKit renderer when NVIDIA is loaded
-- **app:** Say nothing about a session that is verified
-- **app:** Keep the session's identifiers out of the room
-- **timeline:** Read a message as text rather than as a control
-- **timeline:** A message with no key yet is waiting, not broken
 
 ## 0.1.0 (2026-08-28)
 
