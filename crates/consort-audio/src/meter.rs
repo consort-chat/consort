@@ -92,7 +92,7 @@ impl Meter {
 const FULL_SCALE: f32 = 32_768.0;
 
 /// The loudest sample in a frame, as a fraction of full scale.
-fn peak_of(frame: &[i16]) -> f32 {
+pub(crate) fn peak_of(frame: &[i16]) -> f32 {
     let peak = frame
         .iter()
         // `unsigned_abs`, because `i16::MIN.abs()` overflows: it has no

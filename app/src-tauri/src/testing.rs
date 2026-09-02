@@ -314,12 +314,8 @@ impl consort_call::Roster for FakeCallRoster {
         self.0.borrow().1.clone()
     }
 
-    async fn changed(&mut self) -> Option<consort_call::Change> {
-        self.0
-            .changed()
-            .await
-            .ok()
-            .map(|()| consort_call::Change::Roster)
+    async fn changed(&mut self) -> Option<()> {
+        self.0.changed().await.ok()
     }
 }
 

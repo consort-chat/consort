@@ -178,6 +178,7 @@ mod tests {
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 crate::ears::Levels::new(voices, std::collections::BTreeMap::new()),
+                consort_audio::Talking::new(),
             ),
             move |event| recorder.0.lock().unwrap().push(event),
         );

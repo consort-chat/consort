@@ -542,6 +542,14 @@ async fn call_connect_for(
     let (device, gate) = microphone_to_open(state, host);
     let output = speakers_to_open(state, host);
 
+    // Read before the client is moved into the closure below. It is what the
+    // audio thread draws this session's own green ring under, because the
+    // frames it decides from carry no name of their own.
+    let us = client
+        .user_id()
+        .ok_or(consort_matrix::Error::NotLoggedIn)?
+        .to_string();
+
     // Out here rather than in the closure below, which runs at most once per
     // process. Editing `settings.json` and pressing join again reuses the
     // transport built from the old file, and nothing about that is visible;
@@ -570,6 +578,7 @@ async fn call_connect_for(
             output,
             gate,
             backends: Box::new(backends),
+            us,
         },
     );
     Ok(())

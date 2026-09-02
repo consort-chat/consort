@@ -44,7 +44,7 @@ use crate::failure::CallFailure;
 use crate::hearing::{Cue, Ears};
 use crate::microphone::Microphone;
 use crate::publish::pump;
-use crate::transport::{CallSession, CallTransport, Change, Roster};
+use crate::transport::{CallSession, CallTransport, Roster};
 
 /// How long a join may take before it is abandoned.
 ///
@@ -574,34 +574,27 @@ async fn watch_roster<R: Roster>(
     // channel as an arrival. See `Arrivals::settle`.
     let mut arrivals = Arrivals::new(roster.me());
 
-    while let Some(change) = roster.changed().await {
-        match change {
-            Change::Roster => {
-                // Told before the roster is drawn, because the two are answers
-                // to different questions and this one is the urgent half:
-                // somebody who just walked in is audible until it is answered,
-                // and unheard until their audio is attached.
-                let _ = restate.send(());
-                let said = connected(&room_id, &roster).await;
+    while roster.changed().await.is_some() {
+        // Told before the roster is drawn, because the two are answers to
+        // different questions and this one is the urgent half: somebody who
+        // just walked in is audible until it is answered, and unheard until
+        // their audio is attached.
+        let _ = restate.send(());
+        let said = connected(&room_id, &roster).await;
 
-                // Diffed against the people rather than against the event.
-                // `Connected` is re-emitted for reasons that are not arrivals:
-                // it carries the call's trouble, which changes on its own, and
-                // a chime for a refused media key would be the wrong sound for
-                // the wrong thing.
-                if let CallEvent::Connected { participants, .. } = &said {
-                    for movement in arrivals.settle(participants) {
-                        tracing::debug!(cue = ?movement.cue, who = ?movement.who, "the roster moved");
-                        ears.cue(movement.cue);
-                    }
-                }
-
-                emit(&events, said);
+        // Diffed against the people rather than against the event.
+        // `Connected` is re-emitted for reasons that are not arrivals: it
+        // carries the call's trouble, which changes on its own, and a chime
+        // for a refused media key would be the wrong sound for the wrong
+        // thing.
+        if let CallEvent::Connected { participants, .. } = &said {
+            for movement in arrivals.settle(participants) {
+                tracing::debug!(cue = ?movement.cue, who = ?movement.who, "the roster moved");
+                ears.cue(movement.cue);
             }
-            // Nothing is re-read and nothing is restated. This arrives many
-            // times a second and everything it needs is already in it.
-            Change::Speaking(user_ids) => emit(&events, CallEvent::Speaking { user_ids }),
         }
+
+        emit(&events, said);
     }
 }
 
@@ -859,11 +852,6 @@ mod tests {
         /// Held by the transport rather than made per session, so a test can
         /// reach the roster of a call the loop is holding.
         roster: watch::Sender<Standing>,
-        /// Who is talking, on its own channel because that is what it is on
-        /// the real one. A roster read is expensive and a speaker change is
-        /// not, and the whole point of telling them apart is that the second
-        /// must not cost the first.
-        speaking: watch::Sender<Vec<String>>,
     }
 
     /// What a leave does.
@@ -886,7 +874,6 @@ mod tests {
                     leaving: Leaving::Succeeds,
                     publishing: Publishing::Succeeds,
                     roster: watch::channel((Vec::new(), None)).0,
-                    speaking: watch::channel(Vec::new()).0,
                 },
                 log,
             )
@@ -925,7 +912,6 @@ mod tests {
                     leaving: self.leaving,
                     publishing: self.publishing,
                     roster: self.roster.clone(),
-                    speaking: self.speaking.clone(),
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
                 Joining::Hangs => std::future::pending().await,
@@ -941,8 +927,6 @@ mod tests {
         /// The roster every view of this call reads from. A test pushes to the
         /// sender to make somebody arrive or leave.
         roster: watch::Sender<Standing>,
-        /// Who is talking. A test pushes to the sender to make somebody speak.
-        speaking: watch::Sender<Vec<String>>,
     }
 
     /// What a fake call currently is: who is in it, and what is wrong.
@@ -954,7 +938,6 @@ mod tests {
     /// One view of a fake call.
     struct FakeRoster {
         standing: watch::Receiver<Standing>,
-        speaking: watch::Receiver<Vec<String>>,
     }
 
     impl Roster for FakeRoster {
@@ -975,18 +958,8 @@ mod tests {
             self.standing.borrow().1.clone()
         }
 
-        async fn changed(&mut self) -> Option<Change> {
-            tokio::select! {
-                changed = self.standing.changed() => {
-                    changed.ok().map(|()| Change::Roster)
-                }
-                changed = self.speaking.changed() => match changed {
-                    // `borrow_and_update` rather than `borrow`, so a second
-                    // wake-up does not report the same speakers again.
-                    Ok(()) => Some(Change::Speaking(self.speaking.borrow_and_update().clone())),
-                    Err(_) => None,
-                },
-            }
+        async fn changed(&mut self) -> Option<()> {
+            self.standing.changed().await.ok()
         }
     }
 
@@ -1002,7 +975,6 @@ mod tests {
         fn roster(&self) -> Self::Roster {
             FakeRoster {
                 standing: self.roster.subscribe(),
-                speaking: self.speaking.subscribe(),
             }
         }
 
@@ -2404,101 +2376,6 @@ mod tests {
             .await;
 
             assert_eq!(after, vec![connected_with(MUSIC, vec![person("Ada")])]);
-        }
-    }
-
-    /// Who is talking, which is drawn on the roster but does not come with it.
-    mod speaking {
-        use super::*;
-
-        #[tokio::test]
-        async fn who_is_talking_reaches_the_interface() {
-            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
-            let _watching = transport.speaking.subscribe();
-            let speaking = transport.speaking.clone();
-
-            let (to_loop, inbox) = unbounded_channel();
-            let (events, mut said) = unbounded_channel();
-
-            let heard = tokio::task::LocalSet::new()
-                .run_until(async move {
-                    let serving = tokio::task::spawn_local(serve(
-                        transport,
-                        inbox,
-                        events,
-                        Microphone::new(),
-                        Arc::new(Deaf::default()),
-                    ));
-
-                    to_loop.send(connect_to(GENERAL)).unwrap();
-                    said.recv().await;
-                    said.recv().await;
-
-                    speaking.send(vec!["@ada:example.org".to_owned()]).unwrap();
-                    let heard = said.recv().await;
-
-                    to_loop.send(Message::Shutdown).unwrap();
-                    drop(to_loop);
-                    serving.await.unwrap();
-                    heard
-                })
-                .await;
-
-            assert_eq!(
-                heard,
-                Some(CallEvent::Speaking {
-                    user_ids: vec!["@ada:example.org".to_owned()],
-                })
-            );
-        }
-
-        #[tokio::test]
-        async fn somebody_starting_to_talk_does_not_redraw_the_roster() {
-            // The reason this is its own event. The SFU revises the speaker
-            // list several times a second, and a `Connected` costs a
-            // member-store read per person to name. Folding the two together
-            // would put a database read behind every syllable.
-            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
-            let _watching = transport.speaking.subscribe();
-            let speaking = transport.speaking.clone();
-
-            let (to_loop, inbox) = unbounded_channel();
-            let (events, mut said) = unbounded_channel();
-
-            let after = tokio::task::LocalSet::new()
-                .run_until(async move {
-                    let serving = tokio::task::spawn_local(serve(
-                        transport,
-                        inbox,
-                        events,
-                        Microphone::new(),
-                        Arc::new(Deaf::default()),
-                    ));
-
-                    to_loop.send(connect_to(GENERAL)).unwrap();
-                    said.recv().await;
-                    said.recv().await;
-
-                    speaking.send(vec!["@ada:example.org".to_owned()]).unwrap();
-
-                    to_loop.send(Message::Shutdown).unwrap();
-                    drop(to_loop);
-                    serving.await.unwrap();
-
-                    let mut rest = Vec::new();
-                    while let Some(event) = said.recv().await {
-                        rest.push(event);
-                    }
-                    rest
-                })
-                .await;
-
-            assert!(
-                !after
-                    .iter()
-                    .any(|event| matches!(event, CallEvent::Connected { .. })),
-                "a speaker change redrew the whole roster: {after:?}"
-            );
         }
     }
 

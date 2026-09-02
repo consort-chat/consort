@@ -9,9 +9,6 @@
 //! rather than in [`crate::livekit`] where nothing can.
 
 use consort_matrix::Participant;
-// `SpeakingMember` is not re-exported from the crate root; the module is
-// public, so this is the path rather than a private reach-in.
-use matrix_rtc_media::event::SpeakingMember;
 use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
 
 /// Whether this membership has muted its microphone.
@@ -204,38 +201,6 @@ fn with_flag(
         .collect()
 }
 
-/// The people behind `speakers`, by Matrix user ID and without repeats.
-///
-/// The SFU answers in memberships, because that is what it has; a roster is
-/// drawn per person. Somebody talking on their laptop with their phone also in
-/// the call is one person talking, and saying their name twice would light two
-/// entries that are the same human.
-///
-/// Speakers whose membership is not in the roster are dropped. That is the
-/// window between a membership being signalled and this session having caught
-/// up with it, and inventing a user ID for it would be worse than briefly
-/// missing a green ring.
-pub fn speaking_users(
-    speakers: &[SpeakingMember],
-    memberships: &[MediaParticipant],
-) -> Vec<String> {
-    let mut talking = Vec::new();
-
-    for speaker in speakers {
-        let Some(member) = memberships
-            .iter()
-            .find(|member| member.member_id == speaker.member_id)
-        else {
-            continue;
-        };
-        if !talking.contains(&member.user_id) {
-            talking.push(member.user_id.clone());
-        }
-    }
-
-    talking
-}
-
 #[cfg(test)]
 mod deafening {
     use super::*;
@@ -326,90 +291,6 @@ mod deafening {
 
         assert!(people[0].deafened);
         assert!(!people[1].deafened);
-    }
-}
-
-#[cfg(test)]
-mod speaking {
-    use super::*;
-
-    fn membership(member_id: &str, user_id: &str) -> MediaParticipant {
-        MediaParticipant {
-            member_id: member_id.to_owned(),
-            user_id: user_id.to_owned(),
-            device_id: None,
-            is_local: false,
-            reachable: true,
-            joined_at_ms: None,
-            streams: Vec::new(),
-        }
-    }
-
-    fn talking(member_id: &str) -> SpeakingMember {
-        SpeakingMember {
-            member_id: member_id.to_owned(),
-            level: 0.8,
-        }
-    }
-
-    #[test]
-    fn a_speaking_membership_names_its_person() {
-        let people = speaking_users(
-            &[talking("ada-laptop")],
-            &[membership("ada-laptop", "@ada:example.org")],
-        );
-
-        assert_eq!(people, vec!["@ada:example.org".to_owned()]);
-    }
-
-    #[test]
-    fn one_person_on_two_devices_is_named_once() {
-        // The roster is per person, so naming them twice would light two
-        // entries that are the same human.
-        let people = speaking_users(
-            &[talking("ada-laptop"), talking("ada-phone")],
-            &[
-                membership("ada-laptop", "@ada:example.org"),
-                membership("ada-phone", "@ada:example.org"),
-            ],
-        );
-
-        assert_eq!(people, vec!["@ada:example.org".to_owned()]);
-    }
-
-    #[test]
-    fn a_speaker_this_session_has_not_heard_of_is_dropped() {
-        // The window between a membership being signalled and this session
-        // catching up. Inventing a user ID would be worse than a missing ring.
-        let people = speaking_users(
-            &[talking("a-stranger")],
-            &[membership("ada-laptop", "@ada:example.org")],
-        );
-
-        assert!(people.is_empty());
-    }
-
-    #[test]
-    fn nobody_talking_is_nobody_named() {
-        assert!(speaking_users(&[], &[membership("ada-laptop", "@ada:example.org")]).is_empty());
-    }
-
-    #[test]
-    fn everybody_talking_at_once_is_named_in_the_order_the_sfu_gave() {
-        // Loudest first where the transport orders them, which is what makes
-        // an interface that only has room for a few names show the right ones.
-        let people = speaking_users(
-            &[talking("bob-laptop"), talking("ada-laptop")],
-            &[
-                membership("ada-laptop", "@ada:example.org"),
-                membership("bob-laptop", "@bob:example.org"),
-            ],
-        );
-
-        assert_eq!(
-            people,
-            vec!["@bob:example.org".to_owned(), "@ada:example.org".to_owned()]
-        );
     }
 }
 

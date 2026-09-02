@@ -91,6 +91,12 @@ pub enum AppEvent {
     /// second, so it must not sit on the call channel where it would evict the
     /// call state constantly. And unlike a mute it is never replayed: see
     /// [`is_worth_keeping`](Self::is_worth_keeping).
+    ///
+    /// Measured here rather than reported by the call thread, which is why it
+    /// does not arrive as a `CallEvent`. The two things it is made of are a
+    /// gate verdict on the audio thread and the frames going into the mixer,
+    /// and neither is anything `consort-call` can see. See
+    /// [`consort_audio::talking`].
     Speaking(Vec<String>),
 }
 

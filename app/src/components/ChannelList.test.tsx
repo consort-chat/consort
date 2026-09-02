@@ -711,9 +711,9 @@ describe("ChannelList", () => {
     });
 
     it("marks this session's own user when they are the one talking", () => {
-      // The SFU reports every speaker it can hear, including us. Excluding
-      // ourselves would leave the one person most likely to be looking for the
-      // ring as the only one who never gets it.
+      // We are measured the same way everybody else is, from the frames on
+      // their way out. Excluding ourselves would leave the one person most
+      // likely to be looking for the ring as the only one who never gets it.
       render(
         <ChannelList
           space={space([voice(LOUNGE, "Lounge")])}

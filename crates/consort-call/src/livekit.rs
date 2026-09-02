@@ -47,7 +47,7 @@ use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
 use crate::roster;
 use crate::thread::AbortOnDrop;
-use crate::transport::{CallSession, CallTransport, Change, Roster};
+use crate::transport::{CallSession, CallTransport, Roster};
 use crate::trouble::{Faults, what_it_says};
 use tokio::sync::{broadcast, watch};
 
@@ -764,7 +764,7 @@ impl Roster for LiveKitRoster {
         roster::with_away(named, &whose, &flags.away)
     }
 
-    async fn changed(&mut self) -> Option<Change> {
+    async fn changed(&mut self) -> Option<()> {
         // Destructured so the two futures below borrow different fields.
         // `select!` over `self.memberships` and `self.reports` directly would
         // be two mutable borrows of one `self`.
@@ -778,24 +778,19 @@ impl Roster for LiveKitRoster {
 
         loop {
             tokio::select! {
-                changed = memberships.changed() => return changed.is_ok().then_some(Change::Roster),
+                changed = memberships.changed() => return changed.is_ok().then_some(()),
                 // Rare, and worth a full redraw when it happens: it is drawn
                 // beside the mute, in the roster, by name.
-                changed = announced.changed() => return changed.is_ok().then_some(Change::Roster),
+                changed = announced.changed() => return changed.is_ok().then_some(()),
                 report = reports.recv() => match report {
-                    // Answered here rather than through `what_it_says`, which
-                    // is about what is wrong with a call. This one is cheap and
-                    // frequent, and the whole point of telling it apart is that
-                    // it must not cost a roster read.
+                    // `ActiveSpeakers` is deliberately not answered. It is the
+                    // SFU's dominant-speaker detector, which is built to pick
+                    // out one face in a meeting of thirty and is smoothed and
+                    // thresholded to match, and reading the rings off it made
+                    // them slow enough to be useless in a channel of three.
+                    // Who is talking is measured from the audio instead. See
+                    // `consort_audio::talking`.
                     //
-                    // `borrow` rather than `borrow_and_update`: this is reading
-                    // the memberships to name somebody, not waiting on them,
-                    // and marking them seen here would swallow a genuine roster
-                    // change from the arm above.
-                    Ok(matrix_rtc_media::CallEvent::ActiveSpeakers { speakers }) => {
-                        let talking = roster::speaking_users(&speakers, &memberships.borrow());
-                        return Some(Change::Speaking(talking));
-                    }
                     // Only a report that changes the answer is worth waking
                     // anybody for. The cryptor reports its state per frame run
                     // rather than only on a transition, so most of these say
@@ -803,7 +798,7 @@ impl Roster for LiveKitRoster {
                     Ok(event) => match what_it_says(&event) {
                         Some((member_id, fault)) => {
                             if faults.note(member_id, fault) {
-                                return Some(Change::Roster);
+                                return Some(());
                             }
                             continue;
                         }

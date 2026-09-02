@@ -1127,10 +1127,12 @@ export const NOBODY: ReadonlySet<string> = new Set();
  *
  * The empty list is a real answer and arrives whenever the last person stops.
  *
- * The SFU decides who counts as talking, from the audio it is already
- * receiving. That is one answer for everybody in the call, arrived at the same
- * way, rather than each client guessing from what it happens to be able to
- * measure.
+ * Measured on this machine, from the frames actually travelling: ours on the
+ * way out of the gate and everybody else's on the way to the sound card. The
+ * SFU also has an opinion, and it used to be the source of this, but its
+ * detector is built to pick one face out of a meeting of thirty and is
+ * smoothed and thresholded to match, which made the rings too slow to be worth
+ * drawing in a channel of three.
  */
 export function onSpeaking(
   handler: (userIds: string[]) => void,

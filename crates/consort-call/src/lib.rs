@@ -65,5 +65,5 @@ pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use notices::{Announced, Flags, Notice};
 pub use publish::PublishedAudio;
 pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT, SHUTDOWN_LEAVE_TIMEOUT};
-pub use transport::{CallSession, CallTransport, Change, Roster};
+pub use transport::{CallSession, CallTransport, Roster};
 pub use trouble::{Fault, Faults};

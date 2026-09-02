@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use consort_audio::{Phrase, Sound, Voices};
+use consort_audio::{Phrase, Sound, Talking, Voices};
 use consort_call::hearing::{Cue, Ears, Heard};
 
 /// The mixer, as somewhere a call can be played.
@@ -27,6 +27,14 @@ struct Speakers {
     chiming: Wanted,
     speaking: Wanted,
     levels: Arc<Levels>,
+    talking: Talking,
+    /// Which person each membership in the call belongs to.
+    ///
+    /// Kept because [`Heard::hear`] is handed a membership and the rings are
+    /// drawn per person, and this is the only layer where both are known. The
+    /// same two facts `Levels` needs, for the same reason, and they arrive
+    /// together through [`Heard::attribute`].
+    whose: Mutex<HashMap<String, String>>,
 }
 
 /// Whether one of the two kinds of call sound is switched on.
@@ -48,15 +56,28 @@ pub type Wanted = Arc<AtomicBool>;
 /// because what somebody chose about a person is not a fact about the call they
 /// happened to choose it in.
 ///
+/// `talking` is who is currently audible. Everybody else's half is filled in
+/// here, from the frames on their way to the sound card; this session's own
+/// half is filled in by the audio thread, from the frames on their way out.
+/// Both are measured the same way and neither asks the SFU anything.
+///
 /// A free function rather than `Speakers::new`, because what a caller wants is
 /// the trait object and a `new` that does not return `Self` is a surprise
 /// worth avoiding. Nothing outside this module needs the type itself.
-pub fn speakers(voices: Voices, chiming: Wanted, speaking: Wanted, levels: Arc<Levels>) -> Ears {
+pub fn speakers(
+    voices: Voices,
+    chiming: Wanted,
+    speaking: Wanted,
+    levels: Arc<Levels>,
+    talking: Talking,
+) -> Ears {
     Arc::new(Speakers {
         voices,
         chiming,
         speaking,
         levels,
+        talking,
+        whose: Mutex::new(HashMap::new()),
     })
 }
 
@@ -150,9 +171,26 @@ impl Levels {
     }
 }
 
+impl Speakers {
+    /// Recovering from a poisoned lock rather than spreading a panic, on the
+    /// same terms as `Levels::known`: one of the callers is the call thread.
+    fn whose(&self) -> MutexGuard<'_, HashMap<String, String>> {
+        self.whose.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 impl Heard for Speakers {
     fn hear(&self, who: &str, samples: &[i16]) {
         self.voices.hear(who, samples);
+
+        // Resolved to a person before it is tallied, so that somebody talking
+        // on a laptop with their phone also in the call lights one ring rather
+        // than two. A membership nobody has attributed yet is not tallied at
+        // all: inventing a name for it would put a ring on the wrong person,
+        // and the next roster change is a moment away.
+        if let Some(user_id) = self.whose().get(who) {
+            self.talking.heard(user_id, samples);
+        }
     }
 
     fn forget(&self, who: &str) {
@@ -164,6 +202,7 @@ impl Heard for Speakers {
     }
 
     fn attribute(&self, whose: &[(String, String)]) {
+        *self.whose() = whose.iter().cloned().collect();
         self.levels.present(whose);
     }
 
@@ -242,7 +281,7 @@ mod tests {
     /// and would leave those tests passing for the wrong reason.
     fn chimes_only(voices: Voices) -> Ears {
         let levels = no_levels(voices.clone());
-        speakers(voices, on(), off(), levels)
+        speakers(voices, on(), off(), levels, Talking::new())
     }
 
     /// One buffer's worth of what the mixer would play.
@@ -332,7 +371,13 @@ mod tests {
     #[test]
     fn turning_the_sounds_off_stops_them() {
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), off(), off(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            off(),
+            off(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.cue(Cue::Arrived);
 
@@ -355,6 +400,7 @@ mod tests {
             wanted.clone(),
             off(),
             no_levels(voices.clone()),
+            Talking::new(),
         );
         ears.cue(Cue::Arrived);
 
@@ -369,7 +415,13 @@ mod tests {
         // Two different things. Somebody who turned the chimes off still wants
         // to hear the people.
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), off(), off(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            off(),
+            off(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.hear("alice", &[1, 2, 3]);
 
@@ -382,7 +434,13 @@ mod tests {
         // gets a person's attention and the sentence is what they hear once
         // they have it. Played together they would be one noise.
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), on(), on(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            on(),
+            on(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.cue(Cue::Arrived);
 
@@ -399,7 +457,13 @@ mod tests {
         // playing. This is what says the switch that works today still works
         // while the switch that works tomorrow has nothing to say.
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), on(), on(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            on(),
+            on(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.cue(Cue::Arrived);
 
@@ -415,9 +479,23 @@ mod tests {
         // The whole reason there are two of them. Either one alone has to be a
         // state somebody can be in, or the second setting is decoration.
         let chime = Voices::new();
-        speakers(chime.clone(), on(), off(), no_levels(chime.clone())).cue(Cue::Arrived);
+        speakers(
+            chime.clone(),
+            on(),
+            off(),
+            no_levels(chime.clone()),
+            Talking::new(),
+        )
+        .cue(Cue::Arrived);
         let sentence = Voices::new();
-        speakers(sentence.clone(), off(), on(), no_levels(sentence.clone())).cue(Cue::Arrived);
+        speakers(
+            sentence.clone(),
+            off(),
+            on(),
+            no_levels(sentence.clone()),
+            Talking::new(),
+        )
+        .cue(Cue::Arrived);
 
         assert_eq!(chime.sound_waiting(), Sound::Joined.samples().len());
         assert_eq!(sentence.sound_waiting(), Phrase::Entered.samples().len());
@@ -429,9 +507,23 @@ mod tests {
         // being pinned is that the two cues reach different phrases, which is
         // the part a recording cannot fix later if it is wrong now.
         let entering = Voices::new();
-        speakers(entering.clone(), off(), on(), no_levels(entering.clone())).cue(Cue::Arrived);
+        speakers(
+            entering.clone(),
+            off(),
+            on(),
+            no_levels(entering.clone()),
+            Talking::new(),
+        )
+        .cue(Cue::Arrived);
         let leaving = Voices::new();
-        speakers(leaving.clone(), off(), on(), no_levels(leaving.clone())).cue(Cue::Departed);
+        speakers(
+            leaving.clone(),
+            off(),
+            on(),
+            no_levels(leaving.clone()),
+            Talking::new(),
+        )
+        .cue(Cue::Departed);
 
         assert_eq!(entering.sound_waiting(), Phrase::Entered.samples().len());
         assert_eq!(leaving.sound_waiting(), Phrase::Left.samples().len());
@@ -443,7 +535,13 @@ mod tests {
         // Giving one of them a third meaning would make both ambiguous, so
         // this cue is a sentence or it is nothing, even with both switches on.
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), on(), on(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            on(),
+            on(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.cue(Cue::Returned);
 
@@ -460,7 +558,13 @@ mod tests {
         // the sentences off turned this off with them, and the chime setting
         // has no opinion about it.
         let voices = Voices::new();
-        let ears = speakers(voices.clone(), on(), off(), no_levels(voices.clone()));
+        let ears = speakers(
+            voices.clone(),
+            on(),
+            off(),
+            no_levels(voices.clone()),
+            Talking::new(),
+        );
 
         ears.cue(Cue::Returned);
 
@@ -602,11 +706,112 @@ mod levels {
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             levels,
+            Talking::new(),
         );
 
         ears.attribute(&ada_present());
         voices.hear("ada-laptop", &[1000]);
 
         assert_eq!(played(&voices, 1), vec![0]);
+    }
+}
+
+#[cfg(test)]
+mod rings {
+    use super::*;
+
+    /// A frame loud enough to be somebody talking.
+    fn loud() -> Vec<i16> {
+        vec![8_000; consort_audio::FRAME_SAMPLES]
+    }
+
+    /// Ada on one device, as the call reports her.
+    fn ada_present() -> Vec<(String, String)> {
+        vec![("ada-laptop".to_owned(), "@ada:example.org".to_owned())]
+    }
+
+    fn listening(talking: Talking) -> (Voices, Ears) {
+        let voices = Voices::new();
+        let levels = Levels::new(voices.clone(), BTreeMap::new());
+        let ears = speakers(
+            voices.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            levels,
+            talking,
+        );
+        (voices, ears)
+    }
+
+    #[test]
+    fn somebody_audible_lights_up_as_the_person_they_are() {
+        // The seam the rings hang off. A membership is what audio belongs to
+        // and a person is what a ring is drawn for, and this is the only layer
+        // that knows which is which.
+        let talking = Talking::new();
+        let (_voices, ears) = listening(talking.clone());
+        ears.attribute(&ada_present());
+
+        ears.hear("ada-laptop", &loud());
+
+        assert_eq!(talking.advance(), Some(vec!["@ada:example.org".to_owned()]));
+    }
+
+    #[test]
+    fn somebody_on_two_devices_lights_one_ring() {
+        let talking = Talking::new();
+        let (_voices, ears) = listening(talking.clone());
+        ears.attribute(&[
+            ("ada-laptop".to_owned(), "@ada:example.org".to_owned()),
+            ("ada-phone".to_owned(), "@ada:example.org".to_owned()),
+        ]);
+
+        ears.hear("ada-laptop", &loud());
+        ears.hear("ada-phone", &loud());
+
+        assert_eq!(talking.advance(), Some(vec!["@ada:example.org".to_owned()]));
+    }
+
+    #[test]
+    fn a_membership_nobody_has_named_yet_lights_nobody() {
+        // The window between a stream arriving and the roster catching up with
+        // it. Guessing a name would put a ring on the wrong person, and the
+        // next roster change is a frame or two away.
+        let talking = Talking::new();
+        let (_voices, ears) = listening(talking.clone());
+
+        ears.hear("ada-laptop", &loud());
+
+        assert_eq!(talking.advance(), None);
+    }
+
+    #[test]
+    fn a_silent_participant_lights_nobody() {
+        // Their gate is shut on their own machine, so what arrives here is
+        // silence. Measuring the frames that actually travel is what makes a
+        // ring mean "this is reaching me" rather than "they are connected".
+        let talking = Talking::new();
+        let (_voices, ears) = listening(talking.clone());
+        ears.attribute(&ada_present());
+
+        ears.hear("ada-laptop", &vec![0; consort_audio::FRAME_SAMPLES]);
+
+        assert_eq!(talking.advance(), None);
+    }
+
+    #[test]
+    fn the_audio_still_reaches_the_mixer() {
+        // The tally is beside the mixer rather than in front of it. A ring
+        // that cost somebody their audio would be the worst possible trade.
+        let talking = Talking::new();
+        let (voices, ears) = listening(talking);
+        ears.attribute(&ada_present());
+
+        ears.hear("ada-laptop", &[1, 2, 3]);
+
+        let mut mixing = consort_audio::Mixing::new(voices, 1);
+        let mut out = vec![0i16; 3];
+        mixing.fill_i16(&mut out);
+        assert_eq!(out, vec![1, 2, 3]);
     }
 }

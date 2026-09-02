@@ -201,31 +201,16 @@ pub trait Roster {
     /// are and why there is only ever one.
     fn trouble(&self) -> Option<String>;
 
-    /// Who is talking right now, by Matrix user ID.
+    /// Wait for anything about this call to be different.
     ///
-    /// Reported separately from [`now`](Self::now) because it changes on a
-    /// completely different timescale. People join a call a few times an hour;
-    /// they start and stop talking several times a second, and answering this
-    /// must not cost the member-store read that naming a roster does.
+    /// `Some` means re-read and redraw; `None` means the call is over and
+    /// nothing will change again.
     ///
-    /// Delivered by [`changed`](Self::changed) rather than polled, so this has
-    /// no accessor: a value nobody asked for at the right moment is a value
-    /// that is already wrong.
-    async fn changed(&mut self) -> Option<Change>;
-}
-
-/// Why a roster watcher woke up.
-///
-/// Two kinds of change on one seam, because they come from one call and are
-/// drawn in one place, but they are told apart here because they cost wildly
-/// different amounts to act on. Collapsing them into a single "something
-/// changed" would put a member-store read behind every syllable.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Change {
-    /// Who is in the call, or what is wrong with it, is different now. Worth
-    /// re-reading and re-drawing in full.
-    Roster,
-    /// Who is talking is different now, and nothing else is. Cheap: the user
-    /// IDs are already known and nothing has to be named again.
-    Speaking(Vec<String>),
+    /// A bare wake-up rather than a description of what moved. It used to
+    /// carry one, because who is talking arrived here too and cost nothing to
+    /// act on while a roster read costs a member-store lookup per person. Who
+    /// is talking is now measured from the audio itself, on the machine that
+    /// is playing it, so the only thing left on this seam is the expensive
+    /// kind. See `consort_audio::talking`.
+    async fn changed(&mut self) -> Option<()>;
 }

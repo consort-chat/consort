@@ -119,24 +119,6 @@ pub enum CallEvent {
     ///
     /// [`Connected`]: Self::Connected
     SelfAudio(SelfAudio),
-    /// Who is talking right now, by Matrix user ID.
-    ///
-    /// Its own event, and deliberately not part of [`Connected`]. The SFU
-    /// revises this several times a second, and `Connected` carries a roster
-    /// that costs a member-store read per person to name. Folding the two
-    /// together would put a database read behind every syllable anybody says.
-    ///
-    /// Per person rather than per membership, to match the roster it is drawn
-    /// against: somebody talking on one of their two devices is one person
-    /// talking.
-    ///
-    /// The SFU decides who counts as speaking, from the RTP it is already
-    /// receiving. That is deliberate: it is one answer for everybody in the
-    /// call, arrived at the same way, rather than each client guessing from
-    /// whatever it happens to be able to measure.
-    ///
-    /// [`Connected`]: Self::Connected
-    Speaking { user_ids: Vec<String> },
     /// The join did not happen. The thread is still alive and can be asked
     /// again.
     Failed { room_id: String, error: String },

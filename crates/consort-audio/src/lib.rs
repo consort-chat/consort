@@ -19,6 +19,7 @@ pub mod mixing;
 pub mod playback;
 pub mod settings;
 pub mod sound;
+pub mod talking;
 pub mod thread;
 pub mod tone;
 
@@ -41,5 +42,6 @@ pub use mixing::{
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
 pub use sound::{Phrase, Sound};
+pub use talking::{FLOOR, HOLD_FRAMES, Talking};
 pub use thread::{AudioEvent, AudioThread, GatedSink};
 pub use tone::Tone;

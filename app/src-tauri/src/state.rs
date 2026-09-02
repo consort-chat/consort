@@ -13,7 +13,7 @@ use consort_matrix::{
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
-use consort_audio::{GateConfig, Voices};
+use consort_audio::{GateConfig, GatedSink, Talking, Voices};
 
 use crate::audio::Backends;
 use crate::call::CallBridge;
@@ -78,6 +78,45 @@ pub struct CallAudio {
     /// The sound card. A closure because the audio thread is built at most
     /// once per process and almost every call finds it already there.
     pub backends: Box<dyn Fn() -> Backends + Send>,
+    /// This session's own Matrix user ID.
+    ///
+    /// Carried because the audio thread is where this session's own ring is
+    /// decided, and the frames it decides from say nothing about whose they
+    /// are. Read from the signed-in client at the moment of joining, which is
+    /// the last layer that has one.
+    pub us: String,
+}
+
+/// The microphone sink a call is fed from, which is also where this session's
+/// own green ring is decided.
+///
+/// Two jobs on one closure because they are the same frame seen twice, and
+/// because this is the only place both are available. The frames are the
+/// gate's output, so they are silence while it is shut, which is what lets the
+/// ring be measured exactly as everybody else's is rather than from the gate's
+/// verdict. That distinction matters with voice activity switched off: the
+/// gate then reports every frame open, and a ring drawn from the verdict would
+/// simply stay lit.
+///
+/// It is also the tick. Frames arrive every 10 ms for as long as a call has
+/// the microphone, whether or not anybody is saying anything, so this is the
+/// one clock in the building that can put a ring out again. Nothing here
+/// blocks: `advance` answers `None` on all but a handful of frames a second.
+fn speaking_sink(
+    queue: Microphone,
+    talking: Talking,
+    us: String,
+    events: Arc<LatestSink>,
+) -> GatedSink {
+    Box::new(move |samples, open| {
+        // Before the tally, because this is the frame's reason for existing.
+        queue.offer(samples, open);
+
+        talking.heard(&us, samples);
+        if let Some(user_ids) = talking.advance() {
+            events.emit(AppEvent::Speaking(user_ids));
+        }
+    })
 }
 
 /// The one piece of long-lived state the app has.
@@ -221,6 +260,13 @@ pub struct AppState {
     /// in: it has to survive leaving, rejoining, and the application being shut
     /// for a week. See [`crate::ears::Levels`].
     levels: Arc<crate::ears::Levels>,
+    /// Who is currently audible, which is what the green rings are drawn from.
+    ///
+    /// Held here rather than inside the call because its two writers are on
+    /// different threads and neither belongs to the call: everybody else's
+    /// frames are tallied beside the mixer, and this session's own are tallied
+    /// on the audio thread as they leave. See [`consort_audio::talking`].
+    talking: Talking,
     /// How the microphone should be opened for the call currently being
     /// joined. See [`CallAudio`].
     call_audio: Arc<std::sync::Mutex<Option<CallAudio>>>,
@@ -275,6 +321,7 @@ impl AppState {
             chiming,
             speaking,
             levels,
+            talking: Talking::new(),
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             call: std::sync::Mutex::new(None),
         }
@@ -351,6 +398,7 @@ impl AppState {
                     self.chiming.clone(),
                     self.speaking.clone(),
                     self.levels.clone(),
+                    self.talking.clone(),
                 ),
                 self.call_reporter(),
             )
@@ -442,6 +490,7 @@ impl AppState {
         let microphone = self.microphone.clone();
         let voices = self.voices.clone();
         let call_audio = self.call_audio.clone();
+        let talking = self.talking.clone();
 
         move |event| {
             match &event {
@@ -456,27 +505,28 @@ impl AppState {
                             || (audio.backends)(),
                             audio.device.clone(),
                             audio.gate,
-                            Box::new(move |samples, open| queue.offer(samples, open)),
+                            speaking_sink(queue, talking.clone(), audio.us.clone(), events.clone()),
                             audio.output.clone(),
                             voices.clone(),
                         );
                     }
                 }
                 CallEvent::Connected { .. } => {}
-                CallEvent::Disconnected | CallEvent::Failed { .. } => sound.stop_call(),
+                CallEvent::Disconnected | CallEvent::Failed { .. } => {
+                    sound.stop_call();
+                    // The tally is ticked by the microphone, and the line
+                    // above is what stops it. Without this whoever was talking
+                    // when the call ended stays lit until the next one.
+                    if let Some(user_ids) = talking.quiet() {
+                        events.emit(AppEvent::Speaking(user_ids));
+                    }
+                }
                 // Split onto its own channel here rather than being given one
                 // by the call thread, which has one way out and no reason to
                 // know how the webview is wired. See `AppEvent::SelfAudio` for
                 // why it cannot travel with the call.
                 CallEvent::SelfAudio(audio) => {
                     events.emit(AppEvent::SelfAudio(*audio));
-                    return;
-                }
-                // Split off for the same reason, and more urgently: this
-                // arrives several times a second, and on the call channel it
-                // would evict the call state constantly.
-                CallEvent::Speaking { user_ids } => {
-                    events.emit(AppEvent::Speaking(user_ids.clone()));
                     return;
                 }
             }
@@ -840,6 +890,7 @@ mod tests {
             output: Some("Headphones".to_owned()),
             gate: GateConfig::default(),
             backends: Box::new(fake_backends),
+            us: "@ada:example.org".to_owned(),
         }
     }
 
@@ -1469,5 +1520,129 @@ mod tests {
             assert!(!state.has_call_thread());
             assert_eq!(last_call_state(&sink), None);
         }
+    }
+}
+
+/// The green rings, which are decided here rather than asked of the SFU.
+#[cfg(test)]
+mod rings {
+    use super::*;
+    use crate::events::RecordingSink;
+
+    const US: &str = "@ada:example.org";
+
+    /// A frame loud enough to be somebody talking.
+    fn loud() -> Vec<i16> {
+        vec![8_000; consort_audio::FRAME_SAMPLES]
+    }
+
+    /// A frame the gate has shut on, which is what a call is published while
+    /// nobody is talking.
+    fn shut() -> Vec<i16> {
+        vec![0; consort_audio::FRAME_SAMPLES]
+    }
+
+    fn sink() -> (GatedSink, Talking, Arc<RecordingSink>, Microphone) {
+        let recorder = Arc::new(RecordingSink::new());
+        let events = Arc::new(LatestSink::new(recorder.clone()));
+        let talking = Talking::new();
+        let queue = Microphone::new();
+        (
+            speaking_sink(queue.clone(), talking.clone(), US.to_owned(), events),
+            talking,
+            recorder,
+            queue,
+        )
+    }
+
+    /// Every set of speakers the webview was told about, in order.
+    fn told(recorder: &RecordingSink) -> Vec<Vec<String>> {
+        recorder
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AppEvent::Speaking(user_ids) => Some(user_ids),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn our_own_ring_lights_on_the_first_audible_frame() {
+        // One frame is 10 ms. The SFU's detector needed several hundred, and
+        // reaching that threshold from a desk microphone meant leaning into
+        // it, which is the complaint this replaces.
+        let (mut sink, _talking, recorder, _queue) = sink();
+
+        sink(&loud(), true);
+
+        assert_eq!(told(&recorder), vec![vec![US.to_owned()]]);
+    }
+
+    #[test]
+    fn a_gated_shut_frame_lights_nothing() {
+        // Measured on the samples rather than on the gate's verdict, so this
+        // holds whether or not voice activity is switched on: with it off the
+        // gate reports every frame open and these samples would still be
+        // silence.
+        let (mut sink, _talking, recorder, _queue) = sink();
+
+        sink(&shut(), true);
+
+        assert!(told(&recorder).is_empty());
+    }
+
+    #[test]
+    fn talking_continuously_says_so_once() {
+        // A hundred frames a second, and the interface needs to hear about one
+        // of them. Emitting per frame would be a hundred IPC messages a second
+        // saying what the last one said.
+        let (mut sink, _talking, recorder, _queue) = sink();
+
+        for _ in 0..50 {
+            sink(&loud(), true);
+        }
+
+        assert_eq!(told(&recorder), vec![vec![US.to_owned()]]);
+    }
+
+    #[test]
+    fn stopping_puts_the_ring_out() {
+        let (mut sink, _talking, recorder, _queue) = sink();
+        sink(&loud(), true);
+
+        for _ in 0..consort_audio::HOLD_FRAMES {
+            sink(&shut(), false);
+        }
+
+        assert_eq!(
+            told(&recorder),
+            vec![vec![US.to_owned()], Vec::new()],
+            "the ring never went out"
+        );
+    }
+
+    #[test]
+    fn somebody_else_talking_reaches_the_webview_on_our_tick() {
+        // The two halves are written from different threads and read from one.
+        // This session's own capture is the clock, because it runs whether or
+        // not anybody is saying anything, which is what lets a ring go out.
+        let (mut sink, talking, recorder, _queue) = sink();
+        talking.heard("@bob:example.org", &loud());
+
+        sink(&shut(), false);
+
+        assert_eq!(told(&recorder), vec![vec!["@bob:example.org".to_owned()]]);
+    }
+
+    #[tokio::test]
+    async fn the_frames_still_reach_the_call() {
+        // The tally is beside the queue, not in front of it. A ring that cost
+        // the call its audio would be the worst possible trade.
+        let (mut sink, _talking, _recorder, queue) = sink();
+
+        sink(&loud(), true);
+
+        assert_eq!(queue.next().await.samples, loud());
     }
 }
