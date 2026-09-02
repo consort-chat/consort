@@ -4,6 +4,14 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.1.5 (2026-09-02)
+
+### Fixed
+
+- **dialog:** Keep the keyring's zbus off tokio
+- **timeline:** Stop a picture growing a pixel at a time
+- **timeline:** Take the dead bands off the top and bottom of a room
+
 ## 0.1.4 (2026-09-02)
 
 ### Added

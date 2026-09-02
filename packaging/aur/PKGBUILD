@@ -7,7 +7,7 @@
 
 _pkgname=consort
 pkgname=consort-git
-pkgver=0.1.4.r0.g0000000
+pkgver=0.1.5.r0.g0000000
 pkgrel=1
 pkgdesc="Matrix chat client with voice, in a Tauri desktop shell"
 arch=('x86_64' 'aarch64')
