@@ -56,9 +56,15 @@ tauri-plugin-single-instance = "2"
 # Rust only, so the webview gains no capability from it: the frontend still
 # cannot reach the filesystem, and asking to save is a command like any other.
 #
-# `xdg-portal` rather than the GTK dialog, so the window is the desktop's own
-# and a sandboxed install gets a portal it can actually write through.
-tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
+# The GTK dialog, and not the `xdg-portal` one, however much nicer the portal
+# window is. That feature turns on `rfd/tokio`, which turns on `ashpd/tokio`,
+# which turns on `zbus/tokio`. zbus is one crate in this graph and the keyring
+# is the other thing in it: `keyring` reaches Secret Service through zbus's
+# blocking API, and with `zbus/tokio` on, that API drives the connection by
+# calling `block_on` on a tokio runtime. Reading the session is an async
+# command, so the call arrives already inside one, and tokio answers
+# "Cannot start a runtime from within a runtime" before the window is drawn.
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["gtk3"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

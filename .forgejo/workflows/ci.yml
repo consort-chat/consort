@@ -127,6 +127,26 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: The keyring's zbus is not driven by tokio
+        # One zbus in the graph serves both Secret Service and whatever else
+        # pulls it in. Its `tokio` feature switches the blocking API over to
+        # `block_on`, and the keyring is read from inside an async command, so
+        # turning it on panics at startup with "Cannot start a runtime from
+        # within a runtime". Nothing catches that but running the application.
+        #
+        # Resolved into a variable rather than piped straight into grep, so a
+        # cargo that failed to answer fails the step instead of reading as a
+        # clean graph.
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree --workspace --locked --edges features --invert zbus)
+          if printf '%s\n' "$tree" | grep -F 'zbus feature "tokio"'; then
+            echo
+            echo "Something enabled zbus/tokio. Find it in the tree above and turn that feature off."
+            exit 1
+          fi
+          echo "Not enabled."
+
       - name: Test
         run: cargo test --workspace
 
