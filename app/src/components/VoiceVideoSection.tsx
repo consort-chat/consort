@@ -193,7 +193,18 @@ function VolumeSlider({
  * A device can appear or vanish while the window is up, and a picker drawn
  * from a stale list offers things that are not there.
  */
-export function VoiceVideoSection() {
+export function VoiceVideoSection({
+  onReady,
+}: {
+  /**
+   * Called once the machine's devices and the saved settings have landed.
+   *
+   * The settings screen draws a spinner beside this section's menu item until
+   * then, because enumerating ALSA takes long enough that a menu item which
+   * does nothing meanwhile reads as one that does not work.
+   */
+  onReady?: () => void;
+}) {
   const [devices, setDevices] = useState<{
     input: AudioDeviceList;
     output: AudioDeviceList;
@@ -316,9 +327,17 @@ export function VoiceVideoSection() {
       });
 
     reload()
-      .then(() => (cancelled ? undefined : audioTestStart()))
+      .then(() => {
+        if (cancelled) return undefined;
+        onReady?.();
+        return audioTestStart();
+      })
       .catch((raw: unknown) => {
-        if (!cancelled) setProblem(asCommandError(raw).message);
+        if (cancelled) return;
+        // Reported as ready even so. The spinner says a question is being
+        // asked, and one that has been answered badly has still been answered.
+        onReady?.();
+        setProblem(asCommandError(raw).message);
       });
 
     return () => {
@@ -337,6 +356,10 @@ export function VoiceVideoSection() {
         console.error("could not stop the test tone", asCommandError(raw).detail);
       });
     };
+    // `onReady` is deliberately not a dependency. It is a fresh closure on
+    // every render of the settings screen, and listing it would tear the
+    // microphone down and reopen it on each one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   /**

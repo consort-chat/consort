@@ -236,4 +236,41 @@ describe("SettingsModal", () => {
 
     expect(account).not.toHaveAttribute("aria-current", "page");
   });
+
+  it("says it is reading the machine's devices while it does", async () => {
+    // Enumerating ALSA means opening every PCM on the machine to ask what it
+    // supports, and a menu item that does nothing for most of a second reads
+    // as one that does not work.
+    audioDevices.mockReturnValue(new Promise(() => {}));
+    render(<SettingsModal profile={profile} onClose={vi.fn()} onSignedOut={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /voice & video/i }));
+
+    expect(
+      await screen.findByRole("status", { name: /sound devices/i }),
+    ).toBeVisible();
+  });
+
+  it("stops saying so once they have arrived", async () => {
+    render(<SettingsModal profile={profile} onClose={vi.fn()} onSignedOut={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /voice & video/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: /sound devices/i })).toBeNull(),
+    );
+  });
+
+  it("stops saying so when the machine will not answer either", async () => {
+    // The spinner says a question is outstanding, and one answered badly has
+    // still been answered.
+    audioDevices.mockRejectedValue({ message: "no sound system", detail: "" });
+    render(<SettingsModal profile={profile} onClose={vi.fn()} onSignedOut={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /voice & video/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: /sound devices/i })).toBeNull(),
+    );
+  });
 });

@@ -424,8 +424,10 @@ pub async fn attachment_for(
 /// Asked for whenever the settings screen opens, and after every change: a
 /// device can appear or vanish while the window is open, and the only honest
 /// way to draw a picker is to have just asked.
-fn audio_devices_for(state: &AppState, host: &dyn AudioDevices) -> AudioDeviceReport {
-    let settings = state.settings().load().audio;
+/// Takes the settings rather than the state it came out of, because the
+/// command runs this on a blocking pool: state is borrowed, and what crosses
+/// to another thread has to own what it needs.
+fn audio_devices_for(host: &dyn AudioDevices, settings: &AudioSettings) -> AudioDeviceReport {
     AudioDeviceReport::of(host, settings.input.as_deref(), settings.output.as_deref())
 }
 
@@ -728,9 +730,28 @@ fn call_set_away_for(state: &AppState, away: bool) {
     state.set_call_away(away);
 }
 
+/// What devices this machine has. See `audio_devices_for`.
+///
+/// Asynchronous, over a blocking pool, and neither of those is incidental. A
+/// synchronous command runs on the thread drawing the window, and enumerating
+/// devices means opening every ALSA PCM on the machine twice, once per
+/// direction, to read what formats it supports. On a desktop with a handful of
+/// cards that is most of a second with the interface frozen solid, which is
+/// what opening Voice and Video used to feel like.
 #[tauri::command]
-pub fn audio_devices(state: State<'_, AppState>) -> AudioDeviceReport {
-    audio_devices_for(&state, &CpalHost)
+pub async fn audio_devices(state: State<'_, AppState>) -> Result<AudioDeviceReport, CommandError> {
+    // The settings half is a file read and is cheap; only the enumeration goes
+    // to the pool, and it takes a copy of what it needs rather than the state,
+    // which is not `'static`.
+    let settings = audio_settings_for(&state);
+    let report = tokio::task::spawn_blocking(move || audio_devices_for(&CpalHost, &settings))
+        .await
+        .map_err(|error| CommandError {
+            message: "Consort could not read this machine's sound devices.".to_owned(),
+            detail: format!("enumerating audio devices: {error}"),
+        })?;
+
+    Ok(report)
 }
 
 #[tauri::command]
@@ -1285,7 +1306,7 @@ mod tests {
             )
             .expect("save");
 
-            let report = audio_devices_for(&state, &Fake);
+            let report = audio_devices_for(&Fake, &audio_settings_for(&state));
 
             assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
             assert_eq!(report.input.missing, None);
@@ -1303,7 +1324,7 @@ mod tests {
             )
             .expect("save");
 
-            let report = audio_devices_for(&state, &Fake);
+            let report = audio_devices_for(&Fake, &audio_settings_for(&state));
 
             assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
             assert_eq!(
@@ -1318,7 +1339,7 @@ mod tests {
         fn nothing_saved_reports_the_host_default() {
             let (_dir, state, _) = state();
 
-            let report = audio_devices_for(&state, &Fake);
+            let report = audio_devices_for(&Fake, &audio_settings_for(&state));
 
             assert_eq!(report.input.selected.as_deref(), Some("Yeti"));
             assert_eq!(report.output.selected.as_deref(), Some("Headphones"));

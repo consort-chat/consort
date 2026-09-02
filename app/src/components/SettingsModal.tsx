@@ -61,6 +61,16 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
     initialiser runs before the commit, while the gear is still focused.
   */
   const [opener] = useState<Element | null>(() => document.activeElement);
+  /*
+    Whether the voice section is still reading the machine's devices.
+
+    Held here rather than there because the thing it draws is in the nav, which
+    the section cannot reach. Enumerating ALSA means opening every PCM on the
+    machine to ask what it supports, which on some of them is most of a second,
+    and a menu item that does nothing for that long reads as one that does not
+    work.
+  */
+  const [reading, setReading] = useState(false);
 
   useEffect(() => {
     const first =
@@ -151,10 +161,20 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
             <button
               key={entry.id}
               className="settings__nav-item"
-              onClick={() => setSection(entry.id)}
+              onClick={() => {
+                if (entry.id === "voice") setReading(true);
+                setSection(entry.id);
+              }}
               aria-current={section === entry.id ? "page" : undefined}
             >
               {entry.label}
+              {entry.id === "voice" && reading && (
+                <span
+                  className="settings__nav-spinner"
+                  role="status"
+                  aria-label="Reading this machine's sound devices"
+                />
+              )}
             </button>
           ))}
         </nav>
@@ -188,7 +208,9 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
             {section === "account" && (
               <MyAccountSection profile={profile} onSignedOut={onSignedOut} />
             )}
-            {section === "voice" && <VoiceVideoSection />}
+            {section === "voice" && (
+              <VoiceVideoSection onReady={() => setReading(false)} />
+            )}
           </div>
         </div>
       </div>
