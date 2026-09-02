@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   asCommandError,
@@ -45,6 +45,9 @@ export function ThreadPanel({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // The scrolling box, so a jump to an answered message is looked for in this
+  // panel rather than in the room beside it, which draws the root as well.
+  const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +110,15 @@ export function ThreadPanel({
     () => (thread?.root === undefined ? [] : group([thread.root])),
     [thread?.root],
   );
+  /*
+    What a reply in here may point at. The root as well as the replies: the
+    first answer in a thread names the message it hangs from, and that is drawn
+    above the rule rather than in the list.
+  */
+  const known = useMemo(() => {
+    const everything = [...(thread?.root ? [thread.root] : []), ...(thread?.messages ?? [])];
+    return new Map(everything.map((message) => [message.id, message]));
+  }, [thread?.root, thread?.messages]);
 
   if (thread === null) return null;
 
@@ -148,7 +160,7 @@ export function ThreadPanel({
         </button>
       </div>
 
-      <div className="thread__scroll">
+      <div className="thread__scroll" ref={scroller}>
         {/*
           The message it hangs from, above a rule rather than in the list. It
           is what the replies are about rather than the first of them, and a
@@ -161,6 +173,8 @@ export function ThreadPanel({
               groups={root}
               names={names}
               roomId={thread.roomId}
+              known={known}
+              container={scroller}
               onAbout={(person, at) => setOpened({ person, at })}
             />
           </div>
@@ -180,6 +194,8 @@ export function ThreadPanel({
           groups={replies}
           names={names}
           roomId={thread.roomId}
+          known={known}
+          container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
         />
       </div>

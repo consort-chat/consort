@@ -144,6 +144,7 @@ mod tests {
             html: None,
             media: None,
             thread: None,
+            reply_to: None,
             kind: MessageKind::Text,
         }
     }

@@ -136,6 +136,19 @@ pub struct Message {
     /// the interface has to be able to tell the two apart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadSummary>,
+    /// The event this message is answering, when it is answering one.
+    ///
+    /// The ID alone. What that event said is not repeated here: the interface
+    /// is already holding every message it is drawing, so a preview would be a
+    /// second copy of one of them on the wire and a second thing to keep in
+    /// step when the original is edited or redacted.
+    ///
+    /// `None` for the fallback pointer every threaded message carries. That
+    /// one names the last thing said in the thread rather than anything
+    /// somebody chose, and drawing it would put a reply row on every message
+    /// in a thread panel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
     pub kind: MessageKind,
 }
 

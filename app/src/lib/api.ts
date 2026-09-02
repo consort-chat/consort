@@ -1291,6 +1291,18 @@ export interface Message {
    */
   media?: Media;
   /**
+   * The event this message is answering, when it is answering one.
+   *
+   * The ID alone. What that event said is not repeated: the interface is
+   * already holding every message it is drawing, and a preview on the wire
+   * would be a second copy of one of them.
+   *
+   * Absent for the fallback pointer every threaded message carries, which
+   * names the last thing said in the thread rather than anything somebody
+   * chose.
+   */
+  replyTo?: string;
+  /**
    * The thread hanging off it, when anybody has replied in one.
    *
    * Absent rather than a count of zero for a message nobody has replied to. A

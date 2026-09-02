@@ -1,3 +1,5 @@
+import type { RefObject } from "react";
+
 import type { Message, MessageKind, Participant } from "../lib/api";
 import { FormattedBody } from "./FormattedBody";
 import { MessageMedia } from "./MessageMedia";
@@ -86,6 +88,52 @@ function attachmentKind(
 }
 
 /**
+ * How long an answered message stays lit after being jumped to, in
+ * milliseconds.
+ *
+ * Long enough to find with the eye after the scroll settles, short enough that
+ * it is not still glowing when somebody starts reading the next thing.
+ */
+const FLASH = 1_400;
+
+/**
+ * A turning arrow, in front of the message being answered.
+ *
+ * It replaces the words "In reply to", which were not ours: they are the
+ * fallback the sender writes for clients that draw no reply of their own, and
+ * they arrived as a link that went nowhere.
+ */
+function ReplyIcon() {
+  return (
+    <svg
+      className="timeline__reply-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 17 4 12l5-5" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+    </svg>
+  );
+}
+
+/**
+ * One line standing in for a message somebody answered.
+ *
+ * The filename for an attachment nobody captioned, because the alternative is
+ * an empty quote, which reads as a message that failed to load rather than as
+ * a picture.
+ */
+function previewOf(message: Message): string {
+  if (message.body !== "") return message.body;
+  return message.media?.name ?? "an attachment";
+}
+
+/**
  * A run of grouped messages, drawn.
  *
  * Its own component because a thread panel draws the same thing beside the
@@ -97,6 +145,8 @@ export function MessageGroups({
   groups,
   names,
   roomId,
+  known,
+  container,
   onAbout,
   onOpenThread,
 }: {
@@ -104,6 +154,25 @@ export function MessageGroups({
   /** Display names by user ID, for whoever the room has told us about. */
   names: Record<string, string>;
   roomId: string;
+  /**
+   * The messages a reply may point at, by event ID.
+   *
+   * Passed in rather than worked out from `groups`, because the thread panel
+   * draws its root and its replies as two of these and a reply answering the
+   * root has to be able to find it.
+   *
+   * A reply pointing at something not in here still draws a row, saying so. A
+   * room shows a window of history and a reply can name anything older than
+   * it.
+   */
+  known?: ReadonlyMap<string, Message>;
+  /**
+   * Where to look for the message a reply names, when one is pressed.
+   *
+   * The scrolling box, so the search is scoped: the thread panel draws the
+   * same component beside the room, and a root message is in both.
+   */
+  container?: RefObject<HTMLElement | null>;
   /** Open somebody's card, at the point that was clicked. */
   onAbout: (person: Participant, at: { x: number; y: number }) => void;
   /**
@@ -114,6 +183,27 @@ export function MessageGroups({
    */
   onOpenThread?: (rootId: string) => void;
 }) {
+  /**
+   * Scroll to a message and light it up.
+   *
+   * The attribute goes on the element rather than through state, and
+   * deliberately. The row being jumped to may belong to a different
+   * `MessageGroups` than the one that was clicked, which state here could not
+   * reach; and React leaves an attribute it never set alone, so a re-render
+   * does not fight it.
+   */
+  function goTo(eventId: string) {
+    const box = container?.current;
+    const target = box?.querySelector(
+      `[data-message-id="${CSS.escape(eventId)}"]`,
+    );
+    if (!(target instanceof HTMLElement)) return;
+
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
+    target.setAttribute("data-flash", "true");
+    window.setTimeout(() => target.removeAttribute("data-flash"), FLASH);
+  }
+
   /**
    * Open a thread, unless the press was the end of a selection.
    *
@@ -195,8 +285,41 @@ export function MessageGroups({
               {one.messages.map((message) => {
                 const open = opening(message);
 
+                const answered =
+                  message.replyTo === undefined
+                    ? undefined
+                    : known?.get(message.replyTo);
+
                 return (
-                  <div key={message.id} className="timeline__message">
+                  <div
+                    key={message.id}
+                    className="timeline__message"
+                    data-message-id={message.id}
+                  >
+                    {message.replyTo !== undefined &&
+                      (answered === undefined ? (
+                        <p className="timeline__reply timeline__reply--gone">
+                          <ReplyIcon />
+                          <span className="timeline__reply-said">
+                            Replying to a message that is not loaded.
+                          </span>
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          className="timeline__reply"
+                          aria-label={`Go to ${names[answered.sender] ?? answered.sender}'s message`}
+                          onClick={() => goTo(answered.id)}
+                        >
+                          <ReplyIcon />
+                          <span className="timeline__reply-who">
+                            {names[answered.sender] ?? answered.sender}
+                          </span>
+                          <span className="timeline__reply-said">
+                            {previewOf(answered)}
+                          </span>
+                        </button>
+                      ))}
                     {message.media !== undefined ? (
                       /*
                         The attachment, and under it whatever words were sent

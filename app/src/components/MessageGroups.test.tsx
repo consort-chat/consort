@@ -55,10 +55,16 @@ function draw(
       groups={group(messages)}
       names={{ [ADA]: "Ada" }}
       roomId={GENERAL}
+      known={known(messages)}
       onAbout={vi.fn()}
       onOpenThread={onOpenThread}
     />,
   );
+}
+
+/** The messages a reply may point at, which is whatever is being drawn. */
+function known(messages: Message[]): ReadonlyMap<string, Message> {
+  return new Map(messages.map((message) => [message.id, message]));
 }
 
 describe("grouping", () => {
@@ -197,5 +203,100 @@ describe("selecting a threaded message", () => {
 
     expect(onOpenThread).not.toHaveBeenCalled();
     vi.mocked(window.getSelection).mockRestore();
+  });
+});
+
+describe("a reply", () => {
+  it("names who is being answered and what they said", () => {
+    draw([
+      said("$1", ADA, "the original"),
+      said("$2", BOB, "agreed", NOON + 1_000, { replyTo: "$1" }),
+    ]);
+
+    const row = screen.getByRole("button", { name: /go to ada's message/i });
+    expect(row).toHaveTextContent("Ada");
+    expect(row).toHaveTextContent("the original");
+  });
+
+  it("does not say the words in reply to", () => {
+    // That was the sender's own fallback passing through the formatter. It is
+    // an arrow now, and the row itself is the thing to press.
+    draw([
+      said("$1", ADA, "the original"),
+      said("$2", BOB, "agreed", NOON + 1_000, { replyTo: "$1" }),
+    ]);
+
+    expect(screen.queryByText(/in reply to/i)).not.toBeInTheDocument();
+  });
+
+  it("marks every message with its own ID, so one can be scrolled to", () => {
+    const { container } = draw([said("$1", ADA, "the original")]);
+
+    expect(
+      container.querySelector('[data-message-id="$1"]'),
+    ).toHaveTextContent("the original");
+  });
+
+  it("scrolls the answered message into view when the row is pressed", async () => {
+    const box = document.createElement("div");
+    document.body.append(box);
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const messages = [
+      said("$1", ADA, "the original"),
+      said("$2", BOB, "agreed", NOON + 1_000, { replyTo: "$1" }),
+    ];
+    render(
+      <MessageGroups
+        groups={group(messages)}
+        names={{ [ADA]: "Ada" }}
+        roomId={GENERAL}
+        known={known(messages)}
+        container={{ current: box }}
+        onAbout={vi.fn()}
+        onOpenThread={vi.fn()}
+      />,
+      { container: box },
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /go to ada's message/i }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(box.querySelector('[data-message-id="$1"]')).toHaveAttribute(
+      "data-flash",
+      "true",
+    );
+  });
+
+  it("says so plainly when the answered message is not loaded", () => {
+    // A room shows a window of history and a reply can point outside it. The
+    // event ID is known and the message is not, and a row that pretended
+    // otherwise would be a control that goes nowhere.
+    draw([said("$2", BOB, "agreed", NOON, { replyTo: "$missing" })]);
+
+    expect(screen.getByText(/not loaded/i)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /go to/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("names an attachment rather than drawing an empty quote", () => {
+    draw([
+      said("$1", ADA, "", NOON, {
+        kind: "image",
+        media: {
+          source: '{"url":"mxc://example.org/a"}',
+          name: "screenshot.png",
+        },
+      }),
+      said("$2", BOB, "nice", NOON + 1_000, { replyTo: "$1" }),
+    ]);
+
+    expect(
+      screen.getByRole("button", { name: /go to ada's message/i }),
+    ).toHaveTextContent("screenshot.png");
   });
 });

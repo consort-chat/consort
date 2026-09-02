@@ -39,8 +39,9 @@
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
 use matrix_sdk::ruma::events::room::message::{
-    FormattedBody, MessageFormat, MessageType, Relation,
+    FormattedBody, MessageFormat, MessageType, Relation, RoomMessageEventContentWithoutRelation,
 };
 use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
@@ -119,6 +120,8 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
     // Before the body is read, because both of these have one and drawing it
     // is the thing being avoided. `Reply` is deliberately not matched: see the
     // header.
+    let reply_to = answering(said.content.relates_to.as_ref());
+
     match said.content.relates_to {
         // An edit, wherever it turns up. It carries the replacement text and
         // nothing here can attach it to the message it replaces.
@@ -222,13 +225,21 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         id: said.event_id.to_string(),
         sender: said.sender.to_string(),
         at: said.origin_server_ts.0.into(),
-        body,
+        // Only for a reply. The plaintext fallback and an ordinary markdown
+        // quote are the same characters, and the relation is the only thing
+        // that tells them apart, so stripping unconditionally would eat the
+        // first paragraph of anybody quoting somebody.
+        body: if reply_to.is_some() {
+            remove_plain_reply_fallback(&body).to_owned()
+        } else {
+            body
+        },
         // `format` is an open string, and anything other than the one the
         // specification defines is somebody's extension that this build has no
         // way to read. The plaintext fallback is what it is for.
         html: formatted
             .filter(|formatted| formatted.format == MessageFormat::Html)
-            .map(|formatted| formatted.body),
+            .map(|formatted| without_quoted_reply(formatted.body)),
         media,
         thread: said.unsigned.relations.thread.map(|bundle| ThreadSummary {
             // Saturating rather than fallible. The count is the homeserver's
@@ -238,8 +249,51 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
             count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
             participated: bundle.current_user_participated,
         }),
+        reply_to,
         kind,
     })
+}
+
+/// Which event a message is answering, if it chose one.
+///
+/// Not every `m.in_reply_to` is somebody answering. A threaded message carries
+/// one pointing at the last thing said in the thread, purely so that a client
+/// with no idea about threads draws the conversation in some order, and
+/// `is_falling_back` is the flag that says which kind it is. Reading them all
+/// would put a reply row on every message in a thread panel.
+fn answering(
+    relation: Option<&Relation<RoomMessageEventContentWithoutRelation>>,
+) -> Option<String> {
+    match relation? {
+        Relation::Reply(reply) => Some(reply.in_reply_to.event_id.to_string()),
+        Relation::Thread(thread) if !thread.is_falling_back => Some(
+            thread
+                .in_reply_to
+                .as_ref()
+                .map(|in_reply_to| in_reply_to.event_id.to_string())?,
+        ),
+        _ => None,
+    }
+}
+
+/// A `formatted_body` with the rich reply fallback taken off the front.
+///
+/// The specification puts `<mx-reply>` at the very start and nowhere else, so
+/// this is a slice rather than a parse. ruma has the plaintext half of this
+/// and not the HTML half without turning on its own sanitiser, which would
+/// mean a second allow-list of elements to keep in step with `FormattedBody`'s
+/// in the webview, and the one that is not the renderer is the one that goes
+/// stale.
+fn without_quoted_reply(html: String) -> String {
+    const CLOSE: &str = "</mx-reply>";
+
+    if !html.starts_with("<mx-reply") {
+        return html;
+    }
+    match html.find(CLOSE) {
+        Some(at) => html[at + CLOSE.len()..].to_owned(),
+        None => html,
+    }
 }
 
 /// What the interface needs to fetch, name and place one attachment.
@@ -315,6 +369,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         html: None,
         media: None,
         thread: None,
+        reply_to: None,
         kind: MessageKind::Undecryptable,
     })
 }
@@ -887,7 +942,7 @@ mod tests {
         // name another one, and it reads correctly on its own.
         let reply = sent(json!({
             "msgtype": "m.text",
-            "body": "> quoted\n\nagreed",
+            "body": "> <@ada:example.org> quoted\n\nagreed",
             "m.relates_to": {
                 "m.in_reply_to": { "event_id": "$original:example.org" },
             },
@@ -895,7 +950,102 @@ mod tests {
 
         assert_eq!(
             message(&reply).map(|said| said.body),
-            Some("> quoted\n\nagreed".to_owned())
+            Some("agreed".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_reply_says_what_it_is_answering() {
+        let reply = sent(json!({
+            "msgtype": "m.text",
+            "body": "agreed",
+            "m.relates_to": {
+                "m.in_reply_to": { "event_id": "$original:example.org" },
+            },
+        }));
+
+        assert_eq!(
+            message(&reply).and_then(|said| said.reply_to),
+            Some("$original:example.org".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_reply_loses_the_quote_it_was_sent_with() {
+        // The fallback exists for clients that draw no reply of their own.
+        // Consort draws one, so leaving it in would show the quoted message
+        // twice, once as a blockquote nobody can click and once as the row
+        // above it.
+        let reply = sent(json!({
+            "msgtype": "m.text",
+            "body": "> <@ada:example.org> the original\n\nagreed",
+            "format": "org.matrix.custom.html",
+            "formatted_body": "<mx-reply><blockquote>\
+        <a href=\"https://matrix.to/#/!room:example.org/$original:example.org\">In reply to</a> \
+        <a href=\"https://matrix.to/#/@ada:example.org\">@ada:example.org</a><br>the original\
+        </blockquote></mx-reply>agreed",
+            "m.relates_to": {
+                "m.in_reply_to": { "event_id": "$original:example.org" },
+            },
+        }));
+
+        let said = message(&reply).expect("a reply is a message");
+        assert_eq!(said.body, "agreed");
+        assert_eq!(said.html.as_deref(), Some("agreed"));
+    }
+
+    #[test]
+    fn a_quote_that_is_not_a_fallback_is_left_alone() {
+        // The plaintext fallback and a markdown quote are the same characters,
+        // and only the relation tells them apart. Stripping one that is not a
+        // reply would eat the first paragraph of anybody quoting somebody.
+        let quoting = sent(json!({
+            "msgtype": "m.text",
+            "body": "> <@ada:example.org> said this\n\nand I agree",
+        }));
+
+        assert_eq!(
+            message(&quoting).map(|said| said.body),
+            Some("> <@ada:example.org> said this\n\nand I agree".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_thread_reply_answering_nothing_in_particular_says_so() {
+        // Every threaded message carries an `m.in_reply_to` pointing at the
+        // last thing said, so that a client with no idea about threads draws
+        // something. `is_falling_back` is what says it is that rather than
+        // somebody actually answering a particular message.
+        let threaded = sent(json!({
+            "msgtype": "m.text",
+            "body": "in the thread",
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+                "is_falling_back": true,
+                "m.in_reply_to": { "event_id": "$latest:example.org" },
+            },
+        }));
+
+        assert_eq!(in_thread(&threaded).and_then(|said| said.reply_to), None);
+    }
+
+    #[test]
+    fn a_thread_reply_answering_a_particular_message_keeps_it() {
+        let threaded = sent(json!({
+            "msgtype": "m.text",
+            "body": "answering you",
+            "m.relates_to": {
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+                "is_falling_back": false,
+                "m.in_reply_to": { "event_id": "$earlier:example.org" },
+            },
+        }));
+
+        assert_eq!(
+            in_thread(&threaded).and_then(|said| said.reply_to),
+            Some("$earlier:example.org".to_owned())
         );
     }
 

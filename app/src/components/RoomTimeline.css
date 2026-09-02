@@ -242,6 +242,98 @@
 }
 
 /*
+  The message being answered, above the answer.
+
+  Its own row rather than the blockquote the sender's fallback produced. That
+  came with the words "In reply to" and a link that went nowhere; this is an
+  arrow, a name and one line, and pressing it goes to the message.
+
+  One line, whatever was said. A reply to a paragraph would otherwise draw the
+  paragraph twice, once here and once where it belongs.
+*/
+.timeline__reply {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  max-width: 100%;
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.timeline__reply:hover {
+  color: var(--text-secondary);
+}
+
+.timeline__reply:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-focus);
+}
+
+/* Nothing to press: the message it names is outside what is loaded. */
+.timeline__reply--gone {
+  font-style: italic;
+  cursor: default;
+}
+
+.timeline__reply-glyph {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.timeline__reply-who {
+  flex: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.timeline__reply-said {
+  overflow: hidden;
+  /* A reply's quote is one line even when the message was six. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline__reply:hover .timeline__reply-who {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/*
+  Where a jump landed, lit long enough to find with the eye and no longer. The
+  attribute is set on the element by hand rather than through React: the row
+  being jumped to belongs to whichever `MessageGroups` drew it, which is not
+  always the one that was pressed.
+*/
+.timeline__message[data-flash="true"] {
+  animation: timeline-flash 1.4s ease-out;
+}
+
+@keyframes timeline-flash {
+  from {
+    background: var(--violet-glow);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline__message[data-flash="true"] {
+    animation: none;
+    background: var(--violet-glow);
+  }
+}
+
+/*
   An attachment and whatever was said with it, as one message. The card brings
   its own top margin, so this only has to keep the caption under it.
 */

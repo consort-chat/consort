@@ -198,6 +198,11 @@ export function RoomTimeline({
   const mine = timeline.roomId === channel.id;
   const messages = mine ? timeline.messages : [];
   const groups = useMemo(() => group(messages), [messages]);
+  // What a reply in this room may point at, which is whatever is loaded.
+  const known = useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
   const name = channelLabel(channel);
 
   return (
@@ -255,6 +260,8 @@ export function RoomTimeline({
           groups={groups}
           names={names}
           roomId={channel.id}
+          known={known}
+          container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
           onOpenThread={(rootId) => void threadOpen(rootId).catch(() => {})}
         />
