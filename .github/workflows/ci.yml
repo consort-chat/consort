@@ -1,30 +1,28 @@
-# Consort CI, on Forgejo Actions.
+# Consort CI, on GitHub Actions.
+#
+# ## Why it lives here and not on Forgejo
+#
+# It used to be .forgejo/workflows/ci.yml, and Forgejo was the place pull
+# requests arrived. GitHub is now that place, and it bills nothing for standard
+# runners on a public repository, so there is no reason to run the same jobs
+# twice. The Forgejo copy is gone rather than kept in step, and the mirror no
+# longer runs CI: it falls back to reading this directory, finds
+# `runs-on: ubuntu-latest`, and has no runner carrying that label.
+#
+# The free tier is only the standard runners. A larger runner is billed on a
+# public repository like any other, so nothing here may move to one.
 #
 # ## Who can make this run
 #
-# Nothing here gates on the author, and it does not need to. Forgejo blocks
-# workflow runs for pull requests from untrusted authors by default, where
-# untrusted means anyone with only read access opening a PR from a fork or over
-# AGit. Their first pull request waits until somebody with write access presses
-# "Approve once" or "Approve always" on the conversation page, so a drive-by
-# cannot burn runner minutes. Trust also expires after three months of
-# inactivity, and blocking a user revokes it.
+# GitHub runs workflows for a first-time contributor's pull request only if the
+# repository says so, and the default is "Require approval for first-time
+# contributors". Leave it there or tighten it; the setting is under Actions in
+# the repository settings, and it is the equivalent of the approval Forgejo
+# used to give.
 #
-# Two consequences worth knowing:
-#
-#   - `pull_request_target` bypasses that block entirely. It is deliberately
-#     not used anywhere in this file, and it should not be added. A workflow
-#     using it runs untrusted branches with repository secrets in scope.
-#   - For an untrusted author, Forgejo runs the workflows from the *target*
-#     branch rather than the ones in the pull request. Editing this file in a
-#     PR therefore cannot change what CI does to that same PR.
-#
-# ## Why not GitHub
-#
-# GitHub is a mirror for now. When it becomes the place pull requests arrive,
-# this file gets a sibling under .github/workflows with the same jobs plus
-# GitHub's own "require approval for first-time contributors" setting, which is
-# the equivalent control and is not on by default there.
+# `pull_request_target` is deliberately not used anywhere in this file and
+# should not be added. A workflow using it runs an untrusted branch with
+# repository secrets in scope.
 
 name: CI
 
@@ -46,7 +44,7 @@ env:
 jobs:
   frontend:
     name: Frontend
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: node:24-bookworm
     defaults:
@@ -83,7 +81,7 @@ jobs:
 
   rust:
     name: Rust
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
     steps:
@@ -162,14 +160,14 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rust-coverage
           path: lcov.info
 
   advisories:
     name: Advisories
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
     steps:
@@ -198,7 +196,7 @@ jobs:
 
   hygiene:
     name: Hygiene
-    runs-on: docker
+    runs-on: ubuntu-latest
     container:
       image: debian:bookworm-slim
     steps:

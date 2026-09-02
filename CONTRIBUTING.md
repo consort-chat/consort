@@ -59,15 +59,16 @@ bullet is fine. CI checks this, so it is worth catching first.
 
 ## What CI does, and when it runs
 
-CI lives in `.forgejo/workflows/ci.yml` and runs three jobs: frontend
-(typecheck, tests with coverage thresholds, build), Rust (fmt, clippy, tests,
-coverage) and hygiene (the dash rule and a couple of other greps).
+CI lives in `.github/workflows/ci.yml` and runs four jobs: frontend (typecheck,
+tests with coverage thresholds, build), Rust (fmt, clippy, tests, coverage),
+advisories (`cargo audit` against the lockfile) and hygiene (the dash rule and a
+couple of other greps).
 
 If this is your first pull request, **the run will not start until a maintainer
-approves it.** That is Forgejo blocking workflows from authors it does not yet
-trust, and it is deliberate rather than something going wrong. Once somebody
-presses "Approve always" your later pull requests run without waiting. Nothing
-is required from you but patience on the first one.
+approves it.** That is GitHub holding workflows from authors the repository does
+not yet trust, and it is deliberate rather than something going wrong. Once
+somebody approves one, your later pull requests run without waiting. Nothing is
+required from you but patience on the first one.
 
 ## What makes a change easy to accept
 
