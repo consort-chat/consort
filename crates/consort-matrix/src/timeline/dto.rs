@@ -83,15 +83,66 @@ pub struct Message {
     /// that would go stale.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
+    /// The picture or the clip hanging off it, when there is one.
+    ///
+    /// Present for [`MessageKind::Image`] and [`MessageKind::Video`] and for
+    /// nothing else. The bytes are not here: this says where they are and what
+    /// shape they will be, and the interface asks for them one at a time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<Media>,
     pub kind: MessageKind,
+}
+
+/// Where an attachment's bytes are, and what shape they will be drawn at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Media {
+    /// An opaque handle, to be handed back to `timeline::media` unread.
+    ///
+    /// It is the event's own `MediaSource` as JSON, which for an encrypted
+    /// room carries the file's key as well as its URI. That is deliberate and
+    /// it is the reason this is one field rather than two: half the shapes an
+    /// attachment can take are encrypted, and a handle that held only a URI
+    /// would need a second path beside it for the half that matters here.
+    ///
+    /// It crosses the IPC boundary, which is the same boundary the decrypted
+    /// bytes cross a moment later, so the key adds nothing to what the webview
+    /// already holds. Nothing reads it on that side: it goes back to Rust as
+    /// it arrived.
+    pub source: String,
+    /// What the sender said the bytes are, when they said something this build
+    /// would repeat.
+    ///
+    /// Kept only when it names an image or a video, because it becomes the
+    /// type of a blob in the webview and the sender writes it. It is a hint
+    /// for playback rather than a fact: what actually arrives is sniffed in
+    /// Rust and refused if it is neither.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    /// How many bytes the sender said it is.
+    ///
+    /// For telling somebody what they are about to wait for, and for nothing
+    /// else. The real limit is applied to what arrives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// The pixel width the sender said it has, if any.
+    ///
+    /// Here so the room can hold the space before the bytes land. Without it
+    /// every picture that loads shoves the conversation below it downwards,
+    /// which in a room that follows the bottom is the whole view moving.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u64>,
+    /// The pixel height the sender said it has, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u64>,
 }
 
 /// What sort of message this is.
 ///
-/// Only the three `m.room.message` types that are text, plus the two ways a
-/// message can exist and have no text to draw. Images, files and everything
-/// else are deliberately absent: they are not built, and a variant for one
-/// would be a promise the interface cannot keep.
+/// The three `m.room.message` types that are text, the two that carry
+/// something to look at, and the two ways a message can exist with nothing to
+/// draw at all. Files and audio are deliberately absent: they are not built,
+/// and a variant for one would be a promise the interface cannot keep.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MessageKind {
@@ -102,6 +153,14 @@ pub enum MessageKind {
     /// `m.notice`, which is what bots and bridges send. Drawn quieter, because
     /// the whole point of the type is that it is not a person talking.
     Notice,
+    /// `m.image`. Its `media` says where the picture is.
+    Image,
+    /// `m.video`. Its `media` says where the clip is.
+    ///
+    /// Separate from an image rather than folded in with it, because the two
+    /// are not fetched on the same terms: a picture is drawn as soon as the
+    /// room is, and a clip waits to be asked for.
+    Video,
     /// Encrypted, and this session has no key for it.
     ///
     /// Drawn rather than skipped. A gap in a conversation that says nothing

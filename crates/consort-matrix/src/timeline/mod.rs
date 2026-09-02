@@ -40,9 +40,11 @@
 pub mod dto;
 mod facts;
 mod history;
+mod media;
 
-pub use dto::{Message, MessageKind, Timeline};
+pub use dto::{Media, Message, MessageKind, Timeline};
 pub use history::History;
+pub use media::media;
 
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::RoomId;

@@ -386,6 +386,18 @@ pub async fn timeline_send_for(
     Ok(())
 }
 
+/// The bytes of one attachment, by the handle its message carried.
+///
+/// Raw rather than encoded, and the one command in this file whose answer is
+/// not JSON: a photograph is megabytes and base64 would add a third to that
+/// before the webview had to hold it as a string. See
+/// `consort_matrix::timeline::media` for what is refused and why it is refused
+/// on this side.
+pub async fn timeline_media_for(state: &AppState, source: String) -> Result<Vec<u8>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(timeline::media(&client, &source).await?)
+}
+
 /// What devices this machine has, and which of them are in use.
 ///
 /// Asked for whenever the settings screen opens, and after every change: a
@@ -986,6 +998,20 @@ pub async fn timeline_send(
     body: String,
 ) -> Result<(), CommandError> {
     timeline_send_for(&state, room_id, body).await
+}
+
+/// The bytes of one attachment, by the handle its message carried.
+///
+/// Answers with an `ArrayBuffer` rather than JSON, which is what a
+/// `tauri::ipc::Response` is for. See `timeline_media_for`.
+#[tauri::command]
+pub async fn timeline_media(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<tauri::ipc::Response, CommandError> {
+    timeline_media_for(&state, source)
+        .await
+        .map(tauri::ipc::Response::new)
 }
 
 /// One room's avatar, as a data URL.
@@ -2690,6 +2716,35 @@ mod against_a_mock_homeserver {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn asking_for_an_attachment_while_signed_out_says_so() {
+        let (_dir, state, _sink) = state();
+
+        let error = timeline_media_for(&state, "{}".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_for_an_attachment_by_something_that_is_not_a_handle_says_so() {
+        // Only reachable by handing back something this build never wrote, so
+        // what matters is that it is an answer rather than a panic.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = timeline_media_for(&state, "nonsense".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
     }
 
     #[tokio::test]

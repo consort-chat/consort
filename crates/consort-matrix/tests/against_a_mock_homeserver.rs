@@ -3621,9 +3621,11 @@ mod timeline {
     }
 
     #[tokio::test]
-    async fn an_image_arrives_as_something_to_draw_rather_than_vanishing() {
-        // The end-to-end half of the unit test on the same rule. Somebody
-        // whose screenshot silently disappeared would send it again.
+    async fn an_image_arrives_with_a_handle_to_fetch_it_by() {
+        // The end-to-end half of the unit test on the same rule. What crosses
+        // the boundary is the address of the picture and not the picture, on
+        // the same terms as an avatar: a timeline is re-sent in full whenever
+        // anything in it changes.
         let server = MatrixMockServer::new().await;
         let (_dir, client) = signed_in(&server).await;
         server
@@ -3655,9 +3657,86 @@ mod timeline {
         .await;
         drop(watch);
 
-        assert_eq!(
-            settled(&reports).unwrap().messages[0].kind,
-            MessageKind::Unsupported
+        let drawn = &settled(&reports).unwrap().messages[0];
+        assert_eq!(drawn.kind, MessageKind::Image);
+        assert_eq!(drawn.body, "screenshot.png");
+        assert!(
+            drawn
+                .media
+                .as_ref()
+                .is_some_and(|media| media.source.contains("mxc://example.org/abc")),
+            "an image must reach the interface with something to fetch it by"
         );
+    }
+
+    mod attachments {
+        use super::*;
+
+        /// The eight bytes every PNG starts with, and nothing after them.
+        ///
+        /// Enough for the sniffing, which is what these are about. A real
+        /// image would prove nothing extra and would put a blob in the file.
+        const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+        /// The handle a plain, unencrypted attachment reaches the interface as.
+        const HANDLE: &str = r#"{"url":"mxc://example.org/abc"}"#;
+
+        /// Answer a download with `bytes`, on either endpoint.
+        ///
+        /// Both, because which one the SDK reaches for depends on the versions
+        /// the homeserver advertises, and these tests are not about that
+        /// choice.
+        async fn mount_download(server: &MatrixMockServer, bytes: &'static [u8]) {
+            let body = || wiremock::ResponseTemplate::new(200).set_body_raw(bytes, "image/png");
+
+            server
+                .mock_media_download()
+                .expect_any_access_token()
+                .respond_with(body())
+                .mount()
+                .await;
+            server
+                .mock_authed_media_download()
+                .expect_any_access_token()
+                .respond_with(body())
+                .mount()
+                .await;
+        }
+
+        #[tokio::test]
+        async fn a_picture_comes_back_as_the_bytes_it_was_sent_as() {
+            // Byte for byte, and not encoded on the way. The interface makes a
+            // blob out of these, which is the whole reason they are not a data
+            // URL like an avatar.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            mount_download(&server, PNG).await;
+
+            let bytes = timeline::media(&client, HANDLE).await.unwrap();
+
+            assert_eq!(bytes, PNG);
+        }
+
+        #[tokio::test]
+        async fn something_that_is_not_media_is_refused_rather_than_handed_over() {
+            // What a homeserver answers with when the file has been removed,
+            // and what a sender who lied about their upload produces.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            mount_download(&server, b"<!doctype html>").await;
+
+            let error = timeline::media(&client, HANDLE).await.unwrap_err();
+
+            assert!(!error.user_message().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_homeserver_that_will_not_hand_it_over_is_an_answer_not_a_panic() {
+            // Nothing mounted, so the download is a 404.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+
+            assert!(timeline::media(&client, HANDLE).await.is_err());
+        }
     }
 }

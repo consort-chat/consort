@@ -24,6 +24,7 @@ import {
   type Timeline,
 } from "../lib/api";
 import { FormattedBody } from "./FormattedBody";
+import { MessageMedia } from "./MessageMedia";
 import { PersonMenu } from "./PersonMenu";
 import { PresenceDot } from "./PresenceDot";
 import { RoomAvatar } from "./RoomAvatar";
@@ -339,37 +340,52 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                     {timeOf(one.at)}
                   </time>
                 </p>
-                {one.messages.map((message) => (
+                {one.messages.map((message) =>
                   /*
-                    A `div` rather than a `p`, because a formatted body can be a
-                    heading or a list and a paragraph may hold neither. One
-                    element for both kinds beats two that have to be kept
-                    looking alike.
-
-                    `data-selectable` because the shell turns selection off,
-                    dragging across the chrome of a desktop application never
-                    being deliberate. A message is what a reader does mean to
-                    select, and opting back in is also what puts a text cursor
-                    over the words instead of an arrow.
+                    An attachment is drawn instead of its body rather than
+                    beside it. The body of an image is its filename, and a line
+                    reading "screenshot.png" above the screenshot is the thing
+                    somebody sent a picture to avoid.
                   */
-                  <div
-                    key={message.id}
-                    className={
-                      message.html === undefined
-                        ? "timeline__body"
-                        : "timeline__body timeline__body--rich"
-                    }
-                    data-kind={message.kind}
-                    data-selectable
-                  >
-                    {message.kind === "emote" && `${who} `}
-                    {message.html === undefined ? (
-                      message.body
-                    ) : (
-                      <FormattedBody html={message.html} />
-                    )}
-                  </div>
-                ))}
+                  message.media !== undefined ? (
+                    <MessageMedia
+                      key={message.id}
+                      kind={message.kind === "video" ? "video" : "image"}
+                      media={message.media}
+                      name={message.body}
+                    />
+                  ) : (
+                    /*
+                      A `div` rather than a `p`, because a formatted body can be
+                      a heading or a list and a paragraph may hold neither. One
+                      element for both kinds beats two that have to be kept
+                      looking alike.
+
+                      `data-selectable` because the shell turns selection off,
+                      dragging across the chrome of a desktop application never
+                      being deliberate. A message is what a reader does mean to
+                      select, and opting back in is also what puts a text cursor
+                      over the words instead of an arrow.
+                    */
+                    <div
+                      key={message.id}
+                      className={
+                        message.html === undefined
+                          ? "timeline__body"
+                          : "timeline__body timeline__body--rich"
+                      }
+                      data-kind={message.kind}
+                      data-selectable
+                    >
+                      {message.kind === "emote" && `${who} `}
+                      {message.html === undefined ? (
+                        message.body
+                      ) : (
+                        <FormattedBody html={message.html} />
+                      )}
+                    </div>
+                  ),
+                )}
               </div>
             </article>
           );

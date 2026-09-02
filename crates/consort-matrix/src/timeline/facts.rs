@@ -37,12 +37,16 @@
 //! things to be looking at.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
-use matrix_sdk::ruma::events::room::message::{MessageFormat, MessageType, Relation};
+use matrix_sdk::ruma::UInt;
+use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::events::room::message::{
+    FormattedBody, MessageFormat, MessageType, Relation,
+};
 use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
 };
 
-use crate::timeline::dto::{Message, MessageKind};
+use crate::timeline::dto::{Media, Message, MessageKind};
 
 /// What this build says instead of an encrypted message it has no key for.
 ///
@@ -83,11 +87,38 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
 
     // All three text types carry a `formatted_body`, and reading it for one of
     // them is how a bot's links arrive as literal angle brackets.
-    let (kind, body, formatted) = match said.content.msgtype {
-        MessageType::Text(text) => (MessageKind::Text, text.body, text.formatted),
-        MessageType::Emote(emote) => (MessageKind::Emote, emote.body, emote.formatted),
-        MessageType::Notice(notice) => (MessageKind::Notice, notice.body, notice.formatted),
-        _ => (MessageKind::Unsupported, NOT_SUPPORTED.to_owned(), None),
+    let (kind, body, formatted, media) = match said.content.msgtype {
+        MessageType::Text(text) => (MessageKind::Text, text.body, text.formatted, None),
+        MessageType::Emote(emote) => (MessageKind::Emote, emote.body, emote.formatted, None),
+        MessageType::Notice(notice) => (MessageKind::Notice, notice.body, notice.formatted, None),
+        MessageType::Image(image) => {
+            let info = image.info.as_deref();
+            let media = attachment(
+                &image.source,
+                info.and_then(|info| info.mimetype.as_deref()),
+                info.and_then(|info| info.size),
+                info.and_then(|info| info.width),
+                info.and_then(|info| info.height),
+            );
+            drawable(MessageKind::Image, image.body, media)
+        }
+        MessageType::Video(video) => {
+            let info = video.info.as_deref();
+            let media = attachment(
+                &video.source,
+                info.and_then(|info| info.mimetype.as_deref()),
+                info.and_then(|info| info.size),
+                info.and_then(|info| info.width),
+                info.and_then(|info| info.height),
+            );
+            drawable(MessageKind::Video, video.body, media)
+        }
+        _ => (
+            MessageKind::Unsupported,
+            NOT_SUPPORTED.to_owned(),
+            None,
+            None,
+        ),
     };
 
     Some(Message {
@@ -101,8 +132,52 @@ pub fn message(event: &TimelineEvent) -> Option<Message> {
         html: formatted
             .filter(|formatted| formatted.format == MessageFormat::Html)
             .map(|formatted| formatted.body),
+        media,
         kind,
     })
+}
+
+/// What the interface needs to fetch and place one attachment.
+///
+/// `None` only when the source cannot be written down, which nothing a
+/// homeserver sends produces: it is a URI or a key, and both are JSON already.
+/// The caller falls back to the line that says this build cannot draw it.
+fn attachment(
+    source: &MediaSource,
+    mime: Option<&str>,
+    size: Option<UInt>,
+    width: Option<UInt>,
+    height: Option<UInt>,
+) -> Option<Media> {
+    Some(Media {
+        source: serde_json::to_string(source).ok()?,
+        // The sender writes this and nothing checks it, and it becomes the
+        // type of a blob in the webview. Anything that is not one of the two
+        // kinds this draws is dropped rather than repeated.
+        mime: mime
+            .filter(|mime| mime.starts_with("image/") || mime.starts_with("video/"))
+            .map(str::to_owned),
+        size: size.map(Into::into),
+        width: width.map(Into::into),
+        height: height.map(Into::into),
+    })
+}
+
+/// An attachment as something to draw, or as the line that says otherwise.
+fn drawable(
+    kind: MessageKind,
+    body: String,
+    media: Option<Media>,
+) -> (MessageKind, String, Option<FormattedBody>, Option<Media>) {
+    match media {
+        Some(media) => (kind, body, None, Some(media)),
+        None => (
+            MessageKind::Unsupported,
+            NOT_SUPPORTED.to_owned(),
+            None,
+            None,
+        ),
+    }
 }
 
 /// An encrypted event with no key for it, as something to draw.
@@ -124,6 +199,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
             .flatten()?,
         body: NO_KEY.to_owned(),
         html: None,
+        media: None,
         kind: MessageKind::Undecryptable,
     })
 }
@@ -132,6 +208,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
 mod tests {
     use super::*;
     use matrix_sdk::deserialized_responses::UnableToDecryptInfo;
+    use matrix_sdk::ruma::events::room::MediaSource;
     use matrix_sdk::ruma::serde::Raw;
     use serde_json::{Value, json};
 
@@ -263,17 +340,142 @@ mod tests {
     }
 
     #[test]
-    fn an_image_is_drawn_as_something_rather_than_vanishing() {
-        // Somebody whose screenshot silently disappeared has no way to know it
-        // was ever sent, and would send it again.
+    fn an_image_arrives_with_a_handle_to_fetch_it_by() {
         let said = message(&sent(json!({
             "msgtype": "m.image",
             "body": "screenshot.png",
             "url": "mxc://example.org/abc",
         })))
-        .expect("an image is still something to draw");
+        .expect("an image is a message");
+
+        assert_eq!(said.kind, MessageKind::Image);
+        // The filename, which is what a reader is told when the picture will
+        // not load and what a screen reader is told either way.
+        assert_eq!(said.body, "screenshot.png");
+        let media = said.media.expect("an image has something to fetch");
+        let source =
+            serde_json::from_str::<MediaSource>(&media.source).expect("a handle is a source");
+        assert!(
+            matches!(source, MediaSource::Plain(uri) if uri == "mxc://example.org/abc"),
+            "the handle must name the picture it was made from"
+        );
+    }
+
+    #[test]
+    fn an_image_carries_the_shape_it_will_be_drawn_at() {
+        // So the room can hold the space before the bytes arrive. Without it
+        // every picture that loads shoves the conversation under it downwards,
+        // which in a room that follows the bottom is the whole view moving.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "url": "mxc://example.org/abc",
+            "info": { "mimetype": "image/png", "size": 1234, "w": 800, "h": 600 },
+        })))
+        .expect("an image is a message");
+
+        let media = said.media.expect("an image has something to fetch");
+        assert_eq!(media.mime.as_deref(), Some("image/png"));
+        assert_eq!(media.size, Some(1234));
+        assert_eq!(media.width, Some(800));
+        assert_eq!(media.height, Some(600));
+    }
+
+    #[test]
+    fn an_image_that_says_nothing_about_itself_is_still_an_image() {
+        // `info` is optional, and a bridge that omits it is common.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "url": "mxc://example.org/abc",
+        })))
+        .expect("an image is a message");
+
+        let media = said.media.expect("an image has something to fetch");
+        assert_eq!(media.mime, None);
+        assert_eq!(media.width, None);
+    }
+
+    #[test]
+    fn an_encrypted_image_carries_what_it_takes_to_open_it() {
+        // The ordinary case in this client, because the rooms are encrypted.
+        // The handle is the whole `MediaSource` rather than a URI precisely so
+        // that this works without a second shape for it.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "file": {
+                "url": "mxc://example.org/sealed",
+                "key": {
+                    "kty": "oct",
+                    "key_ops": ["encrypt", "decrypt"],
+                    "alg": "A256CTR",
+                    "k": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "ext": true,
+                },
+                "iv": "AAAAAAAAAAAAAAAAAAAAAA",
+                "hashes": { "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+                "v": "v2",
+            },
+        })))
+        .expect("an encrypted image is a message");
+
+        let media = said
+            .media
+            .expect("an encrypted image has something to fetch");
+        let source =
+            serde_json::from_str::<MediaSource>(&media.source).expect("a handle is a source");
+        assert!(
+            matches!(source, MediaSource::Encrypted(_)),
+            "an encrypted image must not lose its key on the way to the interface"
+        );
+    }
+
+    #[test]
+    fn a_video_is_an_attachment_on_the_same_terms() {
+        let said = message(&sent(json!({
+            "msgtype": "m.video",
+            "body": "clip.mp4",
+            "url": "mxc://example.org/reel",
+            "info": { "mimetype": "video/mp4", "size": 9_000, "w": 1920, "h": 1080 },
+        })))
+        .expect("a video is a message");
+
+        assert_eq!(said.kind, MessageKind::Video);
+        let media = said.media.expect("a video has something to fetch");
+        assert_eq!(media.mime.as_deref(), Some("video/mp4"));
+        assert_eq!(media.height, Some(1080));
+    }
+
+    #[test]
+    fn a_type_the_sender_claims_that_is_neither_is_left_off() {
+        // The sender writes this field and nothing checks it. It reaches the
+        // webview as the type of a blob, so the one thing it must never say is
+        // something the browser would treat as a document.
+        let said = message(&sent(json!({
+            "msgtype": "m.image",
+            "body": "screenshot.png",
+            "url": "mxc://example.org/abc",
+            "info": { "mimetype": "text/html" },
+        })))
+        .expect("an image is a message");
+
+        assert_eq!(said.media.expect("still an image").mime, None);
+    }
+
+    #[test]
+    fn a_file_is_still_the_line_that_says_so() {
+        // Not built, and drawn as itself rather than vanishing: somebody whose
+        // attachment silently disappeared would send it again.
+        let said = message(&sent(json!({
+            "msgtype": "m.file",
+            "body": "accounts.ods",
+            "url": "mxc://example.org/sheet",
+        })))
+        .expect("a file is still something to draw");
 
         assert_eq!(said.kind, MessageKind::Unsupported);
+        assert_eq!(said.media, None);
         assert!(!said.body.is_empty());
     }
 

@@ -66,18 +66,25 @@ at whatever homeserver you already run.
   timeline, and the same card a name in a voice channel opens. A dot on the
   face says whether they are here, when the homeserver will say; most have
   presence switched off, and no dot is drawn rather than a grey one.
+- Pictures and clips. An image is drawn in the room as soon as the room is, and
+  a video waits for somebody to ask for it, because scrolling back through a
+  room of them should not download every one. Encrypted rooms work the same
+  way: the file is decrypted here and never becomes a string on its way to the
+  window.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Threads, edits, reactions, replies drawn as replies, redactions, inline
-images, attachments, read receipts and typing notifications. Links in a message
-are drawn but go nowhere, because opening one outside the window needs a Tauri
-plugin this build does not grant. A message sent from here
-appears when the sync brings it back rather than immediately, because there is
-no local echo yet. See [the roadmap](#roadmap).
+Threads, edits, reactions, replies drawn as replies, redactions, sending an
+attachment, files and audio as anything but a line saying so, read receipts and
+typing notifications. Links in a message are drawn but go nowhere, because
+opening one outside the window needs a Tauri plugin this build does not grant.
+A message this session has no key for stays that way until the room is
+reopened. A message sent from here appears when the sync brings it back rather
+than immediately, because there is no local echo yet.
+See [the roadmap](#roadmap).
 
 ---
 

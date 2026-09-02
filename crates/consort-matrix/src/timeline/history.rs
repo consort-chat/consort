@@ -102,6 +102,7 @@ mod tests {
             at: 1_000,
             body: body.to_owned(),
             html: None,
+            media: None,
             kind: MessageKind::Text,
         }
     }

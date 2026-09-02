@@ -155,3 +155,22 @@ export function standingLabel(standing: Standing): string | null {
       return null;
   }
 }
+
+/**
+ * How large something is, in the units a person weighs a file in.
+ *
+ * Decimal rather than binary, and labelled as such. A megabyte here is a
+ * million bytes, which is what the number beside a download in every browser
+ * means and what the sender's own client told them when they attached it.
+ *
+ * `null` for a size nobody stated, which is the honest answer: the field is
+ * optional off the wire, and "0 B" is a claim about the file rather than an
+ * admission that it was not made.
+ */
+export function sizeLabel(bytes: number | undefined): string | null {
+  if (bytes === undefined) return null;
+  if (bytes < 1_000) return `${bytes} B`;
+  // Whole kilobytes. A tenth of one is not a thing anybody weighs a picture in.
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} kB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}

@@ -81,6 +81,22 @@ pub enum Error {
     #[error("a message with no text in it")]
     EmptyMessage,
 
+    /// An attachment larger than this build will carry into the webview.
+    ///
+    /// The bytes are held whole on both sides of the IPC boundary for a
+    /// moment, so there is a size past which drawing one costs more than any
+    /// room is worth.
+    #[error("attachment is {bytes} bytes, past the {limit} this build will carry")]
+    MediaTooLarge { bytes: usize, limit: usize },
+
+    /// An attachment whose bytes are neither a picture nor a clip.
+    ///
+    /// The type an event claims is written by whoever sent it, so what
+    /// actually arrives is sniffed and refused when the two disagree. Also
+    /// what a homeserver that has lost the file answers with.
+    #[error("attachment is not something this build can draw")]
+    UndrawableMedia,
+
     /// A command named a verification flow the SDK no longer has.
     ///
     /// Not necessarily a bug. Flows expire after ten minutes, either side can
@@ -189,6 +205,12 @@ impl Error {
                     .to_owned()
             }
             Self::EmptyMessage => "There is nothing to send.".to_owned(),
+            Self::MediaTooLarge { .. } => {
+                "That attachment is too large for Consort to show.".to_owned()
+            }
+            Self::UndrawableMedia => {
+                "Consort cannot show that attachment.".to_owned()
+            }
             Self::NoSuchFlow { .. } => {
                 "That verification is no longer waiting for an answer. Start a new one.".to_owned()
             }
@@ -340,6 +362,11 @@ mod tests {
                 field: "user_id",
                 value: "nonsense".to_owned(),
             },
+            Error::MediaTooLarge {
+                bytes: 40_000_000,
+                limit: 33_554_432,
+            },
+            Error::UndrawableMedia,
             Error::NoSuchFlow {
                 flow_id: "the-only-flow".to_owned(),
             },

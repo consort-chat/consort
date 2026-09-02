@@ -1140,17 +1140,58 @@ export function memberNames(
 /**
  * What sort of message this is.
  *
- * Mirrors `consort_matrix::MessageKind`. Only the three `m.room.message` types
- * that are text, plus the two ways a message can exist and have no text to
- * draw. Images and files are not built, and a variant for one would be a
- * promise the interface cannot keep.
+ * Mirrors `consort_matrix::MessageKind`. The three `m.room.message` types that
+ * are text, the two that carry something to look at, and the two ways a
+ * message can exist with nothing to draw at all. Files and audio are not
+ * built, and a variant for one would be a promise the interface cannot keep.
  */
 export type MessageKind =
   | "text"
   | "emote"
   | "notice"
+  | "image"
+  | "video"
   | "undecryptable"
   | "unsupported";
+
+/**
+ * Where an attachment's bytes are, and what shape they will be drawn at.
+ *
+ * Mirrors `consort_matrix::Media`. The bytes are not here: a timeline is
+ * re-sent in full whenever anything in it changes, so it carries handles and
+ * the interface asks for the ones it is about to draw.
+ */
+export interface Media {
+  /**
+   * An opaque handle, to be handed back to `timelineMedia` unread.
+   *
+   * Nothing on this side parses it, and nothing on this side should: it is the
+   * event's own media source, which in an encrypted room carries the file's
+   * key as well as its address.
+   */
+  source: string;
+  /**
+   * What the sender said the bytes are, when they said something worth
+   * repeating.
+   *
+   * It becomes the type of the blob the bytes are wrapped in, so Rust keeps it
+   * only when it names an image or a video. Absent for an attachment whose
+   * sender said nothing, which a blob survives: the browser sniffs.
+   */
+  mime?: string;
+  /** How many bytes the sender said it is, for saying what a clip will cost. */
+  size?: number;
+  /**
+   * The pixel width the sender said it has, if any.
+   *
+   * Here so the room can hold the space before the bytes land. Without it
+   * every picture that loads shoves the conversation below it downwards, which
+   * in a room that follows the bottom is the whole view moving.
+   */
+  width?: number;
+  /** The pixel height the sender said it has, if any. */
+  height?: number;
+}
 
 /** One message in a room. Mirrors `consort_matrix::Message`. */
 export interface Message {
@@ -1177,6 +1218,12 @@ export interface Message {
    * touch it, and nothing at all may hand it to `dangerouslySetInnerHTML`.
    */
   html?: string;
+  /**
+   * The picture or the clip hanging off it.
+   *
+   * Present for an `image` or a `video` and for nothing else.
+   */
+  media?: Media;
   kind: MessageKind;
 }
 
@@ -1274,6 +1321,23 @@ export function timelineEarlier(): Promise<void> {
  */
 export function timelineSend(roomId: string, body: string): Promise<void> {
   return invoke<void>("timeline_send", { roomId, body });
+}
+
+/**
+ * The bytes of one attachment, by the handle its message carried.
+ *
+ * The one command that answers with an `ArrayBuffer` rather than JSON. A
+ * photograph is megabytes, and encoding it would add a third to that before
+ * this side had to hold it as a string, so the bytes cross as bytes and become
+ * a blob here.
+ *
+ * Rejects for an attachment larger than Consort will carry and for one whose
+ * bytes turn out to be neither a picture nor a clip. Both are decided in Rust,
+ * where the bytes are: this side cannot decline something already handed to
+ * it, and the type an event claims is written by whoever sent it.
+ */
+export function timelineMedia(source: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>("timeline_media", { source });
 }
 
 /**

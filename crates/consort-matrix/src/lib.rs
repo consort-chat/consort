@@ -61,6 +61,7 @@ pub mod auth;
 pub mod backup;
 pub mod calls;
 pub mod error;
+mod media;
 pub mod rooms;
 pub mod secrets;
 pub mod session;

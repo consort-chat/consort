@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { elapsedLabel, presenceLabel, standingLabel } from "./labels";
+import {
+  elapsedLabel,
+  presenceLabel,
+  sizeLabel,
+  standingLabel,
+} from "./labels";
 
 /** An arbitrary fixed "now", so nothing here depends on the clock. */
 const NOW = 1_700_000_000_000;
@@ -55,5 +60,33 @@ describe("standingLabel", () => {
   it("says nothing about an ordinary member", () => {
     // A badge on everybody is a badge that says nothing.
     expect(standingLabel("member")).toBeNull();
+  });
+});
+
+describe("sizeLabel", () => {
+  it("counts small things in bytes", () => {
+    expect(sizeLabel(512)).toBe("512 B");
+  });
+
+  it("counts most things in kilobytes, whole", () => {
+    // A tenth of a kilobyte is not a thing anybody weighs a picture in.
+    expect(sizeLabel(94_600)).toBe("95 kB");
+  });
+
+  it("counts large things in megabytes, to one place", () => {
+    expect(sizeLabel(12_400_000)).toBe("12.4 MB");
+  });
+
+  it("changes unit at the thousand rather than near it", () => {
+    expect(sizeLabel(999)).toBe("999 B");
+    expect(sizeLabel(1_000)).toBe("1 kB");
+    expect(sizeLabel(999_999)).toBe("1000 kB");
+    expect(sizeLabel(1_000_000)).toBe("1.0 MB");
+  });
+
+  it("says nothing rather than zero for something with no size", () => {
+    // The field is optional off the wire, and "0 B" is a claim about a file
+    // rather than an admission that nobody said.
+    expect(sizeLabel(undefined)).toBeNull();
   });
 });
