@@ -87,6 +87,19 @@ works, your pnpm comes from corepack rather than the `pnpm` package. makepkg
 checks installed packages, not `$PATH`. Either `pacman -S pnpm`, or pass `-d` to
 skip the check.
 
+If `pacman -S pnpm` then stops with `/usr/bin/pnpm exists in filesystem`, those
+are corepack's symlinks and no package owns them, so pacman will not write over
+them. Remove them first:
+
+```sh
+sudo rm /usr/bin/pnpm /usr/bin/pnpx
+sudo pacman -S pnpm
+```
+
+Passing `--overwrite` to that command does not help on its own, because
+`makepkg -si` runs its own `pacman -S` for the build dependencies without your
+flags.
+
 Arch is the distro this is developed on, so it is the one most likely to work.
 
 ### Debian, Ubuntu, Fedora
@@ -392,16 +405,22 @@ why.
 
 ### If the window comes up blank on Linux
 
-WebKitGTK's DMA-BUF renderer does not get along with every driver, and when it
-fails the window paints nothing while the process keeps running happily. The
-giveaway is `Failed to create GBM buffer` on stderr.
+WebKitGTK composites through a DMA-BUF buffer it allocates with GBM, and
+NVIDIA's driver refuses the allocation, so the window paints nothing while the
+process keeps running happily. The giveaway is `Failed to create GBM buffer` on
+stderr.
+
+Consort detects that case at startup and takes the older rendering path, so
+there should be nothing to do. If some other driver has the same problem:
 
 ```sh
-WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+WEBKIT_DISABLE_DMABUF_RENDERER=1 consort
 ```
 
-If that fixes it, put it in your shell profile. It is a driver problem, not a
-Consort one, and there is nothing to fix on this side.
+Setting it explicitly always wins, in either direction, so
+`WEBKIT_DISABLE_DMABUF_RENDERER=0` is how to keep the fast path on a machine
+where it works. Please open an issue either way, so the detection can learn
+about it.
 
 ---
 

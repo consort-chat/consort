@@ -34,8 +34,8 @@ pnpm test           # vitest
 pnpm test:coverage  # vitest with the thresholds enforced
 pnpm tauri build    # release bundle
 
-# The dev build. The variable is not optional on this machine. See below.
-WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
+# The dev build.
+pnpm tauri dev
 ```
 
 Use **pnpm**, not npm or yarn. The lockfile is pnpm's and `pnpm-workspace.yaml`
@@ -43,27 +43,30 @@ carries settings the build needs.
 
 ## Things that will waste your time if you do not know them
 
-### Never start the dev build without WEBKIT_DISABLE_DMABUF_RENDERER=1
+### A blank window on NVIDIA is the DMABUF renderer, and Consort now handles it
 
-```sh
-cd app && WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
-```
+For a long time this section said the opposite: that
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` had to be typed in front of every
+`pnpm tauri dev`, and that it was the single most repeated mistake in this
+repository's history. It was. `app/src-tauri/src/renderer.rs` now sets it in
+`run()` when `/sys/module/nvidia` is present, so neither the dev build nor an
+installed one needs it on the command line.
 
-Leave the variable off and the window opens, the title bar says Consort, and
-the content area is a blank rectangle. This is the single most repeated mistake
-in this repository's history.
+Worth knowing anyway, because the failure is silent. WebKitGTK composites
+through a DMABUF buffer it allocates with GBM, NVIDIA's driver refuses the
+allocation, and the result is a window with a title bar and nothing inside it.
+The process stays up, the frontend is served, and the Rust side logs a textbook
+boot: session restored, channels listed, key backup state read. Every check
+somebody would think to run says the application is fine. The only tell is
+`Failed to create GBM buffer` on stderr, among GTK theme warnings that are
+harmless and always present.
 
-What makes it a trap is that nothing reports it. The process stays up, the
-frontend compiles, and the Rust side logs a textbook boot: session restored,
-verification state Verified, key backup state Enabled. Tailing the log and
-checking that the process is alive both say the app is fine while the user is
-looking at an empty window. The only tell is `Failed to create GBM buffer` on
-stderr, sitting among GTK theme warnings that are harmless and always present.
-
-It is a WebKitGTK and driver problem on this machine rather than a Consort bug,
-which is why the workaround is not baked into `package.json` or the Tauri
-config: doing that would disable the fast rendering path for every user to
-paper over one machine. It belongs on the command line, every time.
+The old reasoning against baking the workaround in was that it would cost every
+user the fast rendering path to paper over one machine. That was wrong on the
+facts. The machine was never the special part, the driver is, and it is still
+broken on webkit2gtk 2.52.6. So the workaround is applied on exactly that
+condition and nowhere else, and an explicit `WEBKIT_DISABLE_DMABUF_RENDERER`
+in the environment still wins in either direction.
 
 When stopping the dev build, kill the Vite process too, not just the window.
 Vite holds port 1420 with `strictPort`, so a leftover one makes the next

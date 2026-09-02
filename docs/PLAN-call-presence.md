@@ -104,7 +104,7 @@ roster change as well as on the button, and `ChannelList` draws a `DeafenedIcon`
 What is missing is confirmation. Neither half has been seen working against a
 second live client: not this session's own icon, and not a second Consort
 drawing it. Both are testable in one sitting with
-`CONSORT_PROFILE=second WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev`.
+`CONSORT_PROFILE=second pnpm tauri dev`.
 
 That is the whole of this item. It is listed because "built" and "confirmed" are
 different claims and only one of them has been earned.

@@ -13,6 +13,7 @@ mod call;
 mod commands;
 mod ears;
 mod events;
+mod renderer;
 mod settings;
 mod sound;
 mod state;
@@ -29,6 +30,10 @@ use crate::state::AppState;
 /// Start the application.
 pub fn run() {
     init_tracing();
+
+    // Before any thread exists, which is what makes the `set_var` inside it
+    // sound, and long before Tauri asks GTK for a window.
+    unsafe { renderer::configure() };
 
     // Before any TLS. See `consort_matrix::install_crypto_provider`.
     if !consort_matrix::install_crypto_provider() {
