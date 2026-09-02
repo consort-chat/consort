@@ -50,22 +50,36 @@
   overflow-y: auto;
 }
 
+/*
+  Flex rather than a grid with named rows. The pane holds either one child or
+  two depending on whether the session has anything to announce, and a template
+  of three rows charged a gap for the row that was never filled: that gap was
+  the empty band under the composer.
+*/
 .shell__main {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-6);
   min-width: 0;
   padding: var(--space-6);
   overflow-y: auto;
 }
 
+/* Whichever of the two is drawn takes the rest of the height. */
+.shell__main > .timeline,
+.shell__main > .shell__empty {
+  flex: 1;
+  min-height: 0;
+}
+
 /*
-  Everything the session needs to say about itself. Empty most of the time, and
-  a grid rather than a stack of margins so that an empty one collapses to
-  nothing instead of leaving a gap where a banner used to be.
+  Everything the session needs to say about itself, drawn only when there is
+  any. A grid rather than a stack of margins so the spacing between two
+  banners is one rule.
 */
 .shell__alerts {
   display: grid;
+  flex: none;
   gap: var(--space-4);
   justify-items: start;
 }

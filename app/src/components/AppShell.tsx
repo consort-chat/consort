@@ -228,6 +228,19 @@ export function AppShell({
     if (chosen?.kind === "voice") onJoinVoice(id);
   }
 
+  /*
+    Whether anything below has something to draw. Written out here rather than
+    left to the four components, because each of them decides for itself to
+    render nothing and a wrapper cannot see that: what it gets either way is a
+    box with no children, which still takes its share of the gap.
+  */
+  const announcing =
+    flows.length > 0 ||
+    callRefused !== null ||
+    verification.state !== "verified" ||
+    keyBackup.state === "missing" ||
+    (storage !== null && !storage.isPreferred);
+
   return (
     <>
       {/*
@@ -278,6 +291,12 @@ export function AppShell({
       </div>
 
       <main className="shell__main">
+        {/*
+          Absent rather than empty. An empty box still takes the gap either
+          side of it, which for a session with nothing wrong with it was a
+          band of dead space above every room name.
+        */}
+        {announcing && (
         <div className="shell__alerts">
           {flows.map((flow) => (
             <VerificationFlowPanel
@@ -324,6 +343,7 @@ export function AppShell({
             </p>
           )}
         </div>
+        )}
 
         {/*
           The page's `h1` lives in whichever of these is drawn. It names the

@@ -189,6 +189,26 @@ describe("AppShell", () => {
     expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
+  it("leaves out the banner strip when there is nothing to announce", () => {
+    // It used to be drawn empty, and an empty grid row still takes the gap
+    // either side of it. That gap was a band of dead space above every room
+    // name for a session with nothing wrong with it.
+    const { container } = shell();
+
+    expect(container.querySelector(".shell__alerts")).toBeNull();
+  });
+
+  it("draws the banner strip once something has to be said", () => {
+    const { container } = shell({
+      callRefused: {
+        roomId: "!lounge:example.org",
+        readiness: { state: "noIdentity" },
+      },
+    });
+
+    expect(container.querySelector(".shell__alerts")).not.toBeNull();
+  });
+
   it("shows no dialog until it is asked for", () => {
     shell();
 
