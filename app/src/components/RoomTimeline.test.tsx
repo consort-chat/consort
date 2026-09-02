@@ -50,6 +50,14 @@ const lounge: Channel = { ...general, id: "!lounge:example.org", name: "Lounge",
 /** One minute past midnight, so the clock time is stable wherever this runs. */
 const NOON = Date.UTC(2026, 0, 1, 12, 0, 0);
 
+/** The clock time the component draws, formatted the way it formats it. */
+function timeOf(at: number): string {
+  return new Date(at).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function said(id: string, sender: string, body: string, at = NOON): Message {
   return { id, sender, body, at, kind: "text" };
 }
@@ -210,6 +218,41 @@ describe("RoomTimeline", () => {
     await arrive(timeline([said("$1", ADA, "2 * 3 * 4")]));
 
     expect(await screen.findByText("2 * 3 * 4")).toBeVisible();
+  });
+
+  it("lets the words of a message be selected", async () => {
+    // The shell turns selection off, because dragging across the chrome of a
+    // desktop application is never what somebody meant. A message is the one
+    // thing in the room a reader does mean to select, and opting back in is
+    // also what puts a text cursor over it instead of an arrow.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "worth quoting")]));
+
+    expect(await screen.findByText("worth quoting")).toHaveAttribute(
+      "data-selectable",
+    );
+  });
+
+  it("does not tooltip a date over the words of a message", async () => {
+    // A tooltip that follows the pointer across every sentence in a room is
+    // noise, and it appears over the one thing somebody is trying to read.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    expect(await screen.findByText("hello")).not.toHaveAttribute("title");
+  });
+
+  it("puts the whole date on the time beside the name", async () => {
+    // Where a date belongs, and where it is out of the way of the words. The
+    // clock time is already there, so hovering it asks about the date.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    const at = await screen.findByText(timeOf(NOON));
+    expect(at).toHaveAttribute("title", new Date(NOON).toLocaleString());
   });
 
   it("names the sender rather than printing their user ID", async () => {

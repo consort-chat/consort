@@ -183,6 +183,16 @@
 }
 
 /*
+  Two things one person said in the same breath. They share a byline, so this
+  gap has to be smaller than the one between groups and larger than the gap
+  between two lines of a single message, or six sentences in a row read as one
+  unbroken paragraph with nothing to say where each ended.
+*/
+.timeline__body + .timeline__body {
+  margin-top: var(--space-2);
+}
+
+/*
   A formatted body brings its own structure, so the newline-preserving
   whitespace that plain text needs would double every break in it.
 */

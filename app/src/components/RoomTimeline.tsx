@@ -323,7 +323,17 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                   >
                     {who}
                   </button>
-                  <time className="timeline__at" dateTime={new Date(one.at).toISOString()}>
+                  {/*
+                    The whole date lives here rather than on the words. A
+                    tooltip that follows the pointer across every sentence in a
+                    room appears over the one thing somebody is reading; the
+                    clock time is already the thing being asked about.
+                  */}
+                  <time
+                    className="timeline__at"
+                    dateTime={new Date(one.at).toISOString()}
+                    title={dateOf(one.at)}
+                  >
                     {timeOf(one.at)}
                   </time>
                 </p>
@@ -333,6 +343,12 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                     heading or a list and a paragraph may hold neither. One
                     element for both kinds beats two that have to be kept
                     looking alike.
+
+                    `data-selectable` because the shell turns selection off,
+                    dragging across the chrome of a desktop application never
+                    being deliberate. A message is what a reader does mean to
+                    select, and opting back in is also what puts a text cursor
+                    over the words instead of an arrow.
                   */
                   <div
                     key={message.id}
@@ -342,7 +358,7 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
                         : "timeline__body timeline__body--rich"
                     }
                     data-kind={message.kind}
-                    title={dateOf(message.at)}
+                    data-selectable
                   >
                     {message.kind === "emote" && `${who} `}
                     {message.html === undefined ? (
