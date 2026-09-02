@@ -164,19 +164,37 @@ release notes entirely.
 
 ## Releasing
 
-Four files carry the version and none of them reads another: `Cargo.toml`,
-`app/package.json`, `app/src-tauri/tauri.conf.json`, and the placeholder in
-`packaging/aur/PKGBUILD` that makepkg overwrites. Set all four, then:
-
 ```sh
-git cliff --tag v0.1.3 --output CHANGELOG.md
-git commit -am "chore(release): 0.1.3"
-git tag -a v0.1.3 -m "0.1.3"
+scripts/release.sh
 ```
 
-`--tag` is needed because the tag does not exist yet: without it everything
-since the last release lands under an "Unreleased" heading. `cliff.toml` says
-which commit types are listed and which are kept out.
+That is the whole of it. It refuses to run on a dirty tree or off `main`, and
+then does the five things nobody should be doing by hand.
+
+**Nobody picks the version.** git-cliff reads the commits since the last tag
+and answers with the next one: a `feat` moves the minor, a `fix` moves the
+patch, a `!` or a `BREAKING CHANGE:` footer moves the major. `git cliff
+--bumped-version` is what the script asks, and you can ask it yourself at any
+time to see where the next release would land. The consequence is worth being
+awake to: a `feat` that should have been a `fix` moves the minor number and
+there is no taking it back once the tag is pushed.
+
+**Five files carry the version and none of them reads another:** `Cargo.toml`,
+`app/package.json`, `app/src-tauri/tauri.conf.json`, the placeholder in
+`packaging/aur/PKGBUILD` that makepkg overwrites, and the two built-artefact
+filenames in the README. The script writes all five and refreshes `Cargo.lock`
+so its four `consort-*` entries follow.
+
+**The changelog and the tag message both come from the commits.**
+`git cliff --tag` is what puts the new commits under the version about to
+exist rather than under an "Unreleased" heading, and `cliff.toml` says which
+commit types are listed and which are kept out. The same notes go into the
+annotated tag, so `git show v0.2.0` says what changed.
+
+**Nothing is pushed.** The script prints the two commands and stops. Pushing
+the tag to `origin` is what runs `.github/workflows/release.yml`, which writes
+the release page from the same notes and attaches a Windows installer built
+from the tagged commit.
 
 ## Licence
 
