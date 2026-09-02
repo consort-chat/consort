@@ -24,6 +24,25 @@
   color: var(--text-primary);
 }
 
+/* `min-width: 0`, so the ellipsis below has something to happen against. */
+.timeline__head {
+  min-width: 0;
+}
+
+/*
+  The room's own description, kept to one line. A topic is free text and plenty
+  of them are paragraphs; letting one grow gives the least important part of
+  the pane the most of its height.
+*/
+.timeline__topic {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .timeline__scroll {
   display: flex;
   flex-direction: column;

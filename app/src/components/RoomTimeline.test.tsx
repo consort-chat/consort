@@ -445,6 +445,19 @@ describe("RoomTimeline", () => {
     expect(heading).not.toHaveTextContent("#");
   });
 
+  it("puts the room's topic under its name", async () => {
+    await pane({ ...general, topic: "Where the good links go" });
+
+    expect(screen.getByText("Where the good links go")).toBeVisible();
+  });
+
+  it("draws no subtitle for a room with no topic", async () => {
+    const { container } = render(<RoomTimeline channel={general} />);
+    await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+
+    expect(container.querySelector(".timeline__topic")).toBeNull();
+  });
+
   it("offers older messages only when there are some", async () => {
     await pane();
 

@@ -249,9 +249,22 @@ export function RoomTimeline({ channel }: { channel: Channel }) {
 
   return (
     <section className="timeline" aria-label={`Messages in ${name}`}>
-      <h1 className="timeline__name">
-        {channel.kind === "voice" ? name : `#${name}`}
-      </h1>
+      <div className="timeline__head">
+        <h1 className="timeline__name">
+          {channel.kind === "voice" ? name : `#${name}`}
+        </h1>
+        {/*
+          One line, whatever the room wrote. A topic is free text and some are
+          paragraphs, and a heading that grows to four lines pushes the
+          conversation off the bottom of the window. The whole of it is on the
+          pointer.
+        */}
+        {channel.topic !== undefined && (
+          <p className="timeline__topic" title={channel.topic}>
+            {channel.topic}
+          </p>
+        )}
+      </div>
 
       <div
         className="timeline__scroll"

@@ -614,6 +614,7 @@ mod tests {
                     channels: vec![Channel {
                         id: "!lounge:example.org".to_owned(),
                         name: Some("Lounge".to_owned()),
+                        topic: None,
                         kind: ChannelKind::Voice,
                         avatar: None,
                         joined: true,

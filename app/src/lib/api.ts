@@ -196,6 +196,11 @@ export interface Channel {
    * `!AbCdEf...` is not a channel name.
    */
   name: string | null;
+  /**
+   * The room's topic, when it set one worth drawing. Absent for a blank topic
+   * and for a room this account has not joined, whose state it cannot read.
+   */
+  topic?: string;
   kind: ChannelKind;
   /** An `mxc://` URI. Pass it nowhere; call `roomAvatar(id)` for the image. */
   avatar: string | null;

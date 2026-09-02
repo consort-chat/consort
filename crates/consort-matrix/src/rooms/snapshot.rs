@@ -103,6 +103,7 @@ fn channels_of(
             None => Channel {
                 id: child.id.clone(),
                 name: None,
+                topic: None,
                 kind: ChannelKind::Text,
                 avatar: None,
                 joined: false,
@@ -160,6 +161,7 @@ fn joined_channel(room: &RoomFacts) -> Channel {
     Channel {
         id: room.id.clone(),
         name: Some(room.name.clone()),
+        topic: room.topic.clone(),
         kind: match room.kind {
             RoomKind::Voice => ChannelKind::Voice,
             // A space never reaches here: `channels_of` filters subspaces out
@@ -183,6 +185,7 @@ mod tests {
         RoomFacts {
             id: id.to_owned(),
             name: name.to_owned(),
+            topic: None,
             avatar: None,
             kind: RoomKind::Text,
             children: Vec::new(),
@@ -529,6 +532,32 @@ mod tests {
 
             assert_eq!(names(channels), [Some("general")]);
             assert!(channels[0].joined);
+        }
+
+        #[test]
+        fn a_channel_carries_the_topic_the_room_set() {
+            let rooms = assemble(vec![RoomFacts {
+                topic: Some("Where the good links go".to_owned()),
+                ..room("!g:example.org", "general")
+            }]);
+
+            assert_eq!(
+                rooms.spaces[0].channels[0].topic.as_deref(),
+                Some("Where the good links go")
+            );
+        }
+
+        #[test]
+        fn a_channel_nobody_has_joined_claims_no_topic() {
+            // Its state is state this account cannot read, so an absence is
+            // the only honest answer.
+            let rooms = assemble(vec![space(
+                "!s:example.org",
+                "Kahu HQ",
+                vec![child("!unknown:example.org")],
+            )]);
+
+            assert_eq!(rooms.spaces[1].channels[0].topic, None);
         }
 
         #[test]

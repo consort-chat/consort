@@ -317,6 +317,7 @@ mod tests {
         Channel {
             id: "!v:example.org".to_owned(),
             name: Some("Lounge".to_owned()),
+            topic: None,
             kind,
             avatar: None,
             joined: true,

@@ -78,6 +78,15 @@ pub struct Channel {
     /// name, so that the interface cannot show somebody `!AbCdEf...` by
     /// forgetting a check.
     pub name: Option<String>,
+    /// The room's `m.room.topic`, when it has one worth drawing.
+    ///
+    /// Absent rather than null when there is none, and absent for a room a
+    /// space lists that this account has not joined, whose state it cannot
+    /// read. A blank topic is treated as no topic, for the reason a blank name
+    /// is: some bridges set one, and a subtitle that is an empty line is worse
+    /// than no subtitle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
     pub kind: ChannelKind,
     pub avatar: Option<String>,
     /// False for a room a space lists that this account has not joined. Those
@@ -255,6 +264,7 @@ mod tests {
         Channel {
             id: "!a:example.org".to_owned(),
             name: Some("general".to_owned()),
+            topic: None,
             kind: ChannelKind::Text,
             avatar: None,
             joined: true,
@@ -298,6 +308,26 @@ mod tests {
         let json = serde_json::to_value(channel()).unwrap();
 
         assert_eq!(json["participants"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_channel_with_no_topic_leaves_the_key_out() {
+        // Absent rather than null, so the frontend's `topic?: string` is the
+        // whole of what it has to check.
+        let json = serde_json::to_value(channel()).unwrap();
+
+        assert!(json.get("topic").is_none());
+    }
+
+    #[test]
+    fn a_channel_with_a_topic_sends_it() {
+        let json = serde_json::to_value(Channel {
+            topic: Some("Where the good links go".to_owned()),
+            ..channel()
+        })
+        .unwrap();
+
+        assert_eq!(json["topic"], "Where the good links go");
     }
 
     #[test]

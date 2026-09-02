@@ -67,6 +67,8 @@ pub(crate) struct RoomFacts {
     /// Always known, because a joined room always resolves to something: its
     /// own name, a calculated one, or in the worst case its ID.
     pub(crate) name: String,
+    /// The room's own `m.room.topic`, blank-filtered, or `None`.
+    pub(crate) topic: Option<String>,
     pub(crate) avatar: Option<String>,
     pub(crate) kind: RoomKind,
     /// Empty unless this is a space.
@@ -115,6 +117,9 @@ pub(crate) async fn extract(room: &Room) -> RoomFacts {
     RoomFacts {
         id: room.room_id().to_string(),
         name: name_of(room).await,
+        // Local: read out of the room's own state, like the avatar URI beside
+        // it, so a text room still costs nothing on every sync.
+        topic: room.topic().filter(|topic| !topic.trim().is_empty()),
         avatar: room.avatar_url().map(|uri| uri.to_string()),
         kind,
         children: match kind {

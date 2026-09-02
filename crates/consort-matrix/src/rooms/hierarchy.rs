@@ -216,6 +216,7 @@ mod tests {
             } else {
                 None
             },
+            topic: None,
             kind: ChannelKind::Text,
             avatar: None,
             joined,
