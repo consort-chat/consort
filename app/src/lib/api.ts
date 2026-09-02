@@ -1323,6 +1323,42 @@ export interface ThreadSummary {
  * room list: a reader handed one of these has everything it needs to draw, and
  * never has to patch a copy of its own from a stream of deltas.
  */
+/**
+ * One thread as it is currently loaded, oldest reply first.
+ *
+ * Mirrors `consort_matrix::Thread`. Its own value rather than a field on
+ * `Timeline`, because a thread is open or it is not, and a room whose panel is
+ * shut should not be carrying a copy of somebody's last conversation.
+ */
+export interface Thread {
+  /** The room the thread is in, on the same terms as `Timeline.roomId`. */
+  roomId: string;
+  /**
+   * The event ID of the message the thread hangs from.
+   *
+   * Load-bearing for the same reason as `roomId`: opening one thread and then
+   * another puts two of these in flight, and the panel draws the one whose
+   * root it asked for.
+   */
+  rootId: string;
+  /**
+   * The message it hangs from, drawn at the top of the panel.
+   *
+   * Absent when the homeserver would not hand it over, which a redaction and a
+   * missing key both look like. The replies are still worth reading.
+   */
+  root?: Message;
+  /** The replies, oldest first, which is the order they are drawn in. */
+  messages: Message[];
+  /**
+   * Whether there are older replies than the ones here.
+   *
+   * The homeserver is asked for the recent end of a long thread, so this is
+   * how the panel says the top of what it is showing is not the beginning.
+   */
+  moreBefore: boolean;
+}
+
 export interface Timeline {
   /**
    * Which room this is.
@@ -1400,6 +1436,33 @@ export function timelineClose(): Promise<void> {
  */
 export function timelineEarlier(): Promise<void> {
   return invoke<void>("timeline_earlier");
+}
+
+/**
+ * The thread open beside the room, or `null` when the panel is shut.
+ *
+ * Its own channel rather than a field on the timeline: a thread's replies are
+ * deliberately not in the room, and carrying the two together would re-send a
+ * conversation nobody is looking at every time somebody speaks in the room.
+ *
+ * Replayed to a webview that reloaded, like the timeline. Shutting the panel
+ * takes the retained value away rather than replacing it with an empty thread.
+ */
+export function onThread(
+  handler: (thread: Thread | null) => void,
+): Promise<UnlistenFn> {
+  return listen<Thread | null>("thread", (event) => handler(event.payload));
+}
+
+/**
+ * Open the thread hanging from a message, or shut whichever is open.
+ *
+ * Answers nothing: what was asked for arrives on the `thread` channel. Asking
+ * with no room open does nothing, which is what pressing a thread at the same
+ * moment as a room change is.
+ */
+export function threadOpen(rootId: string | null): Promise<void> {
+  return invoke<void>("thread_open", { rootId });
 }
 
 /**

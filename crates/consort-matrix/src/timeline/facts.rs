@@ -83,6 +83,25 @@ pub fn in_thread(event: &TimelineEvent) -> Option<Message> {
     read(event, Reading::Thread)
 }
 
+/// The message an event is a threaded reply to, when it is one.
+///
+/// Deliberately not a field on [`Message`]. A reply's own relation is of no
+/// interest to anything drawing it, and the one caller is the watcher asking
+/// whether an arriving event belongs to the thread somebody has open.
+pub fn thread_root(event: &TimelineEvent) -> Option<String> {
+    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
+        SyncMessageLikeEvent::Original(said),
+    )) = event.raw().deserialize().ok()?
+    else {
+        return None;
+    };
+
+    match said.content.relates_to {
+        Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
+        _ => None,
+    }
+}
+
 fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
     if event.kind.is_utd() {
         return undecryptable(event);

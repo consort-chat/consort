@@ -79,7 +79,7 @@ pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
 pub use store_key::StoreKey;
 pub use sync::{Connection, StopReason};
-pub use timeline::{Message, MessageKind, Timeline};
+pub use timeline::{Message, MessageKind, Thread, Timeline};
 pub use verification::{Flow, FlowState, SessionVerification};
 
 // Re-exported so a consumer holding a `Client` needs only this crate as a

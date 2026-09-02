@@ -366,6 +366,20 @@ pub fn timeline_earlier_for(state: &AppState) {
     state.earlier_messages();
 }
 
+/// Open the thread hanging from a message, or shut whichever is open.
+///
+/// Answers nothing. What was asked for arrives on the `thread` channel, in
+/// full, on the same terms as the room's own timeline, and shutting it sends
+/// nothing rather than an empty thread: a panel that is closed is not a panel
+/// showing no replies.
+///
+/// Idempotent and infallible. Asking with no room open does nothing rather
+/// than complaining, which is what pressing a thread at the same moment as a
+/// room change is.
+pub fn thread_open_for(state: &AppState, root_id: Option<String>) {
+    state.open_thread(root_id);
+}
+
 /// Say something in a room.
 ///
 /// Nothing comes back. The message appears when the sync brings it round,
@@ -1061,6 +1075,12 @@ pub fn timeline_close(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn timeline_earlier(state: State<'_, AppState>) {
     timeline_earlier_for(&state);
+}
+
+/// See `thread_open_for`. What was asked for arrives on the `thread` channel.
+#[tauri::command]
+pub fn thread_open(state: State<'_, AppState>, root_id: Option<String>) {
+    thread_open_for(&state, root_id);
 }
 
 /// Say something in a room.
@@ -3122,6 +3142,17 @@ mod against_a_mock_homeserver {
                 .collect()
         }
 
+        /// What went out on the thread channel, open and shut alike.
+        fn threads(sink: &RecordingSink) -> Vec<Option<Box<consort_matrix::Thread>>> {
+            sink.events()
+                .into_iter()
+                .filter_map(|event| match event {
+                    AppEvent::Thread(thread) => Some(thread),
+                    _ => None,
+                })
+                .collect()
+        }
+
         /// Wait until `done` holds of what has been published, or give up.
         async fn until(sink: &Arc<RecordingSink>, done: impl Fn(&[Timeline]) -> bool) {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -3286,6 +3317,32 @@ mod against_a_mock_homeserver {
 
             timeline_earlier_for(&state);
             timeline_close_for(&state);
+        }
+
+        #[tokio::test]
+        async fn opening_a_thread_with_no_room_open_does_nothing() {
+            // What pressing a thread at the same moment as a room change is.
+            let (_dir, state, _sink) = state();
+
+            thread_open_for(&state, Some("$root:example.org".to_owned()));
+            thread_open_for(&state, None);
+        }
+
+        #[tokio::test]
+        async fn closing_the_room_shuts_the_thread_beside_it() {
+            // Otherwise the panel is left drawing a conversation out of a room
+            // nobody has open.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = in_two_rooms(&server).await;
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            until(&sink, |seen| !seen.is_empty()).await;
+
+            timeline_close_for(&state);
+
+            assert!(
+                threads(&sink).last().is_some_and(Option::is_none),
+                "the panel was not shut with the room"
+            );
         }
 
         #[tokio::test]

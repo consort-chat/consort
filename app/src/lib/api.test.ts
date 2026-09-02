@@ -31,6 +31,8 @@ import {
   onRooms,
   onVerificationFlow,
   onAudio,
+  onThread,
+  threadOpen,
   resendState,
   roomAvatar,
   setAudioSettings,
@@ -243,6 +245,28 @@ describe("asCommandError", () => {
   });
 });
 
+describe("threads", () => {
+  beforeEach(() => {
+    invoke.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("names the root it wants opened", async () => {
+    await threadOpen("$root:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("thread_open", {
+      rootId: "$root:example.org",
+    });
+  });
+
+  it("shuts the panel by asking for no root at all", async () => {
+    // Rather than a second command. There is one thing open at a time and
+    // this says which, so `null` is the honest way to say none.
+    await threadOpen(null);
+
+    expect(invoke).toHaveBeenCalledWith("thread_open", { rootId: null });
+  });
+});
+
 describe("event subscriptions", () => {
   beforeEach(() => {
     listen.mockReset().mockResolvedValue(() => {});
@@ -255,6 +279,27 @@ describe("event subscriptions", () => {
     await onConnection(vi.fn());
 
     expect(listen).toHaveBeenCalledWith("connection", expect.any(Function));
+  });
+
+  it("subscribes to the thread channel the Rust side emits on", async () => {
+    await onThread(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("thread", expect.any(Function));
+  });
+
+  it("hands a shut panel through as null rather than dropping it", async () => {
+    // The panel is drawn from this, so a shut one has to arrive. Swallowing
+    // the null would leave the last thread on screen after its room closed.
+    const handler = vi.fn();
+    await onThread(handler);
+    const [, forward] = listen.mock.calls[0] as [
+      string,
+      (event: { payload: unknown }) => void,
+    ];
+
+    forward({ payload: null });
+
+    expect(handler).toHaveBeenCalledWith(null);
   });
 
   it("hands the handler the payload rather than the event envelope", async () => {

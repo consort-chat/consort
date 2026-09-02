@@ -591,11 +591,15 @@ impl AppState {
         };
 
         let events = self.events.clone();
+        let for_threads = self.events.clone();
         // Assigned rather than pushed, so the previous watcher is dropped, and
         // therefore aborted, by the assignment itself.
-        *self.locked_timeline() = Some(timeline::watch(client, &room_id, move |timeline| {
-            events.emit(AppEvent::Timeline(timeline))
-        }));
+        *self.locked_timeline() = Some(timeline::watch(
+            client,
+            &room_id,
+            move |timeline| events.emit(AppEvent::Timeline(timeline)),
+            move |thread| for_threads.emit(AppEvent::Thread(thread.map(Box::new))),
+        ));
     }
 
     /// Stop watching whatever room was open, and say so.
@@ -611,6 +615,10 @@ impl AppState {
     pub fn close_room(&self) {
         if self.locked_timeline().take().is_some() {
             self.events.emit(AppEvent::Timeline(Timeline::default()));
+            // The thread went with the watcher that owned it, and a panel left
+            // on screen would be showing a conversation from a room nobody has
+            // open.
+            self.events.emit(AppEvent::Thread(None));
         }
     }
 
@@ -621,6 +629,17 @@ impl AppState {
     pub fn earlier_messages(&self) {
         if let Some(watch) = self.locked_timeline().as_ref() {
             watch.earlier();
+        }
+    }
+
+    /// Open the thread hanging from `root_id`, or shut whichever is open.
+    ///
+    /// A no-op when no room is open. The panel belongs to the room's watcher,
+    /// so there is nothing to open it against and nothing on screen to draw
+    /// it beside.
+    pub fn open_thread(&self, root_id: Option<String>) {
+        if let Some(watch) = self.locked_timeline().as_ref() {
+            watch.open_thread(root_id);
         }
     }
 

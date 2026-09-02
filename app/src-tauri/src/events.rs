@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
 use consort_matrix::{
-    CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification, Timeline,
+    CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification, Thread, Timeline,
 };
 use serde::Serialize;
 
@@ -107,6 +107,17 @@ pub enum AppEvent {
     /// timeline for a room it is not showing ignores it, which is what the
     /// moment between two clicks looks like.
     Timeline(Timeline),
+    /// The thread open beside the room, or `None` when the panel is shut.
+    ///
+    /// Its own channel rather than a field on [`Self::Timeline`]. A thread's
+    /// replies are deliberately not in the room, and carrying the two together
+    /// would re-serialise a conversation nobody is looking at every time
+    /// somebody says something in the room.
+    ///
+    /// Boxed because a thread carries its root message inline, which makes it
+    /// four times the size of anything else on this enum, and every event of
+    /// every kind would otherwise be that big.
+    Thread(Option<Box<Thread>>),
 }
 
 impl AppEvent {
@@ -134,6 +145,8 @@ impl AppEvent {
     pub const SPEAKING: &'static str = "speaking";
     /// The channel carrying the open room's messages.
     pub const TIMELINE: &'static str = "timeline";
+    /// The channel carrying the thread open beside the room.
+    pub const THREAD: &'static str = "thread";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -150,6 +163,7 @@ impl AppEvent {
             Self::SelfAudio(_) => Self::SELF_AUDIO,
             Self::Speaking(_) => Self::SPEAKING,
             Self::Timeline(_) => Self::TIMELINE,
+            Self::Thread(_) => Self::THREAD,
         }
     }
 
@@ -205,6 +219,11 @@ impl AppEvent {
             | Self::SelfAudio(_)
             | Self::Timeline(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
+            // Open is state and shut is history, on the same terms as a
+            // verification flow. A panel that is shut is not a panel showing
+            // nothing, and keeping the `None` would have a reload catch a
+            // webview up on a conversation nobody has open.
+            Self::Thread(thread) => thread.is_some(),
             // A refusal is an incident, not a state. What it reports is
             // already on the `call-readiness` channel as a standing answer,
             // and this only adds "the thing you just clicked". Replayed on a
@@ -233,6 +252,7 @@ impl AppEvent {
             Self::SelfAudio(audio) => serde_json::to_value(audio),
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
             Self::Timeline(timeline) => serde_json::to_value(timeline),
+            Self::Thread(thread) => serde_json::to_value(thread),
         }
     }
 }
@@ -1184,6 +1204,77 @@ mod tests {
                 .map(|event| event.channel())
                 .collect();
             assert_eq!(resent, vec![AppEvent::VERIFICATION, AppEvent::CONNECTION]);
+        }
+    }
+
+    /// The thread somebody has open beside the room.
+    #[cfg(test)]
+    mod threads {
+        use super::*;
+
+        fn open() -> Thread {
+            Thread {
+                room_id: "!general:example.org".to_owned(),
+                root_id: "$root:example.org".to_owned(),
+                ..Thread::default()
+            }
+        }
+
+        #[test]
+        fn a_thread_travels_on_its_own_channel() {
+            // Not the timeline's. A thread's replies are deliberately not in
+            // the room, and putting the two on one channel would mean every
+            // arriving message re-serialising a conversation nobody is looking
+            // at.
+            assert_eq!(
+                AppEvent::Thread(Some(Box::new(open()))).channel(),
+                AppEvent::THREAD
+            );
+            assert_ne!(AppEvent::THREAD, AppEvent::TIMELINE);
+        }
+
+        #[test]
+        fn an_open_thread_is_kept_for_a_late_subscriber() {
+            assert!(AppEvent::Thread(Some(Box::new(open()))).is_worth_keeping());
+        }
+
+        #[test]
+        fn a_closed_thread_takes_the_open_one_off_the_channel() {
+            // Cleared rather than replaced with an empty thread, on the same
+            // terms as a verification flow that has finished: a panel that is
+            // shut is not a panel showing nothing, and a reload should not
+            // reopen somebody's last conversation.
+            let recorder = Arc::new(RecordingSink::new());
+            let latest = LatestSink::new(recorder.clone());
+            latest.emit(AppEvent::Thread(Some(Box::new(open()))));
+            latest.emit(AppEvent::Thread(None));
+
+            let before = recorder.events().len();
+            latest.resend();
+
+            assert_eq!(
+                recorder.events().len(),
+                before,
+                "a shut panel should have nothing left to catch anybody up on"
+            );
+        }
+
+        #[test]
+        fn the_payload_is_the_thread_itself() {
+            let payload = AppEvent::Thread(Some(Box::new(open()))).payload().unwrap();
+
+            assert_eq!(payload["rootId"], "$root:example.org");
+            assert!(payload.get("thread").is_none(), "a wrapper to unpick");
+        }
+
+        #[test]
+        fn a_shut_panel_is_reported_as_nothing() {
+            // The live listeners still have to hear it, or the panel stays on
+            // screen with the conversation it was showing.
+            assert_eq!(
+                AppEvent::Thread(None).payload().unwrap(),
+                serde_json::Value::Null
+            );
         }
     }
 

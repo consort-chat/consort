@@ -85,6 +85,17 @@ const PAGE: u32 = 30;
 /// decryption.
 const PAGES_PER_ASK: usize = 3;
 
+/// What a watcher can be asked to do.
+///
+/// One channel rather than two, so that opening a thread and scrolling back
+/// cannot be answered in the other order from the one they were asked in.
+enum Ask {
+    /// One more page of the room's own history.
+    Earlier,
+    /// Open the thread hanging from this message, or close whatever is open.
+    Thread(Option<String>),
+}
+
 /// A room being watched, and a way to ask it for more.
 ///
 /// Aborts on drop, so replacing one is how a room change is done: there is no
@@ -92,7 +103,7 @@ const PAGES_PER_ASK: usize = 3;
 pub struct Watch {
     room_id: String,
     task: JoinHandle<()>,
-    asking: UnboundedSender<()>,
+    asking: UnboundedSender<Ask>,
 }
 
 impl Watch {
@@ -108,7 +119,17 @@ impl Watch {
     /// ignored once the watcher has ended, which is what a scroll landing at
     /// the same moment as a room change is.
     pub fn earlier(&self) {
-        let _ = self.asking.send(());
+        let _ = self.asking.send(Ask::Earlier);
+    }
+
+    /// Open the thread hanging from `root_id`, or close whatever is open.
+    ///
+    /// Answered on the watcher's own task, like everything else, so a thread
+    /// opened and closed quickly cannot report the two out of order. Silently
+    /// ignored once the watcher has ended, which is what pressing a thread at
+    /// the same moment as a room change is.
+    pub fn open_thread(&self, root_id: Option<String>) {
+        let _ = self.asking.send(Ask::Thread(root_id));
     }
 }
 
@@ -133,9 +154,10 @@ impl Drop for Watch {
 ///
 /// Unlike [`crate::rooms::watch`], this one is per room and is meant to be
 /// replaced. Dropping the [`Watch`] ends it.
-pub fn watch<F>(client: Client, room_id: &str, on_change: F) -> Watch
+pub fn watch<F, G>(client: Client, room_id: &str, on_change: F, on_thread: G) -> Watch
 where
     F: Fn(Timeline) + Send + Sync + 'static,
+    G: Fn(Option<Thread>) + Send + Sync + 'static,
 {
     let (asking, mut asked) = unbounded_channel();
     let room_id = room_id.to_owned();
@@ -161,6 +183,7 @@ where
                 room_id: watching,
                 ..Timeline::default()
             });
+            on_thread(None);
             return;
         };
         let Some(room) = client.get_room(&parsed) else {
@@ -172,20 +195,30 @@ where
                 room_id: watching,
                 ..Timeline::default()
             });
+            on_thread(None);
             return;
         };
 
-        let mut loaded = Loaded::new(watching.clone());
+        let mut loaded = Loaded::new(watching.clone(), client.user_id().map(ToString::to_string));
         loaded.publish(&on_change);
+        loaded.publish_thread(&on_thread);
         loaded.page(&room, &on_change).await;
 
         loop {
             tokio::select! {
                 asked = asked.recv() => {
-                    if asked.is_none() {
-                        break;
+                    match asked {
+                        None => break,
+                        Some(Ask::Earlier) => loaded.page(&room, &on_change).await,
+                        Some(Ask::Thread(root_id)) => {
+                            // Boxed because the compiler otherwise gives up
+                            // computing the layout of this task: the arm holds
+                            // a `/relations` request and an event fetch, both
+                            // of them deep, inside a `select!` inside a spawn.
+                            Box::pin(loaded.open(&client, root_id)).await;
+                            loaded.publish_thread(&on_thread);
+                        }
                     }
-                    loaded.page(&room, &on_change).await;
                 }
                 update = updates.recv() => match update {
                     Ok(update) => {
@@ -194,8 +227,15 @@ where
                             // whether or not this room was in it.
                             continue;
                         };
+                        // The thread first, because counting a reply against
+                        // the message it hangs from writes into the same
+                        // history the room is about to be published from.
+                        if loaded.replied(&joined.timeline.events) {
+                            loaded.publish_thread(&on_thread);
+                        }
                         let arrived = loaded.read(&joined.timeline.events);
-                        if loaded.history.arrived(arrived) {
+                        let counted = loaded.count_replies(&joined.timeline.events);
+                        if loaded.history.arrived(arrived) | counted {
                             loaded.publish(&on_change);
                         }
                     }
@@ -254,6 +294,12 @@ where
 /// six variables threaded through two arms.
 struct Loaded {
     room_id: String,
+    /// Who is signed in, so a reply this session sent counts as one this
+    /// session took part in. `None` only for a client with no session, which
+    /// is not one that reaches here.
+    me: Option<String>,
+    /// The thread somebody has open, if any.
+    open: Option<OpenThread>,
     history: History,
     /// The events this session could not read, by event ID.
     ///
@@ -270,10 +316,25 @@ struct Loaded {
     loading: bool,
 }
 
+/// One thread being watched alongside the room.
+///
+/// Its replies are not in the room's timeline, so this holds its own history
+/// rather than filtering the room's. What it shares with the room is the
+/// arriving sync: the events are already in hand, so keeping a thread current
+/// costs a second read of a batch rather than a second subscription.
+struct OpenThread {
+    root_id: String,
+    root: Option<Message>,
+    history: History,
+    more_before: bool,
+}
+
 impl Loaded {
-    fn new(room_id: String) -> Self {
+    fn new(room_id: String, me: Option<String>) -> Self {
         Self {
             room_id,
+            me,
+            open: None,
             history: History::new(),
             waiting: HashMap::new(),
             from: None,
@@ -413,6 +474,114 @@ impl Loaded {
         changed
     }
 
+    /// Open the thread hanging from `root_id`, or close whatever is open.
+    ///
+    /// A thread that will not load closes rather than half-opening. The
+    /// alternative is a panel drawn from a root with no replies under it,
+    /// which reads as a thread somebody deleted rather than as a request that
+    /// failed.
+    async fn open(&mut self, client: &Client, root_id: Option<String>) {
+        let Some(root_id) = root_id else {
+            self.open = None;
+            return;
+        };
+
+        match thread::thread(client, &self.room_id, &root_id).await {
+            Ok(loaded) => {
+                let mut history = History::new();
+                history.backfilled(loaded.messages);
+                self.open = Some(OpenThread {
+                    root_id,
+                    root: loaded.root,
+                    history,
+                    more_before: loaded.more_before,
+                });
+            }
+            Err(error) => {
+                // Logged rather than raised, on the same terms as a page of
+                // history that would not come back.
+                tracing::warn!(%error, room_id = %self.room_id, %root_id, "could not read the thread");
+                self.open = None;
+            }
+        }
+    }
+
+    /// Add whichever of `events` are replies in the open thread.
+    ///
+    /// Reports whether the panel changed.
+    fn replied(&mut self, events: &[TimelineEvent]) -> bool {
+        let Some(open) = &mut self.open else {
+            return false;
+        };
+
+        let arrived: Vec<Message> = events
+            .iter()
+            .filter(|event| facts::thread_root(event).as_deref() == Some(open.root_id.as_str()))
+            .filter_map(facts::in_thread)
+            .collect();
+
+        open.history.arrived(arrived)
+    }
+
+    /// Count whichever of `events` are thread replies against the messages in
+    /// this room they hang from.
+    ///
+    /// The tally on a message is the homeserver's, and it is only recounted
+    /// when the message is read again. Without this a thread somebody has just
+    /// replied in shows nothing until the room is reopened, which includes
+    /// replying from here.
+    ///
+    /// Reports whether the room changed.
+    fn count_replies(&mut self, events: &[TimelineEvent]) -> bool {
+        let mut changed = false;
+        for event in events {
+            let Some(root_id) = facts::thread_root(event) else {
+                continue;
+            };
+            let Some(existing) = self
+                .history
+                .messages()
+                .iter()
+                .find(|message| message.id == root_id)
+            else {
+                // A reply to something older than what is loaded. The tally
+                // arrives with the message when it is scrolled back to.
+                continue;
+            };
+
+            let mine =
+                facts::message(event).is_some_and(|reply| Some(&reply.sender) == self.me.as_ref());
+            let counted = match existing.thread {
+                Some(summary) => ThreadSummary {
+                    count: summary.count.saturating_add(1),
+                    participated: summary.participated || mine,
+                },
+                None => ThreadSummary {
+                    count: 1,
+                    participated: mine,
+                },
+            };
+
+            let mut updated = existing.clone();
+            updated.thread = Some(counted);
+            changed |= self.history.replace(updated);
+        }
+        changed
+    }
+
+    fn publish_thread<G>(&self, on_thread: &G)
+    where
+        G: Fn(Option<Thread>),
+    {
+        on_thread(self.open.as_ref().map(|open| Thread {
+            room_id: self.room_id.clone(),
+            root_id: open.root_id.clone(),
+            root: open.root.clone(),
+            messages: open.history.messages().to_vec(),
+            more_before: open.more_before,
+        }));
+    }
+
     fn publish<F>(&self, on_change: &F)
     where
         F: Fn(Timeline),
@@ -507,7 +676,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_event_is_kept_so_a_key_has_something_to_open() {
-        let mut loaded = Loaded::new("!room:example.org".to_owned());
+        let mut loaded = Loaded::new("!room:example.org".to_owned(), None);
 
         loaded.read(&[sealed("$sealed:example.org")]);
 
@@ -519,7 +688,7 @@ mod tests {
         // The ciphertext is the only reason to keep one, and a message that
         // arrived readable has none. A room that has been open all day should
         // not be holding a copy of everything said in it.
-        let mut loaded = Loaded::new("!room:example.org".to_owned());
+        let mut loaded = Loaded::new("!room:example.org".to_owned(), None);
 
         loaded.read(&[readable("$said:example.org")]);
 
@@ -528,7 +697,7 @@ mod tests {
 
     #[test]
     fn reading_a_batch_still_answers_with_every_message_in_it() {
-        let mut loaded = Loaded::new("!room:example.org".to_owned());
+        let mut loaded = Loaded::new("!room:example.org".to_owned(), None);
 
         let messages = loaded.read(&[readable("$one:example.org"), sealed("$two:example.org")]);
 
