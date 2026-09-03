@@ -263,12 +263,12 @@ cargo fmt --all --check
 Both halves have to stay above 90% line coverage, and CI enforces it.
 
 ```sh
-cargo test --workspace          # 918 tests
-cd app && pnpm test             # 365 tests
+cargo test --workspace          # 1311 tests
+cd app && pnpm test             # 665 tests
 cd app && pnpm test:coverage    # thresholds enforced from vitest.config.ts
 ```
 
-Twenty-seven Rust tests are marked `#[ignore]` because they need something a CI
+Thirty-one Rust tests are marked `#[ignore]` because they need something a CI
 container does not have. Four want a live platform keyring:
 
 ```sh
@@ -282,7 +282,7 @@ hardware rather than against a fake:
 cargo test -p consort-audio -- --ignored
 ```
 
-The other twenty want a homeserver, because a SAS verification handshake is
+The other twenty-four want a homeserver, because a SAS verification handshake is
 real cryptography between two real devices and no mock produces one. They drive both
 sides of the emoji exchange unattended, in both directions, so asking,
 accepting, confirming, declining and reporting a mismatch are all exercised end
