@@ -4,6 +4,31 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.3.0 (2026-09-03)
+
+### Added
+
+- **viewer:** Draw the viewer's controls as icons
+- **timeline:** Load older messages by scrolling to them
+- **timeline:** Start a thread on any message
+- **timeline:** React to a message
+- **timeline:** Draw custom emoji
+- **timeline:** Say who is typing
+
+### Documentation
+
+- Cut the README to the part that is about Consort
+- Bring the test counts and the feature list up to date
+
+### Fixed
+
+- **ci:** Install alsa, and enable pnpm the way that works
+- **ci:** Run a container job's steps under bash
+- **packaging:** Declare libstdc++, which livekit's C++ pulls in
+- **viewer:** Scale a tall picture to the window
+- **thread:** Open a thread at its newest reply
+- **call:** Play somebody whose track stopped and started again
+
 ## 0.2.0 (2026-09-03)
 
 ### Added

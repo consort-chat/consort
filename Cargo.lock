@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "consort-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "consort-audio",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "consort-audio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cpal",
  "nnnoiseless",
@@ -955,7 +955,7 @@ dependencies = [
 
 [[package]]
 name = "consort-call"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "consort-audio",
  "consort-matrix",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "consort-matrix"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
