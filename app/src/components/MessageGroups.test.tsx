@@ -39,16 +39,10 @@ function said(
   return { id, sender, at, body, kind: "text", ...extra };
 }
 
-/**
- * Draw the messages, with a handler by default.
- *
- * The handler is what a room passes and a thread panel does not, and a message
- * drawn without one offers nothing to open. Every test here that is about the
- * control rather than about its absence needs one.
- */
+/** Draw the messages as a room does, with somewhere for a thread to open. */
 function draw(
   messages: Message[],
-  onOpenThread: ((rootId: string) => void) | undefined = vi.fn(),
+  onOpenThread: (rootId: string) => void = vi.fn(),
 ) {
   return render(
     <MessageGroups
@@ -59,6 +53,26 @@ function draw(
       known={known(messages)}
       onAbout={vi.fn()}
       onOpenThread={onOpenThread}
+    />,
+  );
+}
+
+/**
+ * Draw them as the thread panel does, with nowhere further to go.
+ *
+ * Its own function rather than passing `undefined` to the one above. A default
+ * parameter fires on `undefined` too, so that call would quietly get a handler
+ * and the test would be asserting nothing.
+ */
+function drawInAPanel(messages: Message[]) {
+  return render(
+    <MessageGroups
+      groups={group(messages)}
+      names={{ [ADA]: "Ada" }}
+      roomId={GENERAL}
+      selfId={BOB}
+      known={known(messages)}
+      onAbout={vi.fn()}
     />,
   );
 }
@@ -165,15 +179,35 @@ describe("a message with a thread", () => {
 });
 
 describe("a message with no thread", () => {
-  it("offers nothing to open", () => {
-    // A count of zero under every line in a room would say "no thread here" on
-    // every one of them, which is not information.
+  it("shows no count, because a count of zero is not information", () => {
+    // "0 replies" under every line in a room says "no thread here" on every
+    // one of them, which is not news about any of them.
     draw([said("$1", ADA, "hello")]);
 
-    expect(screen.queryByRole("button", { name: /repl/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /\d+ repl/i })).toBeNull();
   });
 
-  it("does nothing when it is pressed", async () => {
+  it("offers a way to start one", async () => {
+    // Otherwise a thread can only ever be joined, and every thread in the room
+    // was begun somewhere else.
+    const onOpenThread = vi.fn();
+    draw([said("$1", ADA, "hello")], onOpenThread);
+
+    await userEvent.click(screen.getByRole("button", { name: "Reply in thread" }));
+
+    expect(onOpenThread).toHaveBeenCalledWith("$1");
+  });
+
+  it("offers none inside a thread panel", () => {
+    // Every message in there is already in the thread being read.
+    drawInAPanel([said("$1", ADA, "hello")]);
+
+    expect(screen.queryByRole("button", { name: "Reply in thread" })).toBeNull();
+  });
+
+  it("does nothing when the words themselves are pressed", async () => {
+    // Only the control starts a thread. A click anywhere in a message is how
+    // somebody finishes selecting one.
     const onOpenThread = vi.fn();
     draw([said("$1", ADA, "hello")], onOpenThread);
 

@@ -134,6 +134,31 @@ function previewOf(message: Message): string {
 }
 
 /**
+ * Two overlapping bubbles: a conversation hanging off a message.
+ *
+ * Deliberately not the reply arrow above. A reply answers a message in the
+ * room, and a thread takes the answer somewhere else; drawing both with one
+ * glyph would make the two controls look like one control drawn twice.
+ */
+function ThreadIcon() {
+  return (
+    <svg
+      className="timeline__action-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" />
+      <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
+    </svg>
+  );
+}
+
+/**
  * A run of grouped messages, drawn.
  *
  * Its own component because a thread panel draws the same thing beside the
@@ -421,6 +446,28 @@ export function MessageGroups({
                           {message.thread.count}{" "}
                           {message.thread.count === 1 ? "reply" : "replies"}
                         </button>
+                      )}
+                    {/*
+                      Somewhere to begin one. Only on a message with no thread
+                      yet, because the count above already opens the ones that
+                      have. Last in the row so the words are read before the
+                      things that can be done to them, and quiet until the
+                      message is hovered or something in it takes focus.
+                    */}
+                    {message.thread === undefined &&
+                      onOpenThread !== undefined && (
+                        <div className="timeline__actions">
+                          <button
+                            type="button"
+                            className="timeline__action"
+                            aria-label="Reply in thread"
+                            title="Reply in thread"
+                            disabled={openingId === message.id}
+                            onClick={() => onOpenThread(message.id)}
+                          >
+                            <ThreadIcon />
+                          </button>
+                        </div>
                       )}
                   </div>
                 );
