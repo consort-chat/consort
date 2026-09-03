@@ -82,14 +82,22 @@ at whatever homeserver you already run.
   threads while it is being drawn rather than by asking about each one. Thread
   replies stay out of the room's own timeline, which is where every other
   client puts them and why a room does not read as two conversations at once.
+- Replies, drawn as replies. A message that answers another says whose message
+  and one line of what it said, and pressing that jumps to it and lights it up.
+  The quote the sender writes for clients that draw no reply of their own is
+  taken off, so nothing is shown twice.
+- Mentions. Somebody's name in a message is drawn as a name rather than as a
+  link that goes nowhere, with the `@` the sender left off put back, and a
+  message that names you gets a gold band down its side.
 - Text in a voice channel, because a voice channel is an ordinary Matrix room
   that happens to carry a call. The same timeline is there, beside the call.
 - Signing out clears the session locally and on the server.
 
 ## What does not work yet
 
-Edits, reactions, replies drawn as replies, redactions, sending an attachment,
-playing a voice note, read receipts and typing notifications. A thread longer
+Edits, reactions, redactions, sending an attachment, playing a voice note, read
+receipts and typing notifications. A reply to a message older than what is
+loaded says so rather than fetching it. A thread longer
 than fifty replies shows its recent end and says so rather than loading the
 rest. Links
 in a message are drawn but go nowhere, because opening one outside the window
