@@ -1,8 +1,32 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { asCommandError, mediaUrl, saveAttachment, type Media } from "../lib/api";
 import { sizeLabel } from "../lib/labels";
 import "./ImageViewer.css";
+
+/**
+ * The shared shell of the three corner controls' icons.
+ *
+ * One wrapper rather than three copies of the same nine attributes. What
+ * differs between them is the path, so the path is the only thing written out
+ * at each use.
+ */
+function Glyph({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      className="viewer__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {children}
+    </svg>
+  );
+}
 
 /**
  * One picture, as large as the window will allow.
@@ -110,7 +134,10 @@ export function ImageViewer({
           aria-label="Close"
           onClick={onClose}
         >
-          ✕
+          <Glyph>
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </Glyph>
         </button>
 
         <div className="viewer__tools">
@@ -121,7 +148,11 @@ export function ImageViewer({
             aria-pressed={telling}
             onClick={() => setTelling((showing) => !showing)}
           >
-            ⓘ
+            <Glyph>
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 16v-4" />
+              <path d="M12 8h.01" />
+            </Glyph>
           </button>
           <button
             type="button"
@@ -129,7 +160,11 @@ export function ImageViewer({
             aria-label={`Save ${media.name}`}
             onClick={save}
           >
-            ⭳
+            <Glyph>
+              <path d="M12 3v13" />
+              <path d="m7 11 5 5 5-5" />
+              <path d="M4 20h16" />
+            </Glyph>
           </button>
         </div>
 

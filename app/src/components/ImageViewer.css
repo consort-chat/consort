@@ -59,11 +59,13 @@
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-base);
-  line-height: 1;
   cursor: pointer;
   transition: background var(--duration-fast) ease;
+}
+
+.viewer__glyph {
+  width: 18px;
+  height: 18px;
 }
 
 .viewer__button:hover {
