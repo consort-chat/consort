@@ -73,7 +73,17 @@ git commit -qam "chore(release): $version"
 
 # The notes go in the tag object as well as on the release page, so somebody
 # reading the history with git alone gets them too.
-git cliff --latest --strip all | git tag -a "$tag" -F -
+#
+# --unreleased rather than --latest, and --tag for the same reason the
+# changelog above needs it: the tag does not exist yet, so "latest" is still
+# the previous release and the tag would carry the wrong version's notes. The
+# sed drops the version heading, which the tag's own name already is.
+#
+# --cleanup=verbatim because the notes are markdown and git's default strips
+# every line beginning with a hash, which is all of the section headings.
+git cliff --tag "$tag" --unreleased --strip all \
+  | sed '0,/^## /{/^## /d}' \
+  | git tag -a "$tag" -F - --cleanup=verbatim
 
 cat <<MSG
 
