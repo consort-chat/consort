@@ -54,7 +54,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Enable pnpm
-        run: corepack enable && corepack prepare --activate
+        # `corepack enable pnpm`, not `corepack prepare --activate`: that reads
+        # a `packageManager` field this repository does not have, and fails
+        # with a usage error rather than falling back to anything.
+        run: corepack enable pnpm
 
       - name: Install dependencies
         # --frozen-lockfile so a pull request that edits package.json without
@@ -90,13 +93,16 @@ jobs:
       - name: System dependencies
         # webkit2gtk and friends are needed to compile the Tauri crate at all,
         # not just to run it. libssl and pkg-config are for the C half of
-        # aws-lc-sys.
+        # aws-lc-sys. libasound2-dev is cpal's, and is the one that is easy to
+        # leave off: every desktop Linux has the runtime library already, so
+        # nothing notices until a machine that only builds tries to.
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev \
             libgtk-3-dev \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libsqlite3-dev \

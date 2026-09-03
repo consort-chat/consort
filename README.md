@@ -161,7 +161,7 @@ makepkg -si
 ```
 
 Either way you get the `consort` binary in `/usr/bin`, a desktop entry, and
-icons in the hicolor theme. The two packages declare each other as conflicts,
+icons in the hicolor theme. `consort-git` declares a conflict with `consort`,
 so pacman will not let both be installed.
 
 If `makepkg` stops with a missing `pnpm` dependency even though `pnpm --version`
@@ -248,12 +248,13 @@ corepack enable pnpm
 
 ```sh
 # Arch
-sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl \
+sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl alsa-lib \
                appmenu-gtk-module libappindicator-gtk3 librsvg
 
 # Debian / Ubuntu
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-                 libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+                 libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+                 libasound2-dev
 ```
 
 macOS needs Xcode command line tools. Windows needs more than one line's worth,

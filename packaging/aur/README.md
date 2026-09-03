@@ -36,11 +36,12 @@ checkout, otherwise you publish the placeholder version.
 **A unique package name.** `consort-git` is free at the time of writing, but
 check, because names are first come first served.
 
-**The `-git` suffix, for now.** AUR convention: a package built from the latest
-VCS commit takes the suffix and needs a `pkgver()` function so `yay` can tell
-that an upgrade exists. A tagged release later gets a plain `consort` package
-alongside it. The `provides`/`conflicts` pair in the PKGBUILD is what stops
-both installing at once.
+**The `-git` suffix.** AUR convention: a package built from the latest VCS
+commit takes the suffix and needs a `pkgver()` function so `yay` can tell that
+an upgrade exists. The plain `consort` package that builds a tag instead is
+`packaging/arch/PKGBUILD`, and would be published as a second AUR repo under
+that name. The `provides`/`conflicts` pair here is what stops both installing
+at once, and is why that one needs no such pair of its own.
 
 ## Before pushing anything
 

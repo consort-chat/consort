@@ -63,6 +63,7 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libsoup-3.0-dev \
             libgtk-3-dev \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libsqlite3-dev \

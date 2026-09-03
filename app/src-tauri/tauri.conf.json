@@ -45,7 +45,8 @@
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0",
           "libsoup-3.0-0",
-          "libsqlite3-0"
+          "libsqlite3-0",
+          "libasound2"
         ]
       }
     },

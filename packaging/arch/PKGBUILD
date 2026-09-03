@@ -29,6 +29,7 @@ depends=(
   'gtk3'
   'libsoup3'
   'sqlite'
+  'alsa-lib'
   'glib2'
   'cairo'
   'gdk-pixbuf2'

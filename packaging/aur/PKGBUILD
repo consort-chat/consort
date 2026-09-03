@@ -24,7 +24,9 @@ license=('AGPL-3.0-only')
 #
 # sqlite is the one that is easy to miss: matrix-sdk-sqlite links the system
 # library rather than bundling it, and the crypto store will not open without
-# it.
+# it. alsa-lib is the other one, for the same reason from the other end: cpal
+# links libasound directly, and every machine with a sound card already has it,
+# so leaving it out costs nothing until it does.
 #
 # libgcc, not gcc-libs. gcc-libs is now a metapackage that also pulls libasan,
 # libgfortran, libgomp, libstdc++ and nine others. The binary needs libgcc_s.so.1
@@ -46,6 +48,7 @@ depends=(
   'gtk3'
   'libsoup3'
   'sqlite'
+  'alsa-lib'
   'glib2'
   'cairo'
   'gdk-pixbuf2'
