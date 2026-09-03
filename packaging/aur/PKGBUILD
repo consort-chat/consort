@@ -28,9 +28,11 @@ license=('AGPL-3.0-only')
 # links libasound directly, and every machine with a sound card already has it,
 # so leaving it out costs nothing until it does.
 #
-# libgcc, not gcc-libs. gcc-libs is now a metapackage that also pulls libasan,
-# libgfortran, libgomp, libstdc++ and nine others. The binary needs libgcc_s.so.1
-# and nothing else from that set.
+# libgcc and libstdc++, not gcc-libs. gcc-libs is now a metapackage that also
+# pulls libasan, libgfortran, libgomp and nine others, and the binary needs two
+# of that set: libgcc_s.so.1, and libstdc++.so.6 for the C++ that arrived with
+# livekit. Before the voice layer this was libgcc alone, which is what the line
+# used to say.
 #
 # The keyring support added in the verification milestone does NOT change this
 # list. `keyring` reaches Secret Service through zbus, which speaks the DBus
@@ -54,6 +56,7 @@ depends=(
   'gdk-pixbuf2'
   'dbus'
   'libgcc'
+  'libstdc++'
   'glibc'
   'hicolor-icon-theme'
 )

@@ -35,6 +35,7 @@ depends=(
   'gdk-pixbuf2'
   'dbus'
   'libgcc'
+  'libstdc++'
   'glibc'
   'hicolor-icon-theme'
 )
