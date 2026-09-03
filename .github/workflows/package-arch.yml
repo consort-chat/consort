@@ -47,6 +47,13 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+    defaults:
+      run:
+        # A job in a container gets `sh`, not bash, whatever the image has in
+        # it. On Debian that is dash, which has no `pipefail`, so a step
+        # opening with `set -euo pipefail` dies on its first line. The Arch
+        # container only escaped it because Arch points /bin/sh at bash.
+        shell: bash
     steps:
       # base-devel has the compiler, fakeroot and sudo, and neither git (which
       # both the checkout and the PKGBUILD's source need) nor gh.

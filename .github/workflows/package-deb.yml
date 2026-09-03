@@ -48,6 +48,13 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
+    defaults:
+      run:
+        # A job in a container gets `sh`, not bash, whatever the image has in
+        # it. On Debian that is dash, which has no `pipefail`, so a step
+        # opening with `set -euo pipefail` dies on its first line. The Arch
+        # container only escaped it because Arch points /bin/sh at bash.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
