@@ -44,6 +44,17 @@ import "./RoomTimeline.css";
 export const AT_THE_BOTTOM = 48;
 
 /**
+ * How close to the top of what is loaded starts fetching the page above it,
+ * in pixels.
+ *
+ * Not zero. A page takes a homeserver round trip and a round of decryption, so
+ * asking at the moment somebody reaches the wall makes every one of them a
+ * stop followed by a jump. Asking a screenful early means the page is usually
+ * already there.
+ */
+const NEAR_THE_TOP = 200;
+
+/**
  * A room's messages, and somewhere to add to them.
  *
  * The list is not held here. `timelineOpen` starts a watcher in Rust that
@@ -98,6 +109,13 @@ export function RoomTimeline({
     at: { x: number; y: number };
   } | null>(null);
 
+  /*
+    Whether the reader is near the top of what is loaded. State rather than a
+    ref because it is what asks for the page above, and that has to happen when
+    the answer changes rather than when a render happens to notice.
+  */
+  const [nearTheTop, setNearTheTop] = useState(false);
+
   const scroller = useRef<HTMLDivElement>(null);
   /*
     Whether the reader was at the bottom before this render. Read in a layout
@@ -105,6 +123,24 @@ export function RoomTimeline({
     the new message is already in the box and everybody looks scrolled up.
   */
   const following = useRef(true);
+  /*
+    How far the bottom was from the reader before this render. The anchor a
+    page of history has to be held against: it arrives above them and pushes
+    everything down by its own height, so this is the one number that does not
+    change when it lands.
+  */
+  const fromBottom = useRef(0);
+  /*
+    The oldest message drawn, so a render can tell a page landing on the front
+    from a message landing on the back. The two need opposite anchors and there
+    is nothing else in a published timeline that says which happened.
+  */
+  const oldest = useRef<string | undefined>(undefined);
+
+  // A timeline for the room before this one, still in flight when the channel
+  // changed. Drawing it would put the last room's conversation under this
+  // room's name for a moment.
+  const mine = timeline.roomId === channel.id;
 
   useEffect(() => {
     let cancelled = false;
@@ -191,20 +227,69 @@ export function RoomTimeline({
     };
   }, [channel.id, senders]);
 
-  // Before the browser paints, so following the conversation is not a visible
-  // jump from where the list was to where it should have been.
-  useLayoutEffect(() => {
-    const box = scroller.current;
-    if (box === null || !following.current) return;
-    box.scrollTop = box.scrollHeight;
-  }, [timeline.messages, timeline.roomId]);
-
-  const remember = useCallback(() => {
+  /** Read where the reader is. On every scroll, and after the list changes. */
+  const measure = useCallback(() => {
     const box = scroller.current;
     if (box === null) return;
     following.current =
       box.scrollHeight - box.scrollTop - box.clientHeight < AT_THE_BOTTOM;
+    fromBottom.current = box.scrollHeight - box.scrollTop;
+    setNearTheTop(box.scrollTop < NEAR_THE_TOP);
   }, []);
+
+  /*
+    Declared before the effect below so it runs first. A different room is a
+    different conversation: it opens at its own bottom, and nothing about where
+    the last one was left applies to it.
+  */
+  useLayoutEffect(() => {
+    following.current = true;
+    oldest.current = undefined;
+  }, [channel.id]);
+
+  // Before the browser paints, so neither following the conversation nor
+  // holding a reader's place through a page of history is a visible jump.
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (box === null) return;
+
+    const first = timeline.messages[0]?.id;
+    const older = oldest.current !== undefined && first !== oldest.current;
+    oldest.current = first;
+
+    if (following.current) {
+      box.scrollTop = box.scrollHeight;
+    } else if (older) {
+      // Anchored on the bottom rather than on scrollTop. A page lands above
+      // the reader and moves everything down by its own height, so holding
+      // scrollTop would leave them at the top of a page they have not read.
+      box.scrollTop = box.scrollHeight - fromBottom.current;
+    }
+
+    // After the two above, so what is recorded is where the reader ended up.
+    // Also what covers a room short enough that nothing can be scrolled: the
+    // ask below would otherwise wait for a scroll event that cannot happen.
+    measure();
+  }, [timeline.messages, timeline.roomId, measure]);
+
+  /*
+    Ask for the page above when the reader gets near the top of what is loaded.
+
+    An effect rather than a branch in the scroll handler, and that is the whole
+    guard against asking twenty times for one page. A scroll handler runs at
+    frame rate, and the `loading` it would test against has to travel out to
+    Rust and back before it is true here. An effect runs when one of these four
+    changes, and none of them changes while the ask is in flight.
+  */
+  useEffect(() => {
+    if (!mine || !nearTheTop || !timeline.moreBefore || timeline.loading) {
+      return;
+    }
+    void timelineEarlier().catch(() => {
+      // The watcher has gone, which is what a scroll landing at the same
+      // moment as a room change is. There is nothing to say about it.
+    });
+  }, [mine, nearTheTop, timeline.moreBefore, timeline.loading]);
 
   async function send() {
     if (draft.trim() === "" || sending) return;
@@ -226,10 +311,6 @@ export function RoomTimeline({
     }
   }
 
-  // A timeline for the room before this one, still in flight when the channel
-  // changed. Drawing it would put the last room's conversation under this
-  // room's name for a moment.
-  const mine = timeline.roomId === channel.id;
   const messages = mine ? timeline.messages : [];
   const groups = useMemo(() => group(messages), [messages]);
   // What a reply in this room may point at, which is whatever is loaded.
@@ -266,22 +347,21 @@ export function RoomTimeline({
       <div
         className="timeline__scroll"
         ref={scroller}
-        onScroll={remember}
+        onScroll={measure}
         // A scrollable region has to be reachable by keyboard, or the only way
         // to read a long room is a mouse.
         tabIndex={0}
         role="log"
         aria-label={`Messages in ${name}`}
       >
-        {mine && timeline.moreBefore && (
-          <button
-            type="button"
-            className="timeline__earlier"
-            disabled={timeline.loading}
-            onClick={() => void timelineEarlier()}
-          >
-            {timeline.loading ? "Loading..." : "Load older messages"}
-          </button>
+        {/*
+          Said rather than offered. Reaching the top asks for the page above on
+          its own, so the only thing left to report is that it is on its way.
+          The start of a room says nothing at all: there is no news in history
+          that does not exist.
+        */}
+        {mine && timeline.loading && (
+          <p className="timeline__earlier">Loading earlier messages...</p>
         )}
 
         {mine && !timeline.loading && groups.length === 0 && (

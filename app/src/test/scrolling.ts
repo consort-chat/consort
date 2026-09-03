@@ -30,24 +30,43 @@ function fake(name: string, descriptor: PropertyDescriptor) {
   });
 }
 
+/** How tall the content is, and how much of it is on screen. */
+export interface FakeLayout {
+  scrollHeight: number;
+  clientHeight: number;
+}
+
 /**
  * Say how tall the content is and how much of it is on screen.
  *
- * Call it before the box is drawn. `scrollTop` starts at zero and keeps
- * whatever is set, which is both what the component writes when it follows a
- * conversation and what a test writes to put the reader somewhere else.
+ * Call it before the box is drawn. The returned record is writable, because a
+ * page of history landing on the front is a box that got taller, and holding
+ * a reader's place through that is the thing worth testing.
+ *
+ * `scrollTop` keeps what is written to it, clamped the way a browser clamps
+ * it. The clamp is not decoration: `scrollTop = scrollHeight` is how both
+ * panes follow a conversation, and without it the bottom of a box would be a
+ * position no real one can be in.
  */
-export function fakeScrolling(scrollHeight: number, clientHeight: number) {
-  fake("scrollHeight", { get: () => scrollHeight });
-  fake("clientHeight", { get: () => clientHeight });
+export function fakeScrolling(
+  scrollHeight: number,
+  clientHeight: number,
+): FakeLayout {
+  const layout: FakeLayout = { scrollHeight, clientHeight };
+
+  fake("scrollHeight", { get: () => layout.scrollHeight });
+  fake("clientHeight", { get: () => layout.clientHeight });
   fake("scrollTop", {
     get(this: Element) {
       return tops.get(this) ?? 0;
     },
     set(this: Element, top: number) {
-      tops.set(this, top);
+      const furthest = Math.max(0, layout.scrollHeight - layout.clientHeight);
+      tops.set(this, Math.max(0, Math.min(top, furthest)));
     },
   });
+
+  return layout;
 }
 
 afterEach(() => {

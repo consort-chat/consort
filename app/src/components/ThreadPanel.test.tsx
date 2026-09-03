@@ -364,7 +364,7 @@ describe("where the panel opens", () => {
       publish(OPEN);
     });
 
-    expect(container.querySelector(".thread__scroll")?.scrollTop).toBe(900);
+    expect(container.querySelector(".thread__scroll")?.scrollTop).toBe(600);
   });
 
   it("leaves a reader who has scrolled up where they are", async () => {
@@ -411,6 +411,6 @@ describe("where the panel opens", () => {
       });
     });
 
-    expect(box.scrollTop).toBe(900);
+    expect(box.scrollTop).toBe(600);
   });
 });

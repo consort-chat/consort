@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +45,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 import { RoomTimeline } from "./RoomTimeline";
+import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type { Channel, Message, Thread, Timeline } from "../lib/api";
@@ -127,6 +135,15 @@ beforeEach(() => {
 async function pane(channel: Channel = general) {
   render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={channel} />);
   await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+}
+
+/** Put the reader at `top` and let the pane notice. */
+async function scrollTo(top: number) {
+  const box = screen.getByRole("log");
+  await act(async () => {
+    box.scrollTop = top;
+    fireEvent.scroll(box);
+  });
 }
 
 /** Publish `next` and let React settle. */
@@ -471,23 +488,91 @@ describe("RoomTimeline", () => {
     expect(container.querySelector(".timeline__topic")).toBeNull();
   });
 
-  it("offers older messages only when there are some", async () => {
-    await pane();
-
-    await arrive(timeline([said("$1", ADA, "hello")]));
-    expect(screen.queryByRole("button", { name: /older/i })).toBeNull();
-
-    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
-    expect(screen.getByRole("button", { name: /older/i })).toBeVisible();
-  });
-
-  it("asks for older messages when the control is pressed", async () => {
+  it("asks for the page above when the reader gets near the top", async () => {
+    fakeScrolling(900, 300);
     await pane();
     await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
 
-    await userEvent.click(screen.getByRole("button", { name: /older/i }));
+    await scrollTo(50);
 
     expect(timelineEarlier).toHaveBeenCalled();
+  });
+
+  it("asks once, however many scroll events land before the page does", async () => {
+    // The reason the ask is in an effect rather than in the scroll handler. A
+    // scroll handler runs at frame rate and `loading` has to travel out to
+    // Rust and back before it is true here, so a check against it alone lets
+    // twenty asks through for one page.
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+
+    await scrollTo(50);
+    await scrollTo(40);
+    await scrollTo(30);
+
+    expect(timelineEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for nothing at the start of the room", async () => {
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await scrollTo(0);
+
+    expect(timelineEarlier).not.toHaveBeenCalled();
+  });
+
+  it("asks on its own in a room too short to scroll", async () => {
+    // Nothing to scroll means no scroll event, so a pane that only asked from
+    // the handler would sit for ever on a room whose first page held five
+    // messages and a hundred state events.
+    fakeScrolling(300, 300);
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+
+    expect(timelineEarlier).toHaveBeenCalled();
+  });
+
+  it("keeps the reader on the message they were reading when a page lands", async () => {
+    // A page arrives above them and moves everything down by its own height.
+    // Holding scrollTop instead would leave them at the top of a page they
+    // have not read, which is the whole reason nobody scrolls back twice.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$2", ADA, "hello")], { moreBefore: true }));
+    await scrollTo(400);
+
+    layout.scrollHeight = 1_500;
+    await arrive(
+      timeline([said("$1", ADA, "earlier"), said("$2", ADA, "hello")], {
+        moreBefore: true,
+      }),
+    );
+
+    // 500 from the bottom before, and 500 from the bottom after.
+    expect(screen.getByRole("log").scrollTop).toBe(1_000);
+  });
+
+  it("does not drag a reader down when a message lands at the bottom", async () => {
+    // The other half of the same rule. An append and a prepend need opposite
+    // anchors, and the oldest message drawn is the only thing that says which
+    // of the two just happened.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+    await scrollTo(400);
+
+    layout.scrollHeight = 1_000;
+    await arrive(
+      timeline([said("$1", ADA, "hello"), said("$2", BOB, "hi")], {
+        moreBefore: true,
+      }),
+    );
+
+    expect(screen.getByRole("log").scrollTop).toBe(400);
   });
 
   it("says a page is on its way rather than looking like nothing happened", async () => {
@@ -495,7 +580,7 @@ describe("RoomTimeline", () => {
 
     await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true, loading: true }));
 
-    expect(screen.getByRole("button", { name: /loading/i })).toBeDisabled();
+    expect(screen.getByText(/loading earlier messages/i)).toBeVisible();
   });
 
   it("sends what was typed", async () => {
