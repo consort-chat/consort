@@ -1,0 +1,49 @@
+/*
+  A small grid of keys, hanging off the message it belongs to.
+
+  Four across rather than one row of twelve, because a row that wide reaches
+  off the side of a narrow thread panel and there is nowhere for it to go.
+*/
+.picker {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+}
+
+.picker__key {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.picker__key:hover {
+  background: var(--surface-overlay);
+}
+
+.picker__key:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* Already used by this session. Pressing it again takes it back. */
+.picker__key[aria-pressed="true"] {
+  background: var(--violet-glow);
+}

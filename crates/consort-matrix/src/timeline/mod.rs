@@ -41,11 +41,13 @@ pub mod dto;
 mod facts;
 mod history;
 mod media;
+mod reactions;
 mod thread;
 
-pub use dto::{Media, Message, MessageKind, Thread, ThreadSummary, Timeline};
+pub use dto::{Media, Message, MessageKind, Reaction, Thread, ThreadSummary, Timeline};
 pub use history::History;
 pub use media::{Attachment, bytes, media};
+pub use reactions::Reactions;
 pub use thread::thread;
 
 use std::collections::HashMap;
@@ -55,6 +57,8 @@ use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::api::Direction;
 use matrix_sdk::ruma::events::AnySyncTimelineEvent;
+use matrix_sdk::ruma::events::reaction::ReactionEventContent;
+use matrix_sdk::ruma::events::relation::Annotation;
 use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
 use matrix_sdk::ruma::events::room::message::{Relation, RoomMessageEventContent};
 use matrix_sdk::ruma::serde::Raw;
@@ -236,8 +240,14 @@ where
                         }
                         let arrived = loaded.read(&joined.timeline.events);
                         let counted = loaded.count_replies(&joined.timeline.events);
-                        if loaded.history.arrived(arrived) | counted {
+                        let annotated = loaded.annotations(&joined.timeline.events);
+                        if loaded.history.arrived(arrived) | counted | annotated {
                             loaded.publish(&on_change);
+                        }
+                        // A reaction in the room may be on the thread's root or
+                        // on one of its replies, both of which the panel draws.
+                        if annotated && loaded.open.is_some() {
+                            loaded.publish_thread(&on_thread);
                         }
                     }
                     // Too many syncs while this task was busy decrypting a
@@ -302,6 +312,13 @@ struct Loaded {
     /// The thread somebody has open, if any.
     open: Option<OpenThread>,
     history: History,
+    /// What people have reacted with, for every message annotated in anything
+    /// this watcher has seen.
+    ///
+    /// Beside the history rather than inside it, because an annotation arrives
+    /// for a message that may not be loaded, may be loaded later by a page, or
+    /// may never be. Merged onto the messages when a timeline is published.
+    reactions: Reactions,
     /// The events this session could not read, by event ID.
     ///
     /// Held as the JSON they arrived as, which is what `decrypt_event` takes,
@@ -337,6 +354,7 @@ impl Loaded {
             me,
             open: None,
             history: History::new(),
+            reactions: Reactions::new(),
             waiting: HashMap::new(),
             from: None,
             // Assumed until the homeserver says otherwise, because the first
@@ -407,6 +425,12 @@ impl Loaded {
         // that almost makes sense.
         let page: Vec<TimelineEvent> = page.chunk.into_iter().rev().collect();
         let older = self.read(&page);
+        // A page carries every kind of event, reactions among them, which is
+        // how a message scrolled back to arrives with what is already on it.
+        // The thread panel has no equivalent: `/relations` is asked for thread
+        // replies only, so a reply's reactions appear when one arrives live
+        // rather than when the panel opens.
+        self.annotations(&page);
         let drawable = !older.is_empty();
         self.history.backfilled(older);
 
@@ -430,6 +454,31 @@ impl Loaded {
                 Some(message)
             })
             .collect()
+    }
+
+    /// Take note of the reactions and the redactions in one batch.
+    ///
+    /// Reports whether anything drawn changed. Separate from [`Self::read`]
+    /// because these are not messages and never become any: an annotation is
+    /// something *on* a message, and a redaction can remove either.
+    fn annotations(&mut self, events: &[TimelineEvent]) -> bool {
+        let mut changed = false;
+        for event in events {
+            if let Some(one) = facts::annotation(event) {
+                changed |= self
+                    .reactions
+                    .added(&one.event_id, &one.target, &one.key, &one.sender);
+                continue;
+            }
+            if let Some(gone) = facts::redaction(event) {
+                // Whichever it was. A redacted message stops being a message
+                // and is dropped from the history; a redacted annotation is
+                // somebody taking a reaction back.
+                changed |= self.reactions.redacted(&gone);
+                changed |= self.history.forget(&gone);
+            }
+        }
+        changed
     }
 
     /// Try every message this session had no key for again.
@@ -570,16 +619,45 @@ impl Loaded {
         changed
     }
 
+    /// The messages, each carrying what people have reacted to it with.
+    ///
+    /// Merged here rather than held on the message, because the two change for
+    /// different reasons: a message is replaced when a room key opens it, and
+    /// what is on it changes when somebody presses a pill. Keeping the
+    /// reactions on the message would mean every re-read had to carry them
+    /// forward by hand, and the one that forgot would silently clear them.
+    fn drawn(&self, messages: &[Message]) -> Vec<Message> {
+        let me = self.me.as_deref();
+        messages
+            .iter()
+            .map(|message| {
+                let reactions = self.reactions.on(&message.id, me);
+                if reactions.is_empty() {
+                    return message.clone();
+                }
+                Message {
+                    reactions,
+                    ..message.clone()
+                }
+            })
+            .collect()
+    }
+
     fn publish_thread<G>(&self, on_thread: &G)
     where
         G: Fn(Option<Thread>),
     {
-        on_thread(self.open.as_ref().map(|open| Thread {
-            room_id: self.room_id.clone(),
-            root_id: open.root_id.clone(),
-            root: open.root.clone(),
-            messages: open.history.messages().to_vec(),
-            more_before: open.more_before,
+        on_thread(self.open.as_ref().map(|open| {
+            Thread {
+                room_id: self.room_id.clone(),
+                root_id: open.root_id.clone(),
+                root: open
+                    .root
+                    .as_ref()
+                    .map(|root| self.drawn(std::slice::from_ref(root)).remove(0)),
+                messages: self.drawn(open.history.messages()),
+                more_before: open.more_before,
+            }
         }));
     }
 
@@ -589,11 +667,47 @@ impl Loaded {
     {
         on_change(Timeline {
             room_id: self.room_id.clone(),
-            messages: self.history.messages().to_vec(),
+            messages: self.drawn(self.history.messages()),
             more_before: self.more_before,
             loading: self.loading,
         });
     }
+}
+
+/// React to a message.
+///
+/// Nothing is returned and nothing is echoed, on the same terms as sending a
+/// message: the reaction appears when the sync brings it back. Reacting twice
+/// with one key is not guarded against here, because the interface knows
+/// whether this session has already used that key and the specification says
+/// a duplicate is ignored anyway.
+pub async fn react(client: &Client, room_id: &str, event_id: &str, key: &str) -> Result<()> {
+    let room = room_of(client, room_id)?;
+    let target = event_id_of(event_id)?;
+    room.send(ReactionEventContent::new(Annotation::new(
+        target,
+        key.to_owned(),
+    )))
+    .await?;
+    Ok(())
+}
+
+/// Take a reaction back.
+///
+/// `reaction_id` is the annotation's own event, not the message it is on: a
+/// reaction is undone by redacting it, and the two would be indistinguishable
+/// here if the wrong one were passed. `Reaction::mine` is where the interface
+/// gets it.
+pub async fn unreact(client: &Client, room_id: &str, reaction_id: &str) -> Result<()> {
+    let room = room_of(client, room_id)?;
+    // `redact` answers with the SDK's HTTP error rather than its own, which is
+    // the only call in this module that does. Lifted rather than given a
+    // variant of its own: a redaction that failed is an SDK call that failed,
+    // and `user_message` already has words for that.
+    room.redact(&event_id_of(reaction_id)?, None, None)
+        .await
+        .map_err(matrix_sdk::Error::from)?;
+    Ok(())
 }
 
 /// Say something in a room.

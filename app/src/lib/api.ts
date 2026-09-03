@@ -1318,7 +1318,42 @@ export interface Message {
    * "0 replies" under every line in a room would say so on every one of them.
    */
   thread?: ThreadSummary;
+  /**
+   * What people have reacted to it with, in the order the keys first appeared.
+   *
+   * Absent rather than empty for the messages nobody has reacted to, which is
+   * most of them.
+   */
+  reactions?: Reaction[];
   kind: MessageKind;
+}
+
+/**
+ * One key people have reacted to a message with.
+ *
+ * Mirrors `consort_matrix::Reaction`. Rust does the aggregation, because
+ * counting annotations, deduplicating a person who reacted twice with one key
+ * and keeping the order stable are rules rather than drawing, and they are
+ * tested there without a browser.
+ */
+export interface Reaction {
+  /**
+   * What they reacted with.
+   *
+   * An emoji for almost every one of them, and deliberately not required to be
+   * one: `m.annotation` carries free text and other clients send it.
+   */
+  key: string;
+  /** How many people have used it. */
+  count: number;
+  /**
+   * This session's own annotation, when there is one.
+   *
+   * The event ID rather than a flag, and it does two jobs: it says the pill is
+   * pressed, and it is the event `timelineUnreact` redacts. Absent when this
+   * session has not used this key.
+   */
+  mine?: string;
 }
 
 /**
@@ -1510,6 +1545,34 @@ export function threadSend(
  */
 export function timelineSend(roomId: string, body: string): Promise<void> {
   return invoke<void>("timeline_send", { roomId, body });
+}
+
+/**
+ * React to a message.
+ *
+ * `key` is what to react with. The reaction appears when the sync brings it
+ * round, on the same terms as a message: there is no local echo.
+ */
+export function timelineReact(
+  roomId: string,
+  eventId: string,
+  key: string,
+): Promise<void> {
+  return invoke<void>("timeline_react", { roomId, eventId, key });
+}
+
+/**
+ * Take a reaction back.
+ *
+ * `reactionId` is the annotation's own event, which is `Reaction.mine`, and
+ * not the message it is on. Undoing a reaction is redacting it, so passing the
+ * message would redact the message.
+ */
+export function timelineUnreact(
+  roomId: string,
+  reactionId: string,
+): Promise<void> {
+  return invoke<void>("timeline_unreact", { roomId, reactionId });
 }
 
 /**

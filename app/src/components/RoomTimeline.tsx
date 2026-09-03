@@ -17,7 +17,9 @@ import {
   timelineClose,
   timelineEarlier,
   timelineOpen,
+  timelineReact,
   timelineSend,
+  timelineUnreact,
   threadOpen,
   NO_TIMELINE,
   type Channel,
@@ -378,6 +380,18 @@ export function RoomTimeline({
           known={known}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
+          onReact={(eventId, key, mine) => {
+            // Whichever of the two it is. A pill is one control and the
+            // annotation this session already has on that key is what decides,
+            // which is exactly what `mine` carries.
+            const done =
+              mine === undefined
+                ? timelineReact(channel.id, eventId, key)
+                : timelineUnreact(channel.id, mine);
+            void done.catch((raw: unknown) => {
+              setProblem(asCommandError(raw).message);
+            });
+          }}
           openingId={opening}
           onOpenThread={(rootId) => {
             setOpening(rootId);

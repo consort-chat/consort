@@ -185,6 +185,8 @@ pub fn run() {
             commands::thread_open,
             commands::thread_send,
             commands::timeline_send,
+            commands::timeline_react,
+            commands::timeline_unreact,
             commands::direct_room,
             commands::timeline_media_save,
             commands::audio_devices,

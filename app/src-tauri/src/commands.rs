@@ -417,6 +417,37 @@ pub async fn thread_send_for(
     Ok(())
 }
 
+/// React to a message.
+///
+/// `key` is what to react with, which is an emoji for almost every one of them
+/// and is not required to be: `m.annotation` carries free text and other
+/// clients send it.
+pub async fn timeline_react_for(
+    state: &AppState,
+    room_id: String,
+    event_id: String,
+    key: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::react(&client, &room_id, &event_id, &key).await?;
+    Ok(())
+}
+
+/// Take a reaction back.
+///
+/// `reaction_id` is the annotation's own event rather than the message it is
+/// on, because taking one back is redacting it. The interface has that ID from
+/// `Reaction::mine`, which is exactly why it carries one.
+pub async fn timeline_unreact_for(
+    state: &AppState,
+    room_id: String,
+    reaction_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::unreact(&client, &room_id, &reaction_id).await?;
+    Ok(())
+}
+
 /// The room to say something to one person in, made if there is not one.
 ///
 /// A create is a side effect, which is unusual for something a click reaches,
@@ -1121,6 +1152,27 @@ pub async fn thread_send(
     body: String,
 ) -> Result<(), CommandError> {
     thread_send_for(&state, room_id, root_id, latest_id, body).await
+}
+
+/// See `timeline_react_for`.
+#[tauri::command]
+pub async fn timeline_react(
+    state: State<'_, AppState>,
+    room_id: String,
+    event_id: String,
+    key: String,
+) -> Result<(), CommandError> {
+    timeline_react_for(&state, room_id, event_id, key).await
+}
+
+/// See `timeline_unreact_for`.
+#[tauri::command]
+pub async fn timeline_unreact(
+    state: State<'_, AppState>,
+    room_id: String,
+    reaction_id: String,
+) -> Result<(), CommandError> {
+    timeline_unreact_for(&state, room_id, reaction_id).await
 }
 
 /// Write one attachment wherever somebody chooses, and say where that was.

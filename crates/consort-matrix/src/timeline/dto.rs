@@ -78,6 +78,28 @@ pub struct Thread {
     pub more_before: bool,
 }
 
+/// One key people have reacted to a message with.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reaction {
+    /// What they reacted with.
+    ///
+    /// An emoji for almost every one of them, and deliberately not required to
+    /// be one: `m.annotation` carries free text, and a client that assumed
+    /// otherwise would silently drop what other clients send.
+    pub key: String,
+    /// How many people have used it.
+    pub count: u32,
+    /// This session's own annotation, when there is one.
+    ///
+    /// The event ID rather than a flag, because taking a reaction back is
+    /// redacting that exact event. Carrying the ID here is what lets the
+    /// interface toggle a pill without a second lookup, and it says "mine" at
+    /// the same time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mine: Option<String>,
+}
+
 /// One message in a room.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,6 +158,13 @@ pub struct Message {
     /// the interface has to be able to tell the two apart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadSummary>,
+    /// What people have reacted to it with, in the order the keys first
+    /// appeared.
+    ///
+    /// Empty for most messages, and skipped when empty so the ordinary case
+    /// costs nothing on the wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
     /// The event this message is answering, when it is answering one.
     ///
     /// The ID alone. What that event said is not repeated here: the interface

@@ -16,6 +16,8 @@ import {
   resendState,
   threadOpen,
   threadSend,
+  timelineReact,
+  timelineUnreact,
   type Participant,
   type Thread,
 } from "../lib/api";
@@ -244,6 +246,24 @@ export function ThreadPanel({
     onResize(clampThreadWidth(width + by));
   }
 
+  /**
+   * React to something in the panel, or take that reaction back.
+   *
+   * Declared here rather than inline at the two call sites below, because the
+   * root and the replies are two `MessageGroups` and a reaction works the same
+   * way in both.
+   */
+  function react(eventId: string, key: string, mine: string | undefined) {
+    if (thread === null) return;
+    const done =
+      mine === undefined
+        ? timelineReact(thread.roomId, eventId, key)
+        : timelineUnreact(thread.roomId, mine);
+    void done.catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
   if (thread === null) return null;
 
   /*
@@ -317,6 +337,7 @@ export function ThreadPanel({
               known={known}
               container={scroller}
               onAbout={(person, at) => setOpened({ person, at })}
+              onReact={react}
             />
           </div>
         )}
@@ -339,6 +360,7 @@ export function ThreadPanel({
           known={known}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
+          onReact={react}
         />
       </div>
 

@@ -43,11 +43,27 @@ use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallba
 use matrix_sdk::ruma::events::room::message::{
     FormattedBody, MessageFormat, MessageType, Relation, RoomMessageEventContentWithoutRelation,
 };
+use matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent;
 use matrix_sdk::ruma::events::{
     AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
 };
 
 use crate::timeline::dto::{Media, Message, MessageKind, ThreadSummary};
+
+/// One `m.reaction` event, unpacked.
+///
+/// Its own type rather than a tuple, because three strings in a row is three
+/// chances to pass them in the wrong order and the compiler would not mind.
+pub struct Annotated {
+    /// The reaction event's own ID, which is what a redaction names.
+    pub event_id: String,
+    /// The message it is on.
+    pub target: String,
+    /// What they reacted with.
+    pub key: String,
+    /// Who reacted.
+    pub sender: String,
+}
 
 /// What this build says instead of an encrypted message it has no key for.
 ///
@@ -101,6 +117,48 @@ pub fn thread_root(event: &TimelineEvent) -> Option<String> {
         Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
         _ => None,
     }
+}
+
+/// One event as a reaction, or `None` when it is not one.
+///
+/// Deliberately separate from [`message`], which answers `None` for a reaction
+/// and should keep doing so: a reaction is not a line in the conversation and
+/// drawing it as one is what the annotation relation exists to avoid.
+pub fn annotation(event: &TimelineEvent) -> Option<Annotated> {
+    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::Reaction(
+        SyncMessageLikeEvent::Original(reacted),
+    )) = event.raw().deserialize().ok()?
+    else {
+        return None;
+    };
+
+    Some(Annotated {
+        event_id: reacted.event_id.to_string(),
+        target: reacted.content.relates_to.event_id.to_string(),
+        key: reacted.content.relates_to.key,
+        sender: reacted.sender.to_string(),
+    })
+}
+
+/// The event a redaction removes, when the event is one.
+///
+/// Both fields are read, because which of them carries it is the room
+/// version's business: room 11 moved `redacts` into the content and older
+/// rooms keep it at the top level. Answering that properly needs the room's
+/// version, which this module deliberately has no access to, and taking
+/// whichever is present gets the same answer without it.
+pub fn redaction(event: &TimelineEvent) -> Option<String> {
+    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomRedaction(
+        SyncRoomRedactionEvent::Original(redacted),
+    )) = event.raw().deserialize().ok()?
+    else {
+        return None;
+    };
+
+    redacted
+        .redacts
+        .or(redacted.content.redacts)
+        .map(|id| id.to_string())
 }
 
 fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
@@ -236,6 +294,10 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         id: said.event_id.to_string(),
         sender: said.sender.to_string(),
         at: said.origin_server_ts.0.into(),
+        // Not read off the event, because they are not on it. What is on a
+        // message is put there when a timeline is published, out of the
+        // annotations the watcher is holding.
+        reactions: Vec::new(),
         // Only for a reply. The plaintext fallback and an ordinary markdown
         // quote are the same characters, and the relation is the only thing
         // that tells them apart, so stripping unconditionally would eat the
@@ -381,6 +443,7 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         html: None,
         media: None,
         thread: None,
+        reactions: Vec::new(),
         reply_to: None,
         mentions: Vec::new(),
         kind: MessageKind::Undecryptable,

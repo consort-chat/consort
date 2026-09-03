@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,9 +53,28 @@ function draw(
       known={known(messages)}
       onAbout={vi.fn()}
       onOpenThread={onOpenThread}
+      onReact={vi.fn()}
     />,
   );
 }
+
+/** The same, with a way to see what reacting asked for. */
+function drawReactable(messages: Message[], onReact: Reacted) {
+  return render(
+    <MessageGroups
+      groups={group(messages)}
+      names={{ [ADA]: "Ada" }}
+      roomId={GENERAL}
+      selfId={BOB}
+      known={known(messages)}
+      onAbout={vi.fn()}
+      onOpenThread={vi.fn()}
+      onReact={onReact}
+    />,
+  );
+}
+
+type Reacted = (eventId: string, key: string, mine: string | undefined) => void;
 
 /**
  * Draw them as the thread panel does, with nowhere further to go.
@@ -365,5 +384,116 @@ describe("a mention", () => {
     expect(
       container.querySelector('[data-message-id="$1"]'),
     ).not.toHaveAttribute("data-mentions-me");
+  });
+});
+
+describe("reactions", () => {
+  const cheered = said("$1", ADA, "it works", NOON, {
+    reactions: [{ key: "🎉", count: 2 }],
+  });
+
+  it("says what people used and how many of them", () => {
+    draw([cheered]);
+
+    expect(screen.getByRole("button", { name: "🎉, 2" })).toBeVisible();
+  });
+
+  it("shows nothing at all on a message nobody reacted to", () => {
+    // A row of empty space under every line is a row of empty space under
+    // every line.
+    const { container } = draw([said("$1", ADA, "hello")]);
+
+    expect(container.querySelector(".timeline__reactions")).toBeNull();
+  });
+
+  it("adds one when a key this session has not used is pressed", () => {
+    const onReact = vi.fn();
+    drawReactable([cheered], onReact);
+
+    fireEvent.click(screen.getByRole("button", { name: "🎉, 2" }));
+
+    expect(onReact).toHaveBeenCalledWith("$1", "🎉", undefined);
+  });
+
+  it("offers this session's own back, with the event that undoes it", () => {
+    // The whole reason `mine` is an event ID: taking a reaction back is
+    // redacting that exact event.
+    const onReact = vi.fn();
+    drawReactable(
+      [
+        said("$1", ADA, "it works", NOON, {
+          reactions: [{ key: "🎉", count: 2, mine: "$mine" }],
+        }),
+      ],
+      onReact,
+    );
+
+    const pill = screen.getByRole("button", { name: "🎉, 2" });
+    expect(pill).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(pill);
+    expect(onReact).toHaveBeenCalledWith("$1", "🎉", "$mine");
+  });
+
+  it("picks a new key from the control on the message", async () => {
+    const onReact = vi.fn();
+    drawReactable([said("$1", ADA, "hello")], onReact);
+
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+
+    expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
+  });
+
+  it("takes a key back when it is picked again from the same panel", async () => {
+    // The picker draws what this session has already used as pressed, so
+    // pressing it there has to mean the same thing as pressing the pill.
+    const onReact = vi.fn();
+    drawReactable(
+      [
+        said("$1", ADA, "hello", NOON, {
+          reactions: [{ key: "👍", count: 1, mine: "$mine" }],
+        }),
+      ],
+      onReact,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+
+    expect(onReact).toHaveBeenCalledWith("$1", "👍", "$mine");
+  });
+
+  it("closes the picker once a key has been chosen", async () => {
+    drawReactable([said("$1", ADA, "hello")], vi.fn());
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+
+    expect(screen.queryByRole("group", { name: "React with" })).toBeNull();
+  });
+
+  it("closes the picker on Escape", async () => {
+    drawReactable([said("$1", ADA, "hello")], vi.fn());
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("group", { name: "React with" })).toBeNull();
+  });
+
+  it("opens one picker at a time", async () => {
+    // Two panels of the same twelve keys with nothing saying which message
+    // either belongs to.
+    drawReactable(
+      [said("$1", ADA, "one"), said("$2", ADA, "two", NOON + 1_000)],
+      vi.fn(),
+    );
+
+    const both = screen.getAllByRole("button", { name: "React" });
+    await userEvent.click(both[0]!);
+    await userEvent.click(both[1]!);
+
+    expect(screen.getAllByRole("group", { name: "React with" })).toHaveLength(1);
   });
 });

@@ -298,6 +298,66 @@
 }
 
 /*
+  What people have said about a message, under it.
+
+  Wrapped rather than scrolled: a message with fifteen different reactions on
+  it is rare and worth two lines, and a row that scrolled sideways would hide
+  the count somebody is looking for behind a gesture.
+*/
+.timeline__reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.timeline__reaction {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: 1px var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.timeline__reaction:hover:not(:disabled) {
+  background: var(--surface-overlay);
+}
+
+.timeline__reaction:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.timeline__reaction:disabled {
+  cursor: default;
+}
+
+/*
+  One this session has used. The violet says "you are in this count", which is
+  also what pressing it again undoes.
+*/
+.timeline__reaction[aria-pressed="true"] {
+  background: var(--violet-glow);
+  border-color: var(--violet);
+  color: var(--text-primary);
+}
+
+.timeline__reaction-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/*
   Somebody said your name.
 
   A band down the left and a lift in the background, which is how every client

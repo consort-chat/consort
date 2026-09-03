@@ -144,6 +144,7 @@ mod tests {
             html: None,
             media: None,
             thread: None,
+            reactions: Vec::new(),
             reply_to: None,
             mentions: Vec::new(),
             kind: MessageKind::Text,

@@ -1,9 +1,10 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 
 import type { Message, MessageKind, Participant } from "../lib/api";
 import { FormattedBody } from "./FormattedBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
+import { ReactionPicker } from "./ReactionPicker";
 import { RoomAvatar } from "./RoomAvatar";
 
 /**
@@ -140,6 +141,35 @@ function previewOf(message: Message): string {
  * room, and a thread takes the answer somewhere else; drawing both with one
  * glyph would make the two controls look like one control drawn twice.
  */
+/**
+ * A face with a plus: react to this.
+ *
+ * The plus is the whole message. A bare smiley is what a reaction already
+ * drawn looks like, and the control that adds one has to be distinguishable
+ * from the ones that are already there.
+ */
+function ReactIcon() {
+  return (
+    <svg
+      className="timeline__action-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M20.9 12.6a9 9 0 1 1-9.5-9.5" />
+      <path d="M9 9h.01" />
+      <path d="M15 9h.01" />
+      <path d="M8.5 14.5a4 4 0 0 0 6 .3" />
+      <path d="M19 2v5" />
+      <path d="M16.5 4.5h5" />
+    </svg>
+  );
+}
+
 function ThreadIcon() {
   return (
     <svg
@@ -162,9 +192,13 @@ function ThreadIcon() {
  * A run of grouped messages, drawn.
  *
  * Its own component because a thread panel draws the same thing beside the
- * room it came out of. Everything it needs is passed in: it holds no state,
- * asks for nothing, and is the same markup in both places by construction
- * rather than by two files being kept in step.
+ * room it came out of. Everything about the conversation is passed in: it
+ * keeps no copy of the messages, asks for nothing, and is the same markup in
+ * both places by construction rather than by two files being kept in step.
+ *
+ * The one thing it does hold is which message has its reaction picker open.
+ * That is chrome rather than content: nothing outside can act on it, and one
+ * at a time is a rule about this component's own drawing.
  */
 export function MessageGroups({
   groups,
@@ -176,6 +210,7 @@ export function MessageGroups({
   openingId,
   onAbout,
   onOpenThread,
+  onReact,
 }: {
   groups: Group[];
   /** Display names by user ID, for whoever the room has told us about. */
@@ -225,7 +260,25 @@ export function MessageGroups({
    * being read and there is nowhere further to go.
    */
   onOpenThread?: (rootId: string) => void;
+  /**
+   * React to a message, or take a reaction back.
+   *
+   * `mine` is this session's own annotation on that key, when there is one, so
+   * the caller can tell an addition from a removal without looking the message
+   * up again. One callback rather than two, because a pill is one control that
+   * does whichever of the two applies.
+   *
+   * Absent where reacting is not offered, which is nowhere yet: both the room
+   * and the thread panel pass it.
+   */
+  onReact?: (eventId: string, key: string, mine: string | undefined) => void;
 }) {
+  /*
+    Which message has its picker open, or none. One at a time, for the reason
+    a person's card has the same rule: two open at once is two panels of the
+    same twelve keys with nothing saying which message either belongs to.
+  */
+  const [picking, setPicking] = useState<string | null>(null);
   /**
    * Scroll to a message and light it up.
    *
@@ -447,16 +500,61 @@ export function MessageGroups({
                           {message.thread.count === 1 ? "reply" : "replies"}
                         </button>
                       )}
+                    {message.reactions !== undefined &&
+                      message.reactions.length > 0 && (
+                        <div className="timeline__reactions">
+                          {message.reactions.map((one) => (
+                            <button
+                              key={one.key}
+                              type="button"
+                              className="timeline__reaction"
+                              aria-pressed={one.mine !== undefined}
+                              aria-label={`${one.key}, ${one.count}`}
+                              disabled={onReact === undefined}
+                              onClick={() =>
+                                onReact?.(message.id, one.key, one.mine)
+                              }
+                            >
+                              <span aria-hidden="true">{one.key}</span>
+                              <span
+                                className="timeline__reaction-count"
+                                aria-hidden="true"
+                              >
+                                {one.count}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     {/*
-                      Somewhere to begin one. Only on a message with no thread
-                      yet, because the count above already opens the ones that
-                      have. Last in the row so the words are read before the
-                      things that can be done to them, and quiet until the
-                      message is hovered or something in it takes focus.
+                      What can be done to this message. Last in the row, so the
+                      words are read before the things that can be done to
+                      them, and quiet until the message is hovered or something
+                      in it takes focus.
                     */}
-                    {message.thread === undefined &&
-                      onOpenThread !== undefined && (
-                        <div className="timeline__actions">
+                    <div className="timeline__actions">
+                      {onReact !== undefined && (
+                        <button
+                          type="button"
+                          className="timeline__action"
+                          aria-label="React"
+                          title="React"
+                          aria-expanded={picking === message.id}
+                          onClick={() =>
+                            setPicking((open) =>
+                              open === message.id ? null : message.id,
+                            )
+                          }
+                        >
+                          <ReactIcon />
+                        </button>
+                      )}
+                      {/*
+                        Only on a message with no thread yet: the count above
+                        already opens the ones that have one.
+                      */}
+                      {message.thread === undefined &&
+                        onOpenThread !== undefined && (
                           <button
                             type="button"
                             className="timeline__action"
@@ -467,8 +565,27 @@ export function MessageGroups({
                           >
                             <ThreadIcon />
                           </button>
-                        </div>
+                        )}
+                      {picking === message.id && onReact !== undefined && (
+                        <ReactionPicker
+                          chosen={
+                            new Set(
+                              (message.reactions ?? [])
+                                .filter((one) => one.mine !== undefined)
+                                .map((one) => one.key),
+                            )
+                          }
+                          onChoose={(key) => {
+                            const already = message.reactions?.find(
+                              (one) => one.key === key,
+                            );
+                            onReact(message.id, key, already?.mine);
+                            setPicking(null);
+                          }}
+                          onClose={() => setPicking(null)}
+                        />
                       )}
+                    </div>
                   </div>
                 );
               })}
