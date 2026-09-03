@@ -1248,6 +1248,66 @@ pub async fn timeline_media_save(
     Ok(Some(path.display().to_string()))
 }
 
+/// The schemes a message may send somebody to.
+///
+/// An allow-list, and that is the whole security rule here rather than a
+/// formality. What arrives is an address a stranger wrote, and what it is
+/// handed to is the desktop's own URL handler, which acts on a great deal more
+/// than the web: `file:` reads a disk, and every platform registers schemes of
+/// its own that start programs. Refusing everything not named here means the
+/// worst a message can do is open a website.
+///
+/// The same three `FormattedBody` will draw an anchor for, and the two lists
+/// are kept apart on purpose. That one decides what looks like a link, this
+/// one decides what may be acted on, and neither should be trusted to have
+/// done the other's job.
+const REACHABLE: [&str; 3] = ["http", "https", "mailto"];
+
+/// One address, if Consort will open it.
+///
+/// Parsed rather than matched against the start of the string.
+/// `javascript:x#https://example.org` begins with neither of the two web
+/// schemes and ends with one, and the desktop would act on the scheme before
+/// the first colon.
+fn checked_link(raw: &str) -> Result<url::Url, CommandError> {
+    let address = url::Url::parse(raw).map_err(|error| CommandError {
+        message: "That does not look like an address Consort can open.".to_owned(),
+        detail: format!("parsing {raw}: {error}"),
+    })?;
+
+    if !REACHABLE.contains(&address.scheme()) {
+        return Err(CommandError {
+            message: "Consort opens web links and email addresses, and that is neither.".to_owned(),
+            detail: format!("refused the {} scheme in {raw}", address.scheme()),
+        });
+    }
+
+    Ok(address)
+}
+
+/// Hand one link to whatever the desktop opens links with.
+///
+/// A command rather than an anchor the webview follows. The webview holds one
+/// page and has no way back to it, so following a link in place would replace
+/// Consort with a website and strand whoever pressed it. Doing it from Rust is
+/// also what keeps the frontend on `core:default`: nothing here is reachable
+/// from the page except by asking.
+///
+/// Async so that the fork and exec happen on the runtime's threads. A
+/// synchronous command runs on the one drawing the window.
+#[tauri::command]
+pub async fn open_link(address: String) -> Result<(), CommandError> {
+    let address = checked_link(&address)?;
+
+    // Detached, so a browser that has to start up is not a child this process
+    // waits on.
+    open::that_detached(address.as_str()).map_err(|error| CommandError {
+        message: "Consort could not open that link. Check this machine has a browser set up."
+            .to_owned(),
+        detail: format!("opening {address}: {error}"),
+    })
+}
+
 /// The room to say something to one person in. See `direct_room_for`.
 #[tauri::command]
 pub async fn direct_room(
@@ -2441,6 +2501,55 @@ mod tests {
 
         drop(held);
         other.await.unwrap().unwrap();
+    }
+
+    mod links {
+        use super::*;
+
+        #[test]
+        fn the_web_and_an_email_address_are_what_a_message_may_send_somebody_to() {
+            assert!(checked_link("https://example.org/thread/1").is_ok());
+            assert!(checked_link("http://example.org").is_ok());
+            assert!(checked_link("mailto:someone@example.org").is_ok());
+        }
+
+        #[test]
+        fn a_scheme_nobody_here_has_thought_about_is_refused() {
+            // The whole rule. What is passed goes to the desktop's own URL
+            // handler, which acts on far more than the web: an allow-list is
+            // the only version of this that is safe against the scheme
+            // somebody registers next.
+            for raw in [
+                "javascript:alert(1)",
+                "file:///etc/passwd",
+                "data:text/html,<script>alert(1)</script>",
+                "ms-msdt:/id",
+                "smb://example.org/share",
+            ] {
+                assert!(checked_link(raw).is_err(), "{raw} should be refused");
+            }
+        }
+
+        #[test]
+        fn a_scheme_is_read_by_parsing_rather_than_by_the_start_of_the_string() {
+            // A prefix test says this is https, and the desktop would run the
+            // first colon's scheme instead.
+            assert!(checked_link("javascript:x#https://example.org").is_err());
+        }
+
+        #[test]
+        fn something_that_is_not_an_address_at_all_is_refused() {
+            assert!(checked_link("example.org").is_err());
+            assert!(checked_link("").is_err());
+        }
+
+        #[test]
+        fn refusing_says_something_a_person_could_read() {
+            let refused = checked_link("file:///etc/passwd").unwrap_err();
+
+            assert!(!refused.message().is_empty());
+            assert!(refused.detail().contains("file"));
+        }
     }
 }
 

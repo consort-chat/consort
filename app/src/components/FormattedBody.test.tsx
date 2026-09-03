@@ -1,7 +1,18 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
+  openLink,
+}));
 
 import { FormattedBody } from "./FormattedBody";
+
+beforeEach(() => {
+  openLink.mockReset().mockResolvedValue(undefined);
+});
 
 /** The rendered elements, so a test can ask what actually reached the page. */
 function body(html: string): HTMLElement {
@@ -57,9 +68,9 @@ describe("FormattedBody", () => {
   });
 
   it("draws an ordinary link, and refuses to be navigated by it", () => {
-    // The webview has one page in it and no way back. Until opening a link
-    // outside the application is built, a link that went anywhere would be a
-    // one-way trip out of Consort.
+    // The webview has one page in it and no way back, so a link followed in
+    // place would be a one-way trip out of Consort. It opens in the desktop's
+    // browser instead; the test below is the other half.
     const rendered = body('<p><a href="https://example.org/x">there</a></p>');
     const link = rendered.querySelector("a");
 
@@ -67,6 +78,35 @@ describe("FormattedBody", () => {
     const clicked = new MouseEvent("click", { bubbles: true, cancelable: true });
     link?.dispatchEvent(clicked);
     expect(clicked.defaultPrevented).toBe(true);
+  });
+
+  it("opens an ordinary link outside the application", async () => {
+    body('<p><a href="https://example.org/x">there</a></p>');
+
+    await userEvent.click(screen.getByRole("link", { name: "there" }));
+
+    expect(openLink).toHaveBeenCalledWith("https://example.org/x");
+  });
+
+  it("finds an address a sender wrote bare in a formatted message", () => {
+    // Formatting and linkifying are separate things a client does. A message
+    // in bold with a pasted link in it has the link as plain text.
+    const rendered = body("<p><strong>go to https://example.org/x</strong></p>");
+
+    expect(rendered.querySelector("strong a")).toHaveAttribute(
+      "href",
+      "https://example.org/x",
+    );
+  });
+
+  it("does not look for an address inside a link", () => {
+    // An anchor inside an anchor is invalid, and the address has already been
+    // found by the sender.
+    const rendered = body(
+      '<p><a href="https://example.org/x">https://example.org/x</a></p>',
+    );
+
+    expect(rendered.querySelectorAll("a")).toHaveLength(1);
   });
 
   it("drops the address of a link that is not one to a page", () => {

@@ -2,6 +2,7 @@ import { useState, type RefObject } from "react";
 
 import type { Message, MessageKind, Participant } from "../lib/api";
 import { FormattedBody } from "./FormattedBody";
+import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
 import { ReactionPicker } from "./ReactionPicker";
@@ -440,7 +441,7 @@ export function MessageGroups({
                             onClick={open}
                           >
                             {message.html === undefined ? (
-                              message.body
+                              <PlainBody text={message.body} />
                             ) : (
                               <FormattedBody html={message.html} />
                             )}
@@ -478,7 +479,7 @@ export function MessageGroups({
                       >
                         {message.kind === "emote" && `${who} `}
                         {message.html === undefined ? (
-                          message.body
+                          <PlainBody text={message.body} />
                         ) : (
                           <FormattedBody html={message.html} />
                         )}

@@ -1,6 +1,8 @@
 import { createElement, useMemo, type ReactNode } from "react";
 
 import { mxcUrl } from "../lib/api";
+import { ExternalLink } from "./ExternalLink";
+import { PlainBody } from "./PlainBody";
 
 /**
  * The elements this build draws, and what it draws them as.
@@ -87,13 +89,22 @@ function reachable(raw: string | null): string | undefined {
   }
 }
 
-/** One node as something React can draw, or nothing. */
-function draw(node: Node, key: string): ReactNode {
-  if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+/**
+ * One node as something React can draw, or nothing.
+ *
+ * `linking` is off inside an anchor. A sender can write a bare address in the
+ * middle of a formatted message and it wants finding, but one inside a link
+ * has already been found, and an anchor inside an anchor is invalid.
+ */
+function draw(node: Node, key: string, linking: boolean): ReactNode {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const words = node.textContent ?? "";
+    return linking ? <PlainBody key={key} text={words} /> : words;
+  }
   if (!(node instanceof Element)) return null;
 
   const children = [...node.childNodes].map((child, index) =>
-    draw(child, `${key}.${index}`),
+    draw(child, `${key}.${index}`, linking && node.localName !== "a"),
   );
   const tag = DRAWN[node.localName];
 
@@ -104,32 +115,39 @@ function draw(node: Node, key: string): ReactNode {
 
   if (tag === "a") {
     const href = node.getAttribute("href");
-    /*
-      A mention is drawn as a name rather than as a destination, because that
-      is what it is: pressing it goes nowhere, and an underlined blue word
-      promises otherwise.
 
-      The at sign is put back when the sender left it off, which every client
-      does: the pill's text is the display name, so "bragoodle" arrives where
-      "@bragoodle" was meant and the word reads as a noun.
-    */
-    const mention = mentioned(href);
-    const named = mention && !(node.textContent ?? "").startsWith("@");
+    if (mentioned(href)) {
+      /*
+        A mention is drawn as a name rather than as a destination, because
+        that is what it is: pressing it goes nowhere, and an underlined blue
+        word promises otherwise.
+
+        The at sign is put back when the sender left it off, which every
+        client does: the pill's text is the display name, so "bragoodle"
+        arrives where "@bragoodle" was meant and the word reads as a noun.
+      */
+      const named = !(node.textContent ?? "").startsWith("@");
+      return (
+        <a
+          key={key}
+          className="timeline__mention"
+          href={reachable(href)}
+          // Goes nowhere, on purpose. Every other link opens in the desktop's
+          // browser now, and sending somebody to matrix.to because they
+          // pressed a name would be the wrong destination rather than a
+          // missing one.
+          onClick={(event) => event.preventDefault()}
+        >
+          {named && "@"}
+          {children}
+        </a>
+      );
+    }
 
     return (
-      <a
-        key={key}
-        className={mention ? "timeline__mention" : undefined}
-        href={reachable(href)}
-        // The webview holds one page and has no way back to it. Following a
-        // link would replace Consort with a website and strand whoever
-        // clicked. Opening one outside the application needs a Tauri plugin
-        // and so a capability this build does not grant.
-        onClick={(event) => event.preventDefault()}
-      >
-        {named && "@"}
+      <ExternalLink key={key} href={reachable(href)}>
         {children}
-      </a>
+      </ExternalLink>
     );
   }
 
@@ -207,7 +225,7 @@ export function FormattedBody({ html }: { html: string }) {
   const drawn = useMemo(() => {
     const parsed = new DOMParser().parseFromString(html, "text/html");
     return [...parsed.body.childNodes].map((node, index) =>
-      draw(node, String(index)),
+      draw(node, String(index), true),
     );
   }, [html]);
 

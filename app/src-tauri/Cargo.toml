@@ -65,6 +65,15 @@ tauri-plugin-single-instance = "2"
 # command, so the call arrives already inside one, and tokio answers
 # "Cannot start a runtime from within a runtime" before the window is drawn.
 tauri-plugin-dialog = { version = "2", default-features = false, features = ["gtk3"] }
+# Handing a link to the desktop's browser. Called from Rust only, like the
+# dialog above: the frontend still cannot reach anything outside the webview,
+# and asking for a link to be opened is a command like any other. What decides
+# whether it may be opened is `checked_link`, not this.
+open = "5"
+# For that decision. Reading a scheme means parsing the address rather than
+# looking at the start of it, and this is already in the graph under
+# matrix-sdk, so naming it costs nothing to build.
+url = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

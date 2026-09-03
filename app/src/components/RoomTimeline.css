@@ -398,6 +398,35 @@
 }
 
 /*
+  An address in a message.
+
+  Underlined rather than only coloured, because a colour alone is the one
+  distinction somebody who cannot see it has no way to make. The underline sits
+  a little off the words so a link inside a sentence is still readable, and the
+  break rule is what stops one long address pushing the whole column wider than
+  the window.
+*/
+.body__link {
+  color: var(--violet-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+/* Thicker rather than a second colour, which would need a token invented for
+   one hover state. */
+.body__link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.body__link:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-sm);
+}
+
+/*
   A person's name inside a message.
 
   Drawn as a name rather than as a destination: no underline, because pressing

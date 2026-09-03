@@ -1626,6 +1626,22 @@ export function timelineUnreact(
  * Resolves to `null` when the window was closed without choosing, which is not
  * a failure and must not be drawn as one.
  */
+/**
+ * Open one link in whatever this desktop opens links with.
+ *
+ * A command rather than following the anchor. The webview holds one page and
+ * has no way back to it, so following a link in place would replace Consort
+ * with a website and strand whoever pressed it, and opening one from the page
+ * would need a capability this build deliberately does not grant.
+ *
+ * What may be opened is decided in Rust, by `checked_link`. An address in a
+ * message was written by a stranger and the thing on the other end of this is
+ * the desktop's own URL handler.
+ */
+export function openLink(address: string): Promise<void> {
+  return invoke<void>("open_link", { address });
+}
+
 export function saveAttachment(
   source: string,
   name: string,

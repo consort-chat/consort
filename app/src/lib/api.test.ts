@@ -36,6 +36,7 @@ import {
   onTyping,
   threadOpen,
   threadSend,
+  openLink,
   timelineReact,
   timelineTyping,
   timelineUnreact,
@@ -329,6 +330,15 @@ describe("event subscriptions", () => {
     expect(invoke).toHaveBeenCalledWith("timeline_typing", {
       roomId: "!general:example.org",
       typing: true,
+    });
+  });
+
+  it("asks Rust to open a link rather than following it", async () => {
+    // Following it in the webview would replace Consort with the website.
+    await openLink("https://example.org");
+
+    expect(invoke).toHaveBeenCalledWith("open_link", {
+      address: "https://example.org",
     });
   });
 

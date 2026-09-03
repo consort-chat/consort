@@ -387,6 +387,18 @@ describe("a mention", () => {
   });
 });
 
+describe("a link", () => {
+  it("draws an address somebody pasted as something to press", () => {
+    // A pasted link arrives with no formatting on it at all, so this is the
+    // path the commonest link in a room takes.
+    draw([said("$1", ADA, "have a look at https://example.org/x")]);
+
+    expect(
+      screen.getByRole("link", { name: "https://example.org/x" }),
+    ).toBeVisible();
+  });
+});
+
 describe("reactions", () => {
   const cheered = said("$1", ADA, "it works", NOON, {
     reactions: [{ key: "🎉", count: 2 }],
