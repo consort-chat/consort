@@ -45,8 +45,9 @@ use matrix_sdk::ruma::events::room::message::{
 };
 use matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent;
 use matrix_sdk::ruma::events::{
-    AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
+    AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
 };
+use matrix_sdk::ruma::serde::Raw;
 
 use crate::timeline::dto::{Media, Message, MessageKind, ThreadSummary};
 
@@ -117,6 +118,27 @@ pub fn thread_root(event: &TimelineEvent) -> Option<String> {
         Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
         _ => None,
     }
+}
+
+/// Who an `m.typing` event says is typing, or `None` for anything else.
+///
+/// The whole list every time, because that is what the event carries: it is a
+/// statement of who is typing now rather than a report of somebody starting.
+/// A room where everybody stopped sends an empty one, and treating that as
+/// nothing to say would leave the last name on screen for ever.
+pub fn typing(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<String>> {
+    let AnySyncEphemeralRoomEvent::Typing(typing) = event.deserialize().ok()? else {
+        return None;
+    };
+
+    Some(
+        typing
+            .content
+            .user_ids
+            .into_iter()
+            .map(|user| user.to_string())
+            .collect(),
+    )
 }
 
 /// One event as a reaction, or `None` when it is not one.

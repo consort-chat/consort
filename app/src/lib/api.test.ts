@@ -33,8 +33,12 @@ import {
   onVerificationFlow,
   onAudio,
   onThread,
+  onTyping,
   threadOpen,
   threadSend,
+  timelineReact,
+  timelineTyping,
+  timelineUnreact,
   resendState,
   roomAvatar,
   setAudioSettings,
@@ -297,6 +301,41 @@ describe("event subscriptions", () => {
     await onConnection(vi.fn());
 
     expect(listen).toHaveBeenCalledWith("connection", expect.any(Function));
+  });
+
+  it("names the message a reaction is on and what it is", async () => {
+    await timelineReact("!general:example.org", "$said:example.org", "🎉");
+
+    expect(invoke).toHaveBeenCalledWith("timeline_react", {
+      roomId: "!general:example.org",
+      eventId: "$said:example.org",
+      key: "🎉",
+    });
+  });
+
+  it("takes a reaction back by its own event, not the message it is on", async () => {
+    // Passing the message would redact the message.
+    await timelineUnreact("!general:example.org", "$mine:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("timeline_unreact", {
+      roomId: "!general:example.org",
+      reactionId: "$mine:example.org",
+    });
+  });
+
+  it("says whether this session is typing, and where", async () => {
+    await timelineTyping("!general:example.org", true);
+
+    expect(invoke).toHaveBeenCalledWith("timeline_typing", {
+      roomId: "!general:example.org",
+      typing: true,
+    });
+  });
+
+  it("subscribes to the typing channel the Rust side emits on", async () => {
+    await onTyping(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("typing", expect.any(Function));
   });
 
   it("subscribes to the thread channel the Rust side emits on", async () => {

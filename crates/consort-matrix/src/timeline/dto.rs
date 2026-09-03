@@ -78,6 +78,27 @@ pub struct Thread {
     pub more_before: bool,
 }
 
+/// Who is typing in one room, right now.
+///
+/// Its own value rather than a field on [`Timeline`], because the two change
+/// for unrelated reasons and at unrelated rates. A timeline carries every
+/// message loaded, and republishing all of it because somebody pressed a key
+/// would put the whole conversation across the IPC boundary several times a
+/// sentence.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Typing {
+    /// The room they are typing in, on the same terms as [`Timeline::room_id`]:
+    /// one channel serves whichever room is open, and this is how a reader
+    /// tells an answer about the last room from an answer about this one.
+    pub room_id: String,
+    /// Matrix user IDs, with this session's own already taken out.
+    ///
+    /// Nobody needs telling that they are typing, and every client that has
+    /// ever shown you your own name doing it looked broken.
+    pub users: Vec<String>,
+}
+
 /// One key people have reacted to a message with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

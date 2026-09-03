@@ -20,6 +20,7 @@ use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
 use consort_matrix::{
     CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification, Thread, Timeline,
+    Typing,
 };
 use serde::Serialize;
 
@@ -118,6 +119,14 @@ pub enum AppEvent {
     /// four times the size of anything else on this enum, and every event of
     /// every kind would otherwise be that big.
     Thread(Option<Box<Thread>>),
+    /// Who is typing in the room currently open.
+    ///
+    /// Its own channel rather than a field on [`Timeline`](Self::Timeline),
+    /// because a timeline carries every message loaded and this changes
+    /// several times a sentence. Sent together, a room where two people are
+    /// talking would push the whole conversation across the boundary on every
+    /// keystroke either of them made.
+    Typing(Typing),
 }
 
 impl AppEvent {
@@ -147,6 +156,8 @@ impl AppEvent {
     pub const TIMELINE: &'static str = "timeline";
     /// The channel carrying the thread open beside the room.
     pub const THREAD: &'static str = "thread";
+    /// The channel carrying who is typing in the open room.
+    pub const TYPING: &'static str = "typing";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -164,6 +175,7 @@ impl AppEvent {
             Self::Speaking(_) => Self::SPEAKING,
             Self::Timeline(_) => Self::TIMELINE,
             Self::Thread(_) => Self::THREAD,
+            Self::Typing(_) => Self::TYPING,
         }
     }
 
@@ -217,7 +229,12 @@ impl AppEvent {
             | Self::Rooms(_)
             | Self::Call(_)
             | Self::SelfAudio(_)
-            | Self::Timeline(_) => true,
+            | Self::Timeline(_)
+            // Kept, and the empty one is the important half: it is what tells
+            // a webview that reloaded mid-sentence that nobody is typing any
+            // more. Without it the last name said would stand until somebody
+            // in that room typed again, which in a quiet room is never.
+            | Self::Typing(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             // Open is state and shut is history, on the same terms as a
             // verification flow. A panel that is shut is not a panel showing
@@ -253,6 +270,7 @@ impl AppEvent {
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
             Self::Timeline(timeline) => serde_json::to_value(timeline),
             Self::Thread(thread) => serde_json::to_value(thread),
+            Self::Typing(typing) => serde_json::to_value(typing),
         }
     }
 }

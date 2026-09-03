@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
-    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, backup, calls,
-    rooms, sync, timeline, verification,
+    CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, Typing, backup,
+    calls, rooms, sync, timeline, verification,
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -592,6 +592,7 @@ impl AppState {
 
         let events = self.events.clone();
         let for_threads = self.events.clone();
+        let for_typing = self.events.clone();
         // Assigned rather than pushed, so the previous watcher is dropped, and
         // therefore aborted, by the assignment itself.
         *self.locked_timeline() = Some(timeline::watch(
@@ -599,6 +600,7 @@ impl AppState {
             &room_id,
             move |timeline| events.emit(AppEvent::Timeline(timeline)),
             move |thread| for_threads.emit(AppEvent::Thread(thread.map(Box::new))),
+            move |typing| for_typing.emit(AppEvent::Typing(typing)),
         ));
     }
 
@@ -619,6 +621,10 @@ impl AppState {
             // on screen would be showing a conversation from a room nobody has
             // open.
             self.events.emit(AppEvent::Thread(None));
+            // And nobody is typing in a room nobody is in. Kept on the channel
+            // for a late subscriber, so this has to be replaced rather than
+            // left to go stale.
+            self.events.emit(AppEvent::Typing(Typing::default()));
         }
     }
 

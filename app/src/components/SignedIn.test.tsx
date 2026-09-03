@@ -34,6 +34,8 @@ const verificationRecover = vi.hoisted(() => vi.fn());
 // nothing anybody awaits, which surfaces as an unhandled rejection attributed
 // to whichever test happened to be running.
 const onTimeline = vi.hoisted(() => vi.fn());
+const onTyping = vi.hoisted(() => vi.fn());
+const timelineTyping = vi.hoisted(() => vi.fn());
 const onThread = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
@@ -65,6 +67,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   verificationOtherSessionsExist,
   verificationRecoveryExists,
   onTimeline,
+  onTyping,
+  timelineTyping,
   onThread,
   timelineOpen,
   timelineClose,
@@ -193,6 +197,8 @@ function resetApiMocks() {
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
   onTimeline.mockReset().mockResolvedValue(() => {});
+  onTyping.mockReset().mockResolvedValue(() => {});
+  timelineTyping.mockReset().mockResolvedValue(undefined);
   onThread.mockReset().mockResolvedValue(() => {});
   timelineOpen.mockReset().mockResolvedValue(undefined);
   timelineClose.mockReset().mockResolvedValue(undefined);

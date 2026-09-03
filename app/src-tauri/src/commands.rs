@@ -448,6 +448,20 @@ pub async fn timeline_unreact_for(
     Ok(())
 }
 
+/// Say whether this session is typing in a room.
+///
+/// Safe to call on every keystroke: the SDK holds the time of the last notice
+/// per room and sends nothing while one is still current.
+pub async fn timeline_typing_for(
+    state: &AppState,
+    room_id: String,
+    typing: bool,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::typing(&client, &room_id, typing).await?;
+    Ok(())
+}
+
 /// The room to say something to one person in, made if there is not one.
 ///
 /// A create is a side effect, which is unusual for something a click reaches,
@@ -1173,6 +1187,16 @@ pub async fn timeline_unreact(
     reaction_id: String,
 ) -> Result<(), CommandError> {
     timeline_unreact_for(&state, room_id, reaction_id).await
+}
+
+/// See `timeline_typing_for`.
+#[tauri::command]
+pub async fn timeline_typing(
+    state: State<'_, AppState>,
+    room_id: String,
+    typing: bool,
+) -> Result<(), CommandError> {
+    timeline_typing_for(&state, room_id, typing).await
 }
 
 /// Write one attachment wherever somebody chooses, and say where that was.

@@ -13,6 +13,8 @@ const onTimeline = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
+const onTyping = vi.hoisted(() => vi.fn());
+const timelineTyping = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
@@ -35,6 +37,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineOpen,
   timelineClose,
   timelineEarlier,
+  onTyping,
+  timelineTyping,
   timelineSend,
   memberNames,
   memberAvatar,
@@ -48,7 +52,7 @@ import { RoomTimeline } from "./RoomTimeline";
 import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
-import type { Channel, Message, Thread, Timeline } from "../lib/api";
+import type { Channel, Message, Thread, Timeline, Typing } from "../lib/api";
 
 const GENERAL = "!general:example.org";
 const ADA = "@ada:example.org";
@@ -94,12 +98,20 @@ function timeline(messages: Message[], rest: Partial<Timeline> = {}): Timeline {
 let publish: (timeline: Timeline) => void;
 /** The same, for the thread channel. */
 let publishThread: (thread: Thread | null) => void;
+/** And for the typing channel. */
+let publishTyping: (typing: Typing) => void;
 
 beforeEach(() => {
   resetAvatarCache();
   resetPresenceCache();
   publish = () => {};
   publishThread = () => {};
+  publishTyping = () => {};
+  timelineTyping.mockReset().mockResolvedValue(undefined);
+  onTyping.mockReset().mockImplementation((handler: (t: Typing) => void) => {
+    publishTyping = handler;
+    return Promise.resolve(() => {});
+  });
   onThread.mockReset().mockImplementation((handler: (t: Thread | null) => void) => {
     publishThread = handler;
     return Promise.resolve(() => {});
@@ -741,5 +753,67 @@ describe("opening a thread", () => {
     expect(
       screen.getByRole("button", { name: /3 replies/i }),
     ).not.toBeDisabled();
+  });
+
+  it("says who is typing", async () => {
+    await pane();
+
+    await act(async () => {
+      publishTyping({ roomId: GENERAL, users: [ADA] });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Ada is typing...");
+  });
+
+  it("ignores an answer about the room before this one", async () => {
+    // One channel serves whichever room is open, so this is the moment between
+    // two clicks rather than an error.
+    await pane();
+
+    await act(async () => {
+      publishTyping({ roomId: "!lounge:example.org", users: [ADA] });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("keeps the line even when nobody is typing", async () => {
+    // A line that came and went would change the height of the list above it
+    // and move the conversation under whoever is reading, twice a sentence.
+    await pane();
+
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it("says this session is typing, once rather than once per key", async () => {
+    await pane();
+
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+
+    expect(timelineTyping).toHaveBeenCalledTimes(1);
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, true);
+  });
+
+  it("says it has stopped when the box is emptied", async () => {
+    // Abandoning a message is exactly when the name should come down, and
+    // waiting for the homeserver's own timeout leaves it up for seconds.
+    await pane();
+    const box = screen.getByRole("textbox");
+    await userEvent.type(box, "hello");
+    timelineTyping.mockClear();
+
+    await userEvent.clear(box);
+
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
+  });
+
+  it("says it has stopped once the message has landed", async () => {
+    await pane();
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+    timelineTyping.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
   });
 });

@@ -797,6 +797,27 @@
   font-size: var(--text-sm);
 }
 
+/*
+  Who is typing, above the box.
+
+  Always drawn and always this tall, empty included. A line that appeared and
+  disappeared would change the height of the scrolling list above it, which
+  moves the conversation under whoever is reading, twice per sentence anybody
+  else types.
+*/
+.timeline__typing {
+  flex: none;
+  min-height: 1.2em;
+  margin: 0;
+  padding: 0 var(--space-6);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .timeline__composer {
   display: grid;
   flex: none;

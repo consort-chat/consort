@@ -4,6 +4,7 @@ import {
   elapsedLabel,
   presenceLabel,
   sizeLabel,
+  typingLabel,
 } from "./labels";
 
 /** An arbitrary fixed "now", so nothing here depends on the clock. */
@@ -75,5 +76,31 @@ describe("sizeLabel", () => {
     // The field is optional off the wire, and "0 B" is a claim about a file
     // rather than an admission that nobody said.
     expect(sizeLabel(undefined)).toBeNull();
+  });
+});
+
+describe("typingLabel", () => {
+  it("says nothing when nobody is typing", () => {
+    // What keeps the line reserved and silent rather than appearing under
+    // somebody who is reading.
+    expect(typingLabel([])).toBe("");
+  });
+
+  it("names one person", () => {
+    expect(typingLabel(["Ada"])).toBe("Ada is typing...");
+  });
+
+  it("names two", () => {
+    expect(typingLabel(["Ada", "Bob"])).toBe("Ada and Bob are typing...");
+  });
+
+  it("counts the rest after two", () => {
+    // Three names is already wider than the composer on a narrow window.
+    expect(typingLabel(["Ada", "Bob", "Cleo"])).toBe(
+      "Ada, Bob and 1 other are typing...",
+    );
+    expect(typingLabel(["Ada", "Bob", "Cleo", "Dai"])).toBe(
+      "Ada, Bob and 2 others are typing...",
+    );
   });
 });

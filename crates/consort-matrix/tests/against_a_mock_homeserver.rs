@@ -3262,7 +3262,7 @@ mod timeline {
         .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3290,7 +3290,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], None).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3310,7 +3310,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], Some("t-older")).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3329,7 +3329,7 @@ mod timeline {
         let (_dir, client) = signed_in(&server).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -3345,7 +3345,7 @@ mod timeline {
         let (_dir, client) = signed_in(&server).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, "not a room id", sink, |_| {});
+        let watch = timeline::watch(client, "not a room id", sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -3366,7 +3366,7 @@ mod timeline {
         syncing(&server, vec![arriving("$new", "just said", 5_000)]).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {});
+        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
         let (connections, connection_sink) = recorder();
         let syncing = sync::start(client, connection_sink);
         wait_until(&connections, |states| states.contains(&Connection::Live)).await;
@@ -3397,7 +3397,7 @@ mod timeline {
         syncing(&server, Vec::new()).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {});
+        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3437,7 +3437,7 @@ mod timeline {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3476,7 +3476,7 @@ mod timeline {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3521,7 +3521,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], None).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3756,7 +3756,7 @@ mod timeline {
         .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -4056,7 +4056,7 @@ mod timeline {
             .await;
             let (rooms_seen, rooms_sink) = recorder::<Timeline>();
             let (threads_seen, threads_sink) = recorder::<Option<timeline::Thread>>();
-            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink);
+            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink, |_| {});
             (watch, rooms_seen, threads_seen)
         }
 

@@ -1329,6 +1329,18 @@ export interface Message {
 }
 
 /**
+ * Who is typing in one room.
+ *
+ * Mirrors `consort_matrix::Typing`.
+ */
+export interface Typing {
+  /** The room they are typing in. */
+  roomId: string;
+  /** Matrix user IDs, with this session's own already taken out in Rust. */
+  users: string[];
+}
+
+/**
  * One key people have reacted to a message with.
  *
  * Mirrors `consort_matrix::Reaction`. Rust does the aggregation, because
@@ -1507,6 +1519,34 @@ export function onThread(
   handler: (thread: Thread | null) => void,
 ): Promise<UnlistenFn> {
   return listen<Thread | null>("thread", (event) => handler(event.payload));
+}
+
+/**
+ * Who is typing in one room, as Matrix user IDs.
+ *
+ * Its own channel rather than a field on the timeline: a timeline carries
+ * every message loaded, and this changes several times a sentence, so sending
+ * them together would push the whole conversation across the boundary on every
+ * keystroke anybody made.
+ *
+ * This session's own ID is already taken out in Rust. The room ID is carried
+ * because one channel serves whichever room is open, exactly as the timeline
+ * does, so a reader can tell an answer about the last room from an answer
+ * about this one.
+ */
+export function onTyping(handler: (typing: Typing) => void): Promise<UnlistenFn> {
+  return listen<Typing>("typing", (event) => handler(event.payload));
+}
+
+/**
+ * Say whether this session is typing in a room.
+ *
+ * Safe to call on every keystroke. Rust hands it to the SDK, which holds the
+ * time of the last notice per room and sends nothing while one is current, so
+ * the throttling is already done two layers down.
+ */
+export function timelineTyping(roomId: string, typing: boolean): Promise<void> {
+  return invoke<void>("timeline_typing", { roomId, typing });
 }
 
 /**

@@ -44,7 +44,7 @@ mod media;
 mod reactions;
 mod thread;
 
-pub use dto::{Media, Message, MessageKind, Reaction, Thread, ThreadSummary, Timeline};
+pub use dto::{Media, Message, MessageKind, Reaction, Thread, ThreadSummary, Timeline, Typing};
 pub use history::History;
 pub use media::{Attachment, bytes, media};
 pub use reactions::Reactions;
@@ -56,11 +56,11 @@ use futures_util::StreamExt;
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::ruma::api::Direction;
-use matrix_sdk::ruma::events::AnySyncTimelineEvent;
 use matrix_sdk::ruma::events::reaction::ReactionEventContent;
 use matrix_sdk::ruma::events::relation::Annotation;
 use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
 use matrix_sdk::ruma::events::room::message::{Relation, RoomMessageEventContent};
+use matrix_sdk::ruma::events::{AnySyncEphemeralRoomEvent, AnySyncTimelineEvent};
 use matrix_sdk::ruma::serde::Raw;
 use matrix_sdk::ruma::{EventId, OwnedEventId, RoomId};
 use matrix_sdk::{Client, Room};
@@ -159,10 +159,17 @@ impl Drop for Watch {
 ///
 /// Unlike [`crate::rooms::watch`], this one is per room and is meant to be
 /// replaced. Dropping the [`Watch`] ends it.
-pub fn watch<F, G>(client: Client, room_id: &str, on_change: F, on_thread: G) -> Watch
+pub fn watch<F, G, H>(
+    client: Client,
+    room_id: &str,
+    on_change: F,
+    on_thread: G,
+    on_typing: H,
+) -> Watch
 where
     F: Fn(Timeline) + Send + Sync + 'static,
     G: Fn(Option<Thread>) + Send + Sync + 'static,
+    H: Fn(Typing) + Send + Sync + 'static,
 {
     let (asking, mut asked) = unbounded_channel();
     let room_id = room_id.to_owned();
@@ -207,6 +214,13 @@ where
         let mut loaded = Loaded::new(watching.clone(), client.user_id().map(ToString::to_string));
         loaded.publish(&on_change);
         loaded.publish_thread(&on_thread);
+        // Said once at the start, so a reader that has just changed room is
+        // not left holding the last room's answer until somebody here types.
+        // In a quiet room that is never.
+        on_typing(Typing {
+            room_id: watching.clone(),
+            users: Vec::new(),
+        });
         loaded.page(&room, &on_change).await;
 
         loop {
@@ -248,6 +262,9 @@ where
                         // on one of its replies, both of which the panel draws.
                         if annotated && loaded.open.is_some() {
                             loaded.publish_thread(&on_thread);
+                        }
+                        if let Some(typing) = loaded.typing(&joined.ephemeral) {
+                            on_typing(typing);
                         }
                     }
                     // Too many syncs while this task was busy decrypting a
@@ -332,6 +349,9 @@ struct Loaded {
     more_before: bool,
     /// Whether a page is being fetched right now.
     loading: bool,
+    /// Who was last reported as typing, so an unchanged list is not
+    /// republished on every sync for as long as somebody keeps typing.
+    typing: Vec<String>,
 }
 
 /// One thread being watched alongside the room.
@@ -362,6 +382,7 @@ impl Loaded {
             // stronger claim than an empty list supports.
             more_before: true,
             loading: true,
+            typing: Vec::new(),
         }
     }
 
@@ -454,6 +475,33 @@ impl Loaded {
                 Some(message)
             })
             .collect()
+    }
+
+    /// Who this batch says is typing, when it says anything about it.
+    ///
+    /// `None` when the batch carried no `m.typing` at all, which is almost
+    /// every sync, and when it says the same thing as the last one. A room
+    /// where somebody is typing sends one of these on every sync until they
+    /// stop, and republishing an unchanged list would wake the webview several
+    /// times a minute to hand it what it has.
+    fn typing(&mut self, ephemeral: &[Raw<AnySyncEphemeralRoomEvent>]) -> Option<Typing> {
+        let said = ephemeral.iter().find_map(facts::typing)?;
+
+        // Ours taken out here rather than in the interface, because it is the
+        // same answer for every reader and there is exactly one of us.
+        let users: Vec<String> = said
+            .into_iter()
+            .filter(|user| Some(user) != self.me.as_ref())
+            .collect();
+
+        if users == self.typing {
+            return None;
+        }
+        self.typing.clone_from(&users);
+        Some(Typing {
+            room_id: self.room_id.clone(),
+            users,
+        })
     }
 
     /// Take note of the reactions and the redactions in one batch.
@@ -672,6 +720,16 @@ impl Loaded {
             loading: self.loading,
         });
     }
+}
+
+/// Say whether this session is typing in a room.
+///
+/// Safe to call on every keystroke. The SDK holds the time of the last notice
+/// per room and sends nothing while one is still current, so the throttling
+/// that this would otherwise need is already done a layer down.
+pub async fn typing(client: &Client, room_id: &str, typing: bool) -> Result<()> {
+    room_of(client, room_id)?.typing_notice(typing).await?;
+    Ok(())
 }
 
 /// React to a message.

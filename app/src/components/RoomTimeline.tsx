@@ -7,18 +7,20 @@ import {
   useState,
 } from "react";
 
-import { channelLabel } from "../lib/labels";
+import { channelLabel, typingLabel } from "../lib/labels";
 import {
   asCommandError,
   memberNames,
   onThread,
   onTimeline,
+  onTyping,
   resendState,
   timelineClose,
   timelineEarlier,
   timelineOpen,
   timelineReact,
   timelineSend,
+  timelineTyping,
   timelineUnreact,
   threadOpen,
   NO_TIMELINE,
@@ -55,6 +57,15 @@ export const AT_THE_BOTTOM = 48;
  * already there.
  */
 const NEAR_THE_TOP = 200;
+
+/**
+ * How long to leave between saying this session is typing, in milliseconds.
+ *
+ * Not for the homeserver's sake: the SDK already holds the time of the last
+ * notice per room and sends nothing while one is current. This is so that a
+ * sentence is a handful of IPC calls rather than one per key pressed.
+ */
+const TYPING_EVERY = 3_000;
 
 /**
  * A room's messages, and somewhere to add to them.
@@ -117,6 +128,8 @@ export function RoomTimeline({
     the answer changes rather than when a render happens to notice.
   */
   const [nearTheTop, setNearTheTop] = useState(false);
+  /** Who is typing in this room, as Matrix user IDs, ours already removed. */
+  const [typists, setTypists] = useState<string[]>([]);
 
   const scroller = useRef<HTMLDivElement>(null);
   /*
@@ -138,6 +151,12 @@ export function RoomTimeline({
     is nothing else in a published timeline that says which happened.
   */
   const oldest = useRef<string | undefined>(undefined);
+  /*
+    When this session last said it was typing. A ref rather than state because
+    nothing is drawn from it: it exists only to keep a sentence from being one
+    IPC call per keystroke.
+  */
+  const said = useRef(0);
 
   // A timeline for the room before this one, still in flight when the channel
   // changed. Drawing it would put the last room's conversation under this
@@ -191,6 +210,40 @@ export function RoomTimeline({
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten = onTyping((published) => {
+      // One channel serves whichever room is open, so an answer about the
+      // room before this one is dropped rather than drawn under this room's
+      // name.
+      if (!cancelled && published.roomId === channel.id) {
+        setTypists(published.users);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      setTypists([]);
+      void unlisten.then((stop) => {
+        stop();
+      });
+    };
+  }, [channel.id]);
+
+  /*
+    Stop saying this session is typing when the room changes or the pane goes.
+    Without it, a half-written message abandoned by clicking another channel
+    leaves a name typing in the room just left until the homeserver's own
+    timeout expires it.
+  */
+  useEffect(
+    () => () => {
+      said.current = 0;
+      void timelineTyping(channel.id, false).catch(() => {});
+    },
+    [channel.id],
+  );
+
   // Separate from the subscription above, so that switching rooms does not
   // close the one being opened: this runs only when the component itself goes.
   useEffect(
@@ -207,8 +260,19 @@ export function RoomTimeline({
     message.
   */
   const senders = useMemo(
-    () => [...new Set(timeline.messages.map((message) => message.sender))].sort().join(" "),
-    [timeline.messages],
+    () =>
+      [
+        ...new Set([
+          ...timeline.messages.map((message) => message.sender),
+          // The typists too. Somebody can be typing without having said
+          // anything yet, and their user ID is not a name to put in front of
+          // "is typing".
+          ...typists,
+        ]),
+      ]
+        .sort()
+        .join(" "),
+    [timeline.messages, typists],
   );
 
   useEffect(() => {
@@ -293,6 +357,26 @@ export function RoomTimeline({
     });
   }, [mine, nearTheTop, timeline.moreBefore, timeline.loading]);
 
+  /**
+   * Tell the room this session is typing, at most every few seconds.
+   *
+   * Emptying the box says so immediately rather than waiting, because
+   * abandoning a message is exactly when the name should come down.
+   */
+  function report(text: string) {
+    const now = Date.now();
+    if (text.trim() === "") {
+      if (said.current === 0) return;
+      said.current = 0;
+      void timelineTyping(channel.id, false).catch(() => {});
+      return;
+    }
+    if (now - said.current < TYPING_EVERY) return;
+
+    said.current = now;
+    void timelineTyping(channel.id, true).catch(() => {});
+  }
+
   async function send() {
     if (draft.trim() === "" || sending) return;
 
@@ -304,6 +388,11 @@ export function RoomTimeline({
       // that failed loses what somebody wrote, and retyping it is the one
       // thing an interface must never ask for.
       setDraft("");
+      // Said, so no longer typing. Before the scroll rather than after it,
+      // because the room should stop showing this name the moment the message
+      // it was writing arrives.
+      said.current = 0;
+      void timelineTyping(channel.id, false).catch(() => {});
       // Whatever they said belongs at the bottom, wherever they were reading.
       following.current = true;
     } catch (raw: unknown) {
@@ -408,6 +497,18 @@ export function RoomTimeline({
         </p>
       )}
 
+      {/*
+        Always drawn, empty and all. A line that appeared and disappeared
+        would change the height of the scrolling box above it, which moves the
+        conversation under whoever is reading it, twice per sentence somebody
+        else types.
+      */}
+      <p className="timeline__typing" role="status">
+        {typingLabel(
+          typists.filter((who) => who !== selfId).map((who) => names[who] ?? who),
+        )}
+      </p>
+
       <form
         className="timeline__composer"
         onSubmit={(event) => {
@@ -424,7 +525,10 @@ export function RoomTimeline({
           rows={1}
           value={draft}
           placeholder={`Message ${channel.kind === "voice" ? name : `#${name}`}`}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            report(event.target.value);
+          }}
           onKeyDown={(event) => {
             // Enter sends and Shift+Enter breaks the line, which is what every
             // client anybody already uses does. Without the modifier check a

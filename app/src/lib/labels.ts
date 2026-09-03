@@ -156,3 +156,23 @@ export function sizeLabel(bytes: number | undefined): string | null {
   if (bytes < 1_000_000) return `${Math.round(bytes / 1_000)} kB`;
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
+
+/**
+ * How many people are typing, said the way a person would say it.
+ *
+ * Empty for nobody, which is what keeps the line reserved and silent rather
+ * than appearing and disappearing under whoever is reading.
+ *
+ * Two names and then a count. Three names is already longer than the composer
+ * on a narrow window, and a room where six people are typing is a room where
+ * the useful fact is "several", not which six.
+ */
+export function typingLabel(names: string[]): string {
+  const [first, second] = names;
+  if (first === undefined) return "";
+  if (second === undefined) return `${first} is typing...`;
+  if (names.length === 2) return `${first} and ${second} are typing...`;
+
+  const others = names.length - 2;
+  return `${first}, ${second} and ${others} ${others === 1 ? "other" : "others"} are typing...`;
+}
