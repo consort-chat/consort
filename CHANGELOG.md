@@ -4,6 +4,16 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.4.0 (2026-09-03)
+
+### Added
+
+- **timeline:** Make the links in a message links
+
+### Fixed
+
+- **timeline:** Stay at the bottom while a picture is still loading
+
 ## 0.3.0 (2026-09-03)
 
 ### Added
