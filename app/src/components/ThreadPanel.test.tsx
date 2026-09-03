@@ -26,6 +26,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 import { ThreadPanel } from "./ThreadPanel";
+import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type { Message, Thread } from "../lib/api";
@@ -348,5 +349,68 @@ describe("the panel's width", () => {
     fireEvent.pointerMove(window, { clientX: 2_000 });
 
     expect(resized).toHaveBeenLastCalledWith(300);
+  });
+});
+
+describe("where the panel opens", () => {
+  it("opens at the newest reply rather than the oldest one loaded", async () => {
+    // A panel that opened at the top put somebody at the start of a
+    // conversation they pressed a reply count to see the end of.
+    fakeScrolling(900, 300);
+
+    const { container } = draw();
+    await waitFor(() => expect(onThread).toHaveBeenCalled());
+    await act(async () => {
+      publish(OPEN);
+    });
+
+    expect(container.querySelector(".thread__scroll")?.scrollTop).toBe(900);
+  });
+
+  it("leaves a reader who has scrolled up where they are", async () => {
+    fakeScrolling(900, 300);
+    const { container } = draw();
+    await waitFor(() => expect(onThread).toHaveBeenCalled());
+    await act(async () => {
+      publish(OPEN);
+    });
+
+    const box = container.querySelector(".thread__scroll");
+    if (box === null) throw new Error("the panel drew no scrolling box");
+    box.scrollTop = 100;
+    fireEvent.scroll(box);
+    await act(async () => {
+      publish({
+        ...OPEN,
+        messages: [...OPEN.messages, said("$b:example.org", "seconded", NOON + 2_000)],
+      });
+    });
+
+    expect(box.scrollTop).toBe(100);
+  });
+
+  it("opens a second thread at its own bottom", async () => {
+    // Following is per conversation. Carrying the last one's position over
+    // would open a thread halfway up for no reason anybody could see.
+    fakeScrolling(900, 300);
+    const { container } = draw();
+    await waitFor(() => expect(onThread).toHaveBeenCalled());
+    await act(async () => {
+      publish(OPEN);
+    });
+
+    const box = container.querySelector(".thread__scroll");
+    if (box === null) throw new Error("the panel drew no scrolling box");
+    box.scrollTop = 100;
+    fireEvent.scroll(box);
+    await act(async () => {
+      publish({
+        ...OPEN,
+        rootId: "$other:example.org",
+        root: said("$other:example.org", "and the icon"),
+      });
+    });
+
+    expect(box.scrollTop).toBe(900);
   });
 });

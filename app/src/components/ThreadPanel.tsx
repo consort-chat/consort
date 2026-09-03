@@ -1,5 +1,7 @@
 import {
+  useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,6 +21,7 @@ import {
 } from "../lib/api";
 import { MessageGroups, group } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
+import { AT_THE_BOTTOM } from "./RoomTimeline";
 import "./ThreadPanel.css";
 
 /**
@@ -100,6 +103,14 @@ export function ThreadPanel({
   // The scrolling box, so a jump to an answered message is looked for in this
   // panel rather than in the room beside it, which draws the root as well.
   const scroller = useRef<HTMLDivElement>(null);
+  /*
+    Whether the reader was at the bottom before this render, on the room's
+    terms. True to begin with, which is what opens a thread at its newest
+    reply: a panel that opened at the top put somebody at the oldest thing
+    loaded and made them scroll through a conversation to find the part they
+    pressed it for.
+  */
+  const following = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +164,30 @@ export function ThreadPanel({
       cancelled = true;
     };
   }, [roomId, senders]);
+
+  /*
+    Declared before the effect that scrolls, and that order is the point. A
+    different thread is a different conversation, so it opens at its own bottom
+    however far up the last one was left.
+  */
+  useLayoutEffect(() => {
+    following.current = true;
+  }, [thread?.rootId]);
+
+  // Before the browser paints, so opening a thread is not a visible fall from
+  // the top of it to the bottom.
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (box === null || !following.current) return;
+    box.scrollTop = box.scrollHeight;
+  }, [thread?.messages, thread?.rootId]);
+
+  const remember = useCallback(() => {
+    const box = scroller.current;
+    if (box === null) return;
+    following.current =
+      box.scrollHeight - box.scrollTop - box.clientHeight < AT_THE_BOTTOM;
+  }, []);
 
   const replies = useMemo(
     () => group(thread?.messages ?? []),
@@ -265,7 +300,7 @@ export function ThreadPanel({
         </button>
       </div>
 
-      <div className="thread__scroll" ref={scroller}>
+      <div className="thread__scroll" ref={scroller} onScroll={remember}>
         {/*
           The message it hangs from, above a rule rather than in the list. It
           is what the replies are about rather than the first of them, and a

@@ -36,8 +36,12 @@ import "./RoomTimeline.css";
  * zoomed or on a display that is not one device pixel per CSS pixel, so an
  * exact comparison reads as "scrolled up" for somebody who is at the bottom
  * and never follows the conversation again.
+ *
+ * Exported because the thread panel follows its own conversation on the same
+ * terms, and two boxes on one screen disagreeing about what counts as the
+ * bottom would be a difference nobody could see the reason for.
  */
-const AT_THE_BOTTOM = 48;
+export const AT_THE_BOTTOM = 48;
 
 /**
  * A room's messages, and somewhere to add to them.
