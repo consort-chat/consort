@@ -3,23 +3,35 @@
 
   Darker than the settings backdrop, because what is on top of it is a
   photograph rather than a panel and anything lighter competes with it.
+
+  The row is spelled out rather than left implicit. An implicit row is `auto`,
+  which is a height derived from its contents, and a pane with no definite
+  height is a pane the picture below cannot take a percentage of. One `fr` of a
+  container that is `inset: 0` is a definite track, and that is the whole
+  mechanism by which a tall picture stays inside the window.
 */
 .viewer {
   position: fixed;
   inset: 0;
   z-index: 100;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   background: oklch(8% 0.01 285 / 0.92);
 }
 
 /*
   Fills the backdrop and centres the picture in it, so the space either side of
   a tall one is still somewhere a press closes from.
+
+  `min-height: 0` because a grid item's automatic minimum is its content, and
+  its content here is a photograph that may be four thousand pixels tall. That
+  minimum would push the pane back past the track it was just given.
 */
 .viewer__pane {
   position: relative;
   display: grid;
   place-items: center;
+  min-height: 0;
   padding: var(--space-12) var(--space-6);
 }
 
@@ -27,6 +39,10 @@
   Scaled to fit rather than to fill. A picture smaller than the window is drawn
   at its own size: blowing a 200px avatar up to fill a monitor makes a mess of
   it and answers a question nobody asked.
+
+  Both percentages are of the pane's content box, so the padding above is what
+  keeps a full-height picture clear of the controls in the corners and of the
+  facts panel along the bottom.
 */
 .viewer__image {
   max-width: 100%;
