@@ -4,6 +4,31 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.2.0 (2026-09-03)
+
+### Added
+
+- **timeline:** Say when a message has a thread
+- **timeline:** Read a thread
+- **timeline:** Keep an open thread up to date
+- **timeline:** Open a thread beside the room
+- **timeline:** Reply in a thread
+- **shell:** Fold the channel list away
+- **timeline:** Draw a reply as a reply
+- **timeline:** Keep the @, and say when a mention is about you
+- **timeline:** Say a thread is opening
+- **timeline:** Drag the thread panel wider
+
+### Documentation
+
+- Say that threads are built
+- Say that replies and mentions are drawn
+
+### Fixed
+
+- **timeline:** Make a picture's frame the size of the picture again
+- **timeline:** Keep a picture's shape in a narrow column
+
 ## 0.1.5 (2026-09-02)
 
 ### Fixed
