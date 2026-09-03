@@ -1,12 +1,13 @@
 import { createElement, useMemo, type ReactNode } from "react";
 
+import { mxcUrl } from "../lib/api";
+
 /**
  * The elements this build draws, and what it draws them as.
  *
  * Everything markdown produces plus the rest of the tags the specification
- * lists for `m.room.message`, minus the ones that would need something this
- * build has not got: `img` has no way to fetch an `mxc://`, and `font` and the
- * colour attributes are a typography decision nobody has made.
+ * lists for `m.room.message`, minus `font` and the colour attributes, which
+ * are a typography decision nobody has made.
  *
  * A tag that is not here is not drawn, but what is inside it still is. See
  * [`render`] for why that is the safe half of the rule rather than the
@@ -43,6 +44,7 @@ const DRAWN: Record<string, string> = {
   td: "td",
   caption: "caption",
   a: "a",
+  img: "img",
 };
 
 /**
@@ -131,6 +133,42 @@ function draw(node: Node, key: string): ReactNode {
     );
   }
 
+  if (tag === "img") {
+    /*
+      Only an `mxc://`, and that is the whole security rule here rather than a
+      convenience. An `img` the sender chose the address of is a request the
+      reader's machine makes to a server the sender picked: a read receipt
+      nobody asked for, with an IP address attached. Refusing every other
+      scheme means the only thing a message can point at is the homeserver
+      this account is already talking to.
+
+      The content security policy says the same thing again in
+      `tauri.conf.json`, and neither is a reason to drop the other: this is
+      what decides, and that is what catches a mistake made here.
+    */
+    const src = mxcUrl(node.getAttribute("src") ?? "");
+    if (src === undefined) return null;
+
+    /*
+      A custom emoji is drawn at the height of the words around it, whatever
+      size the sender's client wrote on it. `data-mx-emoticon` is what says it
+      is one, which is MSC2545 and what every client that sends them uses.
+    */
+    const emoticon = node.hasAttribute("data-mx-emoticon");
+    return (
+      <img
+        key={key}
+        className={emoticon ? "body__emoticon" : "body__image"}
+        src={src}
+        // The shortcode, which is what a sender writes and what somebody
+        // reading with a screen reader needs. Empty rather than absent when
+        // there is none: an image with no description is decoration.
+        alt={node.getAttribute("alt") ?? node.getAttribute("title") ?? ""}
+        title={node.getAttribute("title") ?? undefined}
+      />
+    );
+  }
+
   // Void elements take no children, and React throws rather than ignoring
   // them.
   if (tag === "br" || tag === "hr") return createElement(tag, { key });
@@ -151,8 +189,9 @@ function draw(node: Node, key: string): ReactNode {
  * that came off the wire is ever handed back to the HTML parser that owns the
  * page, so there is no ordering of tags, no malformed nesting and no encoding
  * trick that can end with a script in the document. React escapes every piece
- * of text on the way in, and every attribute except an anchor's address is
- * dropped on the floor.
+ * of text on the way in, and every attribute is dropped on the floor except
+ * the four that are read by name: an anchor's address, and an image's source,
+ * description and tooltip. Each of those is checked here before it is used.
  *
  * `DOMParser` is what makes that cheap: the document it returns is inert.
  * Scripts in it do not run and images in it are never fetched, which is the

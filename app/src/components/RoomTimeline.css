@@ -358,6 +358,31 @@
 }
 
 /*
+  A custom emoji in the middle of a sentence.
+
+  Sized against the words rather than in pixels, so it stays right when the
+  type scale changes, and `vertical-align` rather than a flex row because it is
+  a character in a line of text and has to wrap like one.
+*/
+.body__emoticon {
+  width: auto;
+  height: 1.4em;
+  vertical-align: -0.3em;
+  object-fit: contain;
+}
+
+/*
+  An image somebody put in a message body, which is not an attachment and not
+  an emoji. Rare, and capped so one cannot take over the column.
+*/
+.body__image {
+  max-width: min(320px, 100%);
+  max-height: 240px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
+/*
   Somebody said your name.
 
   A band down the left and a lift in the background, which is how every client

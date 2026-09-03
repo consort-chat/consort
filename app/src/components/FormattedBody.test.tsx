@@ -130,4 +130,52 @@ describe("FormattedBody", () => {
     expect(link).toHaveTextContent("general");
     expect(link).not.toHaveClass("timeline__mention");
   });
+
+  it("draws a custom emoji from the homeserver", () => {
+    const rendered = body(
+      '<p>nice <img data-mx-emoticon height="32" src="mxc://example.org/abc" alt=":party:" title=":party:"> one</p>',
+    );
+
+    const emoji = rendered.querySelector("img");
+    expect(emoji).toHaveClass("body__emoticon");
+    expect(emoji).toHaveAttribute("alt", ":party:");
+    expect(emoji?.getAttribute("src")).toMatch(/^consortmedia:/);
+  });
+
+  it("refuses an image pointed anywhere but the homeserver", () => {
+    // The whole security rule. An img whose address the sender chose is a
+    // request the reader's machine makes to a server the sender picked: a read
+    // receipt nobody asked for, with an IP address attached.
+    const rendered = body(
+      '<p>hello<img src="https://tracker.example/pixel.gif" alt=""></p>',
+    );
+
+    expect(rendered.querySelector("img")).toBeNull();
+    expect(rendered).toHaveTextContent("hello");
+  });
+
+  it("refuses a data URI too", () => {
+    // Not a network request, but not an image a message should be able to
+    // conjure either, and the allow-list is what says so rather than a list of
+    // the schemes somebody thought of.
+    const rendered = body(
+      '<p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt=""></p>',
+    );
+
+    expect(rendered.querySelector("img")).toBeNull();
+  });
+
+  it("caps an image that is not an emoji", () => {
+    const rendered = body('<p><img src="mxc://example.org/abc" alt="a chart"></p>');
+
+    expect(rendered.querySelector("img")).toHaveClass("body__image");
+  });
+
+  it("describes an emoji by its title when it carries no alt", () => {
+    const rendered = body(
+      '<p><img data-mx-emoticon src="mxc://example.org/abc" title=":party:"></p>',
+    );
+
+    expect(rendered.querySelector("img")).toHaveAttribute("alt", ":party:");
+  });
 });

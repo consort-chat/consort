@@ -1625,6 +1625,31 @@ export function mediaUrl(handle: string): string {
 }
 
 /**
+ * Where to point an `img` at an unencrypted `mxc://`, or nothing.
+ *
+ * What custom emoji need. An emoji in a message body is an `img` whose `src`
+ * is an `mxc://` URI rather than an opaque handle, because it comes from a
+ * pack rather than from the event, and there is no attachment handle to be
+ * had.
+ *
+ * The handle is built here rather than fetched, because a plain source is
+ * exactly `{"url": "mxc://..."}` and a round trip per emoji would be a request
+ * for every laugh in a busy room. `consort_matrix::timeline::media` parses it
+ * back into `MediaSource::Plain` and fetches it through the authenticated
+ * media path like anything else, so it arrives cached and never leaves the
+ * homeserver.
+ *
+ * `undefined` for anything that is not an `mxc://`. That refusal is the point:
+ * it is the only thing standing between a message and an `img` pointed at
+ * somebody's web server, which is a read receipt they did not ask for and an
+ * IP address they did not give.
+ */
+export function mxcUrl(uri: string): string | undefined {
+  if (!uri.startsWith("mxc://")) return undefined;
+  return mediaUrl(JSON.stringify({ url: uri }));
+}
+
+/**
  * Nobody is talking, which is where every session starts.
  *
  * A single frozen instance rather than a fresh `new Set()` per default, so a

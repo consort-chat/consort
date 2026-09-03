@@ -123,6 +123,29 @@ mod tests {
     }
 
     #[test]
+    fn media_source_of_a_plain_mxc() {
+        // The other half of `mxcUrl` in `app/src/lib/api.ts`, which builds
+        // this exact string for a custom emoji because a pack has no
+        // attachment handle to hand out. The literal is the contract: if ruma
+        // ever changes how a plain source is written, this fails here rather
+        // than becoming a broken picture in every message that has one.
+        let handle = r#"{"url":"mxc://example.org/abc"}"#;
+
+        let source: MediaSource =
+            serde_json::from_str(handle).expect("a plain source is a media source");
+
+        assert!(
+            matches!(&source, MediaSource::Plain(uri) if uri.as_str() == "mxc://example.org/abc"),
+            "{source:?}"
+        );
+        assert_eq!(
+            serde_json::to_string(&source).expect("a source serialises"),
+            handle,
+            "the frontend builds this string by hand"
+        );
+    }
+
+    #[test]
     fn a_picture_comes_back_as_it_arrived() {
         // Byte for byte, under the type the bytes say it is rather than the
         // one the sender claimed.

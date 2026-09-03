@@ -10,6 +10,7 @@ import {
   asCommandError,
   audioDevices,
   mediaUrl,
+  mxcUrl,
   callConnect,
   callDisconnect,
   callRoomId,
@@ -767,6 +768,24 @@ describe("the call commands", () => {
     ).toBe(
       "consortmedia://localhost/eyJ1cmwiOiJteGM6Ly9leGFtcGxlLm9yZy9hYmMiLCJrZXkiOnsiayI6ImErYi9jIn19",
     );
+  });
+
+  it("addresses a plain mxc as the source Rust parses it back into", () => {
+    // What a custom emoji needs: it comes from a pack rather than from an
+    // event, so there is no attachment handle and this builds the one a plain
+    // `MediaSource` serialises to. `media_source_of_a_plain_mxc` in
+    // `timeline/media.rs` reads this same literal back.
+    expect(mxcUrl("mxc://example.org/abc")).toBe(
+      "consortmedia://localhost/eyJ1cmwiOiJteGM6Ly9leGFtcGxlLm9yZy9hYmMifQ",
+    );
+  });
+
+  it("refuses to address anything that is not an mxc", () => {
+    // The only thing stopping a message pointing an img at somebody's web
+    // server, which is a read receipt the reader did not agree to.
+    expect(mxcUrl("https://tracker.example/pixel.gif")).toBeUndefined();
+    expect(mxcUrl("data:image/gif;base64,R0lGOD")).toBeUndefined();
+    expect(mxcUrl("")).toBeUndefined();
   });
 
   it("uses no character a path would have to escape", () => {
