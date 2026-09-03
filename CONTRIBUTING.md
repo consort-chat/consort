@@ -15,7 +15,8 @@ the pull request.
 
 ## Setting up
 
-See [Building from source](README.md#building-from-source) in the README.
+See [docs/BUILDING.md](docs/BUILDING.md) for the prerequisites and for
+Windows, which needs a page of its own.
 
 The short version:
 
@@ -132,10 +133,50 @@ taking `&AppState` and test that.
 
 ## AI assistance
 
-Read the [AI-assisted development](README.md#ai-assisted-development) section of
-the README. The summary is that AI is welcome and unread output is not, and the
-line between them is whether you can explain and defend every line you are
-submitting.
+**Use AI. Read what it wrote before you send it.**
+
+Consort is built with AI assistance and contributions written with AI
+assistance are welcome. There is no disclosure ritual and no scarlet letter for
+using a model. Moving fast is the point.
+
+What is not welcome is unread output.
+
+The cost of generated code does not disappear, it moves. When you skip the part
+where you read, test, and cut your own patch down, you have not saved effort,
+you have transferred it to whoever reviews it. Review is the scarce resource on
+this project. A 900-line diff that a human has not read is not a contribution,
+it is a request for someone else to do the hard part.
+
+**Before you open a pull request, you should be able to say yes to all of these:**
+
+- I have read every line I am submitting and can explain why it is there.
+- I ran it. It actually does the thing.
+- I removed the parts that were generated but not needed, including invented
+  abstractions, defensive branches for conditions that cannot occur, and
+  comments restating what the line above already says.
+- The tests test behaviour, not the implementation echoed back.
+- If a reviewer asks "why this approach," I have an answer that is not
+  "that is what it gave me."
+
+**What gets a change sent back:**
+
+- Sweeping refactors bundled into an unrelated fix.
+- Comments narrating the obvious (`// increment the counter`).
+- Error handling that catches everything and does nothing.
+- Tests asserting that a mock was called.
+- Docs describing behaviour the code does not have.
+- Any pull request the author cannot discuss.
+
+**If it keeps happening,** we will ask you to submit smaller changes, and if it
+still keeps happening, we will stop accepting pull requests from you. That is
+not a threat about using AI. It is the same standard we would apply to someone
+pasting code from anywhere else without reading it. The tool is fine. Not
+reading is the problem.
+
+Small, focused, explained pull requests get reviewed quickly. That is true here
+whether a model wrote them or you did.
+
+---
 
 If a maintainer asks why you did something and the honest answer is that you did
 not choose it, say so. That is a fine answer once, on a small change, while you
