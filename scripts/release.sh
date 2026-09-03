@@ -7,7 +7,7 @@
 # That is the whole reason the commit messages are written the way
 # CONTRIBUTING.md asks for.
 #
-# Five files carry the version and none of them reads another, which is what
+# Six files carry the version and none of them reads another, which is what
 # this exists to stop being a manual checklist. Pushing is not one of the
 # steps: this repository has two remotes and which of them gets a release is a
 # decision rather than a formality.
@@ -57,8 +57,14 @@ sed -i "s/^  \"version\": \".*\",$/  \"version\": \"$version\",/" app/src-tauri/
 # tarball reports.
 sed -i "s/^pkgver=.*$/pkgver=$version.r0.g0000000/" packaging/aur/PKGBUILD
 
-# The two filenames the install instructions name.
-sed -i "s#/deb/Consort_[0-9][^_]*_amd64.deb#/deb/Consort_${version}_amd64.deb#" README.md
+# Not a placeholder. The tagged-release PKGBUILD builds `#tag=v$pkgver`, so
+# this line is the only thing saying which commit gets packaged, and the Arch
+# release workflow refuses to run when it disagrees with the tag.
+sed -i "s/^pkgver=.*$/pkgver=$version/" packaging/arch/PKGBUILD
+
+# The one built-artefact filename the install instructions still spell out. The
+# rest name `<version>`, because what a release page carries is fetched rather
+# than found at a path.
 sed -i "s#/rpm/Consort-[0-9][^-]*-1.x86_64.rpm#/rpm/Consort-${version}-1.x86_64.rpm#" README.md
 
 # So Cargo.lock's four consort-* entries follow. --offline because this reads
@@ -92,5 +98,6 @@ Tagged $tag. Nothing is pushed. When you are ready:
   git push forgejo main --follow-tags
   git push origin main --follow-tags
 
-Pushing the tag to origin is what builds the installer and writes the notes.
+Pushing the tag to origin is what writes the notes and builds the three
+packages.
 MSG

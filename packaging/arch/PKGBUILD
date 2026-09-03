@@ -1,0 +1,108 @@
+# Maintainer: Consort contributors <https://github.com/consort-chat/consort>
+
+# Consort at a tagged release, as opposed to ../aur/PKGBUILD, which builds the
+# latest commit on main and is named consort-git for it. The two are the pair
+# that PKGBUILD's header describes: it carries provides=(consort) and
+# conflicts=(consort), so pacman already refuses to install both, and nothing
+# more is needed on this side.
+#
+# Every decision below is explained there rather than twice: why depends is
+# exactly this list and was read off `readelf -d` rather than guessed, why
+# !lto is required to link at all, why the frontend has to be built before
+# cargo, and why --features custom-protocol is load-bearing. Read that file
+# before changing this one, and change both together.
+#
+# pkgver is written by scripts/release.sh along with the four other files that
+# carry the version. Do not edit it by hand: the release workflow refuses to
+# build when it disagrees with the tag it was asked for.
+
+pkgname=consort
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Matrix chat client with voice, in a Tauri desktop shell"
+arch=('x86_64' 'aarch64')
+url="https://github.com/consort-chat/consort"
+license=('AGPL-3.0-only')
+
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libsoup3'
+  'sqlite'
+  'glib2'
+  'cairo'
+  'gdk-pixbuf2'
+  'dbus'
+  'libgcc'
+  'glibc'
+  'hicolor-icon-theme'
+)
+makedepends=('cargo' 'git' 'nodejs' 'pnpm')
+
+options=('!lto' '!debug')
+
+# The tag rather than a tarball. GitHub's archive tarballs are generated on
+# demand and their checksums have changed under people before now, so there
+# would be nothing honest to put in sha256sums; a tag is a name for one commit.
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+
+  rm -f rust-toolchain.toml
+
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+
+  cd app
+  pnpm install --frozen-lockfile --store-dir "$srcdir/pnpm-store"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+
+  ( cd app && pnpm build )
+
+  cargo build --frozen --release --package consort-app --bin consort \
+    --features custom-protocol
+}
+
+check() {
+  cd "$srcdir/$pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Character for character what build() sets, or cargo refingerprints and
+  # recompiles the whole graph.
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+
+  cargo test --frozen --release --workspace
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 target/release/consort "$pkgdir/usr/bin/consort"
+  install -Dm644 packaging/linux/consort.desktop \
+    "$pkgdir/usr/share/applications/consort.desktop"
+
+  install -Dm644 app/src-tauri/icons/icon.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/consort.svg"
+  install -Dm644 app/src-tauri/icons/32x32.png \
+    "$pkgdir/usr/share/icons/hicolor/32x32/apps/consort.png"
+  install -Dm644 app/src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/consort.png"
+  install -Dm644 'app/src-tauri/icons/128x128@2x.png' \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/consort.png"
+  install -Dm644 app/src-tauri/icons/icon.png \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/consort.png"
+
+  # AGPL-3.0 is not in Arch's `licenses` package, so the text ships here.
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

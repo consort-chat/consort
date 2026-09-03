@@ -179,11 +179,13 @@ time to see where the next release would land. The consequence is worth being
 awake to: a `feat` that should have been a `fix` moves the minor number and
 there is no taking it back once the tag is pushed.
 
-**Five files carry the version and none of them reads another:** `Cargo.toml`,
+**Six files carry the version and none of them reads another:** `Cargo.toml`,
 `app/package.json`, `app/src-tauri/tauri.conf.json`, the placeholder in
-`packaging/aur/PKGBUILD` that makepkg overwrites, and the two built-artefact
-filenames in the README. The script writes all five and refreshes `Cargo.lock`
-so its four `consort-*` entries follow.
+`packaging/aur/PKGBUILD` that makepkg overwrites, `pkgver` in
+`packaging/arch/PKGBUILD`, which is not a placeholder but the name of the
+commit that package builds, and the `.rpm` filename in the README. The script
+writes all six and refreshes `Cargo.lock` so its four `consort-*` entries
+follow.
 
 **The changelog and the tag message both come from the commits.**
 `git cliff --tag` is what puts the new commits under the version about to
@@ -193,8 +195,11 @@ annotated tag, so `git show v0.2.0` says what changed.
 
 **Nothing is pushed.** The script prints the two commands and stops. Pushing
 the tag to `origin` is what runs `.github/workflows/release.yml`, which writes
-the release page from the same notes and attaches a Windows installer built
-from the tagged commit.
+the release page from the same notes and hangs three builds off it: a Windows
+installer, a `.deb` built on Debian 12 so it runs on more than the newest
+Ubuntu, and an Arch package built by `makepkg` from `packaging/arch/PKGBUILD`.
+The two Linux ones are workflows of their own, so either can be rebuilt for a
+tag on its own from the Actions tab.
 
 ## Licence
 

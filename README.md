@@ -117,16 +117,17 @@ See [the roadmap](#roadmap).
 
 ## Installing
 
-There is a Windows installer, and nothing else is packaged. Every Linux route
-below builds from source, and no binary anywhere is signed. See
-[Known limitations](#known-limitations) before you install this on a machine
-you care about.
+Every tag carries three builds on its
+[release page](https://github.com/consort-chat/consort/releases), each made by
+CI on a clean runner from the tagged commit: a Windows installer, a `.deb`, and
+an Arch package. Fedora still builds from source. Nothing is signed and no
+repository serves any of it, so every install below is a file you fetched
+yourself. See [Known limitations](#known-limitations) before you put this on a
+machine you care about.
 
 ### Windows
 
-Every tag carries `Consort_<version>_x64-setup.exe` on its
-[release page](https://github.com/consort-chat/consort/releases), built by CI
-on a clean runner from the tagged commit.
+`Consort_<version>_x64-setup.exe`.
 
 It is not signed, because a code-signing certificate costs money this project
 does not have. SmartScreen will therefore say "Windows protected your PC" the
@@ -137,8 +138,21 @@ the download against the SHA-256 GitHub prints beside the asset.
 
 ### Arch Linux
 
-A PKGBUILD lives in [`packaging/aur/`](packaging/aur/). It is not on the AUR
-yet, so build it in place:
+`consort-<version>-1-x86_64.pkg.tar.zst`, built by `makepkg` from
+[`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) at the tag:
+
+```sh
+sudo pacman -U ./consort-<version>-1-x86_64.pkg.tar.zst
+```
+
+pacman will say the package is not signed and ask whether to install it
+anyway. Nothing here has a key yet, so that is the expected answer rather than
+a sign something went wrong.
+
+To build the same package yourself instead, run `makepkg -si` in
+`packaging/arch`. To track `main` rather than the last release, a second
+PKGBUILD in [`packaging/aur/`](packaging/aur/) builds the latest commit.
+Neither is on the AUR yet, so build in place:
 
 ```sh
 git clone https://github.com/consort-chat/consort.git
@@ -146,9 +160,9 @@ cd consort/packaging/aur
 makepkg -si
 ```
 
-That installs a `consort-git` package: the `consort` binary in `/usr/bin`, a
-desktop entry, and icons in the hicolor theme. When the package is published,
-`yay -S consort-git` will do the same thing.
+Either way you get the `consort` binary in `/usr/bin`, a desktop entry, and
+icons in the hicolor theme. The two packages declare each other as conflicts,
+so pacman will not let both be installed.
 
 If `makepkg` stops with a missing `pnpm` dependency even though `pnpm --version`
 works, your pnpm comes from corepack rather than the `pnpm` package. makepkg
@@ -170,17 +184,30 @@ flags.
 
 Arch is the distro this is developed on, so it is the one most likely to work.
 
-### Debian, Ubuntu, Fedora
+### Debian and Ubuntu
 
-`pnpm tauri build` writes a `.deb` and an `.rpm` to `target/release/bundle/`:
+`Consort_<version>_amd64.deb`.
 
 ```sh
-sudo apt install ./target/release/bundle/deb/Consort_0.2.0_amd64.deb
-sudo dnf install ./target/release/bundle/rpm/Consort-0.2.0-1.x86_64.rpm
+sudo apt install ./Consort_<version>_amd64.deb
 ```
 
-Both are built and installed locally. Neither is signed, and neither is served
-from anywhere.
+It is built on Debian 12, which is the oldest thing it will run on, and that is
+deliberate: a package built on the current Ubuntu links a newer glibc, installs
+happily on Debian 12, and then refuses to start. So this one covers Debian 12
+and 13 and Ubuntu 24.04 onwards from one file.
+
+Ubuntu 22.04 is out of reach. It has glibc 2.35 and only webkit2gtk-4.0, and
+Tauri 2 needs 4.1.
+
+### Fedora
+
+Not built by CI, because nobody has said where an `.rpm` would be tested.
+`pnpm tauri build` writes one locally alongside the `.deb`:
+
+```sh
+sudo dnf install ./target/release/bundle/rpm/Consort-0.2.0-1.x86_64.rpm
+```
 
 ### AppImage
 
@@ -195,7 +222,7 @@ There isn't one, on purpose. Two separate reasons:
   than shipping none.
 
 It has to be built in CI on an old base image. Until that exists, use the
-`.deb`, the `.rpm`, or the PKGBUILD.
+`.deb`, which is built that way for the same reason, or the Arch package.
 
 ## Building from source
 

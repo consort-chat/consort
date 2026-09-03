@@ -1,0 +1,95 @@
+# A .pkg.tar.zst, for Arch.
+#
+# Called by release.yml once a tag has a release page, and dispatchable on its
+# own to rebuild one without touching the other packages.
+#
+# ## Why this one does not check out the tag
+#
+# The other two package workflows compile the tree they check out. This one
+# does not compile anything itself: it runs makepkg over
+# packaging/arch/PKGBUILD, and that recipe names the commit it builds, as
+# `#tag=v$pkgver`. So what has to be checked out is the recipe, and the recipe
+# that is current is the one on the ref this workflow was started from.
+#
+# Which leaves one thing that can go wrong, and it is guarded rather than
+# assumed: somebody dispatching this against a tag the recipe is not for would
+# get a package built from one version attached to the release of another. The
+# versions are compared before anything is built.
+#
+# ## Why the tests are skipped
+#
+# The PKGBUILD's check() runs the workspace test suite in release mode, which
+# resolves matrix-sdk a second time for its `testing` feature and so compiles
+# the largest thing in the graph twice. A tag points at a commit on main, and
+# ci.yml ran those tests on that commit already. Somebody building this
+# PKGBUILD by hand still gets check(); only the release build skips it.
+
+name: Arch package
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing tag to build a package for.
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  pkg:
+    name: .pkg.tar.zst
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      # base-devel has the compiler, fakeroot and sudo, and neither git (which
+      # both the checkout and the PKGBUILD's source need) nor gh.
+      - name: System packages
+        run: pacman -Syu --noconfirm --needed git github-cli
+
+      - uses: actions/checkout@v4
+
+      - name: The recipe is for this tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          recipe=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)
+          if [ "v$recipe" != "$TAG" ]; then
+            echo "packaging/arch/PKGBUILD builds v$recipe and this run is for $TAG."
+            echo "Start this workflow from a ref whose recipe is the one you want."
+            exit 1
+          fi
+          echo "Building v$recipe."
+
+      # makepkg refuses to run as root and the container has nobody else in it.
+      # Passwordless sudo is what --syncdeps needs to install the makedepends,
+      # and is the standard shape for building a package in a container.
+      - name: Somebody for makepkg to be
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+
+      - name: Build the package
+        working-directory: packaging/arch
+        run: sudo -u builder --set-home makepkg --syncdeps --noconfirm --nocheck
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          pkg="packaging/arch/consort-${version}-1-x86_64.pkg.tar.zst"
+          test -f "$pkg"
+          gh release upload "$TAG" "$pkg" --clobber

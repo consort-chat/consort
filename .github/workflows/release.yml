@@ -1,8 +1,14 @@
 # What a tag turns into.
 #
-# Pushing `v*` writes the release notes and attaches a Windows installer to
-# them. Nothing here is run by hand and nothing here decides a version: the
-# version is already in the tag, and `scripts/release.sh` is what chose it.
+# Pushing `v*` writes the release notes and hangs three builds off them: a
+# Windows installer, a .deb for Debian and Ubuntu, and a package for Arch.
+# Nothing here is run by hand and nothing here decides a version: the version
+# is already in the tag, and `scripts/release.sh` is what chose it.
+#
+# The Windows build is a job in this file and the two Linux ones are workflows
+# of their own, called from here so they cannot start before the release page
+# they upload to exists. That also makes each of them dispatchable alone, which
+# is what rebuilding one package without the others looks like.
 #
 # ## Backfilling
 #
@@ -13,15 +19,17 @@
 #
 # ## Cost
 #
-# Free, and only because both runners are standard and the repository is
+# Free, and only because every runner here is standard and the repository is
 # public. A larger runner is billed on a public repository like any other, so
-# neither job may move to one.
+# no job may move to one.
 #
-# ## The installer is not signed
+# ## Nothing here is signed
 #
-# Windows SmartScreen will warn about it on first run, and there is no way
-# around that short of a code-signing certificate. The README says so where
-# somebody downloading it will read it.
+# Windows SmartScreen will warn about the installer on first run, and there is
+# no way around that short of a code-signing certificate. The two Linux
+# packages are unsigned in the same sense: no repository serves them and no key
+# vouches for them. The README says so where somebody downloading them will
+# read it.
 
 name: Release
 
@@ -158,3 +166,23 @@ jobs:
           exe="target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe"
           test -f "$exe"
           gh release upload "$TAG" "$exe" --clobber
+
+  # Named for what they are rather than for the file behind them, because this
+  # is what a person watching a release run sees.
+  deb:
+    name: Debian package
+    needs: notes
+    uses: ./.github/workflows/package-deb.yml
+    permissions:
+      contents: write
+    with:
+      tag: ${{ needs.notes.outputs.tag }}
+
+  arch:
+    name: Arch package
+    needs: notes
+    uses: ./.github/workflows/package-arch.yml
+    permissions:
+      contents: write
+    with:
+      tag: ${{ needs.notes.outputs.tag }}

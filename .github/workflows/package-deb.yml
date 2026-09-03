@@ -1,0 +1,108 @@
+# A .deb, for Debian and Ubuntu.
+#
+# Called by release.yml once a tag has a release page, and dispatchable on its
+# own to backfill a tag that was released before this file existed or to
+# rebuild one without touching the other packages.
+#
+# ## Why this builds in a bookworm container
+#
+# Because the glibc it links against is the oldest one it will run on, and
+# `ubuntu-latest` is noble. A package built there needs glibc 2.39, so it
+# installs on Debian 12 and then dies at startup with a version error, which is
+# worse than not being offered. Debian 12 is glibc 2.36 and carries
+# webkit2gtk-4.1, so building there covers Debian 12 and 13 and Ubuntu 24.04
+# onwards from one artefact.
+#
+# Ubuntu 22.04 is out of reach either way: it is glibc 2.35, older than
+# anything with webkit2gtk-4.1 in it, and 4.0 is not a version Tauri 2 builds
+# against.
+#
+# The system dependency list is the one ci.yml's Rust job uses, which is what
+# makes it known to compile rather than guessed.
+
+name: Debian package
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing tag to build a .deb for.
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 3
+  RUSTUP_MAX_RETRIES: 3
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    name: .deb
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: System dependencies
+        # gh is the last one and is not a build dependency: the runner image
+        # has it and this container does not, and the release is uploaded to
+        # from in here.
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            pkg-config \
+            cmake \
+            clang \
+            gh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable pnpm
+
+      - name: Install dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--bundles deb` is not optional: tauri.conf.json asks for a .rpm as
+      # well, and nobody has said where an .rpm would be tested. The frontend
+      # is not built separately either, because `beforeBuildCommand` is already
+      # `pnpm build`.
+      - name: Build the package
+        working-directory: app
+        run: pnpm tauri build --bundles deb
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Explicit, rather than read off the checkout's git remote, because
+          # the remote is an implementation detail of whichever checkout ran.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          deb="target/release/bundle/deb/Consort_${version}_amd64.deb"
+          test -f "$deb"
+          gh release upload "$TAG" "$deb" --clobber
