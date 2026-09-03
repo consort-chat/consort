@@ -191,6 +191,29 @@ export function ThreadPanel({
       box.scrollHeight - box.scrollTop - box.clientHeight < AT_THE_BOTTOM;
   }, []);
 
+  /*
+    Stay at the bottom while the replies are still growing. The room beside
+    this one carries the same listener and the reason it is needed, which is
+    that a picture finishing its download is not a scroll and so goes
+    unnoticed by everything else here.
+  */
+  useEffect(() => {
+    const box = scroller.current;
+    if (box === null) return;
+
+    const settle = () => {
+      if (!following.current) return;
+      box.scrollTop = box.scrollHeight;
+    };
+
+    box.addEventListener("load", settle, true);
+    return () => {
+      box.removeEventListener("load", settle, true);
+    };
+    // The box goes with the panel, so the listener is attached again each time
+    // one opens rather than once for the life of the component.
+  }, [thread?.rootId]);
+
   const replies = useMemo(
     () => group(thread?.messages ?? []),
     [thread?.messages],

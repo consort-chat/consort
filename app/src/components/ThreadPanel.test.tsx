@@ -39,6 +39,21 @@ function said(id: string, body: string, at = NOON): Message {
   return { id, sender: ADA, at, body, kind: "text" };
 }
 
+/** A reply with a picture on it, which is the thing that arrives late. */
+function picture(id: string): Message {
+  return {
+    ...said(id, ""),
+    kind: "image",
+    media: {
+      source: '{"url":"mxc://example.org/abc"}',
+      name: "screenshot.png",
+      mime: "image/png",
+      width: 800,
+      height: 600,
+    },
+  };
+}
+
 const OPEN: Thread = {
   roomId: GENERAL,
   rootId: "$root:example.org",
@@ -387,6 +402,28 @@ describe("where the panel opens", () => {
     });
 
     expect(box.scrollTop).toBe(100);
+  });
+
+  it("stays at the bottom when a picture finishes loading", async () => {
+    // Same fault as the room beside it, and worth its own test because the
+    // panel keeps its own scroller and its own idea of following.
+    const layout = fakeScrolling(900, 300);
+    const { container } = draw();
+    await waitFor(() => expect(onThread).toHaveBeenCalled());
+    await act(async () => {
+      publish({ ...OPEN, messages: [picture("$a:example.org")] });
+    });
+
+    const box = container.querySelector(".thread__scroll");
+    if (box === null) throw new Error("the panel drew no scrolling box");
+    expect(box.scrollTop).toBe(600);
+
+    layout.scrollHeight = 1_500;
+    await act(async () => {
+      fireEvent.load(screen.getByRole("img", { name: "screenshot.png" }));
+    });
+
+    expect(box.scrollTop).toBe(1_200);
   });
 
   it("opens a second thread at its own bottom", async () => {

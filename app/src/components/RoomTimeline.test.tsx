@@ -84,6 +84,27 @@ function said(id: string, sender: string, body: string, at = NOON): Message {
   return { id, sender, body, at, kind: "text" };
 }
 
+/**
+ * A message with a picture on it.
+ *
+ * The thing that arrives late: an attachment's bytes come over the
+ * `consortmedia` scheme, which is a fetch and a decryption in Rust rather than
+ * an ordinary image load, so it lands well after the room is drawn.
+ */
+function picture(id: string): Message {
+  return {
+    ...said(id, ADA, ""),
+    kind: "image",
+    media: {
+      source: '{"url":"mxc://example.org/abc"}',
+      name: "screenshot.png",
+      mime: "image/png",
+      width: 800,
+      height: 600,
+    },
+  };
+}
+
 function timeline(messages: Message[], rest: Partial<Timeline> = {}): Timeline {
   return {
     roomId: GENERAL,
@@ -585,6 +606,39 @@ describe("RoomTimeline", () => {
     );
 
     expect(screen.getByRole("log").scrollTop).toBe(400);
+  });
+
+  it("stays at the bottom when a picture finishes loading", async () => {
+    // Growing is not scrolling. The box gets taller under somebody already at
+    // the bottom, no event fires and nothing re-renders, so without a listener
+    // for it a room opens at its newest message and drifts up the moment the
+    // first attachment arrives.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([picture("$1")]));
+    const box = screen.getByRole("log");
+    expect(box.scrollTop).toBe(600);
+
+    layout.scrollHeight = 1_500;
+    await act(async () => {
+      fireEvent.load(screen.getByRole("img", { name: "screenshot.png" }));
+    });
+
+    expect(box.scrollTop).toBe(1_200);
+  });
+
+  it("does not drag a reader down when a picture loads above them", async () => {
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([picture("$1")]));
+    await scrollTo(200);
+
+    layout.scrollHeight = 1_500;
+    await act(async () => {
+      fireEvent.load(screen.getByRole("img", { name: "screenshot.png" }));
+    });
+
+    expect(screen.getByRole("log").scrollTop).toBe(200);
   });
 
   it("says a page is on its way rather than looking like nothing happened", async () => {

@@ -339,6 +339,35 @@ export function RoomTimeline({
   }, [timeline.messages, timeline.roomId, measure]);
 
   /*
+    Stay at the bottom while the list is still growing.
+
+    An attachment's bytes arrive long after the effect above has run: the URL
+    is on the `consortmedia` scheme, so Rust fetches and decrypts the file
+    before the browser has a picture to lay out. The box then gets taller under
+    somebody who was at the bottom of it, and growing is not scrolling. No
+    event fires, nothing re-renders, and they are left as far up as the picture
+    is tall until the next message happens to arrive.
+
+    `load` does not bubble, but it does capture, so one listener on the box
+    catches every picture inside it including the ones drawn later.
+  */
+  useEffect(() => {
+    const box = scroller.current;
+    if (box === null) return;
+
+    const settle = () => {
+      if (!following.current) return;
+      box.scrollTop = box.scrollHeight;
+      measure();
+    };
+
+    box.addEventListener("load", settle, true);
+    return () => {
+      box.removeEventListener("load", settle, true);
+    };
+  }, [measure]);
+
+  /*
     Ask for the page above when the reader gets near the top of what is loaded.
 
     An effect rather than a branch in the scroll handler, and that is the whole
