@@ -29,7 +29,7 @@ use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
     AudioFrame, AudioSourceConfig, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions,
+    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -212,6 +212,35 @@ impl LiveKitTransport {
     }
 }
 
+/// One participant's audio, and the track it is being pulled from.
+///
+/// The track handle is kept for one job: telling this stream apart from a
+/// later one for the same person. Being in the map is not evidence that
+/// anything is playing, and there are two ways it stops being true without
+/// anybody leaving the call. See [`Playing::still_going`].
+struct Playing {
+    track: Arc<dyn RemoteTrackHandle>,
+    pump: AbortOnDrop,
+}
+
+impl Playing {
+    /// Whether this is still pulling the engine's current track for its owner.
+    ///
+    /// `current` is what `remote_track` answers for them now. Two things make
+    /// the answer no, and neither of them is somebody leaving:
+    ///
+    /// - the pump ends by itself when its frame stream ends, and until it is
+    ///   noticed the finished handle sits in the map looking like audio;
+    /// - a track that stopped and started again is a different handle in the
+    ///   engine's map, and this stream belongs to the one before it.
+    ///
+    /// Both are what somebody hopping to another voice channel and coming back
+    /// looks like from in here.
+    fn still_going(&self, current: Option<&Arc<dyn RemoteTrackHandle>>) -> bool {
+        !self.pump.0.is_finished() && current.is_some_and(|track| Arc::ptr_eq(track, &self.track))
+    }
+}
+
 /// A call this session is in, and what it takes to describe it.
 ///
 /// `Call` alone cannot: its roster is memberships and user IDs, and turning
@@ -241,7 +270,7 @@ pub struct LiveKitSession {
     /// A `RefCell` rather than a `Mutex` because a session never leaves the
     /// call thread. That is not a shortcut, it is the same constraint that put
     /// the call on a thread of its own: `Call::join` drives `!Send` futures.
-    playing: RefCell<HashMap<String, AbortOnDrop>>,
+    playing: RefCell<HashMap<String, Playing>>,
     /// What this session last said about its own audio.
     ///
     /// LiveKit never delivers a data message back to whoever published it, and
@@ -574,6 +603,27 @@ impl CallSession for LiveKitSession {
         let audible = hearing::audible(&participants);
 
         let mut playing = self.playing.borrow_mut();
+
+        // Before the diff, because `changes` is told who is attached and a
+        // stale entry answers that question wrongly. Left in, its owner reads
+        // as attached, nothing is reported to start, and the track they
+        // published on coming back is never pulled: silent for the rest of the
+        // call. Forgotten as well as dropped, on the same terms as somebody
+        // who left, so no half-word of theirs plays out later.
+        let stale: Vec<String> = playing
+            .iter()
+            .filter(|(who, held)| {
+                let current = self.call.remote_track(who, MediaStreamKind::Microphone);
+                !held.still_going(current.as_ref())
+            })
+            .map(|(who, _)| who.clone())
+            .collect();
+        for who in stale {
+            playing.remove(&who);
+            ears.forget(&who);
+            tracing::debug!(member_id = %who, "a participant's audio went stale");
+        }
+
         let attached: BTreeSet<String> = playing.keys().cloned().collect();
         let (start, stop) = hearing::changes(&attached, &audible);
 
@@ -614,7 +664,13 @@ impl CallSession for LiveKitSession {
             });
 
             tracing::debug!(member_id = %who, "playing a participant");
-            playing.insert(who, AbortOnDrop(pump));
+            playing.insert(
+                who,
+                Playing {
+                    track,
+                    pump: AbortOnDrop(pump),
+                },
+            );
         }
     }
 
