@@ -1,7 +1,9 @@
 import { createElement, useMemo, type ReactNode } from "react";
 
 import { mxcUrl } from "../lib/api";
+import { matrixTarget } from "../lib/matrixTo";
 import { ExternalLink } from "./ExternalLink";
+import { MatrixLink } from "./MatrixLink";
 import { PlainBody } from "./PlainBody";
 
 /**
@@ -58,25 +60,6 @@ const DRAWN: Record<string, string> = {
  */
 const REACHABLE = ["http:", "https:", "mailto:"];
 
-/**
- * Whether an address names a person, and the fragment says which.
- *
- * A `matrix.to` link is how every client writes a mention, and the same shape
- * also names rooms and events, which the sigil tells apart: `@` is somebody,
- * `!` and `#` are a room, and `$` is a message. Only the first is a mention.
- */
-function mentioned(raw: string | null): boolean {
-  if (raw === null) return false;
-  try {
-    const address = new URL(raw);
-    return (
-      address.hostname === "matrix.to" && address.hash.startsWith("#/@")
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** An address worth putting on an anchor, or nothing. */
 function reachable(raw: string | null): string | undefined {
   if (raw === null) return undefined;
@@ -115,8 +98,11 @@ function draw(node: Node, key: string, linking: boolean): ReactNode {
 
   if (tag === "a") {
     const href = node.getAttribute("href");
+    // A `matrix.to` link is how every client writes a mention, and the same
+    // shape also names rooms and messages. See `lib/matrixTo`.
+    const target = matrixTarget(href);
 
-    if (mentioned(href)) {
+    if (target?.kind === "person") {
       /*
         A mention is drawn as a name rather than as a destination, because
         that is what it is: pressing it goes nowhere, and an underlined blue
@@ -141,6 +127,28 @@ function draw(node: Node, key: string, linking: boolean): ReactNode {
           {named && "@"}
           {children}
         </a>
+      );
+    }
+
+    if (target !== undefined) {
+      /*
+        A room or a message, drawn as somewhere to go rather than as an
+        address. Following one in a browser would land on matrix.to's own page
+        offering to open a client, which is a detour to arrive back where the
+        reader already was.
+
+        The sender's own words are kept when they wrote any. A markdown link
+        means what it says, and a generated phrase would throw away the only
+        part of it somebody chose.
+      */
+      const written = (node.textContent ?? "").trim();
+      const chosen = written !== "" && written !== href;
+      return (
+        <MatrixLink
+          key={key}
+          target={target}
+          {...(chosen && { label: written })}
+        />
       );
     }
 

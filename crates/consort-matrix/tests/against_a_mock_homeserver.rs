@@ -3124,6 +3124,91 @@ mod direct_messages {
     }
 }
 
+/// Where a `matrix.to` link in a message points.
+mod room_addresses {
+    use super::*;
+    use consort_matrix::rooms::room_at;
+
+    const ROOM: &str = "!general:example.org";
+    const ALIAS: &str = "#general:example.org";
+
+    #[tokio::test]
+    async fn a_room_id_for_a_joined_room_never_touches_the_directory() {
+        // Nothing is mounted for the directory, so a lookup would 404 and the
+        // answer would be right for the wrong reason. Most links carry an ID
+        // and none of them should cost a request.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        assert_eq!(room_at(&client, ROOM).await.unwrap(), ROOM);
+    }
+
+    #[tokio::test]
+    async fn an_alias_is_asked_about_and_answers_with_the_room_it_names() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_directory_resolve_alias()
+            .ok(ROOM, Vec::new())
+            .mock_once()
+            .mount()
+            .await;
+
+        assert_eq!(room_at(&client, ALIAS).await.unwrap(), ROOM);
+    }
+
+    #[tokio::test]
+    async fn an_alias_no_directory_knows_says_there_is_nowhere_to_go() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_room_directory_resolve_alias()
+            .not_found()
+            .mount()
+            .await;
+
+        let refused = room_at(&client, ALIAS).await.unwrap_err();
+
+        assert!(matches!(
+            refused,
+            consort_matrix::Error::NoSuchAddress { .. }
+        ));
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_address_that_is_neither_an_id_nor_an_alias_never_reaches_the_network() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = room_at(&client, "general").await.unwrap_err();
+
+        assert!(matches!(
+            refused,
+            consort_matrix::Error::NoSuchAddress { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_real_room_this_account_is_not_in_is_reported_as_one_we_cannot_show() {
+        // The distinction the interface needs: the address is fine, and there
+        // is still nothing here to draw. Joining is not something Consort
+        // does yet, so saying so is the whole of the answer.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = room_at(&client, ROOM).await.unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::NoSuchRoom { .. }));
+    }
+}
+
 /// One room's messages, wired to a sync loop and a paginating homeserver.
 ///
 /// The ordering, the deduplication and the rules about which events are
@@ -3646,6 +3731,140 @@ mod timeline {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn answering_a_message_names_it_and_the_person_who_wrote_it() {
+        // Two halves, and both matter. The relation is what draws the row
+        // above the answer saying what it answers; the mention is what makes
+        // the answer arrive as something rather than as one more line in a
+        // room somebody is not reading.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "quite",
+                "m.relates_to": {
+                    "m.in_reply_to": { "event_id": "$said:example.org" },
+                },
+                "m.mentions": { "user_ids": [OTHER] },
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::send_reply(&client, ROOM, "$said:example.org", OTHER, "quite")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_answer_never_carries_the_thread_relation() {
+        // A reply is in the room, and `rel_type` is the field that would put
+        // it somewhere else. Nothing is mounted that would accept one, so a
+        // send carrying it fails rather than passing quietly.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "m.relates_to": { "rel_type": "m.thread" },
+            }))
+            .ok(ruma::event_id!("$wrong:example.org"))
+            .expect(0)
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .ok(ruma::event_id!("$sent:example.org"))
+            .mount()
+            .await;
+
+        timeline::send_reply(&client, ROOM, "$said:example.org", OTHER, "quite")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_answer_with_nothing_in_it_never_reaches_the_homeserver() {
+        // The same rule every other composer has, applied before the event ID
+        // and the sender are even looked at.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::send_reply(&client, ROOM, "$said:example.org", OTHER, "  ")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::EmptyMessage));
+    }
+
+    #[tokio::test]
+    async fn an_answer_to_somebody_who_is_not_a_user_is_refused() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::send_reply(&client, ROOM, "$said:example.org", "ada", "quite")
+            .await
+            .unwrap_err();
+
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_message_address_names_the_room_and_the_event() {
+        // What goes on the clipboard. The room ID rather than an alias, because
+        // an event belongs to a room and an alias can be moved to another one.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let address = timeline::permalink(&client, ROOM, "$said:example.org")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            address,
+            "https://matrix.to/#/!general:example.org/$said:example.org"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_address_for_a_room_this_account_is_not_in_is_refused() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let refused = timeline::permalink(&client, ROOM, "$said:example.org")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::NoSuchRoom { .. }));
     }
 
     #[tokio::test]

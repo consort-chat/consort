@@ -7,7 +7,9 @@ import {
   useState,
 } from "react";
 
+import { flashMessage } from "../lib/flash";
 import { channelLabel, typingLabel } from "../lib/labels";
+import { useRoomLinks } from "../lib/roomLinks";
 import {
   asCommandError,
   memberNames,
@@ -16,19 +18,22 @@ import {
   onTyping,
   resendState,
   timelineClose,
+  timelineCopyLink,
   timelineEarlier,
   timelineOpen,
   timelineReact,
+  timelineReply,
   timelineSend,
   timelineTyping,
   timelineUnreact,
   threadOpen,
   NO_TIMELINE,
   type Channel,
+  type Message,
   type Participant,
   type Timeline,
 } from "../lib/api";
-import { MessageGroups, group } from "./MessageGroups";
+import { MessageGroups, ReplyIcon, group, previewOf } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
 import { SidebarToggle } from "./SidebarToggle";
 import "./RoomTimeline.css";
@@ -68,6 +73,19 @@ const NEAR_THE_TOP = 200;
 const TYPING_EVERY = 3_000;
 
 /**
+ * How long a copied message address stays acknowledged, in milliseconds.
+ *
+ * A copy is silent otherwise, and a control that says nothing invites a second
+ * press. Long enough to read the tick, short enough that the toolbar is back to
+ * its usual self before anybody looks again.
+ *
+ * Exported because a thread panel offers the same control on the same messages,
+ * and two ticks on one screen holding for different lengths of time is a
+ * difference nobody could see the reason for.
+ */
+export const COPIED_FOR = 1_800;
+
+/**
  * A room's messages, and somewhere to add to them.
  *
  * The list is not held here. `timelineOpen` starts a watcher in Rust that
@@ -84,12 +102,22 @@ const TYPING_EVERY = 3_000;
 export function RoomTimeline({
   channel,
   selfId,
+  focus,
   onOpenRoom,
   onUnfold,
 }: {
   channel: Channel;
   /** Whoever is signed in, so a person's card can tell when it is about them. */
   selfId: string;
+  /**
+   * A message somebody followed a link to, to be jumped to once it is drawn.
+   *
+   * A fresh object per press rather than the ID on its own, so that following
+   * the same link twice flashes the message twice. Nothing here can fetch a
+   * message older than what is loaded, so a link into last year opens the room
+   * and stops there.
+   */
+  focus?: { eventId: string } | null;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
   /**
@@ -113,6 +141,14 @@ export function RoomTimeline({
   */
   const [opening, setOpening] = useState<string | null>(null);
   /*
+    Which message the composer is answering, or none. The whole message rather
+    than its ID, because the line above the box quotes it and the send has to
+    name who wrote it.
+  */
+  const [answering, setAnswering] = useState<Message | null>(null);
+  /* The message whose address has just gone to the clipboard, or none. */
+  const [copied, setCopied] = useState<string | null>(null);
+  /*
     Whose card is open, and where it was asked for. One at a time, for the
     reason the sidebar has the same rule: two cards about two people are two
     volume sliders somebody has to tell apart by the heading.
@@ -130,6 +166,10 @@ export function RoomTimeline({
   const [nearTheTop, setNearTheTop] = useState(false);
   /** Who is typing in this room, as Matrix user IDs, ours already removed. */
   const [typists, setTypists] = useState<string[]>([]);
+
+  // For the line above the composer, which quotes a message and so needs the
+  // same words the message's own badge draws.
+  const { nameOf } = useRoomLinks();
 
   const scroller = useRef<HTMLDivElement>(null);
   /*
@@ -157,6 +197,16 @@ export function RoomTimeline({
     IPC call per keystroke.
   */
   const said = useRef(0);
+  /*
+    The message a link asked to be shown, until it has been. A ref because it
+    is consumed rather than drawn: the message may not be loaded when the room
+    opens, and the effect below tries again on every timeline that arrives
+    until one carries it.
+  */
+  const wanted = useRef<string | null>(null);
+  // So the box takes what somebody types next after pressing Reply. Without it
+  // the control moves the conversation and then asks them to click again.
+  const draftBox = useRef<HTMLTextAreaElement>(null);
 
   // A timeline for the room before this one, still in flight when the channel
   // changed. Drawing it would put the last room's conversation under this
@@ -386,6 +436,39 @@ export function RoomTimeline({
     });
   }, [mine, nearTheTop, timeline.moreBefore, timeline.loading]);
 
+  // Recorded rather than acted on, so that a press arriving before the room has
+  // any messages is not lost. The effect below is what spends it.
+  useEffect(() => {
+    const eventId = focus?.eventId;
+    if (eventId !== undefined) wanted.current = eventId;
+  }, [focus]);
+
+  /*
+    Go to a message somebody followed a link to, once it is drawn.
+
+    Runs again on every timeline, because opening the room and drawing its
+    messages are two moments and the link is pressed before either. Cleared the
+    first time it lands, so a later message arriving does not drag the reader
+    back to the same place.
+  */
+  useEffect(() => {
+    const eventId = wanted.current;
+    if (eventId === null || !mine) return;
+    if (!flashMessage(scroller.current, eventId)) return;
+
+    wanted.current = null;
+    // The jump is where they asked to be. Following the bottom from here would
+    // undo it the moment anybody says anything.
+    following.current = false;
+  }, [focus, timeline.messages, mine]);
+
+  // Nothing but the passing of time takes the tick off the copy control.
+  useEffect(() => {
+    if (copied === null) return;
+    const timer = window.setTimeout(() => setCopied(null), COPIED_FOR);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   /**
    * Tell the room this session is typing, at most every few seconds.
    *
@@ -406,17 +489,37 @@ export function RoomTimeline({
     void timelineTyping(channel.id, true).catch(() => {});
   }
 
+  /** Answer this message, with the box ready for what comes next. */
+  function reply(message: Message) {
+    setAnswering(message);
+    draftBox.current?.focus();
+  }
+
+  /** Put one message's address on the clipboard, and say that it worked. */
+  function copyLink(eventId: string) {
+    void timelineCopyLink(channel.id, eventId)
+      .then(() => setCopied(eventId))
+      .catch((raw: unknown) => {
+        setProblem(asCommandError(raw).message);
+      });
+  }
+
   async function send() {
     if (draft.trim() === "" || sending) return;
 
     setSending(true);
     setProblem(null);
     try {
-      await timelineSend(channel.id, draft);
+      // A reply and a message differ only in what they name. Both land in the
+      // room, and both appear when the sync brings them back.
+      await (answering === null
+        ? timelineSend(channel.id, draft)
+        : timelineReply(channel.id, answering.id, answering.sender, draft));
       // Cleared only once the homeserver has it. A box that empties on a send
       // that failed loses what somebody wrote, and retyping it is the one
       // thing an interface must never ask for.
       setDraft("");
+      setAnswering(null);
       // Said, so no longer typing. Before the scroll rather than after it,
       // because the room should stop showing this name the moment the message
       // it was writing arrives.
@@ -511,6 +614,9 @@ export function RoomTimeline({
             });
           }}
           openingId={opening}
+          copiedId={copied}
+          onReply={reply}
+          onCopyLink={copyLink}
           onOpenThread={(rootId) => {
             setOpening(rootId);
             // Cleared here as well as on the channel, because a command that
@@ -538,6 +644,34 @@ export function RoomTimeline({
         )}
       </p>
 
+      {/*
+        What the next message will answer, above the box that writes it.
+
+        A line rather than the quoted fallback other clients put in the message
+        itself. Nothing Consort sends carries a quote: the specification stopped
+        asking for one because every client that draws replies has to strip it
+        again, and the row above the answer is drawn from the relation.
+      */}
+      {answering !== null && (
+        <div className="timeline__answering">
+          <ReplyIcon className="timeline__answering-glyph" />
+          <span className="timeline__answering-who">
+            {names[answering.sender] ?? answering.sender}
+          </span>
+          <span className="timeline__answering-said">
+            {previewOf(answering, nameOf)}
+          </span>
+          <button
+            type="button"
+            className="timeline__answering-stop"
+            aria-label="Stop replying"
+            onClick={() => setAnswering(null)}
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       <form
         className="timeline__composer"
         onSubmit={(event) => {
@@ -551,6 +685,7 @@ export function RoomTimeline({
         <textarea
           id="timeline-draft"
           className="timeline__draft"
+          ref={draftBox}
           rows={1}
           value={draft}
           placeholder={`Message ${channel.kind === "voice" ? name : `#${name}`}`}
@@ -559,6 +694,17 @@ export function RoomTimeline({
             report(event.target.value);
           }}
           onKeyDown={(event) => {
+            /*
+              Escape stops answering, which is what it does to everything else
+              here that can be dismissed. Stopped where it is caught, so that
+              one press cancels the reply rather than also shutting the thread
+              panel listening on the window behind it.
+            */
+            if (event.key === "Escape" && answering !== null) {
+              event.stopPropagation();
+              setAnswering(null);
+              return;
+            }
             // Enter sends and Shift+Enter breaks the line, which is what every
             // client anybody already uses does. Without the modifier check a
             // paragraph is impossible to type.

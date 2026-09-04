@@ -16,6 +16,8 @@ const timelineEarlier = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
 const timelineTyping = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
+const timelineReply = vi.hoisted(() => vi.fn());
+const timelineCopyLink = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
@@ -40,6 +42,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onTyping,
   timelineTyping,
   timelineSend,
+  timelineReply,
+  timelineCopyLink,
   memberNames,
   memberAvatar,
   resendState,
@@ -146,6 +150,8 @@ beforeEach(() => {
   timelineClose.mockReset().mockResolvedValue(undefined);
   timelineEarlier.mockReset().mockResolvedValue(undefined);
   timelineSend.mockReset().mockResolvedValue(undefined);
+  timelineReply.mockReset().mockResolvedValue(undefined);
+  timelineCopyLink.mockReset().mockResolvedValue(undefined);
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada", [BOB]: "Bob" });
   memberAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
@@ -869,5 +875,203 @@ describe("opening a thread", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
+  });
+});
+
+describe("answering a message", () => {
+  it("draws what is about to be answered above the box", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    const bar = screen.getByRole("button", { name: "Stop replying" })
+      .parentElement;
+    expect(bar).toHaveTextContent("Ada");
+    expect(bar).toHaveTextContent("the original");
+  });
+
+  it("quotes a permalink as words rather than as an address", async () => {
+    // The line above the composer is one line of text, so it cannot hold the
+    // badge the message draws. Saying the same thing is the next best thing.
+    await pane();
+    await arrive(
+      timeline([
+        said(
+          "$1",
+          ADA,
+          "Testing https://matrix.to/#/!voice:example.org/$said:example.org",
+        ),
+      ]),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    const bar = screen.getByRole("button", { name: "Stop replying" })
+      .parentElement;
+    expect(bar).toHaveTextContent("Testing A message");
+    expect(bar).not.toHaveTextContent("matrix.to");
+  });
+
+  it("sends a reply rather than an ordinary message", async () => {
+    // The two differ only in what they name, and naming nothing is what made
+    // an answer read as one more line in the room.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "quite");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(timelineReply).toHaveBeenCalledWith(GENERAL, "$1", ADA, "quite");
+    expect(timelineSend).not.toHaveBeenCalled();
+  });
+
+  it("goes back to an ordinary message once one has been sent", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await userEvent.type(screen.getByRole("textbox"), "quite");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "and another thing");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(timelineSend).toHaveBeenCalledWith(GENERAL, "and another thing");
+  });
+
+  it("keeps the draft and the reply when the send fails", async () => {
+    // Retyping a message is the one thing an interface must never ask for,
+    // and the reply is half of what was typed.
+    timelineReply.mockRejectedValue({ message: "no", detail: "no" });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+    await userEvent.type(screen.getByRole("textbox"), "quite");
+
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(screen.getByRole("textbox")).toHaveValue("quite");
+    expect(screen.getByRole("button", { name: "Stop replying" })).toBeVisible();
+  });
+
+  it("stops answering when the control is pressed", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Stop replying" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Stop replying" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops answering on Escape in the box", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "{Escape}");
+
+    expect(
+      screen.queryByRole("button", { name: "Stop replying" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("copying a message address", () => {
+  it("asks Rust for the address of the message that was pressed", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+
+    expect(timelineCopyLink).toHaveBeenCalledWith(GENERAL, "$1");
+  });
+
+  it("says it worked, because a copy is silent otherwise", async () => {
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Link copied" }),
+    ).toBeVisible();
+  });
+
+  it("says so rather than claiming a copy that did not happen", async () => {
+    timelineCopyLink.mockRejectedValue({
+      message: "no clipboard here",
+      detail: "no clipboard here",
+    });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "the original")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "no clipboard here",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Link copied" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("going to a message somebody linked", () => {
+  /** Render the pane with a message asked for, and hand back a way to change it. */
+  async function focused(focus: { eventId: string } | null) {
+    const view = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        channel={general}
+        focus={focus}
+      />,
+    );
+    await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+    return view;
+  }
+
+  it("scrolls to it and lights it up once it is drawn", async () => {
+    // The link is pressed before the room has any messages in it, so the ask
+    // has to survive until one of them is the message.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await focused({ eventId: "$1" });
+
+    await arrive(timeline([said("$1", ADA, "the one")]));
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(
+      screen.getByRole("log").querySelector('[data-message-id="$1"]'),
+    ).toHaveAttribute("data-flash", "true");
+  });
+
+  it("stays where it is when the message is not loaded", async () => {
+    // A room shows a window of history and a link can name anything older
+    // than it. Nothing here can fetch one, and pretending otherwise would be
+    // a jump to the wrong message.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await focused({ eventId: "$missing" });
+
+    await arrive(timeline([said("$1", ADA, "the one")]));
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("does not drag the reader back when the next message arrives", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await focused({ eventId: "$1" });
+    await arrive(timeline([said("$1", ADA, "the one")]));
+    scrollIntoView.mockClear();
+
+    await arrive(timeline([said("$1", ADA, "the one"), said("$2", BOB, "next")]));
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

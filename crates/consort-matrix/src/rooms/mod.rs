@@ -36,12 +36,14 @@ mod direct;
 pub mod dto;
 mod facts;
 mod hierarchy;
+mod link;
 pub mod profile;
 mod snapshot;
 
 pub use avatar::{avatar, member_avatar};
 pub use direct::direct;
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
+pub use link::room_at;
 pub use profile::{MemberProfile, Presence, member_profile};
 
 use std::collections::BTreeMap;

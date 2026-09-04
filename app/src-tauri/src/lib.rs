@@ -113,7 +113,9 @@ pub fn run() {
     // A profile is the deliberate exception. It moves the data directory, so
     // the thing this protects is no longer shared, and running two accounts
     // against each other is the whole point of having one. See `profile`.
-    let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
     if profile().is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tracing::info!("a second instance was launched; focusing the existing window");
@@ -185,11 +187,14 @@ pub fn run() {
             commands::thread_open,
             commands::thread_send,
             commands::timeline_send,
+            commands::timeline_reply,
             commands::timeline_react,
             commands::timeline_unreact,
             commands::timeline_typing,
             commands::open_link,
+            commands::room_at,
             commands::direct_room,
+            commands::timeline_copy_link,
             commands::timeline_media_save,
             commands::audio_devices,
             commands::audio_settings,

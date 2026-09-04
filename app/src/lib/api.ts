@@ -1588,6 +1588,57 @@ export function timelineSend(roomId: string, body: string): Promise<void> {
 }
 
 /**
+ * Answer one message in the room.
+ *
+ * `sender` is who wrote the message being answered, and it comes from the
+ * message this interface is already drawing. It rides along so the reply can
+ * name them in `m.mentions`, which is what makes an answer arrive as something
+ * rather than as one more line in a room nobody is reading.
+ *
+ * A reply, never a thread. The answer lands in the conversation everybody is
+ * reading, and the row above it saying what it answers is drawn from the same
+ * relation every other client writes.
+ */
+export function timelineReply(
+  roomId: string,
+  replyTo: string,
+  sender: string,
+  body: string,
+): Promise<void> {
+  return invoke<void>("timeline_reply", { roomId, replyTo, sender, body });
+}
+
+/**
+ * Put one message's `matrix.to` address on the clipboard.
+ *
+ * A command rather than a clipboard call from here, because the webview has
+ * `core:default` and no clipboard capability at all. That is the same rule the
+ * Save As window and the browser handoff follow.
+ */
+export function timelineCopyLink(
+  roomId: string,
+  eventId: string,
+): Promise<void> {
+  return invoke<void>("timeline_copy_link", { roomId, eventId });
+}
+
+/**
+ * The joined room one `matrix.to` address points at.
+ *
+ * A room ID answers immediately and an alias costs a directory lookup, which
+ * is the whole reason this is a command rather than something the page works
+ * out: an alias is a name a homeserver holds, and only a homeserver can say
+ * which room it currently names.
+ *
+ * Rejects when there is nowhere to go, which is an alias nothing answered to
+ * and a room this account is not in. Both are ordinary: the address was
+ * written by whoever sent the message.
+ */
+export function roomAt(address: string): Promise<string> {
+  return invoke<string>("room_at", { address });
+}
+
+/**
  * React to a message.
  *
  * `key` is what to react with. The reaction appears when the sync brings it

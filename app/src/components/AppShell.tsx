@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   HOME_ID,
   NOBODY,
+  asCommandError,
   callRoomId,
+  roomAt,
   type Call,
   type CallRefused,
   type Channel,
@@ -17,6 +19,8 @@ import {
   type VerificationFlow,
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
+import type { PlaceTarget } from "../lib/matrixTo";
+import { RoomLinksContext, type RoomLinks } from "../lib/roomLinks";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
@@ -91,6 +95,28 @@ function nameOfChannel(rooms: Rooms, roomId: string): string | null {
   for (const space of rooms.spaces) {
     const found = space.channels.find((channel) => channel.id === roomId);
     if (found) return channelLabel(found);
+  }
+  return null;
+}
+
+/**
+ * What to write on a link into Matrix, the way the shell writes a channel.
+ *
+ * The hash included, because that is how a text channel is named everywhere
+ * else here and a badge saying `general` beside a heading saying `#general`
+ * reads as two different rooms.
+ *
+ * Null for an alias, always. An alias is a name a homeserver holds and only a
+ * homeserver can say which room it currently is, which is a question the badge
+ * does not ask: it asks one when it is pressed.
+ */
+function nameOfLinkedRoom(rooms: Rooms, roomOrAlias: string): string | null {
+  for (const space of rooms.spaces) {
+    const found = space.channels.find((channel) => channel.id === roomOrAlias);
+    if (found === undefined) continue;
+    return found.kind === "voice"
+      ? channelLabel(found)
+      : `#${channelLabel(found)}`;
   }
   return null;
 }
@@ -201,6 +227,14 @@ export function AppShell({
     the default every time somebody shut a thread.
   */
   const [threadWidth, setThreadWidth] = useState(defaultThreadWidth);
+  /*
+    The message a link in a message asked to be shown, handed to the room that
+    holds it. A fresh object per press, so following the same link twice lights
+    the message up twice.
+  */
+  const [focus, setFocus] = useState<{ eventId: string } | null>(null);
+  /* Why the last link somebody pressed went nowhere, if it did. */
+  const [linkProblem, setLinkProblem] = useState<string | null>(null);
 
   // So a panel dragged wide on a large window is not wider than a small one.
   useEffect(() => {
@@ -255,14 +289,56 @@ export function AppShell({
    * it, and both arrive here the same way. A room in no rail entry at all is a
    * room this account has just left, and the selection is left where it is.
    */
-  function openRoom(roomId: string) {
-    const holder = rooms.spaces.find((candidate) =>
-      candidate.channels.some((channel) => channel.id === roomId),
-    );
-    if (holder === undefined) return;
-    setSpaceId(holder.id);
-    setChannelId(roomId);
-  }
+  const openRoom = useCallback(
+    (roomId: string): boolean => {
+      const holder = rooms.spaces.find((candidate) =>
+        candidate.channels.some((channel) => channel.id === roomId),
+      );
+      if (holder === undefined) return false;
+      setSpaceId(holder.id);
+      setChannelId(roomId);
+      return true;
+    },
+    [rooms],
+  );
+
+  /**
+   * Show whatever a `matrix.to` link in a message points at.
+   *
+   * The address is resolved in Rust, because an alias is a name a homeserver
+   * holds and only a homeserver can say which room it currently is. What comes
+   * back is a room this account is in, or a sentence saying why there is
+   * nowhere to go.
+   */
+  const follow = useCallback(
+    async (target: PlaceTarget) => {
+      setLinkProblem(null);
+      try {
+        const roomId = await roomAt(target.roomOrAlias);
+        if (!openRoom(roomId)) {
+          // The account is in the room and the rail has not caught up, which
+          // is a room joined a moment ago from somewhere else. Saying so beats
+          // a control that appears to do nothing.
+          setLinkProblem(
+            "That room is not in the list yet. Try again in a moment.",
+          );
+          return;
+        }
+        setFocus(target.kind === "message" ? { eventId: target.eventId } : null);
+      } catch (raw: unknown) {
+        setLinkProblem(asCommandError(raw).message);
+      }
+    },
+    [openRoom],
+  );
+
+  const links = useMemo<RoomLinks>(
+    () => ({
+      nameOf: (roomOrAlias) => nameOfLinkedRoom(rooms, roomOrAlias),
+      open: (target) => void follow(target),
+    }),
+    [rooms, follow],
+  );
 
   function selectChannel(id: string) {
     setChannelId(id);
@@ -280,12 +356,13 @@ export function AppShell({
   const announcing =
     flows.length > 0 ||
     callRefused !== null ||
+    linkProblem !== null ||
     verification.state !== "verified" ||
     keyBackup.state === "missing" ||
     (storage !== null && !storage.isPreferred);
 
   return (
-    <>
+    <RoomLinksContext.Provider value={links}>
       {/*
         Inert rather than merely covered. The dialog's own focus trap keeps
         Tab inside it; this is the other half, and it is what stops a pointer
@@ -370,6 +447,25 @@ export function AppShell({
             />
           )}
 
+          {/*
+            Dismissed rather than timed out. A link that went nowhere is a
+            thing somebody did and got no result from, and a sentence that
+            disappears while it is being read is worse than no sentence.
+          */}
+          {linkProblem !== null && (
+            <p className="shell__notice shell__notice--alert" role="alert">
+              {linkProblem}
+              <button
+                type="button"
+                className="shell__notice-dismiss"
+                aria-label="Dismiss"
+                onClick={() => setLinkProblem(null)}
+              >
+                &times;
+              </button>
+            </p>
+          )}
+
           <VerificationBanner
             state={verification.state}
             canStart={canStartVerification}
@@ -425,6 +521,7 @@ export function AppShell({
             key={channel.id}
             channel={channel}
             selfId={profile.user_id}
+            focus={focus}
             onOpenRoom={openRoom}
             {...(folded ? { onUnfold: () => setFolded(false) } : {})}
           />
@@ -453,6 +550,6 @@ export function AppShell({
           onSignedOut={onSignedOut}
         />
       )}
-    </>
+    </RoomLinksContext.Provider>
   );
 }

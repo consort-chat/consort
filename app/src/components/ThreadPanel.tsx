@@ -16,6 +16,7 @@ import {
   resendState,
   threadOpen,
   threadSend,
+  timelineCopyLink,
   timelineReact,
   timelineUnreact,
   type Participant,
@@ -23,7 +24,7 @@ import {
 } from "../lib/api";
 import { MessageGroups, group } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
-import { AT_THE_BOTTOM } from "./RoomTimeline";
+import { AT_THE_BOTTOM, COPIED_FOR } from "./RoomTimeline";
 import "./ThreadPanel.css";
 
 /**
@@ -102,6 +103,8 @@ export function ThreadPanel({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /* The reply whose address has just gone to the clipboard, or none. */
+  const [copied, setCopied] = useState<string | null>(null);
   // The scrolling box, so a jump to an answered message is looked for in this
   // panel rather than in the room beside it, which draws the root as well.
   const scroller = useRef<HTMLDivElement>(null);
@@ -239,6 +242,13 @@ export function ThreadPanel({
     };
   }, [open]);
 
+  // Nothing but the passing of time takes the tick off the copy control.
+  useEffect(() => {
+    if (copied === null) return;
+    const timer = window.setTimeout(() => setCopied(null), COPIED_FOR);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   const replies = useMemo(
     () => group(thread?.messages ?? []),
     [thread?.messages],
@@ -310,6 +320,22 @@ export function ThreadPanel({
     void done.catch((raw: unknown) => {
       setProblem(asCommandError(raw).message);
     });
+  }
+
+  /**
+   * Put one reply's address on the clipboard.
+   *
+   * A reply in a thread has an address like anything else said in the room, and
+   * the panel is where somebody reading a long thread wants to link to one line
+   * of it rather than to the message the whole thing hangs from.
+   */
+  function copyLink(eventId: string) {
+    if (thread === null) return;
+    void timelineCopyLink(thread.roomId, eventId)
+      .then(() => setCopied(eventId))
+      .catch((raw: unknown) => {
+        setProblem(asCommandError(raw).message);
+      });
   }
 
   if (thread === null) return null;
@@ -384,8 +410,10 @@ export function ThreadPanel({
               selfId={selfId}
               known={known}
               container={scroller}
+              copiedId={copied}
               onAbout={(person, at) => setOpened({ person, at })}
               onReact={react}
+              onCopyLink={copyLink}
             />
           </div>
         )}
@@ -407,8 +435,10 @@ export function ThreadPanel({
           selfId={selfId}
           known={known}
           container={scroller}
+          copiedId={copied}
           onAbout={(person, at) => setOpened({ person, at })}
           onReact={react}
+          onCopyLink={copyLink}
         />
       </div>
 
