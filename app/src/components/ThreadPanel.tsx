@@ -5,7 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
@@ -214,6 +214,31 @@ export function ThreadPanel({
     // one opens rather than once for the life of the component.
   }, [thread?.rootId]);
 
+  /*
+    Escape shuts the panel, which is what it does to everything else here that
+    can be dismissed.
+
+    On `window` rather than on `document`, and that is the whole of why the
+    picture viewer, the settings dialog, the reaction picker and a person's
+    card each stop the key where they catch it. Theirs are on the document,
+    which is one step nearer the press, so stopping there is what keeps one
+    press to one thing while any of them is open over this.
+  */
+  const open = thread !== null;
+  useEffect(() => {
+    if (!open) return;
+
+    function shut(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      void threadOpen(null).catch(() => {});
+    }
+
+    window.addEventListener("keydown", shut);
+    return () => {
+      window.removeEventListener("keydown", shut);
+    };
+  }, [open]);
+
   const replies = useMemo(
     () => group(thread?.messages ?? []),
     [thread?.messages],
@@ -260,7 +285,7 @@ export function ThreadPanel({
 
   /** The same edge, for a keyboard. A splitter only a mouse can move is half a
    * control. */
-  function nudge(event: KeyboardEvent<HTMLDivElement>) {
+  function nudge(event: ReactKeyboardEvent<HTMLDivElement>) {
     const by =
       event.key === "ArrowLeft" ? STEP : event.key === "ArrowRight" ? -STEP : 0;
     if (by === 0) return;
