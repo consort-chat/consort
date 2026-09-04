@@ -29,14 +29,25 @@ upstream.
 
 ### matrix-rtc-livekit, matrix-rtc-media, matrix-rtc-core, our fork
 
-`tominal/matrix-rust-rtc` at `934cdbad34bda1a8a170faa022dcdd5436f4072a`.
+`tominal/matrix-rust-rtc` at `0427fc00038bb1dce07b8ff28910b6629964a3ad`.
 
-A fork of `BillCarsonFr/matrix-rust-rtc`, branched at
-`7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8` and carrying eight commits on top of
-it, on `feature/plain-rooms-and-arrival-mute`. The oldest and most important is
-the one that stops media frames being encrypted in an unencrypted room, which
-MSC4143 forbids and which leaves a conforming peer decoding ciphertext as
-audio.
+A fork of `BillCarsonFr/matrix-rust-rtc`, rebased onto upstream
+`68e5bca` on 4 September 2026 and carrying eight commits on top of it plus one
+test, on `feature/plain-rooms-and-arrival-mute-rebased`. The oldest and most
+important is the one that stops media frames being encrypted in an unencrypted
+room, which MSC4143 forbids and which leaves a conforming peer decoding
+ciphertext as audio.
+
+The rebase is what brought in upstream `bec01a7`, which is the fix for a device
+that leaves a call and rejoins being unable to hear anyone who stayed. Key
+distribution compared participations by `member_id` alone, which is sound under
+MSC4143 where that id is fresh per join, and wrong in the pre-sticky Element
+Call dialect this build always speaks, where it is `{user}:{device}` and comes
+back reused. The comparison is now `(member_id, membership_ts)`.
+
+The previous rev, `934cdbad34bda1a8a170faa022dcdd5436f4072a`, sat on
+`7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8` and predates that fix. The branch it
+was on is still there, unrebased, as a record.
 
 **Moves when** one of those commits lands upstream, when upstream carries a fix
 this project needs, or when a change here needs a new field on one of the fork's
@@ -56,7 +67,15 @@ git log --oneline $(git merge-base HEAD origin/main)..HEAD                  # ou
 
 Rebasing means moving the rev in this workspace's `Cargo.toml` and the SDK rev
 with it, since the fork's own matrix-sdk pin may have moved too. Check
-`crates/matrix-rtc-livekit/Cargo.toml` in the fork before touching either.
+`crates/matrix-rtc-livekit/Cargo.toml` in the fork before touching either. On
+the September 2026 rebase it had not moved, and the `[patch.crates-io]` set
+below was already identical, so only the three MatrixRTC revs changed.
+
+What that rebase cost on this side, as a guide to the next one: upstream had
+moved the media key bookkeeping out of `matrix-rtc-livekit` into a new
+`matrix-rtc-media::keys`, so four of the eight commits had to be re-landed
+against the new home rather than merged. In this workspace it was two test
+fixtures and one match arm, all of them named by the compiler.
 
 ### Eight livekit and webrtc crates, pinned in Cargo.lock
 

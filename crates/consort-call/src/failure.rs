@@ -73,7 +73,13 @@ pub fn classify(error: &CallError) -> CallFailure {
     match error {
         CallError::Sdk(_) => CallFailure::Homeserver(said),
         CallError::Transport(_) | CallError::Media(_) => CallFailure::NoTransport(said),
-        CallError::Signalling(_) => CallFailure::Signalling(said),
+        // Nothing here sends one: Consort draws no in-call reactions and has
+        // no raised hand. The arm exists because the match is exhaustive, and
+        // that is worth keeping, since being exhaustive is what said this
+        // variant had appeared at all. Signalling is where it belongs if it
+        // ever does arrive: a reaction is an event send, like the membership
+        // beside it.
+        CallError::Signalling(_) | CallError::Reaction(_) => CallFailure::Signalling(said),
     }
 }
 
@@ -155,6 +161,7 @@ mod tests {
 #[cfg(test)]
 mod classifying {
     use super::*;
+    use matrix_rtc_core::reactions::ReactionError;
     use matrix_rtc_media::TransportError;
 
     fn sdk_error() -> CallError {
@@ -169,11 +176,14 @@ mod classifying {
     }
 
     #[test]
-    fn the_authorisation_service_refusing_is_no_transport() {
-        let error = CallError::Transport(matrix_rtc_livekit::Error::Service {
-            status: 403,
-            body: "not allowed".to_owned(),
-        });
+    fn the_authorisation_handshake_failing_is_no_transport() {
+        // Which leg of the handshake failed does not reach `classify`, which
+        // matches the outer `Transport` arm: getting the OpenID token, the
+        // token service refusing, and the socket never opening are one
+        // sentence to whoever is trying to talk.
+        let error = CallError::Transport(matrix_rtc_livekit::Error::OpenIdToken(
+            matrix_rtc_livekit::OpenIdTokenError("the homeserver said no".to_owned()),
+        ));
 
         assert!(matches!(classify(&error), CallFailure::NoTransport(_)));
     }
@@ -191,6 +201,18 @@ mod classifying {
     #[test]
     fn membership_being_refused_is_signalling() {
         let error = CallError::Signalling("membership rejected".to_owned());
+
+        assert!(matches!(classify(&error), CallFailure::Signalling(_)));
+    }
+
+    /// Unreachable today, and classified rather than ignored.
+    ///
+    /// Consort has no way to send one, so this arrives from nowhere. It is
+    /// here because a variant with no arm is a compile error and a variant
+    /// swept into a catch-all is the next upstream addition going unnoticed.
+    #[test]
+    fn a_reaction_failing_is_signalling() {
+        let error = CallError::Reaction(ReactionError::NotJoined);
 
         assert!(matches!(classify(&error), CallFailure::Signalling(_)));
     }

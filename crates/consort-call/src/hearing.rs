@@ -198,6 +198,7 @@ mod tests {
             device_id: None,
             is_local,
             reachable: true,
+            hand_raised_at_ms: None,
             joined_at_ms: None,
             streams: kinds
                 .iter()

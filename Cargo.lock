@@ -3917,7 +3917,7 @@ dependencies = [
 [[package]]
 name = "matrix-rtc-bridge"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=0427fc00038bb1dce07b8ff28910b6629964a3ad#0427fc00038bb1dce07b8ff28910b6629964a3ad"
 dependencies = [
  "async-trait",
  "log",
@@ -3928,15 +3928,17 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "web-time",
 ]
 
 [[package]]
 name = "matrix-rtc-core"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=0427fc00038bb1dce07b8ff28910b6629964a3ad#0427fc00038bb1dce07b8ff28910b6629964a3ad"
 dependencies = [
  "async-trait",
  "base64 0.21.7",
+ "getrandom 0.2.17",
  "log",
  "rand 0.8.7",
  "rand_core 0.6.4",
@@ -3944,43 +3946,61 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "unicode-segmentation",
+ "web-time",
 ]
 
 [[package]]
 name = "matrix-rtc-livekit"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=0427fc00038bb1dce07b8ff28910b6629964a3ad#0427fc00038bb1dce07b8ff28910b6629964a3ad"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "futures-util",
  "jni 0.21.1",
  "livekit",
  "log",
  "matrix-rtc-bridge",
  "matrix-rtc-core",
+ "matrix-rtc-livekit-proto",
  "matrix-rtc-media",
  "matrix-sdk",
  "matrix-sdk-ui",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.20",
  "tokio",
 ]
 
 [[package]]
+name = "matrix-rtc-livekit-proto"
+version = "0.1.0"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=0427fc00038bb1dce07b8ff28910b6629964a3ad#0427fc00038bb1dce07b8ff28910b6629964a3ad"
+dependencies = [
+ "base64 0.22.1",
+ "matrix-rtc-bridge",
+ "matrix-rtc-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "matrix-rtc-media"
 version = "0.1.0"
-source = "git+https://github.com/tominal/matrix-rust-rtc?rev=934cdbad34bda1a8a170faa022dcdd5436f4072a#934cdbad34bda1a8a170faa022dcdd5436f4072a"
+source = "git+https://github.com/tominal/matrix-rust-rtc?rev=0427fc00038bb1dce07b8ff28910b6629964a3ad#0427fc00038bb1dce07b8ff28910b6629964a3ad"
 dependencies = [
  "async-trait",
  "futures-core",
+ "futures-util",
+ "gloo-timers",
  "log",
  "matrix-rtc-core",
  "thiserror 2.0.20",
  "tokio",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
