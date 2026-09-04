@@ -159,6 +159,29 @@ describe("ThreadPanel", () => {
     expect(threadOpen).toHaveBeenCalledWith(null);
   });
 
+  it("shuts on Escape, the way everything else here is dismissed", async () => {
+    await opened();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(threadOpen).toHaveBeenCalledWith(null);
+  });
+
+  it("leaves the thread open when a card over it takes the Escape", async () => {
+    // One press, one thing. The card is on top, so it is what closes, and a
+    // panel that went with it would take the conversation being read away.
+    await opened();
+    const [byline] = await screen.findAllByText("Ada");
+    await userEvent.click(byline!);
+    expect(await screen.findByRole("dialog")).toBeVisible();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(threadOpen).not.toHaveBeenCalled();
+    expect(screen.getByRole("complementary")).toBeVisible();
+  });
+
   it("goes away when Rust says nothing is open", async () => {
     await opened();
     await act(async () => {

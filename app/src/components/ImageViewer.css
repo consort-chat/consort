@@ -26,10 +26,20 @@
   `min-height: 0` because a grid item's automatic minimum is its content, and
   its content here is a photograph that may be four thousand pixels tall. That
   minimum would push the pane back past the track it was just given.
+
+  The row is spelled out here for the same reason it is spelled out above, and
+  leaving it implicit here is why a tall picture still ran off the bottom after
+  that fix. This is a grid as well as a grid item, so the picture sits in a
+  track of its own, and an implicit track is `auto`: as tall as the photograph,
+  whatever the pane holding it is. The cap did resolve, so the picture was
+  scaled correctly and then centred in a track more than twice the height it
+  had been scaled to, which puts its top below the middle of the window and the
+  rest of it past the bottom.
 */
 .viewer__pane {
   position: relative;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   min-height: 0;
   padding: var(--space-12) var(--space-6);

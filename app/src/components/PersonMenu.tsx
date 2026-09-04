@@ -182,7 +182,12 @@ export function PersonMenu({
   // is gone before whatever was underneath it reacts.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      // Stopped for the reason the reaction picker stops it: the thread panel
+      // listens a step further out, at the window, and a card opened over one
+      // should be all that a single press closes.
+      event.stopPropagation();
+      onClose();
     }
     function onDown(event: PointerEvent) {
       const node = menu.current;
