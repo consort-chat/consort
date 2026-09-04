@@ -21,6 +21,14 @@ import { RoomAvatar } from "./RoomAvatar";
  */
 const SAME_BREATH = 5 * 60 * 1000;
 
+/**
+ * Which control a picker was opened from.
+ *
+ * A message with reactions has two of them, and the panel is drawn under
+ * whichever was pressed rather than always in the corner.
+ */
+type Anchor = "toolbar" | "row";
+
 /** Consecutive messages from one person, close enough together to read as one. */
 export interface Group {
   /** The first message's ID, which is what makes this row's key stable. */
@@ -343,14 +351,60 @@ export function MessageGroups({
   onCopyLink?: (eventId: string) => void;
 }) {
   /*
-    Which message has its picker open, or none. One at a time, for the reason
-    a person's card has the same rule: two open at once is two panels of the
-    same twelve keys with nothing saying which message either belongs to.
+    Which message has its picker open and which control opened it, or none.
+    One at a time, for the reason a person's card has the same rule: two open
+    at once is two panels of the same twelve keys with nothing saying which
+    message either belongs to.
   */
-  const [picking, setPicking] = useState<string | null>(null);
+  const [picking, setPicking] = useState<{ id: string; at: Anchor } | null>(
+    null,
+  );
   // For the quoted line above a reply, which cannot hold a badge and so says
   // what the badge would have said.
   const { nameOf } = useRoomLinks();
+
+  /** Open the panel under this control, or shut the one already open there. */
+  function toggle(id: string, at: Anchor) {
+    setPicking((open) =>
+      open?.id === id && open.at === at ? null : { id, at },
+    );
+  }
+
+  /**
+   * The picker, when this is the control it was opened from.
+   *
+   * One function for both sites rather than the same twenty lines twice. What
+   * a key means when it is pressed does not depend on which control opened
+   * the panel, and two copies would be two answers free to drift apart.
+   */
+  function pickerFor(message: Message, at: Anchor) {
+    if (
+      onReact === undefined ||
+      picking?.id !== message.id ||
+      picking.at !== at
+    ) {
+      return null;
+    }
+
+    return (
+      <ReactionPicker
+        align={at === "row" ? "left" : "right"}
+        chosen={
+          new Set(
+            (message.reactions ?? [])
+              .filter((one) => one.mine !== undefined)
+              .map((one) => one.key),
+          )
+        }
+        onChoose={(key) => {
+          const already = message.reactions?.find((one) => one.key === key);
+          onReact(message.id, key, already?.mine);
+          setPicking(null);
+        }}
+        onClose={() => setPicking(null)}
+      />
+    );
+  }
 
   /**
    * Open a thread, unless the press was the end of a selection.
@@ -578,6 +632,31 @@ export function MessageGroups({
                               </span>
                             </button>
                           ))}
+                          {/*
+                            One more item in the row, drawn quieter than a
+                            pill: it is an action rather than something
+                            anybody has said. Only here, because a message
+                            with no reactions has nothing for it to sit beside
+                            and the toolbar is where its first one comes from.
+                          */}
+                          {onReact !== undefined && (
+                            <span className="timeline__add">
+                              <button
+                                type="button"
+                                className="timeline__add-key"
+                                aria-label="Add a reaction"
+                                title="Add a reaction"
+                                aria-expanded={
+                                  picking?.id === message.id &&
+                                  picking.at === "row"
+                                }
+                                onClick={() => toggle(message.id, "row")}
+                              >
+                                <ReactIcon />
+                              </button>
+                              {pickerFor(message, "row")}
+                            </span>
+                          )}
                         </div>
                       )}
                     {/*
@@ -604,12 +683,11 @@ export function MessageGroups({
                           className="timeline__action"
                           aria-label="React"
                           title="React"
-                          aria-expanded={picking === message.id}
-                          onClick={() =>
-                            setPicking((open) =>
-                              open === message.id ? null : message.id,
-                            )
+                          aria-expanded={
+                            picking?.id === message.id &&
+                            picking.at === "toolbar"
                           }
+                          onClick={() => toggle(message.id, "toolbar")}
                         >
                           <ReactIcon />
                         </button>
@@ -659,25 +737,7 @@ export function MessageGroups({
                           )}
                         </button>
                       )}
-                      {picking === message.id && onReact !== undefined && (
-                        <ReactionPicker
-                          chosen={
-                            new Set(
-                              (message.reactions ?? [])
-                                .filter((one) => one.mine !== undefined)
-                                .map((one) => one.key),
-                            )
-                          }
-                          onChoose={(key) => {
-                            const already = message.reactions?.find(
-                              (one) => one.key === key,
-                            );
-                            onReact(message.id, key, already?.mine);
-                            setPicking(null);
-                          }}
-                          onClose={() => setPicking(null)}
-                        />
-                      )}
+                      {pickerFor(message, "toolbar")}
                     </div>
                   </div>
                 );

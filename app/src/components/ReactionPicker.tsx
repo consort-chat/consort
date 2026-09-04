@@ -42,12 +42,22 @@ export function ReactionPicker({
   chosen,
   onChoose,
   onClose,
+  align = "right",
 }: {
   /** The keys this session has already used, drawn as pressed. */
   chosen: ReadonlySet<string>;
   /** Use `key`, or take it back when it is already one of `chosen`. */
   onChoose: (key: string) => void;
   onClose: () => void;
+  /**
+   * Which edge of the control it hangs from.
+   *
+   * The toolbar sits over the message's top right corner, so its panel is
+   * pinned right and grows back across the message. The control beside the
+   * pills is at the other end of the row, where the same pinning would put
+   * the panel somewhere the press was not.
+   */
+  align?: "left" | "right";
 }) {
   const panel = useRef<HTMLDivElement | null>(null);
 
@@ -86,7 +96,7 @@ export function ReactionPicker({
 
   return (
     <div
-      className="picker"
+      className={align === "left" ? "picker picker--left" : "picker"}
       role="group"
       aria-label="React with"
       ref={panel}

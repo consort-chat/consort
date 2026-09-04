@@ -365,6 +365,43 @@
   color: var(--text-primary);
 }
 
+/*
+  The way to add another, at the end of the row.
+
+  Positioned, because the panel hangs off it. Quieter than a pill and with no
+  border: a pill is something somebody said and this is a thing to do, and the
+  two reading alike is what makes a row of reactions hard to count.
+*/
+.timeline__add {
+  position: relative;
+  display: flex;
+}
+
+.timeline__add-key {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.timeline__add-key:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.timeline__add-key:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .timeline__reaction-count {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
