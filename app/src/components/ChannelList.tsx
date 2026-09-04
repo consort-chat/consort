@@ -41,6 +41,30 @@ function VoiceIcon() {
 }
 
 /**
+ * A speech bubble, for the control that reads a voice channel.
+ *
+ * Drawn from the same 24px grid as the speaker beside it, because the two are
+ * on one row and an icon set that does not agree with itself looks like a
+ * mistake at this size.
+ */
+function ChatIcon() {
+  return (
+    <svg
+      className="channels__chat-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+/**
  * Who is in a voice channel, under it.
  *
  * Drawn without anybody clicking the channel and without connecting to
@@ -345,6 +369,7 @@ function ChannelRow({
   call,
   speaking,
   onSelect,
+  onOpenChat,
   onOpenPerson,
 }: {
   channel: Channel;
@@ -352,6 +377,8 @@ function ChannelRow({
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: () => void;
+  /** Show this channel's messages without connecting to it. Voice only. */
+  onOpenChat: () => void;
   onOpenPerson: (
     person: Participant,
     roomId: string,
@@ -364,36 +391,63 @@ function ChannelRow({
 
   return (
     <li>
-      <button
-        type="button"
-        className="channels__entry"
-        data-selected={selected}
-        data-kind={channel.kind}
-        /*
-          The call's own state, separate from selection. A channel can be
-          selected without being joined and joined without being selected, and
-          collapsing the two would mean clicking away from a voice channel
-          looked like leaving it.
-        */
-        data-call={callState ?? undefined}
-        /*
-          A room this account is not in cannot be opened, so the control that
-          would open it is disabled rather than absent. Hiding it would make
-          Consort disagree with every other client about how many channels the
-          space has.
-        */
-        disabled={!channel.joined}
-        aria-current={selected ? "true" : undefined}
-        title={
-          channel.joined
-            ? undefined
-            : "This account has not joined this channel."
-        }
-        onClick={onSelect}
-      >
-        {voice ? <VoiceIcon /> : <span className="channels__hash">#</span>}
-        <span className="channels__name">{channelLabel(channel)}</span>
-      </button>
+      {/*
+        The row is two controls, not one. Clicking a voice channel connects to
+        it, which is the right thing for the row to do and the wrong thing to
+        have to do to read what was said in it: the messages are a room like
+        any other, and every other client lets somebody open one without
+        joining the call in it.
+      */}
+      <div className="channels__row">
+        <button
+          type="button"
+          className="channels__entry"
+          data-selected={selected}
+          data-kind={channel.kind}
+          /*
+            The call's own state, separate from selection. A channel can be
+            selected without being joined and joined without being selected, and
+            collapsing the two would mean clicking away from a voice channel
+            looked like leaving it.
+          */
+          data-call={callState ?? undefined}
+          /*
+            A room this account is not in cannot be opened, so the control that
+            would open it is disabled rather than absent. Hiding it would make
+            Consort disagree with every other client about how many channels the
+            space has.
+          */
+          disabled={!channel.joined}
+          aria-current={selected ? "true" : undefined}
+          title={
+            channel.joined
+              ? undefined
+              : "This account has not joined this channel."
+          }
+          onClick={onSelect}
+        >
+          {voice ? <VoiceIcon /> : <span className="channels__hash">#</span>}
+          <span className="channels__name">{channelLabel(channel)}</span>
+        </button>
+        {/*
+          Only on a voice channel, because a text one is already what this does.
+          Absent rather than disabled on a channel this account is not in: the
+          row beside it is disabled and says why in its own title, and a second
+          dead control saying the same thing is noise on a row that is mostly
+          empty space.
+        */}
+        {voice && channel.joined && (
+          <button
+            type="button"
+            className="channels__chat"
+            aria-label={`Read ${channelLabel(channel)} without connecting`}
+            title="Read without connecting"
+            onClick={onOpenChat}
+          >
+            <ChatIcon />
+          </button>
+        )}
+      </div>
       {/*
         Beside the channel that was clicked rather than in the connection
         panel, because there is no connection to put it in: a failed join
@@ -430,6 +484,7 @@ function Group({
   call,
   speaking,
   onSelect,
+  onOpenChat,
   onOpenPerson,
 }: {
   label: string;
@@ -438,6 +493,8 @@ function Group({
   call: Call;
   speaking: ReadonlySet<string>;
   onSelect: (id: string) => void;
+  /** Show a channel without connecting. Only a voice row draws the control. */
+  onOpenChat: (id: string) => void;
   onOpenPerson: (
     person: Participant,
     roomId: string,
@@ -460,6 +517,7 @@ function Group({
             call={call}
             speaking={speaking}
             onSelect={() => onSelect(channel.id)}
+            onOpenChat={() => onOpenChat(channel.id)}
             onOpenPerson={onOpenPerson}
           />
         ))}
@@ -570,6 +628,7 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
+            onOpenChat={onOpenRoom}
             onOpenPerson={open}
           />
           <Group
@@ -579,6 +638,7 @@ export function ChannelList({
             call={call}
             speaking={speaking}
             onSelect={onSelect}
+            onOpenChat={onOpenRoom}
             onOpenPerson={open}
           />
         </>

@@ -31,13 +31,14 @@ function voice(
   id: string,
   name: string,
   participants: Participant[] = [],
+  joined = true,
 ): Channel {
   return {
     id,
     name,
     kind: "voice",
     avatar: null,
-    joined: true,
+    joined,
     participants,
   };
 }
@@ -59,6 +60,9 @@ function space(channels: Channel[], name = "Kahu HQ"): Space {
 function namesIn(label: string): string[] {
   return within(screen.getByRole("region", { name: label }))
     .getAllByRole("button")
+    // The rows themselves. A voice row also carries the control that reads it
+    // without connecting, and the people in it are controls of their own.
+    .filter((button) => button.classList.contains("channels__entry"))
     .map((button) => button.textContent ?? "");
 }
 
@@ -260,6 +264,70 @@ describe("ChannelList", () => {
 
     await userEvent.click(entry);
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("reads a voice channel without connecting to it", async () => {
+    // The messages in a voice room are a room like any other, and connecting
+    // to the call should not be the price of reading them.
+    const onSelect = vi.fn();
+    const onOpenRoom = vi.fn();
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={onOpenRoom}
+        onFold={vi.fn()}
+        space={space([voice(LOUNGE, "Lounge")])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={onSelect}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /read lounge without connecting/i }),
+    );
+
+    expect(onOpenRoom).toHaveBeenCalledWith(LOUNGE);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing of the kind on a text channel", () => {
+    // Clicking one already does exactly this, and a second control that
+    // repeated it would be a control with nothing to say.
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([text("!a:example.org", "general")])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /without connecting/i }),
+    ).toBeNull();
+  });
+
+  it("offers nothing of the kind on a channel this account is not in", () => {
+    // There is nothing to read. The row beside it is disabled and says why.
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([voice(LOUNGE, "Lounge", [], false)])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /without connecting/i }),
+    ).toBeNull();
   });
 
   it("shows who is in a voice channel without anybody opening it", () => {
@@ -553,7 +621,9 @@ describe("ChannelList", () => {
 
       const problem = screen.getByRole("alert");
       expect(problem).toHaveTextContent("no voice server would take this call");
-      expect(entryFor("Lounge").parentElement).toContainElement(problem);
+      // The channel's own list item, which is what "beside" means here: the
+      // row above it, and the people in it below.
+      expect(entryFor("Lounge").closest("li")).toContainElement(problem);
     });
 
     it("says nothing about a failure in the channel that did not fail", () => {

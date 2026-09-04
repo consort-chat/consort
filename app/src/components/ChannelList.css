@@ -59,6 +59,16 @@
   list-style: none;
 }
 
+/*
+  The channel and the control that only reads it, as one row. Positioned,
+  because the second is drawn over the end of the first: a column of its own
+  would be a gutter down the whole list, kept empty by every text channel and
+  by every voice channel nobody is pointing at.
+*/
+.channels__row {
+  position: relative;
+}
+
 .channels__entry {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -98,6 +108,65 @@
 .channels__entry:disabled {
   cursor: default;
   opacity: 0.45;
+}
+
+/*
+  Room at the end of a voice row for the control that sits over it, so a long
+  channel name runs out of space before it runs underneath one.
+*/
+.channels__entry[data-kind="voice"] {
+  padding-right: calc(24px + var(--space-2));
+}
+
+/*
+  Read a voice channel without connecting to it.
+
+  Hidden until the row is wanted, on the reasoning the message actions use:
+  by opacity rather than by `display`, because an element that is not drawn
+  cannot be tabbed to, and `focus-within` is what brings it back for a
+  keyboard. Its own surface, so that it stays legible over the fill a selected
+  or connected row carries.
+*/
+.channels__chat {
+  position: absolute;
+  top: 50%;
+  right: var(--space-1);
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--surface-overlay);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition:
+    opacity var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+  pointer-events: none;
+}
+
+.channels__row:hover .channels__chat,
+.channels__row:focus-within .channels__chat {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.channels__chat:hover {
+  color: var(--text-primary);
+}
+
+.channels__chat:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__chat-glyph {
+  width: 14px;
+  height: 14px;
 }
 
 .channels__hash {
