@@ -535,6 +535,27 @@
 }
 
 /*
+  Across the message rather than shrunk to what is in it.
+
+  `.timeline__message` is `justify-items: start`, which is right for a line of
+  text and wrong for this: a start-aligned item is sized shrink-to-fit, and a
+  percentage inside a box whose width is being worked out from that same box's
+  contents cannot be resolved. Every cap `MessageMedia.css` writes is a
+  `min()` holding one, so a clip's card fell back to its `min-height` and took
+  its width from the aspect ratio, which is the 170px stamp a video was drawn
+  as in a column wide enough for three of them. Pressing it then swapped that
+  for a 300px player, because an unresolvable width is what a `video` element
+  answers with its own default size.
+
+  Stretching the box gives them all something definite to be a percentage of.
+  Nothing here is drawn wider by it: the caps are inside, and they are what
+  decide the size.
+*/
+.timeline__attachment {
+  justify-self: stretch;
+}
+
+/*
   An attachment and whatever was said with it, as one message. The card brings
   its own top margin, so this only has to keep the caption under it.
 */
