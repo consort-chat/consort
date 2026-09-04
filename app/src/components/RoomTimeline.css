@@ -120,8 +120,12 @@
   at the same place, which is what makes a wall of messages scannable.
 */
 .timeline__group {
+  /* Named because three rules have to agree on it: the column, the picture in
+     it, and the flash that reaches back across it. */
+  --avatar: 36px;
+
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: var(--avatar) minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
 }
@@ -149,8 +153,8 @@
 }
 
 .timeline__face {
-  width: 36px;
-  height: 36px;
+  width: var(--avatar);
+  height: var(--avatar);
   border-radius: 50%;
   transition: opacity var(--duration-fast) var(--ease-out-expo);
 }
@@ -622,9 +626,30 @@
   attribute is set on the element by hand rather than through React: the row
   being jumped to belongs to whichever `MessageGroups` drew it, which is not
   always the one that was pressed.
+
+  Drawn on a pseudo-element reaching back across the avatar gutter, rather
+  than as a background on the message. A message occupies the second column
+  only, so a background there stops where the words do and a one-word message
+  gets a one-word band: a highlight smaller than the thing it marks. Over the
+  content rather than behind it, because `--violet-glow` is 28% alpha and a
+  layer underneath would be hidden by the gold of a message that also names
+  you.
+
+  Absolutely positioned, so it becomes no grid item and the conversation does
+  not move when a jump lands.
+
+  Twice rather than once. A single fade during a scroll that is still settling
+  is easy to look straight past, and the hard edge between the two is what
+  makes it read as something asking to be noticed.
 */
-.timeline__message[data-flash="true"] {
-  animation: timeline-flash 1.4s ease-out;
+.timeline__message[data-flash="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: calc(-1 * (var(--avatar) + var(--space-3)));
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  animation: timeline-flash 700ms ease-out 2;
 }
 
 @keyframes timeline-flash {
@@ -637,7 +662,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .timeline__message[data-flash="true"] {
+  .timeline__message[data-flash="true"]::after {
     animation: none;
     background: var(--violet-glow);
   }
