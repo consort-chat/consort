@@ -26,6 +26,17 @@ pnpm install
 pnpm tauri dev
 ```
 
+`pnpm tauri` sweeps the Cargo target directory before it builds, because cargo
+orphans artifacts it never collects and the directory does not stop growing on
+its own. Install cargo-sweep so the size cap has teeth:
+
+```sh
+cargo install cargo-sweep
+```
+
+[docs/BUILDING.md](docs/BUILDING.md#the-target-directory-and-keeping-it-bounded)
+has what it removes and how to tune it.
+
 ## Before you open a pull request
 
 ```sh

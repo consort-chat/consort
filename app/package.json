@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "tauri": "tauri",
+    "tauri": "node ../scripts/sweep-target.mjs && tauri",
+    "sweep": "node ../scripts/sweep-target.mjs --force",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

@@ -55,6 +55,51 @@ Rust crates and the Tauri app share one cargo workspace.
 The first build compiles the Matrix SDK from source and takes a while. Later
 builds are incremental and fast.
 
+## The target directory, and keeping it bounded
+
+Cargo never deletes anything. Every artifact is hash-suffixed by its
+fingerprint, so a dependency bump, a feature change or a rustflag edit orphans
+the previous set rather than replacing it, and nothing collects the orphans.
+One generation of `debug/deps` on this workspace is roughly 20 GB. Left alone
+the directory reached 184 GB in nine days of ordinary work.
+
+`pnpm tauri` runs `scripts/sweep-target.mjs` before it builds, and that holds a
+ceiling over the directory. At most once every twelve hours it:
+
+- caps `deps/` and `build/` with `cargo sweep --maxsize`, which evicts oldest
+  first, so the generation being linked against right now survives and the
+  abandoned ones go,
+- deletes `incremental/` directories nothing has rebuilt in a week. Cargo
+  orphans one whenever a crate's fingerprint changes, and neither cargo nor
+  cargo-sweep ever collects it. This was 66 GB of the 184 GB,
+- deletes `llvm-cov-target/` when no coverage run has touched it in a week.
+
+The size cap needs cargo-sweep, which is optional:
+
+```sh
+cargo install cargo-sweep
+```
+
+Without it the incremental and coverage pruning still run, and the script says
+what it skipped. Nothing here can fail a build. A missing tool, an unreadable
+directory or a sweep that exits non-zero is reported and stepped over, which is
+also how CI runs this unchanged without cargo-sweep installed.
+
+Three variables tune it:
+
+| Variable | Default | |
+|---|---|---|
+| `CONSORT_TARGET_MAX_SIZE` | `30GB` | Ceiling for the whole directory. |
+| `CONSORT_TARGET_MAX_AGE_DAYS` | `7` | Age at which incremental and coverage output is dropped. |
+| `CONSORT_SWEEP_INTERVAL_HOURS` | `12` | How often it is willing to look. `0` means every build. |
+
+`pnpm sweep` runs it immediately and ignores the interval.
+
+One thing to know if `~/.cargo/config.toml` sets `build.target-dir`, which
+points every project on the machine at one directory: the cap covers the whole
+of it, so another project's stale artifacts are evicted alongside ours.
+Everything under it is reproducible, so that costs a rebuild and nothing else.
+
 
 ## Building the Arch package by hand
 
