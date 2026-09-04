@@ -854,11 +854,15 @@
   disappeared would change the height of the scrolling list above it, which
   moves the conversation under whoever is reading, twice per sentence anybody
   else types.
+
+  The gap under it is a margin rather than padding, so that the height reserved
+  above stays the one line this is. Without it the name sits on the top edge of
+  the box below and reads as a label for it.
 */
 .timeline__typing {
   flex: none;
   min-height: 1.2em;
-  margin: 0;
+  margin: 0 0 var(--space-2);
   padding: 0 var(--space-6);
   overflow: hidden;
   color: var(--text-muted);
