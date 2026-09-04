@@ -27,6 +27,12 @@ under `rustc -vV`:
 LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata cargo llvm-cov ...
 ```
 
+`cargo llvm-cov` builds into `llvm-cov-target`, a second target directory with
+instrumentation in it, and never cleans up between runs. It reached 19 GB
+before anybody noticed. `pnpm tauri` now drops it once a week has passed
+without a coverage run, so an occasional run costs a rebuild and a permanent
+one costs nothing.
+
 ## What is excluded, and why
 
 Five files are outside the measurement. Each is excluded because a test could
