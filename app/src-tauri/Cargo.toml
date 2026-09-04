@@ -65,6 +65,14 @@ tauri-plugin-single-instance = "2"
 # command, so the call arrives already inside one, and tokio answers
 # "Cannot start a runtime from within a runtime" before the window is drawn.
 tauri-plugin-dialog = { version = "2", default-features = false, features = ["gtk3"] }
+# Putting a message's address on the clipboard. Rust only, like the dialog
+# above and for the same reason: no capability is granted to the webview, so
+# the page cannot read what somebody copied somewhere else, and copying a link
+# is a command like any other. The platform work is the whole reason this is a
+# dependency rather than four lines: an X11 selection belongs to a process
+# rather than to the system, so something has to stay alive to hand the text
+# over when the other application asks for it.
+tauri-plugin-clipboard-manager = "2"
 # Handing a link to the desktop's browser. Called from Rust only, like the
 # dialog above: the frontend still cannot reach anything outside the webview,
 # and asking for a link to be opened is a command like any other. What decides

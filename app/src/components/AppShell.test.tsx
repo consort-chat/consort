@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,6 +23,7 @@ const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
+const roomAt = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   audioDevices,
@@ -40,6 +41,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineEarlier,
   timelineSend,
   memberNames,
+  roomAt,
   roomAvatar,
 }));
 
@@ -55,6 +57,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  Timeline,
 } from "../lib/api";
 
 const profile: Profile = {
@@ -173,6 +176,7 @@ describe("AppShell", () => {
     timelineEarlier.mockReset().mockResolvedValue(undefined);
     timelineSend.mockReset().mockResolvedValue(undefined);
     memberNames.mockReset().mockResolvedValue({});
+    roomAt.mockReset().mockResolvedValue("!tech:example.org");
   });
 
   it("folds the channel list away, and back", async () => {
@@ -475,6 +479,98 @@ describe("AppShell", () => {
         screen.queryByRole("group", { name: /voice connection/i }),
       ).toBeNull();
       expect(screen.getByRole("alert")).toHaveTextContent("no voice server");
+    });
+  });
+
+  describe("a link to a room inside a message", () => {
+    const TECH = "!tech:example.org";
+    const twoRooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [
+            textChannel("!general:example.org", "general"),
+            textChannel(TECH, "tech"),
+          ],
+        },
+      ],
+    };
+
+    /** Open general and say one thing in it, with a link in what was said. */
+    async function linked(body: string) {
+      let publish: (timeline: Timeline) => void = () => {};
+      onTimeline.mockImplementation((handler: (t: Timeline) => void) => {
+        publish = handler;
+        return Promise.resolve(() => {});
+      });
+      shell({ rooms: twoRooms });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /general/i }),
+      );
+      await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+      await act(async () => {
+        publish({
+          roomId: "!general:example.org",
+          messages: [
+            {
+              id: "$1",
+              sender: "@ada:example.org",
+              at: Date.UTC(2026, 0, 1),
+              body,
+              kind: "text",
+            },
+          ],
+          moreBefore: false,
+          loading: false,
+        });
+      });
+
+      // Scoped to the conversation. The channel list draws a `#tech` of its
+      // own, and the badge in the message is the one under test.
+      return within(screen.getByRole("log"));
+    }
+
+    it("names the room the way the rest of the shell names it", async () => {
+      // The hash included. A badge saying `tech` beside a heading saying
+      // `#tech` reads as two different rooms.
+      const said = await linked(`look at https://matrix.to/#/${TECH}`);
+
+      expect(said.getByRole("button", { name: "#tech" })).toBeVisible();
+    });
+
+    it("shows the room when the badge is pressed", async () => {
+      const said = await linked(`look at https://matrix.to/#/${TECH}`);
+
+      await userEvent.click(said.getByRole("button", { name: "#tech" }));
+
+      expect(roomAt).toHaveBeenCalledWith(TECH);
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "#tech" }),
+      ).toBeVisible();
+    });
+
+    it("says why a link went nowhere, rather than doing nothing", async () => {
+      // The address was written by whoever sent the message, so an alias no
+      // directory knows and a room this account is not in are both ordinary.
+      roomAt.mockRejectedValue({
+        message: "Nothing here could find a room at that address.",
+        detail: "no",
+      });
+      const said = await linked("look at https://matrix.to/#/#gone:example.org");
+
+      await userEvent.click(
+        said.getByRole("button", { name: "#gone:example.org" }),
+      );
+
+      const complaint = await screen.findByRole("alert");
+      expect(complaint).toHaveTextContent(/could find a room at that address/i);
+      await userEvent.click(
+        within(complaint).getByRole("button", { name: "Dismiss" }),
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 });

@@ -77,6 +77,14 @@ pub enum Error {
     #[error("this account is not in room {room_id}")]
     NoSuchRoom { room_id: String },
 
+    /// A link named a room address that nothing could turn into a room.
+    ///
+    /// A room ID that is not one, or an alias no directory answered to. Both
+    /// arrive the same way: somebody pressed a `matrix.to` link in a message
+    /// that a stranger wrote.
+    #[error("`{address}` does not name a room")]
+    NoSuchAddress { address: String },
+
     /// A command named something that is not a Matrix user ID.
     ///
     /// Only reachable from a user ID the interface did not get out of a room,
@@ -214,6 +222,9 @@ impl Error {
             }
             Self::CorruptSession(_) | Self::InvalidStoredIdentifier { .. } => {
                 "The saved session was unreadable, so you have been signed out.".to_owned()
+            }
+            Self::NoSuchAddress { .. } => {
+                "Nothing here could find a room at that address.".to_owned()
             }
             Self::NoSuchUser { .. } => {
                 "That is not a Matrix user, so there is nobody to message.".to_owned()

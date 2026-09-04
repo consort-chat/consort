@@ -399,6 +399,24 @@ pub async fn timeline_send_for(
     Ok(())
 }
 
+/// Answer one message in the room.
+///
+/// `sender` is who wrote the message being answered. It rides along so the
+/// reply can name them in `m.mentions`, which is what makes an answer arrive
+/// as something rather than as one more line in the room, and it comes from
+/// the message the interface is already drawing rather than from a lookup.
+pub async fn timeline_reply_for(
+    state: &AppState,
+    room_id: String,
+    reply_to: String,
+    sender: String,
+    body: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::send_reply(&client, &room_id, &reply_to, &sender, &body).await?;
+    Ok(())
+}
+
 /// Say something in a thread.
 ///
 /// The same as saying something in the room, with the relation that puts it in
@@ -460,6 +478,33 @@ pub async fn timeline_typing_for(
     let client = signed_in_client(state).await?;
     timeline::typing(&client, &room_id, typing).await?;
     Ok(())
+}
+
+/// A `matrix.to` address for one message, to give to somebody else.
+///
+/// Split from the copy below so the address is testable: putting text on the
+/// clipboard needs an `AppHandle`, which only exists inside a running
+/// application, and what is worth checking is the address rather than the
+/// platform's clipboard.
+pub async fn timeline_permalink_for(
+    state: &AppState,
+    room_id: String,
+    event_id: String,
+) -> Result<String, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(timeline::permalink(&client, &room_id, &event_id).await?)
+}
+
+/// The joined room one `matrix.to` address points at.
+///
+/// An alias costs a directory lookup and a room ID costs nothing, and both
+/// answer the same thing: the ID of a room this account is in, or a sentence
+/// saying why there is nowhere to go. Pressing a link in a message is the only
+/// caller, and a message is written by a stranger, so both failures are
+/// ordinary rather than a bug.
+pub async fn room_at_for(state: &AppState, address: String) -> Result<String, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::room_at(&client, &address).await?)
 }
 
 /// The room to say something to one person in, made if there is not one.
@@ -1168,6 +1213,18 @@ pub async fn thread_send(
     thread_send_for(&state, room_id, root_id, latest_id, body).await
 }
 
+/// See `timeline_reply_for`.
+#[tauri::command]
+pub async fn timeline_reply(
+    state: State<'_, AppState>,
+    room_id: String,
+    reply_to: String,
+    sender: String,
+    body: String,
+) -> Result<(), CommandError> {
+    timeline_reply_for(&state, room_id, reply_to, sender, body).await
+}
+
 /// See `timeline_react_for`.
 #[tauri::command]
 pub async fn timeline_react(
@@ -1306,6 +1363,37 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
             .to_owned(),
         detail: format!("opening {address}: {error}"),
     })
+}
+
+/// Put one message's address on the clipboard.
+///
+/// One command rather than an address returned and copied from the page,
+/// because the webview has `core:default` and no clipboard capability. That is
+/// the same rule the Save As window and the browser handoff follow: what the
+/// page can reach is a command, and the thing itself is Rust's.
+#[tauri::command]
+pub async fn timeline_copy_link(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    room_id: String,
+    event_id: String,
+) -> Result<(), CommandError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let address = timeline_permalink_for(&state, room_id, event_id).await?;
+
+    app.clipboard()
+        .write_text(address)
+        .map_err(|error| CommandError {
+            message: "Consort could not reach this desktop's clipboard.".to_owned(),
+            detail: format!("writing to the clipboard: {error}"),
+        })
+}
+
+/// The joined room one `matrix.to` address points at. See `room_at_for`.
+#[tauri::command]
+pub async fn room_at(state: State<'_, AppState>, address: String) -> Result<String, CommandError> {
+    room_at_for(&state, address).await
 }
 
 /// The room to say something to one person in. See `direct_room_for`.
@@ -3584,6 +3672,53 @@ mod against_a_mock_homeserver {
             let refused = timeline_send_for(&state, GENERAL.to_owned(), "hello".to_owned())
                 .await
                 .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn answering_a_message_while_signed_out_is_refused_first() {
+            let (_dir, state, _sink) = state();
+
+            let refused = timeline_reply_for(
+                &state,
+                GENERAL.to_owned(),
+                "$said:example.org".to_owned(),
+                "@ada:example.org".to_owned(),
+                "quite".to_owned(),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_for_a_message_address_while_signed_out_says_so() {
+            let (_dir, state, _sink) = state();
+
+            let refused =
+                timeline_permalink_for(&state, GENERAL.to_owned(), "$said:example.org".to_owned())
+                    .await
+                    .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn following_a_room_link_while_signed_out_says_so() {
+            let (_dir, state, _sink) = state();
+
+            let refused = room_at_for(&state, GENERAL.to_owned()).await.unwrap_err();
 
             assert_eq!(
                 refused.message,

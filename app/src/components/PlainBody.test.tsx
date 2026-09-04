@@ -52,6 +52,36 @@ describe("PlainBody", () => {
     expect(clicked.defaultPrevented).toBe(true);
   });
 
+  it("draws a pasted message address as somewhere to go", () => {
+    // Exactly what Consort's own Copy link produces, pasted into a room. It
+    // arrives as plain words with no formatting at all, and as an address
+    // nothing outside Matrix can do anything useful with.
+    render(
+      <PlainBody text="see https://matrix.to/#/!general:example.org/$said:example.org" />,
+    );
+
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByRole("button", { name: "A message" })).toBeVisible();
+  });
+
+  it("never hands a pasted matrix address to the desktop's browser", async () => {
+    render(<PlainBody text="https://matrix.to/#/#general:example.org" />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "#general:example.org" }),
+    );
+
+    expect(openLink).not.toHaveBeenCalled();
+  });
+
+  it("leaves a link to a person as a link", () => {
+    // Consort has no card to open from a message body, so the only honest
+    // thing left is the address itself.
+    render(<PlainBody text="https://matrix.to/#/@ada:example.org" />);
+
+    expect(screen.getByRole("link")).toBeVisible();
+  });
+
   it("says so in the console when a link cannot be opened", async () => {
     // Somebody pressed something and nothing happened. Silence would leave
     // nothing at all to look at.

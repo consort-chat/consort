@@ -41,12 +41,14 @@ pub mod dto;
 mod facts;
 mod history;
 mod media;
+mod permalink;
 mod reactions;
 mod thread;
 
 pub use dto::{Media, Message, MessageKind, Reaction, Thread, ThreadSummary, Timeline, Typing};
 pub use history::History;
 pub use media::{Attachment, bytes, media};
+pub use permalink::permalink;
 pub use reactions::Reactions;
 pub use thread::thread;
 
@@ -59,10 +61,12 @@ use matrix_sdk::ruma::api::Direction;
 use matrix_sdk::ruma::events::reaction::ReactionEventContent;
 use matrix_sdk::ruma::events::relation::Annotation;
 use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
-use matrix_sdk::ruma::events::room::message::{Relation, RoomMessageEventContent};
+use matrix_sdk::ruma::events::room::message::{
+    AddMentions, ForwardThread, Relation, ReplyMetadata, RoomMessageEventContent,
+};
 use matrix_sdk::ruma::events::{AnySyncEphemeralRoomEvent, AnySyncTimelineEvent};
 use matrix_sdk::ruma::serde::Raw;
-use matrix_sdk::ruma::{EventId, OwnedEventId, RoomId};
+use matrix_sdk::ruma::{EventId, OwnedEventId, RoomId, UserId};
 use matrix_sdk::{Client, Room};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
@@ -783,6 +787,42 @@ pub async fn unreact(client: &Client, room_id: &str, reaction_id: &str) -> Resul
 /// takes. See the module header for why there is no local echo.
 pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
     let content = written(body)?;
+    room_of(client, room_id)?.send(content).await?;
+    Ok(())
+}
+
+/// Answer one message in the room.
+///
+/// A reply rather than a thread: it lands in the conversation everybody is
+/// reading, and `facts::answering` is what draws the row above it saying what
+/// it answers. Nothing here writes the quoted fallback the specification used
+/// to ask for. It was removed from the specification because every client that
+/// draws replies has to strip it again, and this one strips what arrives.
+///
+/// `sender` is who wrote the message being answered, and it is used for one
+/// thing: the `m.mentions` a reply carries, so that the person answered is
+/// notified rather than having to notice. It comes from the message the
+/// interface is already drawing, on the same terms as `latest_id` below.
+pub async fn send_reply(
+    client: &Client,
+    room_id: &str,
+    reply_to: &str,
+    sender: &str,
+    body: &str,
+) -> Result<()> {
+    let answered = event_id_of(reply_to)?;
+    let author = UserId::parse(sender).map_err(|_| Error::NoSuchUser {
+        user_id: sender.to_owned(),
+    })?;
+    let content = written(body)?.make_reply_to(
+        ReplyMetadata::new(&answered, &author, None),
+        // The room, never the thread the answered message might be in. A
+        // message in a thread is not drawn in the room at all, so nothing here
+        // can be pressed to reply to one.
+        ForwardThread::No,
+        AddMentions::Yes,
+    );
+
     room_of(client, room_id)?.send(content).await?;
     Ok(())
 }

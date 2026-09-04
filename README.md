@@ -39,10 +39,15 @@ at whatever homeserver you already run.
   messages load as you scroll to them. Attachments are drawn and can be saved
   anywhere. Mentions of you are marked.
 - **Threads and replies.** Threads open beside the room and can be started from
-  any message. A reply is drawn as a reply, and pressing it jumps to what it
-  answers.
+  any message. Any message can also be answered in the room itself: the box
+  above the composer says what is being answered, the reply is drawn as a
+  reply, and pressing it jumps to what it answers.
 
   [Screenshot of the thread panel open beside a room Here]
+- **Links into Matrix.** A `matrix.to` link to a room or to a message is drawn
+  as a badge naming where it goes, and pressing it goes there rather than
+  opening a browser. Every message carries a Copy link control that puts its
+  own address on the clipboard.
 - **Reactions.** Twelve keys to pick from, and any key anybody else sends draws
   correctly. Custom emoji from other clients are shown.
 
@@ -178,6 +183,9 @@ resource here. The full standard, and what gets a change sent back, is in
 - **No local echo.** A message you send appears when the sync brings it back.
 - **A reply to something older than what is loaded** says so rather than
   fetching it, and a thread longer than fifty replies shows its recent end.
+- **A link to a message older than what is loaded** opens the room and stops
+  there. Going to the message itself needs history fetched around it, which is
+  the same gap the reply above has.
 - **Playing a clip needs codecs this application does not ship.** Consort
   renders through WebKitGTK, which decodes through GStreamer, so an mp4 needs
   H.264 and AAC decoders installed on the machine. Where they are missing the

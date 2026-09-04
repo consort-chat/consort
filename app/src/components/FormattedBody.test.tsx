@@ -159,16 +159,55 @@ describe("FormattedBody", () => {
     expect(rendered.querySelector("a")).toHaveClass("timeline__mention");
   });
 
-  it("leaves a link to a room alone", () => {
-    // A matrix.to link can name a room or an event as well as a person, and
-    // neither of those wants an at sign in front of it.
+  it("draws a link to a room as somewhere to go rather than as an address", () => {
+    // A matrix.to link can name a room or a message as well as a person, and
+    // neither of those is a mention. Nor is either of them a website: following
+    // one in a browser lands on matrix.to's own page offering to open a client.
     const rendered = body(
       '<p><a href="https://matrix.to/#/!general:example.org">general</a></p>',
     );
 
-    const link = rendered.querySelector("a");
-    expect(link).toHaveTextContent("general");
-    expect(link).not.toHaveClass("timeline__mention");
+    expect(rendered.querySelector("a")).toBeNull();
+    expect(screen.getByRole("button", { name: "general" })).toBeVisible();
+  });
+
+  it("names a room link for itself when the sender wrote only the address", () => {
+    // What a pasted link inside a markdown link looks like. Nothing was
+    // chosen, so nothing is preserved, and the alias is what a person can read.
+    const rendered = body(
+      '<p><a href="https://matrix.to/#/#general:example.org">https://matrix.to/#/#general:example.org</a></p>',
+    );
+
+    expect(rendered.querySelector("a")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "#general:example.org" }),
+    ).toBeVisible();
+  });
+
+  it("keeps the words a sender wrote around a link to a message", () => {
+    body(
+      '<p><a href="https://matrix.to/#/!general:example.org/$said:example.org">this one</a></p>',
+    );
+
+    expect(screen.getByRole("button", { name: "this one" })).toBeVisible();
+  });
+
+  it("says a message link is a message when the sender wrote no words", () => {
+    body(
+      '<p><a href="https://matrix.to/#/!general:example.org/$said:example.org">https://matrix.to/#/!general:example.org/$said:example.org</a></p>',
+    );
+
+    expect(screen.getByRole("button", { name: "A message" })).toBeVisible();
+  });
+
+  it("never hands a link into Matrix to the desktop's browser", async () => {
+    body(
+      '<p><a href="https://matrix.to/#/!general:example.org">general</a></p>',
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "general" }));
+
+    expect(openLink).not.toHaveBeenCalled();
   });
 
   it("draws a custom emoji from the homeserver", () => {

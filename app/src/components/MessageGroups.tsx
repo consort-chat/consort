@@ -1,6 +1,9 @@
 import { useState, type RefObject } from "react";
 
 import type { Message, MessageKind, Participant } from "../lib/api";
+import { flashMessage } from "../lib/flash";
+import { withAddressesNamed } from "../lib/matrixTo";
+import { useRoomLinks } from "../lib/roomLinks";
 import { FormattedBody } from "./FormattedBody";
 import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
@@ -90,25 +93,20 @@ function attachmentKind(
 }
 
 /**
- * How long an answered message stays lit after being jumped to, in
- * milliseconds.
- *
- * Long enough to find with the eye after the scroll settles, short enough that
- * it is not still glowing when somebody starts reading the next thing.
- */
-const FLASH = 1_400;
-
-/**
- * A turning arrow, in front of the message being answered.
+ * A turning arrow: the message being answered, or the control that answers one.
  *
  * It replaces the words "In reply to", which were not ours: they are the
  * fallback the sender writes for clients that draw no reply of their own, and
  * they arrived as a link that went nowhere.
+ *
+ * Exported because the room's composer draws the same arrow in front of what
+ * is about to be answered, and one glyph drawn twice beats two that have to be
+ * kept looking alike.
  */
-function ReplyIcon() {
+export function ReplyIcon({ className }: { className: string }) {
   return (
     <svg
-      className="timeline__reply-glyph"
+      className={className}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -129,9 +127,17 @@ function ReplyIcon() {
  * The filename for an attachment nobody captioned, because the alternative is
  * an empty quote, which reads as a message that failed to load rather than as
  * a picture.
+ *
+ * `nameOf` is what turns an address in the body into the words the message
+ * itself draws on its badge. Without it a reply to "look at <permalink>" quotes
+ * sixty characters of room ID, which is both unreadable and not what the line
+ * above it says.
  */
-function previewOf(message: Message): string {
-  if (message.body !== "") return message.body;
+export function previewOf(
+  message: Message,
+  nameOf: (roomOrAlias: string) => string | null,
+): string {
+  if (message.body !== "") return withAddressesNamed(message.body, nameOf);
   return message.media?.name ?? "an attachment";
 }
 
@@ -167,6 +173,44 @@ function ReactIcon() {
       <path d="M8.5 14.5a4 4 0 0 0 6 .3" />
       <path d="M19 2v5" />
       <path d="M16.5 4.5h5" />
+    </svg>
+  );
+}
+
+/** A chain: an address for this message, to give to somebody else. */
+function LinkIcon() {
+  return (
+    <svg
+      className="timeline__action-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 17H7A5 5 0 0 1 7 7h2" />
+      <path d="M15 7h2a5 5 0 0 1 0 10h-2" />
+      <path d="M8 12h8" />
+    </svg>
+  );
+}
+
+/** A tick: the address is on the clipboard. */
+function CopiedIcon() {
+  return (
+    <svg
+      className="timeline__action-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m5 13 4 4L19 7" />
     </svg>
   );
 }
@@ -209,9 +253,12 @@ export function MessageGroups({
   known,
   container,
   openingId,
+  copiedId,
   onAbout,
   onOpenThread,
+  onReply,
   onReact,
+  onCopyLink,
 }: {
   groups: Group[];
   /** Display names by user ID, for whoever the room has told us about. */
@@ -252,6 +299,14 @@ export function MessageGroups({
    * press looks like nothing happened and invites another.
    */
   openingId?: string | null;
+  /**
+   * The message whose address has just gone to the clipboard, if any.
+   *
+   * Held by the caller rather than here, on the same terms as `openingId`: a
+   * copy is a command that can fail, and only the caller can tell a clipboard
+   * that took the text from one that would not.
+   */
+  copiedId?: string | null;
   /** Open somebody's card, at the point that was clicked. */
   onAbout: (person: Participant, at: { x: number; y: number }) => void;
   /**
@@ -261,6 +316,17 @@ export function MessageGroups({
    * being read and there is nowhere further to go.
    */
   onOpenThread?: (rootId: string) => void;
+  /**
+   * Answer a message in the room it is in.
+   *
+   * The whole message rather than its ID, because the composer draws a line of
+   * what is being answered and the reply itself has to name who wrote it.
+   *
+   * Absent inside a thread panel, where answering is what the box at the
+   * bottom already does and a second kind of reply would be two controls with
+   * one meaning.
+   */
+  onReply?: (message: Message) => void;
   /**
    * React to a message, or take a reaction back.
    *
@@ -273,6 +339,8 @@ export function MessageGroups({
    * and the thread panel pass it.
    */
   onReact?: (eventId: string, key: string, mine: string | undefined) => void;
+  /** Put one message's address on the clipboard. */
+  onCopyLink?: (eventId: string) => void;
 }) {
   /*
     Which message has its picker open, or none. One at a time, for the reason
@@ -280,26 +348,9 @@ export function MessageGroups({
     same twelve keys with nothing saying which message either belongs to.
   */
   const [picking, setPicking] = useState<string | null>(null);
-  /**
-   * Scroll to a message and light it up.
-   *
-   * The attribute goes on the element rather than through state, and
-   * deliberately. The row being jumped to may belong to a different
-   * `MessageGroups` than the one that was clicked, which state here could not
-   * reach; and React leaves an attribute it never set alone, so a re-render
-   * does not fight it.
-   */
-  function goTo(eventId: string) {
-    const box = container?.current;
-    const target = box?.querySelector(
-      `[data-message-id="${CSS.escape(eventId)}"]`,
-    );
-    if (!(target instanceof HTMLElement)) return;
-
-    target.scrollIntoView({ block: "center", behavior: "smooth" });
-    target.setAttribute("data-flash", "true");
-    window.setTimeout(() => target.removeAttribute("data-flash"), FLASH);
-  }
+  // For the quoted line above a reply, which cannot hold a badge and so says
+  // what the badge would have said.
+  const { nameOf } = useRoomLinks();
 
   /**
    * Open a thread, unless the press was the end of a selection.
@@ -399,7 +450,7 @@ export function MessageGroups({
                     {message.replyTo !== undefined &&
                       (answered === undefined ? (
                         <p className="timeline__reply timeline__reply--gone">
-                          <ReplyIcon />
+                          <ReplyIcon className="timeline__reply-glyph" />
                           <span className="timeline__reply-said">
                             Replying to a message that is not loaded.
                           </span>
@@ -409,14 +460,16 @@ export function MessageGroups({
                           type="button"
                           className="timeline__reply"
                           aria-label={`Go to ${names[answered.sender] ?? answered.sender}'s message`}
-                          onClick={() => goTo(answered.id)}
+                          onClick={() =>
+                            flashMessage(container?.current ?? null, answered.id)
+                          }
                         >
-                          <ReplyIcon />
+                          <ReplyIcon className="timeline__reply-glyph" />
                           <span className="timeline__reply-who">
                             {names[answered.sender] ?? answered.sender}
                           </span>
                           <span className="timeline__reply-said">
-                            {previewOf(answered)}
+                            {previewOf(answered, nameOf)}
                           </span>
                         </button>
                       ))}
@@ -534,6 +587,17 @@ export function MessageGroups({
                       in it takes focus.
                     */}
                     <div className="timeline__actions">
+                      {onReply !== undefined && (
+                        <button
+                          type="button"
+                          className="timeline__action"
+                          aria-label="Reply"
+                          title="Reply"
+                          onClick={() => onReply(message)}
+                        >
+                          <ReplyIcon className="timeline__action-glyph" />
+                        </button>
+                      )}
                       {onReact !== undefined && (
                         <button
                           type="button"
@@ -567,6 +631,34 @@ export function MessageGroups({
                             <ThreadIcon />
                           </button>
                         )}
+                      {onCopyLink !== undefined && (
+                        /*
+                          The address, on the clipboard, rather than a panel
+                          offering five services to post it to. Pasting it
+                          somewhere is what almost everybody wanted, and the
+                          glyph turning into a tick is how they are told it
+                          worked: a copy is silent otherwise, and a silent
+                          control invites a second press.
+                        */
+                        <button
+                          type="button"
+                          className="timeline__action"
+                          data-done={String(copiedId === message.id)}
+                          aria-label={
+                            copiedId === message.id ? "Link copied" : "Copy link"
+                          }
+                          title={
+                            copiedId === message.id ? "Link copied" : "Copy link"
+                          }
+                          onClick={() => onCopyLink(message.id)}
+                        >
+                          {copiedId === message.id ? (
+                            <CopiedIcon />
+                          ) : (
+                            <LinkIcon />
+                          )}
+                        </button>
+                      )}
                       {picking === message.id && onReact !== undefined && (
                         <ReactionPicker
                           chosen={

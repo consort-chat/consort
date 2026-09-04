@@ -37,7 +37,10 @@ import {
   threadOpen,
   threadSend,
   openLink,
+  roomAt,
+  timelineCopyLink,
   timelineReact,
+  timelineReply,
   timelineTyping,
   timelineUnreact,
   resendState,
@@ -287,6 +290,50 @@ describe("threads", () => {
     await threadOpen(null);
 
     expect(invoke).toHaveBeenCalledWith("thread_open", { rootId: null });
+  });
+});
+
+describe("replies and links", () => {
+  beforeEach(() => {
+    invoke.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("names what a reply answers and who wrote it", async () => {
+    // The sender is not decoration. It is what the reply names in
+    // `m.mentions`, which is what makes an answer arrive as something.
+    await timelineReply(
+      "!general:example.org",
+      "$said:example.org",
+      "@ada:example.org",
+      "quite",
+    );
+
+    expect(invoke).toHaveBeenCalledWith("timeline_reply", {
+      roomId: "!general:example.org",
+      replyTo: "$said:example.org",
+      sender: "@ada:example.org",
+      body: "quite",
+    });
+  });
+
+  it("asks Rust to put a message address on the clipboard", async () => {
+    await timelineCopyLink("!general:example.org", "$said:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("timeline_copy_link", {
+      roomId: "!general:example.org",
+      eventId: "$said:example.org",
+    });
+  });
+
+  it("asks Rust which room an address points at", async () => {
+    invoke.mockResolvedValue("!general:example.org");
+
+    await expect(roomAt("#general:example.org")).resolves.toBe(
+      "!general:example.org",
+    );
+    expect(invoke).toHaveBeenCalledWith("room_at", {
+      address: "#general:example.org",
+    });
   });
 });
 

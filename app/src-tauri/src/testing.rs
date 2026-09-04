@@ -10,12 +10,13 @@
 //!
 //! Nothing here is compiled into the application.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use consort_audio::{
     AudioCapture, AudioDevices, AudioEvent, AudioPlayback, CaptureError, CaptureStream, Device,
-    Direction, FRAME_SAMPLES, FrameSink, PlaybackError, PlaybackStream, Tone, ToneEnded,
+    Direction, FRAME_MS, FRAME_SAMPLES, FrameSink, PlaybackError, PlaybackStream, Tone, ToneEnded,
 };
 
 use crate::audio::Backends;
@@ -25,19 +26,34 @@ use crate::events::{AppEvent, EventSink};
 /// enough that a genuinely stuck thread does not hold the suite up.
 pub const PATIENCE: Duration = Duration::from_secs(5);
 
-/// A microphone that hands over one loud frame and never touches hardware.
+/// A microphone that hands over loud frames and never touches hardware.
 ///
-/// Synchronously, from inside `open`, so no test has to guess how long a real
-/// device takes to say something.
+/// From a thread of its own, at the real cadence, for as long as the stream is
+/// held. A fake that hands over everything it will ever hand over from inside
+/// `open` makes a race of every test that waits for a frame: `Sound::start_call`
+/// opens the device and only then installs the sink, so a sink that arrives a
+/// moment later finds a microphone with nothing left to say. Against hardware
+/// that ordering costs a few milliseconds of audio and nothing else, which is
+/// why the fake is what changed and not the ordering.
 pub struct FakeCapture;
 
 struct FakeStream {
     device: String,
+    /// Cleared on the way out, which is what stops the thread below. The
+    /// audio thread drops the stream to release the device, so this is how a
+    /// fake microphone stops talking.
+    running: Arc<AtomicBool>,
 }
 
 impl CaptureStream for FakeStream {
     fn device_name(&self) -> &str {
         &self.device
+    }
+}
+
+impl Drop for FakeStream {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
     }
 }
 
@@ -47,15 +63,22 @@ impl AudioCapture for FakeCapture {
         device: Option<&str>,
         mut on_frame: FrameSink,
     ) -> Result<Box<dyn CaptureStream>, CaptureError> {
-        // Enough to clear the gate's pre-roll and leave one over. The
-        // publication runs `PRE_ROLL_FRAMES` behind the microphone, so a fake
-        // that hands over fewer than that publishes nothing at all, and every
-        // test waiting on a frame waits out its whole patience for one.
-        for _ in 0..=consort_audio::PRE_ROLL_FRAMES {
-            on_frame(&vec![9_000i16; FRAME_SAMPLES]);
-        }
+        let running = Arc::new(AtomicBool::new(true));
+        let mine = running.clone();
+        std::thread::Builder::new()
+            .name("consort-fake-microphone".to_owned())
+            .spawn(move || {
+                let frame = vec![9_000i16; FRAME_SAMPLES];
+                while mine.load(Ordering::Relaxed) {
+                    on_frame(&frame);
+                    std::thread::sleep(Duration::from_millis(u64::from(FRAME_MS)));
+                }
+            })
+            .expect("the operating system refused a thread");
+
         Ok(Box::new(FakeStream {
             device: device.unwrap_or("Default").to_owned(),
+            running,
         }))
     }
 }

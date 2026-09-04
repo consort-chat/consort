@@ -76,6 +76,28 @@ function drawReactable(messages: Message[], onReact: Reacted) {
 
 type Reacted = (eventId: string, key: string, mine: string | undefined) => void;
 
+/** The same, with the two controls a room offers and a thread panel does not. */
+function drawWithActions(
+  messages: Message[],
+  props: {
+    onReply?: (message: Message) => void;
+    onCopyLink?: (eventId: string) => void;
+    copiedId?: string | null;
+  },
+) {
+  return render(
+    <MessageGroups
+      groups={group(messages)}
+      names={{ [ADA]: "Ada" }}
+      roomId={GENERAL}
+      selfId={BOB}
+      known={known(messages)}
+      onAbout={vi.fn()}
+      {...props}
+    />,
+  );
+}
+
 /**
  * Draw them as the thread panel does, with nowhere further to go.
  *
@@ -324,6 +346,80 @@ describe("a reply", () => {
       "data-flash",
       "true",
     );
+  });
+
+  it("hands the whole message to whoever is going to answer it", async () => {
+    // Not the ID. The composer quotes what is being answered and the reply
+    // names who wrote it, and neither is reachable from an ID alone.
+    const onReply = vi.fn();
+    const message = said("$1", ADA, "the original");
+    drawWithActions([message], { onReply });
+
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(onReply).toHaveBeenCalledWith(message);
+  });
+
+  it("offers no reply control where there is nothing to pass it to", () => {
+    // The thread panel, where the box at the bottom is already the reply.
+    drawWithActions([said("$1", ADA, "the original")], {});
+
+    expect(
+      screen.queryByRole("button", { name: "Reply" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for the address of the message whose control was pressed", async () => {
+    const onCopyLink = vi.fn();
+    drawWithActions(
+      [said("$1", ADA, "one"), said("$2", BOB, "two", NOON + 1_000)],
+      { onCopyLink },
+    );
+
+    const [, second] = screen.getAllByRole("button", { name: "Copy link" });
+    await userEvent.click(second!);
+
+    expect(onCopyLink).toHaveBeenCalledWith("$2");
+  });
+
+  it("says a copy worked, on that message and no other", () => {
+    // A copy is silent otherwise, and a control that says nothing invites a
+    // second press. Which message it was matters: the toolbar looks the same
+    // on every row.
+    drawWithActions(
+      [said("$1", ADA, "one"), said("$2", BOB, "two", NOON + 1_000)],
+      { onCopyLink: vi.fn(), copiedId: "$1" },
+    );
+
+    expect(screen.getByRole("button", { name: "Link copied" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "Copy link" })).toHaveLength(1);
+  });
+
+  it("quotes an answered permalink as words rather than as an address", () => {
+    // The row is a button and a badge is a button too, so the quote cannot
+    // hold one. What it can do is say the same thing.
+    const messages = [
+      said(
+        "$1",
+        ADA,
+        "Testing https://matrix.to/#/!voice:example.org/$said:example.org",
+      ),
+      said("$2", BOB, "quite", NOON + 1_000, { replyTo: "$1" }),
+    ];
+    render(
+      <MessageGroups
+        groups={group(messages)}
+        names={{ [ADA]: "Ada" }}
+        roomId={GENERAL}
+        selfId={BOB}
+        known={known(messages)}
+        onAbout={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: /go to ada's message/i });
+    expect(row).toHaveTextContent("Testing A message");
+    expect(row).not.toHaveTextContent("matrix.to");
   });
 
   it("says so plainly when the answered message is not loaded", () => {

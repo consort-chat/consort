@@ -164,6 +164,41 @@
 }
 
 /*
+  A notice about something that just failed rather than about how the session
+  stands. Bordered in the danger colour so it is not read as one more piece of
+  standing advice, and carrying its own way out: it says a link went nowhere,
+  which is news that stops being useful once it has been read.
+*/
+.shell__notice--alert {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  border-color: var(--danger);
+}
+
+.shell__notice-dismiss {
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shell__notice-dismiss:hover {
+  color: var(--text-primary);
+}
+
+.shell__notice-dismiss:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-focus);
+}
+
+/*
   Lives here rather than beside the other button rules because every screen
   that uses it renders inside this shell. Moving it is a job for whenever the
   button styles get a file of their own.

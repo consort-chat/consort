@@ -7,6 +7,7 @@ const threadOpen = vi.hoisted(() => vi.fn());
 const threadSend = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
+const timelineCopyLink = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
@@ -20,6 +21,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   resendState,
   memberNames,
   memberAvatar,
+  timelineCopyLink,
   memberProfile,
   audioSettings,
   setPersonVolume,
@@ -71,6 +73,7 @@ beforeEach(() => {
   memberAvatar.mockReset().mockResolvedValue(null);
   memberProfile.mockReset().mockResolvedValue(null);
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada" });
+  timelineCopyLink.mockReset().mockResolvedValue(undefined);
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
@@ -472,5 +475,39 @@ describe("where the panel opens", () => {
     });
 
     expect(box.scrollTop).toBe(600);
+  });
+});
+
+describe("copying a reply's address", () => {
+  it("asks about the room the thread is in", async () => {
+    // A reply in a thread has an address like anything else said in the room,
+    // and somebody reading a long thread wants to link to one line of it.
+    await opened();
+
+    const [first] = screen.getAllByRole("button", { name: "Copy link" });
+    await userEvent.click(first!);
+
+    expect(timelineCopyLink).toHaveBeenCalledWith(GENERAL, "$root:example.org");
+  });
+
+  it("says it worked", async () => {
+    await opened();
+
+    const [first] = screen.getAllByRole("button", { name: "Copy link" });
+    await userEvent.click(first!);
+
+    expect(
+      await screen.findByRole("button", { name: "Link copied" }),
+    ).toBeVisible();
+  });
+
+  it("says so rather than claiming a copy that did not happen", async () => {
+    timelineCopyLink.mockRejectedValue({ message: "no clipboard", detail: "no" });
+    await opened();
+
+    const [first] = screen.getAllByRole("button", { name: "Copy link" });
+    await userEvent.click(first!);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("no clipboard");
   });
 });

@@ -403,13 +403,13 @@ mod tests {
 
         assert!(sound.capturing(), "the call lost its microphone");
         assert_eq!(heard.stops(), 0);
-        // Waited for rather than asserted outright. Frames reach a sink from
-        // the audio thread, several of them behind the gate's pre-roll, so
-        // reading the count the instant the settings screen closes is reading
-        // it before the answer exists.
+        // Counted from here rather than from zero. Frames the call was fed
+        // before the settings screen closed say nothing about whether it is
+        // still being fed after, which is the whole question.
+        let before = frames(&count);
         crate::testing::wait_for(
             "a frame after the settings screen closed",
-            || frames(&count) > 0,
+            || frames(&count) > before,
             || "none".to_owned(),
         );
     }
@@ -543,18 +543,8 @@ mod tests {
             Voices::new(),
         );
 
-        // The fake hands over its frame from inside `open`, so the running
-        // device has already delivered everything it is going to. Changing
-        // device is how this test gets one more frame to observe, and the
-        // frame it observes is one the call was never opened for.
-        sound.start_test(
-            fake_backends,
-            Some("Webcam".to_owned()),
-            GateConfig::default(),
-        );
-
         crate::testing::wait_for(
-            "a frame after the sink was installed",
+            "a frame from the device that was already open",
             || frames(&count) > 0,
             || "none".to_owned(),
         );

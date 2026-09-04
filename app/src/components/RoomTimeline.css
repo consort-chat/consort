@@ -298,6 +298,19 @@
 }
 
 /*
+  The copy control, for the moment after it worked.
+
+  Violet rather than mint, however much a tick wants to be green: mint means
+  voice and presence here, and a copy button borrowing it is exactly how that
+  signal stops meaning one thing. The tick alone is a small change to notice in
+  a row of four grey glyphs, so the colour is doing real work.
+*/
+.timeline__action[data-done="true"],
+.timeline__action[data-done="true"]:hover:not(:disabled) {
+  color: var(--violet-hover);
+}
+
+/*
   What people have said about a message, under it.
 
   Wrapped rather than scrolled: a message with fifteen different reactions on
@@ -443,6 +456,53 @@
 }
 
 /*
+  A link into Matrix inside a message: a room, or one thing somebody said.
+
+  A badge rather than an address, because the address is sixty characters of
+  room ID and event ID and a room full of them is a room nobody can read. It
+  presses like the mention above it looks, and unlike that one it goes
+  somewhere: into the room, in this window, rather than to matrix.to's own page
+  offering to open a client.
+
+  A button, so it is not underlined and not blue: those say "a website", and
+  this is the one link here that is not one.
+*/
+.body__pill {
+  display: inline-flex;
+  gap: 0.25em;
+  align-items: center;
+  max-width: 100%;
+  padding: 0.05em 0.4em 0.05em 0.3em;
+  background: var(--violet-glow);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--violet-hover);
+  font: inherit;
+  font-weight: 600;
+  vertical-align: baseline;
+  overflow-wrap: anywhere;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.body__pill:hover {
+  background: var(--violet);
+  color: var(--text-primary);
+}
+
+.body__pill:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.body__pill-glyph {
+  flex: none;
+  width: 0.9em;
+  height: 0.9em;
+}
+
+/*
   The message being answered, above the answer.
 
   Its own row rather than the blockquote the sender's fallback produced. That
@@ -457,6 +517,18 @@
   gap: var(--space-2);
   align-items: center;
   max-width: 100%;
+  /*
+    `overflow: hidden` is load-bearing and is not about clipping.
+
+    A grid item's automatic minimum size is its content, and this row is a grid
+    item whose content includes an unwrapped line of somebody else's message.
+    Quoting a pasted link therefore grew the track, which grew the column,
+    which put a horizontal scrollbar under the whole conversation and pushed
+    the message off the right of the window. Declaring an overflow other than
+    visible is what makes that automatic minimum zero, so the track stays the
+    width it is and the ellipsis below has something to happen against.
+  */
+  overflow: hidden;
   margin: 0 0 var(--space-1);
   padding: 0;
   background: none;
@@ -854,11 +926,15 @@
   disappeared would change the height of the scrolling list above it, which
   moves the conversation under whoever is reading, twice per sentence anybody
   else types.
+
+  The gap under it is a margin rather than padding, so that the height reserved
+  above stays the one line this is. Without it the name sits on the top edge of
+  the box below and reads as a label for it.
 */
 .timeline__typing {
   flex: none;
   min-height: 1.2em;
-  margin: 0;
+  margin: 0 0 var(--space-2);
   padding: 0 var(--space-6);
   overflow: hidden;
   color: var(--text-muted);
@@ -866,6 +942,71 @@
   line-height: 1.2;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/*
+  What the next message will answer, above the box that writes it.
+
+  It appears and disappears, which does move the conversation above it, and
+  that is the difference between this and the typing line: this moves because
+  somebody pressed Reply, and a control that produces no visible change is a
+  control nobody can tell they used.
+*/
+.timeline__answering {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  margin: 0 var(--space-6) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.timeline__answering-glyph {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.timeline__answering-who {
+  flex: none;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.timeline__answering-said {
+  overflow: hidden;
+  /* One line, whatever was said. A reply to a paragraph would otherwise push
+     the box off the bottom of the window. */
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline__answering-stop {
+  flex: none;
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.timeline__answering-stop:hover {
+  color: var(--text-primary);
+}
+
+.timeline__answering-stop:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-focus);
 }
 
 .timeline__composer {
