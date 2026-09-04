@@ -123,6 +123,10 @@
   /* Named because three rules have to agree on it: the column, the picture in
      it, and the flash that reaches back across it. */
   --avatar: 36px;
+  /* The byline's height, fixed rather than taken from its text, because the
+     flash on the first message in a group reaches back up over it and an
+     offset in the other direction is not something CSS can measure. */
+  --byline: 1rem;
 
   display: grid;
   grid-template-columns: var(--avatar) minmax(0, 1fr);
@@ -171,6 +175,7 @@
   display: flex;
   gap: var(--space-2);
   align-items: baseline;
+  height: var(--byline);
   margin: 0 0 var(--space-1);
 }
 
@@ -650,6 +655,21 @@
   border-radius: var(--radius-sm);
   pointer-events: none;
   animation: timeline-flash 700ms ease-out 2;
+}
+
+/*
+  Up over the byline as well, when the jump landed on the first thing in a
+  group. The name, the time and the picture belong to the message under them,
+  so lighting the words alone leaves the row headless: a lit paragraph with
+  whoever wrote it dark above it, which is the half of the row a reader looks
+  at to know where they have arrived.
+
+  Only the first, because a byline speaks for the message directly under it
+  and not for the four under that one. The distance is the byline's own height plus
+  the margin under it, which is why that height is a number both rules read.
+*/
+.timeline__byline + .timeline__message[data-flash="true"]::after {
+  top: calc(-1 * (var(--byline) + var(--space-1)));
 }
 
 @keyframes timeline-flash {

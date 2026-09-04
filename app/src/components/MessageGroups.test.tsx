@@ -313,6 +313,21 @@ describe("a reply", () => {
     ).toHaveTextContent("the original");
   });
 
+  it("draws the first message of a group right after the byline", () => {
+    // What the flash reaches back over. A jump landing on the first thing
+    // somebody said lights the name and the picture above it too, and the rule
+    // doing that finds them from the message next to the byline. Anything
+    // drawn between the two lights the words with whoever wrote them dark.
+    const { container } = draw([
+      said("$1", ADA, "the original"),
+      said("$2", ADA, "and again", NOON + 1_000),
+    ]);
+
+    const byline = container.querySelector(".timeline__byline");
+
+    expect(byline?.nextElementSibling).toHaveAttribute("data-message-id", "$1");
+  });
+
   it("scrolls the answered message into view when the row is pressed", async () => {
     const box = document.createElement("div");
     document.body.append(box);
