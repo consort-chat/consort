@@ -4,6 +4,25 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.5.0 (2026-09-05)
+
+### Added
+
+- **timeline:** Shut a thread with Escape
+- **channels:** Read a voice channel without connecting to it
+- **timeline:** Reply in the room, and follow the links in a message
+- **timeline:** Add a reaction from beside the ones already there
+- **timeline:** Go to a message that is not loaded
+
+### Fixed
+
+- **viewer:** Scale a tall picture to the window, one level down
+- **timeline:** Give an attachment a width its caps can resolve against
+- **timeline:** Give the typing line room above the box
+- **timeline:** Light the whole row when a jump lands, not the words alone
+- **timeline:** Light the name and the picture with the words
+- **voice:** Hear the people who stayed when you rejoin a channel
+
 ## 0.4.0 (2026-09-03)
 
 ### Added
