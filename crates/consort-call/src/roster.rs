@@ -306,6 +306,7 @@ mod tests {
             device_id: None,
             is_local: false,
             reachable: true,
+            hand_raised_at_ms: None,
             joined_at_ms: None,
             streams,
         }
@@ -518,6 +519,7 @@ mod cameras {
             device_id: None,
             is_local: false,
             reachable: true,
+            hand_raised_at_ms: None,
             joined_at_ms: None,
             streams,
         }
