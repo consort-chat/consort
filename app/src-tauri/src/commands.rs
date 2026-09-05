@@ -366,6 +366,37 @@ pub fn timeline_earlier_for(state: &AppState) {
     state.earlier_messages();
 }
 
+/// Ask the open room for a page of newer messages.
+///
+/// The other end of `timeline_earlier_for`, and only ever answerable inside a
+/// window somebody jumped into. Idempotent and infallible on the same terms:
+/// asking at the live end does nothing, because what comes after the present
+/// arrives on its own.
+pub fn timeline_later_for(state: &AppState) {
+    state.later_messages();
+}
+
+/// Draw the history around one message instead of the present.
+///
+/// What following a reply row, or a link, to a message older than what is
+/// loaded does. Answers nothing: the window arrives on the `timeline` channel
+/// like every other reading of the room, carrying `focus` so the interface can
+/// say this is not the present.
+///
+/// Idempotent and infallible. A message the homeserver will not hand over
+/// leaves the room where it was, and asking with no room open does nothing.
+pub fn timeline_go_to_for(state: &AppState, event_id: String) {
+    state.go_to_message(event_id);
+}
+
+/// Go back to the live end of the open room.
+///
+/// Answers nothing, on the same terms as everything else here. What was
+/// scrolled back through is not kept: see `consort_matrix::timeline::Watch`.
+pub fn timeline_present_for(state: &AppState) {
+    state.present_messages();
+}
+
 /// Open the thread hanging from a message, or shut whichever is open.
 ///
 /// Answers nothing. What was asked for arrives on the `thread` channel, in
@@ -1183,6 +1214,24 @@ pub fn timeline_close(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn timeline_earlier(state: State<'_, AppState>) {
     timeline_earlier_for(&state);
+}
+
+/// Ask the open room for a page of newer messages.
+#[tauri::command]
+pub fn timeline_later(state: State<'_, AppState>) {
+    timeline_later_for(&state);
+}
+
+/// See `timeline_go_to_for`. The window arrives on the `timeline` channel.
+#[tauri::command]
+pub fn timeline_go_to(state: State<'_, AppState>, event_id: String) {
+    timeline_go_to_for(&state, event_id);
+}
+
+/// See `timeline_present_for`. The room arrives on the `timeline` channel.
+#[tauri::command]
+pub fn timeline_present(state: State<'_, AppState>) {
+    timeline_present_for(&state);
 }
 
 /// See `thread_open_for`. What was asked for arrives on the `thread` channel.

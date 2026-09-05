@@ -52,6 +52,10 @@ impl History {
 
     /// Add what a sync just delivered, at the live end.
     ///
+    /// Also where a forwards page goes, which is the same end and the same
+    /// order: a window somebody jumped into grows towards the present the way
+    /// the present grows on its own.
+    ///
     /// Reports whether anything was new, so a sync carrying nothing for this
     /// room does not republish a timeline nobody's copy differs from.
     pub fn arrived(&mut self, batch: Vec<Message>) -> bool {

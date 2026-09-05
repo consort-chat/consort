@@ -638,6 +638,33 @@ impl AppState {
         }
     }
 
+    /// Ask the open room for a page of newer messages.
+    ///
+    /// A no-op when no room is open, and also at the live end, which is where
+    /// the room normally is: what comes after the present arrives on its own.
+    pub fn later_messages(&self) {
+        if let Some(watch) = self.locked_timeline().as_ref() {
+            watch.later();
+        }
+    }
+
+    /// Draw the history around one message instead of the present.
+    ///
+    /// A no-op when no room is open, which is what following a reply row at
+    /// the same moment as a room change is.
+    pub fn go_to_message(&self, event_id: String) {
+        if let Some(watch) = self.locked_timeline().as_ref() {
+            watch.go_to(event_id);
+        }
+    }
+
+    /// Go back to the live end of the open room.
+    pub fn present_messages(&self) {
+        if let Some(watch) = self.locked_timeline().as_ref() {
+            watch.present();
+        }
+    }
+
     /// Open the thread hanging from `root_id`, or shut whichever is open.
     ///
     /// A no-op when no room is open. The panel belongs to the room's watcher,

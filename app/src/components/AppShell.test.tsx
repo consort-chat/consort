@@ -524,7 +524,9 @@ describe("AppShell", () => {
             },
           ],
           moreBefore: false,
+          moreAfter: false,
           loading: false,
+          loadingAfter: false,
         });
       });
 

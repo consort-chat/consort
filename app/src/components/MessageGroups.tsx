@@ -267,6 +267,7 @@ export function MessageGroups({
   onReply,
   onReact,
   onCopyLink,
+  onGoTo,
 }: {
   groups: Group[];
   /** Display names by user ID, for whoever the room has told us about. */
@@ -287,9 +288,14 @@ export function MessageGroups({
    * draws its root and its replies as two of these and a reply answering the
    * root has to be able to find it.
    *
-   * A reply pointing at something not in here still draws a row, saying so. A
-   * room shows a window of history and a reply can name anything older than
-   * it.
+   * Not every one of these is drawn. A room shows a window of history and a
+   * reply can name anything older than it, and the room looks those up so the
+   * row can say who wrote it and what it said; pressing one of those goes to
+   * it through `onGoTo` rather than scrolling.
+   *
+   * A reply pointing at something not in here at all still draws a row, saying
+   * so. That is a message the homeserver would not hand over, which a
+   * redaction and a missing key both look like.
    */
   known?: ReadonlyMap<string, Message>;
   /**
@@ -349,6 +355,15 @@ export function MessageGroups({
   onReact?: (eventId: string, key: string, mine: string | undefined) => void;
   /** Put one message's address on the clipboard. */
   onCopyLink?: (eventId: string) => void;
+  /**
+   * Go to a message that is named by a reply but is not drawn.
+   *
+   * Only reached when the scroll above could not find it, which is a reply
+   * naming something older than the window of history loaded. Absent in the
+   * thread panel, where a message outside the thread is not somewhere the
+   * panel can go.
+   */
+  onGoTo?: (eventId: string) => void;
 }) {
   /*
     Which message has its picker open and which control opened it, or none.
@@ -514,9 +529,21 @@ export function MessageGroups({
                           type="button"
                           className="timeline__reply"
                           aria-label={`Go to ${names[answered.sender] ?? answered.sender}'s message`}
-                          onClick={() =>
-                            flashMessage(container?.current ?? null, answered.id)
-                          }
+                          onClick={() => {
+                            /*
+                              Drawn first, because a message on screen is
+                              already where somebody asked to be and asking
+                              the homeserver for it would throw away the
+                              conversation around it to arrive back at the
+                              same place. The fall-through is the reply that
+                              names something older than what is loaded.
+                            */
+                            if (
+                              !flashMessage(container?.current ?? null, answered.id)
+                            ) {
+                              onGoTo?.(answered.id);
+                            }
+                          }}
                         >
                           <ReplyIcon className="timeline__reply-glyph" />
                           <span className="timeline__reply-who">

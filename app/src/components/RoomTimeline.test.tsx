@@ -13,6 +13,9 @@ const onTimeline = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
+const timelineLater = vi.hoisted(() => vi.fn());
+const timelineGoTo = vi.hoisted(() => vi.fn());
+const timelinePresent = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
 const timelineTyping = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
@@ -39,6 +42,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineOpen,
   timelineClose,
   timelineEarlier,
+  timelineLater,
+  timelineGoTo,
+  timelinePresent,
   onTyping,
   timelineTyping,
   timelineSend,
@@ -114,7 +120,9 @@ function timeline(messages: Message[], rest: Partial<Timeline> = {}): Timeline {
     roomId: GENERAL,
     messages,
     moreBefore: false,
+    moreAfter: false,
     loading: false,
+    loadingAfter: false,
     ...rest,
   };
 }
@@ -149,6 +157,9 @@ beforeEach(() => {
   timelineOpen.mockReset().mockResolvedValue(undefined);
   timelineClose.mockReset().mockResolvedValue(undefined);
   timelineEarlier.mockReset().mockResolvedValue(undefined);
+  timelineLater.mockReset().mockResolvedValue(undefined);
+  timelineGoTo.mockReset().mockResolvedValue(undefined);
+  timelinePresent.mockReset().mockResolvedValue(undefined);
   timelineSend.mockReset().mockResolvedValue(undefined);
   timelineReply.mockReset().mockResolvedValue(undefined);
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
@@ -1050,10 +1061,10 @@ describe("going to a message somebody linked", () => {
     ).toHaveAttribute("data-flash", "true");
   });
 
-  it("stays where it is when the message is not loaded", async () => {
+  it("asks for the history around a message that is not loaded", async () => {
     // A room shows a window of history and a link can name anything older
-    // than it. Nothing here can fetch one, and pretending otherwise would be
-    // a jump to the wrong message.
+    // than it. Scrolling back to it a page at a time would be an unbounded
+    // number of round trips, so the window around it is asked for directly.
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
     await focused({ eventId: "$missing" });
@@ -1061,6 +1072,29 @@ describe("going to a message somebody linked", () => {
     await arrive(timeline([said("$1", ADA, "the one")]));
 
     expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(timelineGoTo).toHaveBeenCalledWith("$missing");
+  });
+
+  it("waits for the room to read its own page before asking for a window", async () => {
+    // The message may be in the page that is already on its way, and moving
+    // the reader into a window to arrive back at the same place is worse than
+    // waiting a moment.
+    await focused({ eventId: "$1" });
+
+    await arrive(timeline([], { loading: true }));
+
+    expect(timelineGoTo).not.toHaveBeenCalled();
+  });
+
+  it("asks once, however many timelines arrive after it", async () => {
+    // A message this account cannot read answers with nothing changing, and a
+    // condition that does not change is not one to keep asking about.
+    await focused({ eventId: "$missing" });
+
+    await arrive(timeline([said("$1", ADA, "the one")]));
+    await arrive(timeline([said("$1", ADA, "the one"), said("$2", BOB, "next")]));
+
+    expect(timelineGoTo).toHaveBeenCalledTimes(1);
   });
 
   it("does not drag the reader back when the next message arrives", async () => {
@@ -1073,5 +1107,111 @@ describe("going to a message somebody linked", () => {
     await arrive(timeline([said("$1", ADA, "the one"), said("$2", BOB, "next")]));
 
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+});
+
+describe("a room that is not showing the present", () => {
+  it("says so, and offers the way back", async () => {
+    // A conversation from last March and one that has gone quiet look the
+    // same, and somebody who jumped into the middle of the history has no
+    // other way to the bottom: scrolling would be a page at a time.
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    expect(screen.getByText(/showing older messages/i)).toBeVisible();
+    await userEvent.click(
+      screen.getByRole("button", { name: /back to the present/i }),
+    );
+
+    expect(timelinePresent).toHaveBeenCalled();
+  });
+
+  it("says nothing of the sort when it is showing the present", async () => {
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    expect(
+      screen.queryByRole("button", { name: /back to the present/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for the page below when the reader reaches the bottom of a window", async () => {
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(
+      timeline([said("$1", ADA, "last March")], {
+        focus: "$1",
+        moreAfter: true,
+      }),
+    );
+
+    await scrollTo(600);
+
+    expect(timelineLater).toHaveBeenCalled();
+  });
+
+  it("asks for nothing below the live end", async () => {
+    // Where the room normally is, and where what comes next arrives on its
+    // own. A request for it would be one per scroll to the bottom.
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    await scrollTo(600);
+
+    expect(timelineLater).not.toHaveBeenCalled();
+  });
+
+  it("comes back to the present when something is sent from a window", async () => {
+    // The message went to the live end of the room. Watching it not appear is
+    // worse than being moved to where it did.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+
+    expect(timelineSend).toHaveBeenCalledWith(GENERAL, "quite");
+    await waitFor(() => expect(timelinePresent).toHaveBeenCalled());
+  });
+
+  it("goes to a message a reply names but does not draw", async () => {
+    // The row is drawn from what the room looked up, so it says who wrote it
+    // and what they said. Pressing it is the only way to the message itself.
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await pane();
+
+    await arrive(
+      timeline([{ ...said("$2", BOB, "quite"), replyTo: "$old" }], {
+        answered: [said("$old", ADA, "the one being answered")],
+      }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /go to ada's message/i }),
+    );
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(timelineGoTo).toHaveBeenCalledWith("$old");
+  });
+
+  it("scrolls rather than asking when the message a reply names is drawn", async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    await pane();
+
+    await arrive(
+      timeline([
+        said("$1", ADA, "the one being answered"),
+        { ...said("$2", BOB, "quite"), replyTo: "$1" },
+      ]),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /go to ada's message/i }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(timelineGoTo).not.toHaveBeenCalled();
   });
 });
