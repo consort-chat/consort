@@ -4409,4 +4409,537 @@ mod timeline {
             assert_eq!(root.thread.expect("a reply was counted").count, 1);
         }
     }
+    /// Going to a message that is not loaded, and the row that names one.
+    ///
+    /// Both are network shaped and neither can be reached from a unit test: a
+    /// `/context` window for the jump, a `/event` fetch for the row. What is
+    /// worth checking is that the window comes back in one order, that it
+    /// replaces the present rather than joining it, and that what arrives
+    /// while it is being read stays out of it.
+    mod going_to_a_message {
+        use super::*;
+        use matrix_sdk::Client;
+        use matrix_sdk::deserialized_responses::TimelineEvent;
+        use matrix_sdk::test_utils::mocks::RoomContextResponseTemplate;
+
+        const OLD: &str = "$old:example.org";
+
+        /// One message as `/context` and `/event` hand it over.
+        fn event(value: serde_json::Value) -> TimelineEvent {
+            TimelineEvent::from_plaintext(raw(value).cast_unchecked())
+        }
+
+        /// A reply naming `to`, which nothing in the room has to be holding.
+        fn answering(id: &str, body: &str, at: u64, to: &str) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.message",
+                "event_id": id,
+                "room_id": ROOM,
+                "sender": OTHER,
+                "origin_server_ts": at,
+                "content": {
+                    "msgtype": "m.text",
+                    "body": body,
+                    "m.relates_to": { "m.in_reply_to": { "event_id": to } },
+                },
+            })
+        }
+
+        /// Somebody reacting to `to`, as a sync delivers it.
+        fn reacting(id: &str, to: &str) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.reaction",
+                "event_id": id,
+                "sender": OTHER,
+                "origin_server_ts": 9_600,
+                "content": {
+                    "m.relates_to": { "rel_type": "m.annotation", "event_id": to, "key": "👍" },
+                },
+            })
+        }
+
+        /// Answer `/context` with a window, and the tokens either side of it.
+        ///
+        /// `before` is newest first, which is how the endpoint answers and how
+        /// getting it wrong stays invisible until something reads it.
+        async fn mount_context(
+            server: &MatrixMockServer,
+            before: Vec<serde_json::Value>,
+            at: serde_json::Value,
+            after: Vec<serde_json::Value>,
+            start: Option<&str>,
+            end: Option<&str>,
+        ) {
+            let mut template = RoomContextResponseTemplate::new(event(at))
+                .events_before(before.into_iter().map(event).collect())
+                .events_after(after.into_iter().map(event).collect());
+            if let Some(start) = start {
+                template = template.start(start);
+            }
+            if let Some(end) = end {
+                template = template.end(end);
+            }
+            server
+                .mock_room_event_context()
+                .expect_any_access_token()
+                .ok(template)
+                .mount()
+                .await;
+        }
+
+        /// Answer `/event` with one message.
+        async fn mount_event(server: &MatrixMockServer, value: serde_json::Value) {
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(event(value))
+                .mount()
+                .await;
+        }
+
+        /// The last report with nothing in flight at either end.
+        ///
+        /// Not [`settled`], which only knows about the page above: a forwards
+        /// page raises the other flag and would look settled to it.
+        fn at_rest(reports: &[Timeline]) -> Option<&Timeline> {
+            reports
+                .iter()
+                .rev()
+                .find(|report| !report.loading && !report.loading_after)
+        }
+
+        /// A room with one message in it, watched and drawn.
+        async fn watching(
+            client: Client,
+        ) -> (timeline::Watch, Arc<std::sync::Mutex<Vec<Timeline>>>) {
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| !report.messages.is_empty())
+            })
+            .await;
+            (watch, seen)
+        }
+
+        #[tokio::test]
+        async fn going_to_a_message_draws_the_history_around_it() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                vec![
+                    said("$b:example.org", "just before", 2_000),
+                    said("$a:example.org", "earlier still", 1_000),
+                ],
+                said(OLD, "the one being answered", 3_000),
+                vec![said("$c:example.org", "just after", 4_000)],
+                None,
+                None,
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+            drop(watch);
+
+            let window = at_rest(&reports).unwrap();
+            assert_eq!(
+                bodies(window),
+                vec![
+                    "earlier still",
+                    "just before",
+                    "the one being answered",
+                    "just after",
+                ],
+                "the half above the message arrives newest first and has to be turned round"
+            );
+            assert_eq!(
+                window.focus.as_deref(),
+                Some(OLD),
+                "a room that is not showing the present has to say so"
+            );
+            assert!(
+                !bodies(window).contains(&"the present"),
+                "the window replaces what was loaded rather than joining it"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_window_in_the_middle_of_a_room_says_there_is_history_both_ways() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                Some("t-older"),
+                Some("t-newer"),
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+            drop(watch);
+
+            let window = at_rest(&reports).unwrap();
+            assert!(window.more_before);
+            assert!(
+                window.more_after,
+                "a window in the middle has a page below it, which the live end never does"
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_for_more_after_a_window_puts_the_newer_page_at_the_end() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            // The same mock answers the room's first page and the forwards one
+            // after the jump, which is why the window below excludes it.
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                None,
+                Some("t-newer"),
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+
+            watch.later();
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.messages.len() > 1)
+            })
+            .await;
+            drop(watch);
+
+            let window = at_rest(&reports).unwrap();
+            assert_eq!(
+                bodies(window),
+                vec!["the one being answered", "the present"]
+            );
+            assert!(
+                !window.more_after,
+                "the page said there was nothing after it"
+            );
+        }
+
+        #[tokio::test]
+        async fn coming_back_to_the_present_reads_the_live_end_again() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                Some("t-older"),
+                Some("t-newer"),
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+
+            watch.present();
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_none())
+            })
+            .await;
+            drop(watch);
+
+            let back = at_rest(&reports).unwrap();
+            assert_eq!(bodies(back), vec!["the present"]);
+            assert!(
+                !back.more_after,
+                "the live end has nothing after it to ask for"
+            );
+        }
+
+        #[tokio::test]
+        async fn coming_back_to_the_present_from_the_present_reads_nothing_again() {
+            // Rereading the live end would throw away every page somebody had
+            // scrolled back through, to arrive at a room it was already
+            // showing.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                None,
+                None,
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            let before = seen.lock().unwrap().len();
+            // Both go through one channel and are answered in order, so a
+            // window arriving is proof the ask before it has been dealt with.
+            watch.present();
+            watch.go_to(OLD.to_owned());
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+            drop(watch);
+
+            assert!(
+                reports[before..]
+                    .iter()
+                    .all(|report| !report.messages.is_empty()),
+                "emptying the room is what starting again looks like from here"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_message_that_will_not_load_leaves_the_room_where_it_was() {
+            // Nothing mounted, so `/context` is a 404. Emptying the room to
+            // say so would take away the conversation somebody was reading as
+            // well as the one they asked for.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            // The spinner goes up and comes down again, which is the whole of
+            // what a jump that failed does.
+            let reports = wait_until(&seen, |reports| {
+                reports.iter().filter(|report| !report.loading).count() >= 2
+            })
+            .await;
+            drop(watch);
+
+            let room = at_rest(&reports).unwrap();
+            assert_eq!(bodies(room), vec!["the present"]);
+            assert_eq!(room.focus, None);
+        }
+
+        #[tokio::test]
+        async fn what_is_said_while_reading_older_messages_does_not_land_under_them() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                None,
+                None,
+            )
+            .await;
+            // The reaction is what makes this readable rather than a race. It
+            // lands on a message in the window and so publishes, and it is in
+            // the same batch as the message that must not: by the time the
+            // pill is drawn, the batch has been read.
+            syncing(
+                &server,
+                vec![
+                    arriving("$new:example.org", "said just now", 9_500),
+                    reacting("$react:example.org", OLD),
+                ],
+            )
+            .await;
+
+            let (watch, seen) = watching(client.clone()).await;
+            watch.go_to(OLD.to_owned());
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| {
+                    report
+                        .messages
+                        .iter()
+                        .any(|message| !message.reactions.is_empty())
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let window = at_rest(&reports).unwrap();
+            assert_eq!(
+                bodies(window),
+                vec!["the one being answered"],
+                "what was just said does not belong after a message from last year"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_reply_to_something_not_loaded_carries_the_message_it_names() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![answering("$r:example.org", "quite", 9_000, OLD)],
+                None,
+            )
+            .await;
+            mount_event(&server, said(OLD, "the one being answered", 3_000)).await;
+
+            let (watch, seen) = watching(client).await;
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| !report.answered.is_empty())
+            })
+            .await;
+            drop(watch);
+
+            let room = at_rest(&reports).unwrap();
+            let answered = &room.answered[0];
+            assert_eq!(answered.id, OLD);
+            assert_eq!(
+                answered.body, "the one being answered",
+                "the row draws what was said, so the row is what this is for"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_reply_to_something_loaded_is_not_carried_a_second_time() {
+            // The interface is already holding it, and a second copy would be
+            // a second thing to keep in step with the first.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![
+                    answering("$r:example.org", "quite", 9_000, OLD),
+                    said(OLD, "the one being answered", 3_000),
+                ],
+                None,
+            )
+            .await;
+            // Mounted, so a lookup would succeed. What is under test is that
+            // there is not one.
+            mount_event(&server, said(OLD, "the one being answered", 3_000)).await;
+
+            let (watch, seen) = watching(client).await;
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.messages.len() == 2)
+            })
+            .await;
+            drop(watch);
+
+            assert!(at_rest(&reports).unwrap().answered.is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_message_the_homeserver_will_not_hand_over_is_left_unanswered() {
+            // Nothing mounted, so the lookup is a 404. A redaction and a key
+            // that never arrived look the same from here, and the row says so
+            // rather than guessing which.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![answering("$r:example.org", "quite", 9_000, OLD)],
+                None,
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| !report.messages.is_empty())
+            })
+            .await;
+            drop(watch);
+
+            assert!(at_rest(&reports).unwrap().answered.is_empty());
+        }
+    }
 }

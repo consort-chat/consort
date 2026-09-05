@@ -30,18 +30,58 @@ pub struct Timeline {
     pub room_id: String,
     /// Oldest first, which is the order they are drawn in.
     pub messages: Vec<Message>,
+    /// The messages a reply names that are not in `messages`.
+    ///
+    /// A room draws a window of history and a reply can name anything older
+    /// than it, so the row above a reply regularly points at something that is
+    /// not on screen. Without these the row can only say so, which is a
+    /// sentence where every other reply shows a name and a line of what was
+    /// said.
+    ///
+    /// Here rather than on [`Message::reply_to`], which carries the ID alone
+    /// and gives its reasons. They hold: this is only the ones the reader does
+    /// not already have, and a message twenty replies name is carried once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answered: Vec<Message>,
     /// Whether there is more history to ask for.
     ///
     /// False at the start of the room, and also false before anything has been
     /// loaded at all, because "there might be more" is not something to offer
     /// until there is something to be more than.
     pub more_before: bool,
-    /// Whether history is being fetched right now.
+    /// Whether there are messages newer than these.
+    ///
+    /// Always false in the room as it is normally drawn, which is the live end
+    /// and has nothing after it by definition. True only in a window somebody
+    /// jumped into, where the history runs on in both directions.
+    #[serde(default)]
+    pub more_after: bool,
+    /// The message this window was opened around, when it is not the present.
+    ///
+    /// `None` for the room as it is normally drawn. Load-bearing rather than
+    /// informational: a reader looking at last March has to be told it is not
+    /// the bottom of the room, because everything else about the two looks the
+    /// same and a conversation that has stopped arriving is what a broken
+    /// connection looks like.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<String>,
+    /// Whether a page of older messages is being fetched right now.
     ///
     /// Here rather than kept by the interface so that the spinner belongs to
     /// the room. A reader that owned this would have to clear it itself on a
     /// room change, and forgetting to is a spinner that never stops.
+    ///
+    /// Also true while a jump is in flight. A window around a message from
+    /// last March is earlier messages by any reading.
     pub loading: bool,
+    /// Whether a page of newer messages is being fetched right now.
+    ///
+    /// Its own flag rather than a direction on `loading`, because the notice
+    /// is drawn at the end of the list the page is coming from: one flag for
+    /// both would say "loading earlier messages" at the top of a box whose
+    /// reader is at the bottom waiting for the opposite page.
+    #[serde(default)]
+    pub loading_after: bool,
 }
 
 /// One thread as it is currently loaded, oldest reply first.

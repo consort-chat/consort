@@ -19,8 +19,8 @@
 //! local echo, read receipts. It is not a dependency, and adding one would
 //! mean pinning a second crate to the same git revision as the SDK, which
 //! [`docs/DEPENDENCIES.md`] describes the cost of. What is here instead is the
-//! two things the base SDK already gives: the events a sync delivered, and a
-//! page of history on request.
+//! three things the base SDK already gives: the events a sync delivered, a
+//! page of history on request, and the window around one event.
 //!
 //! What that costs is written down rather than hidden. A sync that arrives
 //! `limited`, which is what a client that has been offline for a while gets,
@@ -28,6 +28,12 @@
 //! messages drawn are all real and all in order; some in the middle may be
 //! missing until the room is reopened. Fixing it properly is a gap-aware
 //! store, which is the thing `matrix-sdk-ui` exists to be.
+//!
+//! The window is the same absence answered honestly rather than papered over.
+//! With nowhere to put a piece of history that is not next to what is loaded,
+//! going to a message somebody linked or answered means drawing that part of
+//! the room instead of this one, and saying so. A store that knew where its
+//! gaps were could hold both at once and would not have to choose.
 //!
 //! There is also no local echo. A message goes to the homeserver and appears
 //! when the sync brings it back, which on a healthy connection is a moment and
@@ -37,6 +43,8 @@
 //!
 //! [`docs/DEPENDENCIES.md`]: https://github.com/consort-chat/consort
 
+mod answering;
+mod around;
 pub mod dto;
 mod facts;
 mod history;
@@ -52,7 +60,7 @@ pub use permalink::permalink;
 pub use reactions::Reactions;
 pub use thread::thread;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use futures_util::StreamExt;
 use matrix_sdk::deserialized_responses::TimelineEvent;
@@ -101,6 +109,16 @@ const PAGES_PER_ASK: usize = 3;
 enum Ask {
     /// One more page of the room's own history.
     Earlier,
+    /// One more page of what came after what is loaded.
+    ///
+    /// Only ever answerable inside a window somebody jumped into. The room as
+    /// it is normally drawn ends at the live end, where later is a sync away
+    /// rather than a request.
+    Later,
+    /// Draw the history around this message instead of the present.
+    Around(String),
+    /// Go back to the live end of the room.
+    Present,
     /// Open the thread hanging from this message, or close whatever is open.
     Thread(Option<String>),
 }
@@ -129,6 +147,39 @@ impl Watch {
     /// the same moment as a room change is.
     pub fn earlier(&self) {
         let _ = self.asking.send(Ask::Earlier);
+    }
+
+    /// Ask for one more page of what came after what is loaded.
+    ///
+    /// Answered with nothing at the live end, which is where the room normally
+    /// is: there is no page after the present, and what comes next arrives on
+    /// its own.
+    pub fn later(&self) {
+        let _ = self.asking.send(Ask::Later);
+    }
+
+    /// Draw the history around `event_id` instead of the present.
+    ///
+    /// What following a reply row or a link to a message older than what is
+    /// loaded does. The window replaces what was loaded rather than joining
+    /// it, and [`present`](Self::present) is the way back.
+    ///
+    /// Answered on the watcher's own task, like everything else here, so a
+    /// jump and a scroll cannot be answered in the other order from the one
+    /// they were asked in.
+    pub fn go_to(&self, event_id: String) {
+        let _ = self.asking.send(Ask::Around(event_id));
+    }
+
+    /// Go back to the live end of the room.
+    ///
+    /// The first page again, freshly read, which is also how whatever was said
+    /// while somebody was reading last March arrives. What had been scrolled
+    /// back through is not kept: coming back to the present is a request to be
+    /// at the bottom of the room, and restoring somebody's old scroll position
+    /// underneath them would be answering a different one.
+    pub fn present(&self) {
+        let _ = self.asking.send(Ask::Present);
     }
 
     /// Open the thread hanging from `root_id`, or close whatever is open.
@@ -225,14 +276,28 @@ where
             room_id: watching.clone(),
             users: Vec::new(),
         });
-        loaded.page(&room, &on_change).await;
+        loaded.page(&room, &on_change, Direction::Backward).await;
 
         loop {
             tokio::select! {
                 asked = asked.recv() => {
                     match asked {
                         None => break,
-                        Some(Ask::Earlier) => loaded.page(&room, &on_change).await,
+                        Some(Ask::Earlier) => {
+                            loaded.page(&room, &on_change, Direction::Backward).await;
+                        }
+                        Some(Ask::Later) => {
+                            loaded.page(&room, &on_change, Direction::Forward).await;
+                        }
+                        // Boxed for the reason the thread arm below is: the
+                        // compiler otherwise gives up computing the layout of
+                        // this task.
+                        Some(Ask::Around(event_id)) => {
+                            Box::pin(loaded.go_to(&room, &on_change, event_id)).await;
+                        }
+                        Some(Ask::Present) => {
+                            Box::pin(loaded.present(&room, &on_change)).await;
+                        }
                         Some(Ask::Thread(root_id)) => {
                             // Boxed because the compiler otherwise gives up
                             // computing the layout of this task: the arm holds
@@ -256,10 +321,25 @@ where
                         if loaded.replied(&joined.timeline.events) {
                             loaded.publish_thread(&on_thread);
                         }
-                        let arrived = loaded.read(&joined.timeline.events);
+                        // Dropped while a window somebody jumped into is
+                        // being drawn. What was just said does not belong
+                        // after a message from last March, and appending it
+                        // there would draw the two as one conversation. It is
+                        // read afresh when they come back to the present.
+                        let arrived = match loaded.focus {
+                            Some(_) => Vec::new(),
+                            None => loaded.read(&joined.timeline.events),
+                        };
                         let counted = loaded.count_replies(&joined.timeline.events);
                         let annotated = loaded.annotations(&joined.timeline.events);
-                        if loaded.history.arrived(arrived) | counted | annotated {
+                        let added = loaded.history.arrived(arrived);
+                        if added {
+                            // A message can arrive answering something older
+                            // than what is loaded, and the row above it has
+                            // the same nothing to draw as any other reply.
+                            loaded.resolve(&room).await;
+                        }
+                        if added | counted | annotated {
                             loaded.publish(&on_change);
                         }
                         // A reaction in the room may be on the thread's root or
@@ -347,12 +427,38 @@ struct Loaded {
     /// holds nothing here at all; one this session arrived late to holds a
     /// screenful, which is the case this exists for.
     waiting: HashMap<String, Raw<AnySyncTimelineEvent>>,
+    /// The message each reply names, for the ones not in the history.
+    ///
+    /// Beside the history rather than inside it, on the same terms as the
+    /// reactions: a reply names a message that may not be loaded, may be
+    /// loaded later by a page, or may never be. Merged onto the timeline when
+    /// one is published.
+    ///
+    /// `None` is a lookup that came back with nothing to draw, kept so that a
+    /// redacted message is asked about once rather than on every publish for
+    /// as long as the reply to it is on screen.
+    answered: HashMap<String, Option<Message>>,
     /// Where the next backwards page starts, or `None` before the first one.
     from: Option<String>,
+    /// Where the next forwards page starts.
+    ///
+    /// `None` at the live end, which is where the room normally is and where
+    /// there is nothing after the present to ask for.
+    forward: Option<String>,
+    /// The message the loaded window was opened around, when it is not the
+    /// present.
+    focus: Option<String>,
     /// Whether the homeserver still has older messages.
     more_before: bool,
-    /// Whether a page is being fetched right now.
+    /// Whether the homeserver has messages after the loaded window.
+    more_after: bool,
+    /// Whether a page of older messages is being fetched right now.
+    ///
+    /// Also what a jump raises. A window around a message from last March is
+    /// earlier messages by any reading, and it is drawn where they would be.
     loading: bool,
+    /// Whether a page of newer messages is being fetched right now.
+    loading_after: bool,
     /// Who was last reported as typing, so an unchanged list is not
     /// republished on every sync for as long as somebody keeps typing.
     typing: Vec<String>,
@@ -380,52 +486,82 @@ impl Loaded {
             history: History::new(),
             reactions: Reactions::new(),
             waiting: HashMap::new(),
+            answered: HashMap::new(),
             from: None,
+            forward: None,
+            focus: None,
             // Assumed until the homeserver says otherwise, because the first
             // page has not been asked for yet and "no more history" is a
             // stronger claim than an empty list supports.
             more_before: true,
+            more_after: false,
             loading: true,
+            loading_after: false,
             typing: Vec::new(),
         }
     }
 
-    /// Answer one ask for older messages, and report the result.
+    /// Answer one ask for a page at either end, and report the result.
     ///
     /// Reports twice, once to put the spinner up and once to take it down.
     /// Both are cheap, and the first is the only thing that makes a slow
     /// homeserver distinguishable from a button that did nothing.
-    async fn page<F>(&mut self, room: &Room, on_change: &F)
+    async fn page<F>(&mut self, room: &Room, on_change: &F, towards: Direction)
     where
         F: Fn(Timeline),
     {
-        if !self.more_before {
+        if !self.has_more(towards) {
             return;
         }
 
-        self.loading = true;
+        self.loading(towards, true);
         self.publish(on_change);
 
         for _ in 0..PAGES_PER_ASK {
-            if !self.fetch(room).await {
+            if !self.fetch(room, towards).await {
                 break;
             }
         }
 
-        self.loading = false;
+        self.resolve(room).await;
+        self.loading(towards, false);
         self.publish(on_change);
     }
 
-    /// Fetch one page of older messages.
+    /// Whether the homeserver has anything left in that direction.
+    fn has_more(&self, towards: Direction) -> bool {
+        match towards {
+            Direction::Backward => self.more_before,
+            Direction::Forward => self.more_after,
+        }
+    }
+
+    /// Say that a page is on its way, or has stopped being.
+    ///
+    /// Which end is part of it, because the interface draws the notice at that
+    /// end of the list. One flag for both would put "loading earlier messages"
+    /// at the top of a box whose reader is at the bottom waiting for the
+    /// opposite page.
+    fn loading(&mut self, towards: Direction, loading: bool) {
+        match towards {
+            Direction::Backward => self.loading = loading,
+            Direction::Forward => self.loading_after = loading,
+        }
+    }
+
+    /// Fetch one page at either end.
     ///
     /// `true` only when the page held nothing to draw and the homeserver has
     /// more, which is the one reason to go round again. A failure answers
     /// `false`: the room is still drawn and still live, the scroll can be
     /// tried again, and three requests in a row to a homeserver that just
     /// refused one is not a way to be told anything new.
-    async fn fetch(&mut self, room: &Room) -> bool {
-        let mut options = MessagesOptions::new(Direction::Backward);
-        options.from.clone_from(&self.from);
+    async fn fetch(&mut self, room: &Room, towards: Direction) -> bool {
+        let mut options = MessagesOptions::new(towards);
+        options.from = match towards {
+            Direction::Backward => self.from.clone(),
+            Direction::Forward => self.forward.clone(),
+        };
         options.limit = PAGE.into();
 
         let page = match room.messages(options).await {
@@ -433,33 +569,140 @@ impl Loaded {
             Err(error) => {
                 // Logged rather than raised. A dialog about a page of history
                 // would be worse than the absence of it.
-                tracing::warn!(%error, room_id = %self.room_id, "could not read older messages");
+                tracing::warn!(%error, room_id = %self.room_id, "could not read a page of messages");
                 return false;
             }
         };
 
-        // An empty chunk is the start of the room's visible history, and so is
-        // a missing `end`. Both are checked because homeservers differ about
-        // which one they say it with.
-        self.more_before = page.end.is_some() && !page.chunk.is_empty();
-        self.from = page.end;
+        // An empty chunk is the end of what the homeserver will give, and so
+        // is a missing `end`. Both are checked because homeservers differ
+        // about which one they say it with.
+        let more = page.end.is_some() && !page.chunk.is_empty();
+        let chunk: Vec<TimelineEvent> = match towards {
+            // Backwards, so the homeserver answers newest first and the page
+            // has to be turned round. Getting this wrong reverses every page
+            // while leaving the pages themselves in order, which reads as a
+            // conversation that almost makes sense.
+            Direction::Backward => {
+                self.more_before = more;
+                self.from = page.end;
+                page.chunk.into_iter().rev().collect()
+            }
+            Direction::Forward => {
+                self.more_after = more;
+                self.forward = page.end;
+                page.chunk
+            }
+        };
 
-        // Backwards, so the homeserver answers newest first and the page has
-        // to be turned round. Getting this wrong reverses every page while
-        // leaving the pages themselves in order, which reads as a conversation
-        // that almost makes sense.
-        let page: Vec<TimelineEvent> = page.chunk.into_iter().rev().collect();
-        let older = self.read(&page);
+        let arrived = self.read(&chunk);
         // A page carries every kind of event, reactions among them, which is
         // how a message scrolled back to arrives with what is already on it.
         // The thread panel has no equivalent: `/relations` is asked for thread
         // replies only, so a reply's reactions appear when one arrives live
         // rather than when the panel opens.
-        self.annotations(&page);
-        let drawable = !older.is_empty();
-        self.history.backfilled(older);
+        self.annotations(&chunk);
+        let drawable = !arrived.is_empty();
+        match towards {
+            Direction::Backward => self.history.backfilled(arrived),
+            Direction::Forward => self.history.arrived(arrived),
+        };
 
-        !drawable && self.more_before
+        !drawable && self.has_more(towards)
+    }
+
+    /// Draw the history around `event_id` instead of the present.
+    ///
+    /// The window replaces what is loaded rather than joining it, for the
+    /// reason [`around`] gives: two pieces of a room that are not next to each
+    /// other, drawn as though they were, is a year passing with nothing to say
+    /// so.
+    ///
+    /// A window that will not load leaves the room where it was. There is
+    /// nothing better to do with a message the homeserver will not hand over,
+    /// and emptying the room to say so would take away the conversation
+    /// somebody was reading as well as the one they asked for.
+    async fn go_to<F>(&mut self, room: &Room, on_change: &F, event_id: String)
+    where
+        F: Fn(Timeline),
+    {
+        self.loading = true;
+        self.publish(on_change);
+
+        match around::around(room, &event_id).await {
+            Ok(window) => {
+                self.history = History::new();
+                self.history.backfilled(window.messages);
+                self.more_before = window.back.is_some();
+                self.more_after = window.forward.is_some();
+                self.from = window.back;
+                self.forward = window.forward;
+                self.focus = Some(event_id);
+                self.resolve(room).await;
+            }
+            Err(error) => {
+                tracing::warn!(%error, room_id = %self.room_id, %event_id, "could not go to the message");
+            }
+        }
+
+        self.loading = false;
+        self.publish(on_change);
+    }
+
+    /// Go back to the live end of the room.
+    ///
+    /// The first page again rather than whatever was loaded before the jump.
+    /// A sync arriving while somebody reads last March is deliberately not
+    /// appended to the window they are reading, so what is held is out of date
+    /// by however long they were away, and reading it fresh is both the
+    /// correction and how the messages they missed arrive.
+    async fn present<F>(&mut self, room: &Room, on_change: &F)
+    where
+        F: Fn(Timeline),
+    {
+        if self.focus.is_none() {
+            return;
+        }
+
+        self.history = History::new();
+        self.focus = None;
+        self.from = None;
+        self.forward = None;
+        self.more_before = true;
+        self.more_after = false;
+        self.page(room, on_change, Direction::Backward).await;
+    }
+
+    /// Look up whatever the loaded replies name and this does not hold.
+    ///
+    /// One request each at worst, and for a message the SDK has already stored
+    /// none at all. Bounded by what is loaded rather than by the room: a reply
+    /// is only looked up while it is on screen, and the answer is kept so
+    /// scrolling past it twice is not asking twice.
+    async fn resolve(&mut self, room: &Room) {
+        let held: HashSet<&str> = self
+            .history
+            .messages()
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect();
+        let wanted: HashSet<String> = self
+            .history
+            .messages()
+            .iter()
+            .filter_map(|message| message.reply_to.as_deref())
+            .filter(|id| !held.contains(id) && !self.answered.contains_key(*id))
+            .map(ToOwned::to_owned)
+            .collect();
+
+        for id in wanted {
+            // Boxed here rather than at the three call sites, which is where
+            // the compiler would otherwise report it: an event fetch is a deep
+            // future, this is awaited from inside a `select!` inside a spawn,
+            // and holding it inline overflows the layout depth limit.
+            let found = Box::pin(answering::answered(room, &id)).await;
+            self.answered.insert(id, found);
+        }
     }
 
     /// One batch of events as messages, remembering the ones with no key.
@@ -695,6 +938,34 @@ impl Loaded {
             .collect()
     }
 
+    /// The messages these replies name that are not among them.
+    ///
+    /// Read out of what [`Self::resolve`] found rather than looked up here,
+    /// because publishing happens on every reaction and every key and is not
+    /// somewhere a request belongs. A reply whose lookup has not happened yet,
+    /// or came back with nothing, contributes nothing and the row says so.
+    ///
+    /// Reactions are deliberately not merged onto these. The row above a reply
+    /// draws a name and a line of what was said; pills belong on the message
+    /// itself, wherever it is drawn.
+    fn answers(&self, messages: &[Message]) -> Vec<Message> {
+        let held: HashSet<&str> = messages.iter().map(|message| message.id.as_str()).collect();
+        let mut answers: Vec<Message> = Vec::new();
+        let mut taken: HashSet<&str> = HashSet::new();
+        for message in messages {
+            let Some(id) = message.reply_to.as_deref() else {
+                continue;
+            };
+            if held.contains(id) || !taken.insert(id) {
+                continue;
+            }
+            if let Some(Some(answered)) = self.answered.get(id) {
+                answers.push(answered.clone());
+            }
+        }
+        answers
+    }
+
     fn publish_thread<G>(&self, on_thread: &G)
     where
         G: Fn(Option<Thread>),
@@ -717,11 +988,16 @@ impl Loaded {
     where
         F: Fn(Timeline),
     {
+        let messages = self.drawn(self.history.messages());
         on_change(Timeline {
             room_id: self.room_id.clone(),
-            messages: self.drawn(self.history.messages()),
+            answered: self.answers(&messages),
+            messages,
             more_before: self.more_before,
+            more_after: self.more_after,
+            focus: self.focus.clone(),
             loading: self.loading,
+            loading_after: self.loading_after,
         });
     }
 }

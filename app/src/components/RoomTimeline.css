@@ -70,6 +70,52 @@
   white-space: nowrap;
 }
 
+/*
+  The bar that says the room is not showing the present.
+
+  Between the heading and the conversation rather than over it, because it is
+  about the whole of what is below it and because a bar that floated would sit
+  on top of somebody's messages. Its own line rather than a word in the
+  heading: the heading names the room, which has not changed.
+*/
+.timeline__elsewhere {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-6);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.timeline__elsewhere-said {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.timeline__elsewhere-back {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-overlay);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.timeline__elsewhere-back:hover {
+  border-color: var(--line-strong);
+  color: var(--text-primary);
+}
+
+.timeline__elsewhere-back:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .timeline__scroll {
   display: flex;
   flex: 1;
@@ -101,7 +147,8 @@
   under somebody who is reading and the thing worth their attention is the
   conversation rather than the news that more of it is coming.
 */
-.timeline__earlier {
+/* The line at either end of the list saying a page is on its way. */
+.timeline__paging {
   align-self: center;
   margin: 0;
   padding: var(--space-1) var(--space-4);

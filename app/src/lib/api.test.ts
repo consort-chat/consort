@@ -39,6 +39,7 @@ import {
   openLink,
   roomAt,
   timelineCopyLink,
+  timelineGoTo,
   timelineReact,
   timelineReply,
   timelineTyping,
@@ -321,6 +322,17 @@ describe("replies and links", () => {
 
     expect(invoke).toHaveBeenCalledWith("timeline_copy_link", {
       roomId: "!general:example.org",
+      eventId: "$said:example.org",
+    });
+  });
+
+  it("names the message a jump is to", async () => {
+    // The one argument, under the name the Rust command expects. Getting it
+    // wrong is a deserialisation error at runtime rather than a build failure,
+    // and the symptom is a reply row that does nothing.
+    await timelineGoTo("$said:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("timeline_go_to", {
       eventId: "$said:example.org",
     });
   });

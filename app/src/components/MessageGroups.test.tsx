@@ -422,6 +422,49 @@ describe("a reply", () => {
     expect(row).not.toHaveTextContent("matrix.to");
   });
 
+  it("draws a message that is named but not on screen like any other reply", () => {
+    // The room looks it up, because a reply can name anything older than the
+    // window of history loaded and a row saying only that it cannot say is a
+    // row where every other reply has a name and a line of what was said.
+    const answered = said("$old", ADA, "the one being answered");
+    render(
+      <MessageGroups
+        groups={group([said("$2", BOB, "quite", NOON, { replyTo: "$old" })])}
+        names={{ [ADA]: "Ada" }}
+        roomId={GENERAL}
+        selfId={BOB}
+        known={known([answered])}
+        onAbout={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /go to ada's message/i }),
+    ).toHaveTextContent("the one being answered");
+  });
+
+  it("hands back a message it names but does not draw, rather than scrolling", () => {
+    // Nothing to scroll to: the message is not in the box. The room's own
+    // answer to that is to fetch the history around it.
+    const onGoTo = vi.fn();
+    const answered = said("$old", ADA, "the one being answered");
+    render(
+      <MessageGroups
+        groups={group([said("$2", BOB, "quite", NOON, { replyTo: "$old" })])}
+        names={{ [ADA]: "Ada" }}
+        roomId={GENERAL}
+        selfId={BOB}
+        known={known([answered])}
+        onAbout={vi.fn()}
+        onGoTo={onGoTo}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /go to ada's message/i }));
+
+    expect(onGoTo).toHaveBeenCalledWith("$old");
+  });
+
   it("says so plainly when the answered message is not loaded", () => {
     // A room shows a window of history and a reply can point outside it. The
     // event ID is known and the message is not, and a row that pretended

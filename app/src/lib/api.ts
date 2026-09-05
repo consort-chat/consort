@@ -1441,10 +1441,43 @@ export interface Timeline {
   roomId: string;
   /** Oldest first, which is the order they are drawn in. */
   messages: Message[];
+  /**
+   * The messages a reply names that are not in `messages`.
+   *
+   * A room draws a window of history and a reply can name anything older than
+   * it, so the row above a reply regularly points at something not on screen.
+   * These are looked up so that row can draw a name and a line of what was
+   * said, like every other reply.
+   *
+   * Absent when there are none, which is most rooms most of the time.
+   */
+  answered?: Message[];
   /** Whether there is more history to ask for. */
   moreBefore: boolean;
-  /** Whether a page of history is being fetched right now. */
+  /**
+   * Whether there are messages newer than these.
+   *
+   * False at the live end, which is where the room normally is. True only in a
+   * window somebody jumped into.
+   */
+  moreAfter: boolean;
+  /**
+   * The message this window was opened around, when it is not the present.
+   *
+   * Absent for the room as it is normally drawn. What tells the interface to
+   * offer a way back: a conversation from last March and one that has gone
+   * quiet look the same otherwise.
+   */
+  focus?: string;
+  /**
+   * Whether a page of older messages is being fetched right now.
+   *
+   * Also true while a jump is in flight: a window around a message from last
+   * March is earlier messages by any reading, and is drawn where they are.
+   */
   loading: boolean;
+  /** Whether a page of newer messages is being fetched right now. */
+  loadingAfter: boolean;
 }
 
 /**
@@ -1458,7 +1491,9 @@ export const NO_TIMELINE: Timeline = Object.freeze({
   roomId: "",
   messages: [],
   moreBefore: false,
+  moreAfter: false,
   loading: false,
+  loadingAfter: false,
 });
 
 /**
@@ -1503,6 +1538,42 @@ export function timelineClose(): Promise<void> {
  */
 export function timelineEarlier(): Promise<void> {
   return invoke<void>("timeline_earlier");
+}
+
+/**
+ * Ask the open room for a page of newer messages.
+ *
+ * The other end of `timelineEarlier`, and only ever answerable inside a window
+ * somebody jumped into. Asking at the live end does nothing: what comes after
+ * the present arrives on its own.
+ */
+export function timelineLater(): Promise<void> {
+  return invoke<void>("timeline_later");
+}
+
+/**
+ * Draw the history around one message instead of the present.
+ *
+ * What following a reply row, or a link, to a message older than what is
+ * loaded does. Answers nothing: the window arrives on the `timeline` channel
+ * like every other reading of the room, carrying `focus`.
+ *
+ * A message the homeserver will not hand over leaves the room where it was.
+ * Doing nothing is a real outcome here, as it is for asking for a page.
+ */
+export function timelineGoTo(eventId: string): Promise<void> {
+  return invoke<void>("timeline_go_to", { eventId });
+}
+
+/**
+ * Go back to the live end of the open room.
+ *
+ * The first page again, freshly read, which is also how whatever was said
+ * while somebody was reading last March arrives. What had been scrolled back
+ * through is not kept.
+ */
+export function timelinePresent(): Promise<void> {
+  return invoke<void>("timeline_present");
 }
 
 /**

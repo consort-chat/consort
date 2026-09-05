@@ -101,6 +101,16 @@ pub fn in_thread(event: &TimelineEvent) -> Option<Message> {
     read(event, Reading::Thread)
 }
 
+/// One event as a message drawn on its own, or `None` when it is not one.
+///
+/// The same reading as [`in_thread`], and named separately because the caller
+/// is asking a different question. A reply row draws the message it names as
+/// itself, and whether that message happens to live in a thread is not
+/// something the row asks: it is being drawn beside the reply either way.
+pub fn alone(event: &TimelineEvent) -> Option<Message> {
+    read(event, Reading::Thread)
+}
+
 /// The message an event is a threaded reply to, when it is one.
 ///
 /// Deliberately not a field on [`Message`]. A reply's own relation is of no

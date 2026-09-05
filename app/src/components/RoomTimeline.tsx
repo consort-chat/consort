@@ -20,7 +20,10 @@ import {
   timelineClose,
   timelineCopyLink,
   timelineEarlier,
+  timelineGoTo,
+  timelineLater,
   timelineOpen,
+  timelinePresent,
   timelineReact,
   timelineReply,
   timelineSend,
@@ -164,6 +167,8 @@ export function RoomTimeline({
     the answer changes rather than when a render happens to notice.
   */
   const [nearTheTop, setNearTheTop] = useState(false);
+  /** Whether the reader is near the bottom of what is loaded, on the same terms. */
+  const [nearTheBottom, setNearTheBottom] = useState(false);
   /** Who is typing in this room, as Matrix user IDs, ours already removed. */
   const [typists, setTypists] = useState<string[]>([]);
 
@@ -204,6 +209,13 @@ export function RoomTimeline({
     until one carries it.
   */
   const wanted = useRef<string | null>(null);
+  /*
+    The message a window has already been asked for, so that a link naming
+    something unreachable asks once rather than on every timeline that arrives
+    afterwards. Cleared when the jump lands, so the same message can be gone to
+    again later.
+  */
+  const asked = useRef<string | null>(null);
   // So the box takes what somebody types next after pressing Reply. Without it
   // the control moves the conversation and then asks them to click again.
   const draftBox = useRef<HTMLTextAreaElement>(null);
@@ -347,10 +359,15 @@ export function RoomTimeline({
   const measure = useCallback(() => {
     const box = scroller.current;
     if (box === null) return;
-    following.current =
-      box.scrollHeight - box.scrollTop - box.clientHeight < AT_THE_BOTTOM;
+    const below = box.scrollHeight - box.scrollTop - box.clientHeight;
+    following.current = below < AT_THE_BOTTOM;
     fromBottom.current = box.scrollHeight - box.scrollTop;
     setNearTheTop(box.scrollTop < NEAR_THE_TOP);
+    // The same distance at the other end, and for the same reason. Only ever
+    // acted on inside a window somebody jumped into: the live end has nothing
+    // after it to ask for, and being near the bottom of it is the ordinary
+    // state of reading a room.
+    setNearTheBottom(below < NEAR_THE_TOP);
   }, []);
 
   /*
@@ -361,7 +378,24 @@ export function RoomTimeline({
   useLayoutEffect(() => {
     following.current = true;
     oldest.current = undefined;
+    // A jump into the room before this one is not one to carry into this one.
+    wanted.current = null;
+    asked.current = null;
   }, [channel.id]);
+
+  /*
+    Declared before the effect below, like the one above, so it runs first.
+
+    A window somebody jumped into replaces the whole list rather than adding to
+    either end of it, so neither of the anchors below applies: they are at the
+    message they asked for, which the jump itself scrolls to. Coming back to
+    the present is the opposite ask and lands at the bottom.
+  */
+  useLayoutEffect(() => {
+    if (!mine) return;
+    following.current = timeline.focus === undefined;
+    oldest.current = undefined;
+  }, [timeline.focus, mine]);
 
   // Before the browser paints, so neither following the conversation nor
   // holding a reader's place through a page of history is a visible jump.
@@ -436,6 +470,17 @@ export function RoomTimeline({
     });
   }, [mine, nearTheTop, timeline.moreBefore, timeline.loading]);
 
+  /*
+    And the page below, on the same terms. `moreAfter` is false at the live
+    end, so outside a window somebody jumped into this never fires.
+  */
+  useEffect(() => {
+    if (!mine || !nearTheBottom || !timeline.moreAfter || timeline.loadingAfter) {
+      return;
+    }
+    void timelineLater().catch(() => {});
+  }, [mine, nearTheBottom, timeline.moreAfter, timeline.loadingAfter]);
+
   // Recorded rather than acted on, so that a press arriving before the room has
   // any messages is not lost. The effect below is what spends it.
   useEffect(() => {
@@ -454,13 +499,30 @@ export function RoomTimeline({
   useEffect(() => {
     const eventId = wanted.current;
     if (eventId === null || !mine) return;
-    if (!flashMessage(scroller.current, eventId)) return;
+    if (!flashMessage(scroller.current, eventId)) {
+      /*
+        Not drawn. Asked for from the homeserver instead, once the room has
+        finished reading its own page: a message near the bottom is about to
+        arrive on its own, and fetching a window around it would move the
+        reader away from the room to arrive back at the same place.
+
+        Once per message, because the answer to a link naming something this
+        account cannot read is that nothing changes, and a condition that does
+        not change is not one to keep asking about.
+      */
+      if (!timeline.loading && asked.current !== eventId) {
+        asked.current = eventId;
+        goTo(eventId);
+      }
+      return;
+    }
 
     wanted.current = null;
+    asked.current = null;
     // The jump is where they asked to be. Following the bottom from here would
     // undo it the moment anybody says anything.
     following.current = false;
-  }, [focus, timeline.messages, mine]);
+  }, [focus, timeline.messages, timeline.loading, mine]);
 
   // Nothing but the passing of time takes the tick off the copy control.
   useEffect(() => {
@@ -495,6 +557,21 @@ export function RoomTimeline({
     draftBox.current?.focus();
   }
 
+  /**
+   * Go to a message older than the window of history loaded.
+   *
+   * Recorded before it is asked for, on the same terms as a link: the window
+   * arrives as a whole new timeline, and the effect above is what lights the
+   * message up once it is drawn.
+   */
+  function goTo(eventId: string) {
+    wanted.current = eventId;
+    asked.current = eventId;
+    void timelineGoTo(eventId).catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
   /** Put one message's address on the clipboard, and say that it worked. */
   function copyLink(eventId: string) {
     void timelineCopyLink(channel.id, eventId)
@@ -527,6 +604,12 @@ export function RoomTimeline({
       void timelineTyping(channel.id, false).catch(() => {});
       // Whatever they said belongs at the bottom, wherever they were reading.
       following.current = true;
+      // Including out of a window of last March, which is where it does not
+      // belong: the message went to the live end of the room, and watching it
+      // not appear is worse than being moved to where it did.
+      if (timeline.focus !== undefined) {
+        void timelinePresent().catch(() => {});
+      }
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     } finally {
@@ -536,10 +619,23 @@ export function RoomTimeline({
 
   const messages = mine ? timeline.messages : [];
   const groups = useMemo(() => group(messages), [messages]);
-  // What a reply in this room may point at, which is whatever is loaded.
+  /*
+    What a reply in this room may point at: whatever is loaded, and beside it
+    whatever the room looked up for the replies naming something older than
+    that. The row is drawn the same way either way. What differs is where
+    pressing it goes, which `MessageGroups` decides by whether the message it
+    names is on screen.
+  */
+  const answered = mine ? timeline.answered : undefined;
   const known = useMemo(
-    () => new Map(messages.map((message) => [message.id, message])),
-    [messages],
+    () =>
+      new Map(
+        [...messages, ...(answered ?? [])].map((message) => [
+          message.id,
+          message,
+        ]),
+      ),
+    [messages, answered],
   );
   const name = channelLabel(channel);
 
@@ -567,6 +663,34 @@ export function RoomTimeline({
         </div>
       </div>
 
+      {/*
+        Said whenever the room is not showing the present. A conversation from
+        last March and one that has gone quiet look the same otherwise, and
+        somebody who jumped into the middle of the history has no other way
+        back to the bottom: scrolling would be a page at a time.
+
+        Above the scrolling box rather than in it, so it stays put while the
+        window it is describing is read.
+      */}
+      {mine && timeline.focus !== undefined && (
+        <div className="timeline__elsewhere">
+          <p className="timeline__elsewhere-said">
+            Showing older messages.
+          </p>
+          <button
+            type="button"
+            className="timeline__elsewhere-back"
+            onClick={() => {
+              void timelinePresent().catch((raw: unknown) => {
+                setProblem(asCommandError(raw).message);
+              });
+            }}
+          >
+            Back to the present
+          </button>
+        </div>
+      )}
+
       <div
         className="timeline__scroll"
         ref={scroller}
@@ -584,7 +708,7 @@ export function RoomTimeline({
           that does not exist.
         */}
         {mine && timeline.loading && (
-          <p className="timeline__earlier">Loading earlier messages...</p>
+          <p className="timeline__paging">Loading earlier messages...</p>
         )}
 
         {mine && !timeline.loading && groups.length === 0 && (
@@ -623,7 +747,13 @@ export function RoomTimeline({
             // failed publishes nothing and the control would keep turning.
             void threadOpen(rootId).catch(() => setOpening(null));
           }}
+          onGoTo={goTo}
         />
+
+        {/* The other end's version of the line above, and it is the same news. */}
+        {mine && timeline.loadingAfter && (
+          <p className="timeline__paging">Loading later messages...</p>
+        )}
       </div>
 
       {problem !== null && (
