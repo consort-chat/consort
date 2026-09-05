@@ -47,3 +47,16 @@
 .picker__key[aria-pressed="true"] {
   background: var(--violet-glow);
 }
+
+/*
+  Hanging off a control at the left of a row rather than one at the right.
+
+  Both edges are needed because the two controls that open this sit at
+  opposite ends of the message: pinning the panel right under the one beside
+  the pills would push it back across the words, which is the distance this
+  second control exists to remove.
+*/
+.picker--left {
+  right: auto;
+  left: 0;
+}

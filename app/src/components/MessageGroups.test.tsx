@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -313,6 +313,21 @@ describe("a reply", () => {
     ).toHaveTextContent("the original");
   });
 
+  it("draws the first message of a group right after the byline", () => {
+    // What the flash reaches back over. A jump landing on the first thing
+    // somebody said lights the name and the picture above it too, and the rule
+    // doing that finds them from the message next to the byline. Anything
+    // drawn between the two lights the words with whoever wrote them dark.
+    const { container } = draw([
+      said("$1", ADA, "the original"),
+      said("$2", ADA, "and again", NOON + 1_000),
+    ]);
+
+    const byline = container.querySelector(".timeline__byline");
+
+    expect(byline?.nextElementSibling).toHaveAttribute("data-message-id", "$1");
+  });
+
   it("scrolls the answered message into view when the row is pressed", async () => {
     const box = document.createElement("div");
     document.body.append(box);
@@ -603,5 +618,86 @@ describe("reactions", () => {
     await userEvent.click(both[1]!);
 
     expect(screen.getAllByRole("group", { name: "React with" })).toHaveLength(1);
+  });
+});
+
+describe("adding another reaction", () => {
+  const cheered = said("$1", ADA, "it works", NOON, {
+    reactions: [{ key: "🎉", count: 2 }],
+  });
+
+  it("offers a control beside the reactions a message already has", () => {
+    const { container } = drawReactable([cheered], vi.fn());
+
+    const row = container.querySelector(".timeline__reactions");
+    expect(row).not.toBeNull();
+    expect(
+      within(row as HTMLElement).getByRole("button", { name: "Add a reaction" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("offers none on a message nobody has reacted to", () => {
+    // Nothing for it to sit beside. The toolbar is where that message's first
+    // reaction comes from.
+    drawReactable([said("$1", ADA, "hello")], vi.fn());
+
+    expect(screen.queryByRole("button", { name: "Add a reaction" })).toBeNull();
+  });
+
+  it("picks a key from the control beside the pills", async () => {
+    const onReact = vi.fn();
+    drawReactable([cheered], onReact);
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+
+    expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
+  });
+
+  it("draws the panel beside the control that opened it", async () => {
+    // The whole point of this control: a panel that opened by the toolbar
+    // would be the journey it exists to remove.
+    const { container } = drawReactable([cheered], vi.fn());
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+
+    expect(container.querySelector(".timeline__reactions .picker")).not.toBeNull();
+    expect(container.querySelector(".timeline__actions .picker")).toBeNull();
+  });
+
+  it("draws it by the toolbar when the toolbar is what was pressed", async () => {
+    const { container } = drawReactable([cheered], vi.fn());
+
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+
+    expect(container.querySelector(".timeline__actions .picker")).not.toBeNull();
+    expect(container.querySelector(".timeline__reactions .picker")).toBeNull();
+  });
+
+  it("opens one panel at a time, whichever control was pressed", async () => {
+    drawReactable([cheered], vi.fn());
+
+    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+
+    expect(screen.getAllByRole("group", { name: "React with" })).toHaveLength(1);
+  });
+
+  it("marks a key this session has already used", async () => {
+    drawReactable(
+      [
+        said("$1", ADA, "it works", NOON, {
+          reactions: [{ key: "🎉", count: 2, mine: "$mine" }],
+        }),
+      ],
+      vi.fn(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+
+    expect(screen.getByRole("button", { name: "React with 🎉" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

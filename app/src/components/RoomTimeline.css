@@ -120,8 +120,16 @@
   at the same place, which is what makes a wall of messages scannable.
 */
 .timeline__group {
+  /* Named because three rules have to agree on it: the column, the picture in
+     it, and the flash that reaches back across it. */
+  --avatar: 36px;
+  /* The byline's height, fixed rather than taken from its text, because the
+     flash on the first message in a group reaches back up over it and an
+     offset in the other direction is not something CSS can measure. */
+  --byline: 1rem;
+
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: var(--avatar) minmax(0, 1fr);
   gap: var(--space-3);
   align-items: start;
 }
@@ -149,8 +157,8 @@
 }
 
 .timeline__face {
-  width: 36px;
-  height: 36px;
+  width: var(--avatar);
+  height: var(--avatar);
   border-radius: 50%;
   transition: opacity var(--duration-fast) var(--ease-out-expo);
 }
@@ -167,6 +175,7 @@
   display: flex;
   gap: var(--space-2);
   align-items: baseline;
+  height: var(--byline);
   margin: 0 0 var(--space-1);
 }
 
@@ -363,6 +372,43 @@
   background: var(--violet-glow);
   border-color: var(--violet);
   color: var(--text-primary);
+}
+
+/*
+  The way to add another, at the end of the row.
+
+  Positioned, because the panel hangs off it. Quieter than a pill and with no
+  border: a pill is something somebody said and this is a thing to do, and the
+  two reading alike is what makes a row of reactions hard to count.
+*/
+.timeline__add {
+  position: relative;
+  display: flex;
+}
+
+.timeline__add-key {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.timeline__add-key:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.timeline__add-key:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 .timeline__reaction-count {
@@ -585,9 +631,45 @@
   attribute is set on the element by hand rather than through React: the row
   being jumped to belongs to whichever `MessageGroups` drew it, which is not
   always the one that was pressed.
+
+  Drawn on a pseudo-element reaching back across the avatar gutter, rather
+  than as a background on the message. A message occupies the second column
+  only, so a background there stops where the words do and a one-word message
+  gets a one-word band: a highlight smaller than the thing it marks. Over the
+  content rather than behind it, because `--violet-glow` is 28% alpha and a
+  layer underneath would be hidden by the gold of a message that also names
+  you.
+
+  Absolutely positioned, so it becomes no grid item and the conversation does
+  not move when a jump lands.
+
+  Twice rather than once. A single fade during a scroll that is still settling
+  is easy to look straight past, and the hard edge between the two is what
+  makes it read as something asking to be noticed.
 */
-.timeline__message[data-flash="true"] {
-  animation: timeline-flash 1.4s ease-out;
+.timeline__message[data-flash="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: calc(-1 * (var(--avatar) + var(--space-3)));
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  animation: timeline-flash 700ms ease-out 2;
+}
+
+/*
+  Up over the byline as well, when the jump landed on the first thing in a
+  group. The name, the time and the picture belong to the message under them,
+  so lighting the words alone leaves the row headless: a lit paragraph with
+  whoever wrote it dark above it, which is the half of the row a reader looks
+  at to know where they have arrived.
+
+  Only the first, because a byline speaks for the message directly under it
+  and not for the four under that one. The distance is the byline's own height plus
+  the margin under it, which is why that height is a number both rules read.
+*/
+.timeline__byline + .timeline__message[data-flash="true"]::after {
+  top: calc(-1 * (var(--byline) + var(--space-1)));
 }
 
 @keyframes timeline-flash {
@@ -600,7 +682,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .timeline__message[data-flash="true"] {
+  .timeline__message[data-flash="true"]::after {
     animation: none;
     background: var(--violet-glow);
   }
