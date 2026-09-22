@@ -21,6 +21,7 @@ import {
 import { channelLabel } from "../lib/labels";
 import type { PlaceTarget } from "../lib/matrixTo";
 import { RoomLinksContext, type RoomLinks } from "../lib/roomLinks";
+import { CallCard } from "./CallCard";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
@@ -565,6 +566,23 @@ export function AppShell({
         onOpenRoom={openRoom}
         width={threadWidth}
         onResize={setThreadWidth}
+      />
+
+      {/*
+        Outside the sidebar, though it is fixed and would position the same
+        inside it. A floating thing nested in a grid row reads as belonging to
+        that column, and this one belongs to the window.
+
+        Everything it draws is already here: the call, who is talking, and the
+        channel's name. Nothing new is subscribed to, which is the test of
+        whether this is in the right place.
+      */}
+      <CallCard
+        call={call}
+        channelName={nameOfCalledChannel(rooms, call)}
+        speaking={speaking}
+        selfId={profile.user_id}
+        onOpenRoom={openRoom}
       />
       </div>
 

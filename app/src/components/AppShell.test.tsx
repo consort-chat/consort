@@ -549,6 +549,29 @@ describe("AppShell", () => {
       expect(panel).not.toHaveTextContent(LOUNGE);
     });
 
+    it("floats a card for the call it is in", () => {
+      // Wiring rather than behaviour: everything the card draws is already in
+      // the shell, and a card that has to subscribe to anything is a card in
+      // the wrong place.
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+      });
+
+      expect(screen.getByRole("region", { name: "Call in Lounge" })).toBeVisible();
+    });
+
+    it("floats no card when there is no call", () => {
+      shell({ rooms: withVoice });
+
+      expect(screen.queryByRole("region", { name: /^Call in/ })).toBeNull();
+    });
+
     it("shows no connection panel for a join that failed", () => {
       // There is no connection to put in it. What is worth saying is which
       // channel would not take the call, and that belongs beside the channel.
