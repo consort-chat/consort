@@ -287,144 +287,18 @@
   so the names form one left edge down the whole list.
 */
 .channels__people {
+  /*
+    What a face is drawn at here, and the only thing this list says about how
+    one looks. The rest lives with the face itself, which the call card draws
+    at three times this size from the same rules.
+  */
+  --avatar-size: 20px;
+
   display: grid;
   gap: 1px;
   margin: var(--space-1) 0 var(--space-1);
   padding: 0 0 0 calc(20px + var(--space-2) * 2);
   list-style: none;
-}
-
-/*
-  The row itself is now only a row. The grid moved onto the button inside it
-  when a name became something you could open a menu on: a button that was not
-  the full width of the row would leave a strip of dead space beside every
-  name, which is worse than not being clickable at all because it looks
-  clickable and is not.
-*/
-.channels__person {
-  display: block;
-}
-
-.channels__person-button {
-  display: grid;
-  /*
-    Two trailing columns that are only there when they are. `auto` collapses to
-    nothing for a row with no icon in it, so the names stay on one line and
-    neither column appears as an empty gutter down the whole list.
-
-    Two rather than one because they answer different questions. Muted and on
-    camera are both ordinary at once, so they cannot share a slot.
-  */
-  grid-template-columns: 20px minmax(0, 1fr) auto auto;
-  gap: var(--space-2);
-  align-items: center;
-  width: 100%;
-  padding: 2px var(--space-2);
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-}
-
-.channels__person-button:hover {
-  background: var(--surface-overlay);
-}
-
-.channels__person-button:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-
-/*
-  Somebody who has muted themselves.
-
-  Dimmed as well as marked. The glyph is the message and carries the label a
-  screen reader reads; this is what makes the row readable at a glance in a
-  list of eight names, without being loud enough to draw the eye away from
-  whoever is actually talking.
-*/
-.channels__person[data-muted="true"] .channels__who,
-.channels__person[data-muted="true"] .channels__muted {
-  color: var(--text-muted);
-  opacity: 0.7;
-}
-
-.channels__muted {
-  width: 12px;
-  height: 12px;
-}
-
-/*
-  Smaller than anywhere else one is drawn, which is what `--avatar-size` on
-  `.avatar` exists for.
-*/
-.channels__face {
-  --avatar-size: 20px;
-  /*
-    Only the ring below moves, and only in colour. `box-shadow` is on the
-    compositor, so a list of twenty faces lighting up as a room talks costs
-    nothing in layout.
-  */
-  transition: box-shadow var(--duration-fast) var(--ease-out-expo);
-}
-
-/*
-  The same green as the level meter's bar, and that is the point rather than a
-  coincidence: somebody who has just watched their own bar move is looking for
-  that colour, and a second green would read as a second thing.
-
-  A ring rather than a filled halo, so it reads at 20px. The glow is what makes
-  it visible against both the hovered row and the plain one without needing to
-  know which it is on.
-*/
-.channels__person[data-speaking="true"] .channels__face {
-  box-shadow:
-    0 0 0 2px var(--mint),
-    0 0 6px 1px var(--mint-glow);
-}
-
-/*
-  Somebody talking is not dimmed, whatever else is true of them. The dimming
-  below is for people who are quiet, and leaving it on a live speaker would be
-  the interface contradicting itself.
-*/
-.channels__person[data-speaking="true"] .channels__who {
-  color: var(--text-secondary);
-  opacity: 1;
-}
-
-.channels__who {
-  overflow: hidden;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/*
-  Whether the call can see somebody.
-
-  Dimmer than the mute glyph and never dimmed further, because unlike that one
-  it is drawn for everybody: at the weight of a status icon, a column of them
-  down a busy channel would be the loudest thing in the sidebar and would say
-  nothing, since most of the time most cameras are off.
-
-  A camera that is on is the exception and is drawn as one, in the colour the
-  interface uses for live things elsewhere.
-*/
-.channels__camera {
-  width: 13px;
-  height: 13px;
-  color: var(--text-muted);
-  opacity: 0.55;
-}
-
-.channels__camera[data-on="true"] {
-  color: var(--mint);
-  opacity: 1;
 }
 
 /*

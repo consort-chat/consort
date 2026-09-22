@@ -9,8 +9,8 @@ import {
   type Space,
 } from "../lib/api";
 import { channelLabel } from "../lib/labels";
+import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
-import { RoomAvatar } from "./RoomAvatar";
 import { SidebarToggle } from "./SidebarToggle";
 import "./ChannelList.css";
 
@@ -75,129 +75,6 @@ function ChatIcon() {
  * channels is omitted, so a quiet voice channel keeps exactly the shape it had
  * before this existed.
  */
-/**
- * A struck-through microphone, next to somebody who has muted themselves.
- *
- * Smaller and thinner than the one in the call panel. That one is a control
- * somebody presses; this is a fact about a name in a list, and drawing them at
- * the same weight would make the list look like a row of buttons.
- */
-function MutedIcon({ "aria-label": label }: { "aria-label": string }) {
-  return (
-    <svg
-      className="channels__muted"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      role="img"
-      aria-label={label}
-    >
-      <rect x="9" y="2" width="6" height="11" rx="3" />
-      <path d="M5 10a7 7 0 0 0 14 0" />
-      <path d="M12 17v4" />
-      <path d="M3 3l18 18" />
-    </svg>
-  );
-}
-
-/**
- * Struck-through headphones, next to somebody who has stopped listening.
- *
- * Drawn instead of the microphone rather than beside it. Deafening mutes, so
- * both are true of the same person, and showing two icons would spend twice
- * the width saying one thing. The headphones are the stronger claim: somebody
- * muted might still be listening, somebody deafened is not.
- */
-function DeafenedIcon({ "aria-label": label }: { "aria-label": string }) {
-  return (
-    <svg
-      className="channels__muted"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      role="img"
-      aria-label={label}
-    >
-      <path d="M4 14v-2a8 8 0 0 1 16 0v2" />
-      <path d="M4 14h3v6H5.5A1.5 1.5 0 0 1 4 18.5z" />
-      <path d="M20 14h-3v6h1.5a1.5 1.5 0 0 0 1.5-1.5z" />
-      <path d="M3 3l18 18" />
-    </svg>
-  );
-}
-
-/**
- * A clock, next to somebody who is not at their computer.
- *
- * The one icon here that is not a struck-through anything, deliberately. The
- * other two say what somebody switched off; this one says they are not there,
- * which is a different kind of fact and should not look like a fault.
- */
-function AwayIcon({ "aria-label": label }: { "aria-label": string }) {
-  return (
-    <svg
-      className="channels__muted"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      role="img"
-      aria-label={label}
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-
-/**
- * A camera, struck through when nobody can see them.
- *
- * Always drawn for the call this session is in, which is the difference
- * between this and the three glyphs above. Those say somebody chose something,
- * so their absence means "nothing to report"; this one answers a question that
- * always has an answer, and an icon that only appeared when a camera came on
- * would leave "off" and "we have not looked" drawn identically.
- *
- * Which is exactly why it is never drawn for a channel this session is not in.
- * Room state carries nothing about cameras, so a cross there would be an
- * invention rather than a reading.
- */
-function CameraIcon({
-  on,
-  "aria-label": label,
-}: {
-  on: boolean;
-  "aria-label": string;
-}) {
-  return (
-    <svg
-      className="channels__camera"
-      data-on={on}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      role="img"
-      aria-label={label}
-    >
-      <path d="M3 7.5h11v9H3z" />
-      <path d="m14 12 6-3.5v7z" />
-      {!on && <path d="m3.5 3.5 17 17" />}
-    </svg>
-  );
-}
-
 function Participants({
   channel,
   people,
@@ -211,7 +88,7 @@ function Participants({
   /**
    * Whether these came from the live call roster rather than from room state.
    *
-   * The camera is only drawn when they did. See [`CameraIcon`].
+   * The camera is only drawn when they did. See [`CallFace`].
    */
   live: boolean;
   onOpenPerson: (
@@ -227,99 +104,15 @@ function Participants({
       className="channels__people"
       aria-label={`In ${channelLabel(channel)}`}
     >
-      {/*
-        `data-speaking` sits on the row rather than on the avatar, because
-        `RoomAvatar` takes the props it knows about and drops the rest. The
-        ring is drawn on the face from here, which is where every other client
-        puts it and where somebody scanning a list of faces is already looking.
-      */}
       {people.map((participant) => (
-        <li
+        <CallFace
           key={participant.id}
-          className="channels__person"
-          data-muted={participant.muted === true}
-          data-speaking={speaking.has(participant.id)}
-        >
-          {/*
-            A button rather than a row with a click handler on it. What it
-            opens is a menu, and a menu that can only be reached with a mouse
-            is a menu half the people here cannot reach at all: this way the
-            keyboard gets it for free, along with focus, Enter and Space.
-
-            Both buttons open the same thing. Right-click is where anybody
-            looks for a card about a person; left-click is what makes the row
-            look like the control it now is, and is the only one a touchpad
-            without a second button has. Splitting them would mean two panels
-            about one person, and a person is one subject.
-          */}
-          <button
-            type="button"
-            className="channels__person-button"
-            aria-haspopup="dialog"
-            onClick={(event) =>
-              onOpenPerson(participant, channel.id, {
-                x: event.clientX,
-                y: event.clientY,
-              })
-            }
-            onContextMenu={(event) => {
-              event.preventDefault();
-              onOpenPerson(participant, channel.id, {
-                x: event.clientX,
-                y: event.clientY,
-              });
-            }}
-          >
-            <RoomAvatar
-              roomId={channel.id}
-              userId={participant.id}
-              name={participant.name}
-              className="channels__face"
-            />
-            <span className="channels__who">{participant.name}</span>
-            {/*
-              Drawn rather than only dimmed, and with a name on it. Somebody
-              scanning this list for who to talk to is reading names, not
-              noticing that one of them is a shade lighter, and a colour with
-              no glyph beside it is nothing at all to a screen reader.
-
-              One icon, never two. All three flags can be set on one person at
-              once, because each of the stronger ones implies the microphone is
-              off, so this is a precedence rather than a set of conditions.
-
-              Deafened first: it is the only one that says talking to them will
-              not reach them at all. Then away, which says they are not there
-              to answer. Muted last, because it is the weakest claim of the
-              three and the only one that leaves somebody listening and
-              present.
-            */}
-            {participant.deafened === true ? (
-              <DeafenedIcon aria-label={`${participant.name} is deafened`} />
-            ) : participant.away === true ? (
-              <AwayIcon aria-label={`${participant.name} is away`} />
-            ) : (
-              participant.muted === true && (
-                <MutedIcon aria-label={`${participant.name} is muted`} />
-              )
-            )}
-            {/*
-              Beside the precedence above rather than inside it, because it is
-              a different question. Somebody muted with their camera on is
-              ordinary, and so is the reverse, so these are two facts about one
-              person rather than two candidates for one slot.
-            */}
-            {live && (
-              <CameraIcon
-                on={participant.camera === true}
-                aria-label={
-                  participant.camera === true
-                    ? `${participant.name} has their camera on`
-                    : `${participant.name} has their camera off`
-                }
-              />
-            )}
-          </button>
-        </li>
+          person={participant}
+          roomId={channel.id}
+          speaking={speaking.has(participant.id)}
+          live={live}
+          onOpen={(at) => onOpenPerson(participant, channel.id, at)}
+        />
       ))}
     </ul>
   );
