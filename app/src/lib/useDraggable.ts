@@ -8,15 +8,7 @@ import {
   type RefObject,
 } from "react";
 
-/**
- * How far to keep a floating thing from the edge of the window.
- *
- * The same eight pixels `PersonMenu` keeps, and deliberately the same number
- * rather than a second one that happens to be close: the two are the only
- * things in this application that float, and a card that stopped a different
- * distance from the edge than the menu it opens would read as a mistake.
- */
-const GAP = 8;
+import { keptOnScreen, type Place } from "./floating";
 
 /** How far one arrow press moves it. Far enough to see, small enough to aim. */
 const STEP = 16;
@@ -36,12 +28,6 @@ const ARROWS: Record<string, { x: number; y: number } | undefined> = {
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 },
 };
-
-/** Where something has been put, in the coordinates `position: fixed` takes. */
-export interface Place {
-  left: number;
-  top: number;
-}
 
 export interface Draggable<T extends HTMLElement> {
   /**
@@ -80,14 +66,6 @@ export interface Draggable<T extends HTMLElement> {
   keepInView: () => void;
 }
 
-/** Keep a box inside the window, the way `PersonMenu` keeps its card inside. */
-function fit(place: Place, box: { width: number; height: number }): Place {
-  return {
-    left: Math.max(GAP, Math.min(place.left, window.innerWidth - box.width - GAP)),
-    top: Math.max(GAP, Math.min(place.top, window.innerHeight - box.height - GAP)),
-  };
-}
-
 /**
  * Move something around the window with a pointer or with the arrow keys.
  *
@@ -121,7 +99,7 @@ export function useDraggable<
     if (box === undefined) return;
     setAt((current) => {
       if (current === null) return null;
-      const next = fit(current, box);
+      const next = keptOnScreen(current, box);
       // The same place said again is not a change. Answering with a fresh
       // object either way would be a render per window resize event, and a
       // render per render for anything that measures after one.
@@ -189,7 +167,9 @@ export function useDraggable<
       if (Math.abs(by.x) > SLOP || Math.abs(by.y) > SLOP) {
         travelled.current = true;
       }
-      setAt(fit({ left: origin.left + by.x, top: origin.top + by.y }, size));
+      setAt(
+        keptOnScreen({ left: origin.left + by.x, top: origin.top + by.y }, size),
+      );
     }
 
     function drop() {
@@ -224,7 +204,7 @@ export function useDraggable<
 
     const origin = at ?? { left: box.left, top: box.top };
     setAt(
-      fit(
+      keptOnScreen(
         { left: origin.left + way.x * STEP, top: origin.top + way.y * STEP },
         box,
       ),
