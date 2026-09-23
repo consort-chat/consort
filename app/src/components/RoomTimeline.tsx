@@ -579,11 +579,13 @@ export function RoomTimeline({
       [
         ...new Set([
           ...timeline.messages.map((message) => message.sender),
-          // The actors and subjects of membership changes too, which are
-          // drawn by name on the same terms as a message's byline.
+          // The actors and subjects of room changes too, which are drawn by
+          // name on the same terms as a message's byline. Only a membership
+          // change has a subject: a rename is about a name, which is already
+          // the text it reads as and not an ID to look up.
           ...(timeline.system ?? []).flatMap((system) => [
             system.actor,
-            system.subject,
+            ...("subject" in system ? [system.subject] : []),
           ]),
           // The typists too. Somebody can be typing without having said
           // anything yet, and their user ID is not a name to put in front of

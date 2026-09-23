@@ -1439,16 +1439,50 @@ export interface ThreadSummary {
 }
 
 /**
- * One membership change in a room: a join, an invite, a leave, a kick or a
- * ban. Mirrors `consort_matrix::SystemMessage`.
+ * What a `SystemMessage` reports, and what that change is about. Mirrors
+ * `consort_matrix::SystemChange`.
  *
- * Carries `actor` and `subject` as bare Matrix user IDs rather than a
- * composed sentence, on the same terms as `Message.sender`: the interface
- * already resolves IDs to display names for the voice roster and for
- * replies, and writing the English here would mean writing it again for
- * every locale Consort ever gains.
+ * A union discriminated on `kind`, because a membership change is about a
+ * person and a rename is about a new name. Switching on `kind` is what gives
+ * an arm the field it actually has: `subject` on the five membership arms,
+ * and the room's new value on the three room ones. There is deliberately no
+ * field that means a person in one arm and a room name in another.
+ *
+ * `subject` is a bare Matrix user ID rather than a composed sentence, on the
+ * same terms as `Message.sender`: the interface already resolves IDs to
+ * display names for the voice roster and for replies, and writing the English
+ * here would mean writing it again for every locale Consort ever gains.
  */
-export interface SystemMessage {
+export type SystemChange =
+  /** `subject` joined, for the first time or again after having left. */
+  | { kind: "joined"; subject: string }
+  /** The actor invited `subject`. */
+  | { kind: "invited"; subject: string }
+  /** `subject` left on their own. */
+  | { kind: "left"; subject: string }
+  /** The actor removed `subject` from the room. */
+  | { kind: "kicked"; subject: string }
+  /** The actor banned `subject`. */
+  | { kind: "banned"; subject: string }
+  /** The actor changed the room's name. `null` means it was removed. */
+  | { kind: "renamed"; name: string | null }
+  /** The actor changed the room's topic. `null` means it was removed. */
+  | { kind: "topicChanged"; topic: string | null }
+  /**
+   * The actor changed the room's picture. `null` means it was removed, which
+   * is the only thing this arm reads the URL for.
+   */
+  | { kind: "avatarChanged"; url: string | null };
+
+/**
+ * One thing that happened to a room rather than in it: somebody's membership
+ * changing, or the room's name, topic or picture changing. Mirrors
+ * `consort_matrix::SystemMessage`.
+ *
+ * The change is spread rather than nested, matching the Rust side's
+ * `#[serde(flatten)]`: `kind` and its payload sit beside `actor` on the wire.
+ */
+export type SystemMessage = {
   /** The event ID. The React key, on the same terms as `Message.id`. */
   id: string;
   /**
@@ -1460,17 +1494,14 @@ export interface SystemMessage {
    */
   at: number;
   /**
-   * Who made the change: the sender of the `m.room.member` event.
+   * Who made the change: the sender of the state event.
    *
-   * For a join this is also `subject`; for an invite, a kick or a ban it is
-   * whoever sent the invitation, or made the removal.
+   * For a join this is also the subject; for an invite, a kick or a ban it is
+   * whoever sent the invitation, or made the removal; for a room change it is
+   * whoever changed the room.
    */
   actor: string;
-  /** Who the change is about: the event's state key. */
-  subject: string;
-  /** What changed. */
-  kind: "joined" | "invited" | "left" | "kicked" | "banned";
-}
+} & SystemChange;
 
 /**
  * Everything currently loaded for one room. Mirrors `consort_matrix::Timeline`.
