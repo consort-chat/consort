@@ -12,17 +12,16 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   /*
-    Half a gap across, and the last four pixels of #104. "Voice connected" is
-    106px in this desktop's interface font and the column is 104px wide once
-    the fourth control has moved behind the chevron, so the button that went is
-    most of the repair and this is the rest of it. The controls read as a group
-    from the 2px they sit at against each other, so they do not need the room
-    to say it twice.
+    The same gap both ways again.
 
-    Down the way it is unchanged, because what is under here is the sentence
-    about a call that cannot be heard, and that wants the air.
+    It was half that across, to buy #104 four more pixels for the words. That
+    was the wrong shape of repair: the label still came out a pixel or two over
+    its column and was still cut, because the width of "Voice connected"
+    depends on a font the stylesheet does not choose. The column is wider now
+    (`AppShell.css` has the arithmetic), so the words have room without the
+    strip having to give up its own spacing to find it.
   */
-  gap: var(--space-2) var(--space-1);
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--surface-void);
   border-top: 1px solid var(--line-subtle);
@@ -138,6 +137,15 @@
   .call-panel__dot {
     animation: none;
   }
+
+  /*
+    The chevron turns on every pass now that a hover opens the panel, rather
+    than only when somebody pressed it, so the one bit of motion in this strip
+    that used to be rare is not rare any more.
+  */
+  .call-panel__more-toggle .call-panel__glyph {
+    transition: none;
+  }
 }
 
 .call-panel__channel {
@@ -160,9 +168,10 @@
   The three controls, as one cell of the panel's grid.
 
   Three and not four, which is what #104 was about: four buttons and a label do
-  not share a 240px column, and the label was the one being cut. Deafen and
-  away moved behind the chevron in the middle, which is one button's worth of
-  column handed back to the words.
+  not share this column, and the label was the one being cut. Deafen and away
+  moved behind the chevron in the middle, which is one button's worth of column
+  handed back to the words. The column itself is wider as well, because the
+  button that went was not enough on its own.
 
   Tight against each other rather than evenly spread. They are one instrument
   with three keys, and the eye should find the row before it finds any one
@@ -306,7 +315,7 @@
 
   Across both columns, under the state and the disconnect control. The panel is
   otherwise two lines of label and this is a whole sentence, so giving it the
-  text column alone would break it over four lines in a 240px sidebar.
+  text column alone would break it over four lines in a sidebar this narrow.
 */
 .call-panel__problem {
   grid-column: 1 / -1;

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 
 import { microphoneOff, type Call, type SelfAudio } from "../lib/api";
 import { callLabel } from "../lib/labels";
@@ -150,6 +150,19 @@ function ChevronIcon() {
 }
 
 /**
+ * How long a pointer has to mean it, opening and closing alike.
+ *
+ * Both ways, because both are the same mistake in opposite directions. The
+ * chevron is between the microphone and the way out, so a pointer on its way
+ * to either crosses it, and a panel that sprang open on every crossing would
+ * be covering the channel list several times a minute. Closing needs it for a
+ * smaller reason: the panel floats four pixels clear of the control, and that
+ * four pixels belongs to neither of them, so travelling from one to the other
+ * is a leave and an enter with nothing in between.
+ */
+const HOVER_SETTLE = 150;
+
+/**
  * Deafen and away, behind one control.
  *
  * Four buttons and a label do not fit a 240px column, and the label is what
@@ -161,6 +174,18 @@ function ChevronIcon() {
  * row. A row that appeared inside the strip would push the channel list up
  * every time somebody looked at it, and there is no room under the strip to
  * push into.
+ *
+ * Two ways in, and a hover is the second of them rather than the only one. A
+ * menu that answers nothing but a pointer is a menu a keyboard cannot reach
+ * and a touchscreen cannot open, and these two are a microphone and a status,
+ * not decoration. So the press stays exactly as it was, Enter and Space with
+ * it, and the hover is added beside them.
+ *
+ * The two are not the same ask, which is why the panel can tell them apart.
+ * A press is somebody asking for this, so the focus goes into it and only a
+ * press, an Escape or a press elsewhere puts it away. A hover is not an ask:
+ * moving the focus would take it out of whatever they were typing, and the
+ * pointer leaving again is the whole of the request to close.
  *
  * Its own component, and not because it is reused. `CallPanel` returns null
  * before it does anything when there is no call, so state belonging to the row
@@ -181,15 +206,25 @@ function MoreActions({
   const wrap = useRef<HTMLSpanElement | null>(null);
   const toggle = useRef<HTMLButtonElement | null>(null);
   const first = useRef<HTMLButtonElement | null>(null);
+  /* Which of the two ways in was used, read by the focus and by the close. */
+  const byPointer = useRef(false);
+  const settle = useRef<number | undefined>(undefined);
 
   /*
-    Focus follows the panel out. Without it the actions are on screen and the
-    next Tab is somewhere else entirely, which for a keyboard is the same as
-    the control having done nothing.
+    Focus follows the panel out, but only when a press is what opened it.
+
+    Without it a keyboard has the actions on screen and its next Tab somewhere
+    else entirely, which is the same as the control having done nothing. On a
+    hover it would be the opposite mistake: taking the caret out of whatever
+    somebody is in the middle of typing, because their pointer passed over a
+    chevron on the way somewhere.
   */
   useEffect(() => {
-    if (shown) first.current?.focus();
+    if (shown && !byPointer.current) first.current?.focus();
   }, [shown]);
+
+  /* A call ends while a hover is settling, and the strip goes with it. */
+  useEffect(() => () => window.clearTimeout(settle.current), []);
 
   useEffect(() => {
     if (!shown) return;
@@ -236,8 +271,50 @@ function MoreActions({
     };
   }, [shown]);
 
+  /*
+    Mouse only, on both of these. A tap fires a pointer event too, and a panel
+    that opened on the way to the press would be opening and closing under the
+    finger that is trying to use it. Touch gets the press, which is the way in
+    that was always here.
+  */
+  function enter(event: PointerEvent<HTMLSpanElement>) {
+    if (event.pointerType !== "mouse") return;
+    window.clearTimeout(settle.current);
+    // Already out, so this is the pointer coming back across the gap below
+    // the panel, and the clear above is the whole of the answer.
+    if (shown) return;
+    settle.current = window.setTimeout(() => {
+      byPointer.current = true;
+      setShown(true);
+    }, HOVER_SETTLE);
+  }
+
+  function leave(event: PointerEvent<HTMLSpanElement>) {
+    if (event.pointerType !== "mouse") return;
+    /*
+      Cancels a pending open as well as arming the close. The chevron sits
+      between the microphone and the way out, so a pointer crosses it to reach
+      either of them, and crossing is not asking.
+    */
+    window.clearTimeout(settle.current);
+    if (!byPointer.current) return;
+    settle.current = window.setTimeout(() => {
+      /*
+        The keyboard caught up with the pointer: somebody hovered this open and
+        then Tabbed into it. Closing now would take their focus with it.
+      */
+      if (wrap.current?.contains(document.activeElement) === true) return;
+      setShown(false);
+    }, HOVER_SETTLE);
+  }
+
   return (
-    <span className="call-panel__more" ref={wrap}>
+    <span
+      className="call-panel__more"
+      ref={wrap}
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+    >
       {/*
         `aria-expanded` and a name that stays put, the way the state line above
         does it and for the same reason: a button renamed under the cursor is
@@ -251,7 +328,13 @@ function MoreActions({
         aria-expanded={shown}
         aria-label="More voice actions"
         title={shown ? "Hide the other actions" : "More voice actions"}
-        onClick={() => setShown(!shown)}
+        onClick={() => {
+          // A press settles it now, and takes it off whatever the hover was
+          // in the middle of deciding.
+          window.clearTimeout(settle.current);
+          byPointer.current = false;
+          setShown(!shown);
+        }}
       >
         <ChevronIcon />
       </button>

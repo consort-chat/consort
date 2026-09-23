@@ -2,9 +2,19 @@
   The signed-in layout.
 
   Three columns and two fixed widths. 72px is the rail, which holds a 48px
-  avatar plus breathing room, and 240px is the channel list, which is wide
-  enough for a channel name and a voice icon without eating the pane. The
-  third column takes what is left.
+  avatar plus breathing room, and 272px is the channel list. The third column
+  takes what is left.
+
+  272 and not the 240 it was, because of the voice strip at the bottom of this
+  column (#104). That strip is the widest thing the column has to hold: a
+  status phrase, a channel name, and three 28px controls on the same line.
+  "Voice connected" is the phrase, and at 240px it had 108px of column to sit
+  in while wanting between 106px and 119px depending on which font the webview
+  resolves `system-ui` to. Fitting by a pixel is how it came to be cut in the
+  first place, so this is sized to the widest of those with room to spare
+  rather than to the narrowest with none: 136px of column against 119px of
+  words. The channel list gets the 32px too, which is a longer name before it
+  truncates and no worse anywhere.
 
   `minmax(0, 1fr)` rather than `1fr` on that third column. A grid track sized
   `1fr` refuses to shrink below the intrinsic width of its contents, so one
@@ -19,7 +29,7 @@
 */
 .shell {
   display: grid;
-  grid-template-columns: 72px 240px minmax(0, 1fr) auto auto;
+  grid-template-columns: 72px 272px minmax(0, 1fr) auto auto;
   height: 100%;
   background: var(--surface-base);
 }

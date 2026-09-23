@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -56,6 +56,27 @@ function disclosure() {
 /** Open it, which is what every test of what is behind it starts with. */
 async function openMore() {
   await userEvent.click(disclosure());
+}
+
+/**
+ * Long enough for a hover to have been meant, twice over.
+ *
+ * The component waits before it acts on a pointer, in both directions, so a
+ * test that asserts nothing happened has to outlast the wait or it is only
+ * asserting that it has not happened yet.
+ */
+const PAST_THE_SETTLE = 400;
+
+/** Sit out the wait above. */
+function settle() {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, PAST_THE_SETTLE);
+  });
+}
+
+/** The first of the two actions, named by what the panel writes out. */
+function deafen() {
+  return screen.queryByRole("button", { name: /^deafen$/i });
 }
 
 /** A call that is up, which is the only state the controls are drawn in. */
@@ -610,6 +631,146 @@ describe("CallPanel", () => {
           parseFloat(getComputedStyle(action).minHeight),
         ).toBeGreaterThanOrEqual(24);
       }
+    });
+
+    describe("opening on a hover, which is a second way in and not the only one", () => {
+      it("opens when the pointer settles on it", async () => {
+        // The ask from #109: the two actions a pointer away rather than a
+        // press away.
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+
+        expect(
+          await screen.findByRole("button", { name: /^deafen$/i }),
+        ).toBeVisible();
+      });
+
+      it("leaves the focus alone, unlike a press", async () => {
+        /*
+          The half that makes a hover safe to add beside the press. A pointer
+          crossing a chevron is not a request to move the caret, and somebody
+          typing in the room beside this would lose what they were mid-way
+          through.
+        */
+        panel(CONNECTED);
+        const before = document.activeElement;
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+
+        expect(deafen()).not.toHaveFocus();
+        expect(document.activeElement).toBe(before);
+      });
+
+      it("puts it away again when the pointer leaves", async () => {
+        // What opened it is what closes it. A hover that had to be pressed to
+        // undo would leave the panel sitting over the channel list.
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+        await userEvent.unhover(disclosure());
+
+        await settle();
+        expect(deafen()).toBeNull();
+      });
+
+      it("ignores a pointer that only crossed it", async () => {
+        /*
+          The chevron sits between the microphone and the way out, so every
+          pointer going to either passes over it. Opening on the crossing
+          would throw the panel over the channel list several times a minute.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await userEvent.unhover(disclosure());
+
+        await settle();
+        expect(deafen()).toBeNull();
+      });
+
+      it("leaves a panel that was pressed open where it is", async () => {
+        // A press is an ask, and stays answered until it is taken back. Only
+        // a hover is undone by the pointer going away.
+        panel(CONNECTED);
+
+        await openMore();
+        await userEvent.hover(disclosure());
+        await userEvent.unhover(disclosure());
+
+        await settle();
+        expect(deafen()).toBeVisible();
+      });
+
+      it("holds still once the keyboard has caught up with the pointer", async () => {
+        // Hovered open, then Tabbed into. Closing because the pointer moved on
+        // would take the focus out of the panel somebody is using.
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        const action = await screen.findByRole("button", { name: /^deafen$/i });
+        action.focus();
+        await userEvent.unhover(disclosure());
+
+        await settle();
+        expect(deafen()).toBeVisible();
+        expect(deafen()).toHaveFocus();
+      });
+
+      it("does not take a finger arriving for a hover", async () => {
+        /*
+          A tap fires a pointer event before it fires a click, so a finger
+          arrives over the control the same way a cursor does. Taken as a
+          hover it would open the panel on the way to the press and the press
+          would then shut what the finger had just opened, which on the second
+          tap is a panel a touchscreen cannot put away.
+
+          Fired rather than tapped: `userEvent` leaves the pointer over the
+          control after a tap, so a second tap in jsdom never arrives again and
+          the difference this guard makes would not show.
+        */
+        panel(CONNECTED);
+
+        fireEvent.pointerOver(disclosure(), { pointerType: "touch" });
+
+        await settle();
+        expect(deafen()).toBeNull();
+      });
+
+      it("takes a cursor arriving, which is the same event from a mouse", async () => {
+        // The control for the test above: the guard is on what kind of
+        // pointer it is, not on the event never being heard.
+        panel(CONNECTED);
+
+        fireEvent.pointerOver(disclosure(), { pointerType: "mouse" });
+
+        expect(
+          await screen.findByRole("button", { name: /^deafen$/i }),
+        ).toBeVisible();
+      });
+
+      it("still opens on a tap, which is the press it falls back to", async () => {
+        // Touch keeps the way in it always had.
+        panel(CONNECTED);
+
+        await userEvent.pointer({ target: disclosure(), keys: "[TouchA]" });
+
+        expect(deafen()).toBeVisible();
+      });
+
+      it("still opens from the keyboard, which hovers nothing", async () => {
+        // Why the hover is added beside the press rather than put in its
+        // place: this is the way in that has no pointer to offer.
+        panel(CONNECTED);
+
+        disclosure().focus();
+        await userEvent.keyboard("{Enter}");
+
+        expect(deafen()).toBeVisible();
+        expect(deafen()).toHaveFocus();
+      });
     });
 
     it("is not there at all when there is no call", () => {
