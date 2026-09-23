@@ -2099,8 +2099,8 @@ mod tests {
         // the payload beside it. Pinned because the mirror is written by
         // hand: a nested `change` object would typecheck on both sides and
         // draw nothing.
-        let said = system(&changed("m.room.name", json!({ "name": "tech" })))
-            .expect("a rename is drawn");
+        let said =
+            system(&changed("m.room.name", json!({ "name": "tech" }))).expect("a rename is drawn");
 
         assert_eq!(
             serde_json::to_value(&said).expect("a system message serialises"),
