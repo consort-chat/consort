@@ -215,16 +215,16 @@ export function RoomTimeline({
     Whether something said from a window of older history is at the live end
     of the room, where this pane is not looking.
 
-    Said by the pane rather than left to the jump that follows a send, because
-    that jump reports nothing: it is dropped in silence by a watcher that has
-    ended and by a room that closed as it arrived, and the command carrying it
-    answers the same way whether or not anything happened. The composer empties
-    only once the homeserver has the message, which makes an empty box with
-    nothing new in the room a state that otherwise never happens, and the
-    natural reading of it is that the message is gone.
+    Said rather than answered by moving them there. The composer empties only
+    once the homeserver has the message, which makes an empty box with nothing
+    new in the room a state that otherwise never happens, and the natural
+    reading of it is that the message is gone. Carrying somebody to the live
+    end to show them it is not would take away whatever they were reading, and
+    they were reading it on purpose.
 
     Cleared by a timeline arriving at the present, which is the one thing that
-    proves the way back was taken.
+    proves what was sent is drawn with everything else: the way back taken, or
+    the window read forwards until it caught up with the room.
   */
   const [sentAway, setSentAway] = useState(false);
   /*
@@ -349,6 +349,14 @@ export function RoomTimeline({
     again later.
   */
   const asked = useRef<string | null>(null);
+  /*
+    Whether the way back to the present has been asked for and not yet
+    arrived. What tells the timeline answering that press from one that reached
+    the present on its own: the first replaces the whole list and belongs at
+    the bottom, the second is a page appended under somebody who scrolled to
+    the end of what was loaded.
+  */
+  const returning = useRef(false);
   // So the box takes what somebody types next after pressing Reply. Without it
   // the control moves the conversation and then asks them to click again.
   const draftBox = useRef<HTMLTextAreaElement>(null);
@@ -631,10 +639,23 @@ export function RoomTimeline({
     either end of it, so neither of the anchors below applies: they are at the
     message they asked for, which the jump itself scrolls to. Coming back to
     the present is the opposite ask and lands at the bottom.
+
+    Asked for, rather than any timeline that arrives at the present. A window
+    read forwards to the live end stops being a window with nobody having
+    pressed anything, and that one is a page appended under somebody who
+    scrolled to the end of what was loaded. Those are the messages they were
+    scrolling towards, and landing at the bottom would skip every one of them.
   */
   useLayoutEffect(() => {
     if (!mine) return;
-    following.current = timeline.focus === undefined;
+    if (timeline.focus !== undefined) {
+      following.current = false;
+      oldest.current = undefined;
+      return;
+    }
+    if (!returning.current) return;
+    returning.current = false;
+    following.current = true;
     oldest.current = undefined;
   }, [timeline.focus, mine]);
 
@@ -1056,29 +1077,27 @@ export function RoomTimeline({
       setStaged(null);
       setAnswering(null);
       setEditing(null);
-      // Said, so no longer typing. Before the scroll rather than after it,
-      // because the room should stop showing this name the moment the message
-      // it was writing arrives.
+      // Said, so no longer typing. Before anything about where the message
+      // landed, because the room should stop showing this name the moment the
+      // message it was writing arrives.
       said.current = 0;
       void timelineTyping(channel.id, false).catch(() => {});
-      // Whatever they said belongs at the bottom, wherever they were reading.
-      following.current = true;
-      // Including out of a window of last March, which is where it does not
-      // belong: the message went to the live end of the room, and watching it
-      // not appear is worse than being moved to where it did.
-      if (timeline.focus !== undefined) {
-        // Said as well as asked for, because the ask can be dropped on the way
-        // and nothing answers back to say it was. An edit is left out: what it
-        // changed is the message in the window, which is on screen either way.
-        if (editing === null) setSentAway(true);
-        void timelinePresent().catch(() => {
-          // Nothing to add to what the pane is already saying, which does
-          // not depend on this having worked. An alert here would be about
-          // the jump and would read as the send having failed, which is the
-          // one thing it did not do: the box emptied because the homeserver
-          // has the message.
-        });
-      }
+      /*
+        Where the reader is is left alone, deliberately.
+
+        Somebody at the bottom of the room follows their message down, because
+        `following` already says they were there. Somebody reading further up
+        stays where they were reading: sending a message is not a request to
+        stop reading, and answering it by moving them is the thing they would
+        have to scroll back from every time.
+
+        A window of last March is the case where that is not enough on its
+        own, because the message went to the live end and there is nothing on
+        screen that could show it arriving. So the pane says where it went.
+        An edit is left out: what it changed is the message in the window,
+        which is on screen either way.
+      */
+      if (timeline.focus !== undefined && editing === null) setSentAway(true);
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     } finally {
@@ -1159,7 +1178,12 @@ export function RoomTimeline({
             type="button"
             className="timeline__elsewhere-back"
             onClick={() => {
+              returning.current = true;
               void timelinePresent().catch((raw: unknown) => {
+                // Nothing came back, so nothing is going to land at the
+                // bottom, and a later timeline reaching the present on its
+                // own is not this press arriving late.
+                returning.current = false;
                 setProblem(asCommandError(raw).message);
               });
             }}
