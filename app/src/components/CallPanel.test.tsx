@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -67,10 +67,18 @@ async function openMore() {
  */
 const PAST_THE_SETTLE = 400;
 
-/** Sit out the wait above. */
-function settle() {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, PAST_THE_SETTLE);
+/**
+ * Sit out the wait above.
+ *
+ * Inside `act`, because the wait is the whole point: when the panel does close
+ * on a pointer leaving, it closes from a timer rather than from anything the
+ * test did, and React has no other way to be told that update was expected.
+ */
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, PAST_THE_SETTLE);
+    });
   });
 }
 
