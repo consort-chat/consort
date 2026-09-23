@@ -9,6 +9,7 @@ import {
   type MemberProfile,
   type Participant,
 } from "../lib/api";
+import { keptOnScreen } from "../lib/floating";
 import { elapsedLabel, presenceLabel } from "../lib/labels";
 import { RoomAvatar } from "./RoomAvatar";
 import "./PersonMenu.css";
@@ -34,9 +35,6 @@ const LOUDEST = 250;
 
 /** How long to wait after a slider stops moving before writing it down. */
 const SETTLE_MS = 150;
-
-/** How far to keep the card from the edge of the window. */
-const GAP = 8;
 
 export interface PersonMenuProps {
   /**
@@ -225,11 +223,9 @@ export function PersonMenu({
   useLayoutEffect(() => {
     const node = menu.current;
     if (node === null) return;
-    const box = node.getBoundingClientRect();
-    setPlacement({
-      left: Math.max(GAP, Math.min(at.x, window.innerWidth - box.width - GAP)),
-      top: Math.max(GAP, Math.min(at.y, window.innerHeight - box.height - GAP)),
-    });
+    setPlacement(
+      keptOnScreen({ left: at.x, top: at.y }, node.getBoundingClientRect()),
+    );
   }, [at.x, at.y, percent, profile]);
 
   // Focus lands on the one control that does anything, so the card is usable

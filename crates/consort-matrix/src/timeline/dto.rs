@@ -56,9 +56,23 @@ pub struct Timeline {
     /// jumped into, where the history runs on in both directions.
     #[serde(default)]
     pub more_after: bool,
+    /// Membership changes (joins, invites, leaves, kicks, bans), drawn as
+    /// system lines rather than as messages.
+    ///
+    /// Oldest first, on the same terms as `messages`. A separate list rather
+    /// than folded into `messages`, because a `Message` is what somebody
+    /// wrote and a `SystemMessage` is Consort's own sentence about something
+    /// that happened; keeping them apart means one can change shape without
+    /// the other's serialised form moving. The interface merges the two by
+    /// `at` for drawing, which is an approximation: see
+    /// [`SystemMessage::at`] for what that costs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub system: Vec<SystemMessage>,
     /// The message this window was opened around, when it is not the present.
     ///
-    /// `None` for the room as it is normally drawn. Load-bearing rather than
+    /// `None` for the room as it is normally drawn, and for a window that has
+    /// been read forwards until it caught up with the live end, which is the
+    /// room normally drawn by another route. Load-bearing rather than
     /// informational: a reader looking at last March has to be told it is not
     /// the bottom of the room, because everything else about the two looks the
     /// same and a conversation that has stopped arriving is what a broken
@@ -436,4 +450,61 @@ pub enum MessageKind {
     /// what this is built from; what federation already handed to other
     /// servers is not recalled by any of it.
     Deleted,
+}
+
+/// One membership change in a room: a join, an invite, a leave, a kick or a
+/// ban.
+///
+/// Carries who did it and who it was done to as bare Matrix IDs, on the same
+/// terms as [`Message::sender`], rather than a composed sentence. The
+/// interface already resolves IDs to display names for the voice roster and
+/// for replies, and building the English here would mean building it again
+/// in every locale Consort ever gains; the two IDs are enough for the
+/// interface to write "so-and-so joined the room" in whatever language it is
+/// drawing in.
+///
+/// Only membership is read yet. Name, topic and avatar changes carry no
+/// event this reads, on the same terms `facts::message` leaves every other
+/// state event undrawn: see `facts::system` for why membership went first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemMessage {
+    /// The event ID. The React key, on the same terms as [`Message::id`].
+    pub id: String,
+    /// `origin_server_ts`, in milliseconds.
+    ///
+    /// Used only to place this line among the messages when the interface
+    /// draws the two together, which is an approximation rather than the
+    /// server's own order: see [`History`](super::History) for why messages
+    /// themselves are deliberately not sorted by this. A membership change
+    /// lands beside the messages nearest its timestamp rather than at its
+    /// exact position in the room's single timeline, which the two lists
+    /// held apart from each other cannot recover.
+    pub at: u64,
+    /// Who made the change: the sender of the `m.room.member` event.
+    ///
+    /// For a join this is also `subject`; for an invite, a kick or a ban it
+    /// is whoever sent the invitation, or made the removal.
+    pub actor: String,
+    /// Who the change is about: the event's state key.
+    pub subject: String,
+    /// What changed.
+    pub kind: SystemMessageKind,
+}
+
+/// What sort of membership change a [`SystemMessage`] reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemMessageKind {
+    /// `subject` joined the room, for the first time or again after having
+    /// left it.
+    Joined,
+    /// `actor` invited `subject`.
+    Invited,
+    /// `subject` left the room on their own.
+    Left,
+    /// `actor` removed `subject` from the room.
+    Kicked,
+    /// `actor` banned `subject`.
+    Banned,
 }

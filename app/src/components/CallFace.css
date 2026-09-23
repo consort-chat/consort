@@ -1,0 +1,164 @@
+/*
+  One person in a voice call, wherever they are drawn.
+
+  Two arrangements of the same face. A row for a list under a channel name, a
+  tile for a grid on the floating card, and no third thing: the difference is
+  how the parts sit, never what they are or what colour they take.
+
+  Size is not set here. Every call site asks for it with `--avatar-size`, which
+  is what that variable on `.avatar` exists for, and the rules below are
+  written against it so a 20px face and a 48px one are the same drawing.
+*/
+.call-face {
+  display: block;
+  min-width: 0;
+}
+
+/*
+  The grid is on the button rather than the row around it. A button that was
+  not the full width of the row would leave a strip of dead space beside every
+  name, which is worse than not being clickable at all because it looks
+  clickable and is not.
+*/
+.call-face__button {
+  display: grid;
+  /*
+    Two trailing columns that are only there when they are. `auto` collapses to
+    nothing for a row with no icon in it, so the names stay on one line and
+    neither column appears as an empty gutter down the whole list.
+
+    Two rather than one because they answer different questions. Muted and on
+    camera are both ordinary at once, so they cannot share a slot.
+  */
+  grid-template-columns: var(--avatar-size, 32px) minmax(0, 1fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: 2px var(--space-2);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.call-face__button:hover {
+  background: var(--surface-overlay);
+}
+
+.call-face__button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  A tile, for a grid of faces rather than a column of rows.
+
+  Wrapped rather than a second grid. The name takes a whole line, so the face
+  above it cannot share one and the two status icons below it cannot either,
+  which puts them side by side on a line of their own without either a wrapper
+  element or arithmetic against the avatar's size.
+*/
+.call-face[data-layout="tile"] .call-face__button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: center;
+  padding: var(--space-2) var(--space-1);
+  text-align: center;
+}
+
+.call-face[data-layout="tile"] .call-face__who {
+  flex: 0 0 100%;
+}
+
+/*
+  Somebody who has muted themselves.
+
+  Dimmed as well as marked. The glyph is the message and carries the label a
+  screen reader reads; this is what makes the row readable at a glance in a
+  list of eight names, without being loud enough to draw the eye away from
+  whoever is actually talking.
+*/
+.call-face[data-muted="true"] .call-face__who,
+.call-face[data-muted="true"] .call-face__flag {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.call-face__flag {
+  width: 12px;
+  height: 12px;
+}
+
+.call-face__avatar {
+  /*
+    Only the ring below moves, and only in colour. `box-shadow` is on the
+    compositor, so a list of twenty faces lighting up as a room talks costs
+    nothing in layout.
+  */
+  transition: box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+
+/*
+  The same green as the level meter's bar, and that is the point rather than a
+  coincidence: somebody who has just watched their own bar move is looking for
+  that colour, and a second green would read as a second thing.
+
+  A ring rather than a filled halo, so it reads at 20px. The glow is what makes
+  it visible against both the hovered row and the plain one without needing to
+  know which it is on.
+
+  Both distances come off `--avatar-size` so the ring is the same drawing on a
+  sidebar face and on a card three times the size. At 20px they work out to the
+  2px and 6px this was first written as. The colour and the argument for it do
+  not scale with anything.
+*/
+.call-face[data-speaking="true"] .call-face__avatar {
+  box-shadow:
+    0 0 0 max(2px, calc(var(--avatar-size, 32px) * 0.05)) var(--mint),
+    0 0 calc(var(--avatar-size, 32px) * 0.3) 1px var(--mint-glow);
+}
+
+/*
+  Somebody talking is not dimmed, whatever else is true of them. The dimming
+  above is for people who are quiet, and leaving it on a live speaker would be
+  the interface contradicting itself.
+*/
+.call-face[data-speaking="true"] .call-face__who {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.call-face__who {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  Whether the call can see somebody.
+
+  Dimmer than the mute glyph and never dimmed further, because unlike that one
+  it is drawn for everybody: at the weight of a status icon, a column of them
+  down a busy channel would be the loudest thing in the sidebar and would say
+  nothing, since most of the time most cameras are off.
+
+  A camera that is on is the exception and is drawn as one, in the colour the
+  interface uses for live things elsewhere.
+*/
+.call-face__camera {
+  width: 13px;
+  height: 13px;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.call-face__camera[data-on="true"] {
+  color: var(--mint);
+  opacity: 1;
+}

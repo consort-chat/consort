@@ -55,9 +55,12 @@ mod reactions;
 mod sending;
 mod thread;
 
-pub use dto::{Media, Message, MessageKind, Reaction, Thread, ThreadSummary, Timeline, Typing};
+pub use dto::{
+    Media, Message, MessageKind, Reaction, SystemMessage, SystemMessageKind, Thread, ThreadSummary,
+    Timeline, Typing,
+};
 pub use edits::Edits;
-pub use history::History;
+pub use history::{History, SystemHistory};
 pub use media::{Attachment, MAX_BYTES, bytes, media};
 pub use permalink::permalink;
 pub use reactions::Reactions;
@@ -362,9 +365,12 @@ where
                         // after a message from last March, and appending it
                         // there would draw the two as one conversation. It is
                         // read afresh when they come back to the present.
-                        let arrived = match loaded.focus {
-                            Some(_) => Vec::new(),
-                            None => loaded.read(&joined.timeline.events),
+                        let (arrived, system_arrived) = match loaded.focus {
+                            Some(_) => (Vec::new(), Vec::new()),
+                            None => (
+                                loaded.read(&joined.timeline.events),
+                                loaded.read_system(&joined.timeline.events),
+                            ),
                         };
                         let counted = loaded.count_replies(&joined.timeline.events);
                         let added = loaded.history.arrived(arrived);
@@ -374,13 +380,14 @@ where
                         // first would find nothing to mark and then watch the
                         // line below draw the words it was sent to remove.
                         let annotated = loaded.annotations(&joined.timeline.events);
+                        let system_added = loaded.system.arrived(system_arrived);
                         if added {
                             // A message can arrive answering something older
                             // than what is loaded, and the row above it has
                             // the same nothing to draw as any other reply.
                             loaded.resolve(&room).await;
                         }
-                        if added | counted | annotated {
+                        if added | counted | annotated | system_added {
                             loaded.publish(&on_change);
                         }
                         // A reaction in the room may be on the thread's root or
@@ -454,6 +461,14 @@ struct Loaded {
     /// The thread somebody has open, if any.
     open: Option<OpenThread>,
     history: History,
+    /// The membership changes loaded alongside `history`.
+    ///
+    /// Its own field rather than folded into `history`, because a join or a
+    /// leave is never re-read the way an undecryptable message is: `history`
+    /// carries the events that key arrivals and thread counts have to find
+    /// again by ID, and membership changes are never looked up after they
+    /// arrive.
+    system: SystemHistory,
     /// What people have reacted with, for every message annotated in anything
     /// this watcher has seen.
     ///
@@ -545,6 +560,7 @@ impl Loaded {
             me,
             open: None,
             history: History::new(),
+            system: SystemHistory::new(),
             reactions: Reactions::new(),
             edits: Edits::new(),
             waiting: HashMap::new(),
@@ -588,6 +604,18 @@ impl Loaded {
         }
 
         self.resolve(room).await;
+        // A window read forwards until the homeserver has nothing after it is
+        // not a window any more: what is loaded ends where the room does. Held
+        // on to, it says a reader at the newest message in the room is looking
+        // at older ones, and it goes on telling the sync arm to drop every
+        // message that arrives, so the room reads as frozen at its own bottom.
+        //
+        // Nothing arriving is lost to giving it up here. A sync that landed
+        // while the page was being read is still waiting on the broadcast
+        // receiver, and the loop reaches it with the window already gone.
+        if matches!(towards, Direction::Forward) && !self.more_after {
+            self.focus = None;
+        }
         self.loading(towards, false);
         self.publish(on_change);
     }
@@ -660,10 +688,19 @@ impl Loaded {
         };
 
         let arrived = self.read(&chunk);
+        let system_arrived = self.read_system(&chunk);
+        // Membership changes are left out of `drawable`: a page holding
+        // nothing but joins and leaves still asks for the next page.
         let drawable = !arrived.is_empty();
         match towards {
-            Direction::Backward => self.history.backfilled(arrived),
-            Direction::Forward => self.history.arrived(arrived),
+            Direction::Backward => {
+                self.history.backfilled(arrived);
+                self.system.backfilled(system_arrived);
+            }
+            Direction::Forward => {
+                self.history.arrived(arrived);
+                self.system.arrived(system_arrived);
+            }
         };
         // A page carries every kind of event, reactions among them, which is
         // how a message scrolled back to arrives with what is already on it.
@@ -700,6 +737,8 @@ impl Loaded {
             Ok(window) => {
                 self.history = History::new();
                 self.history.backfilled(window.messages);
+                self.system = SystemHistory::new();
+                self.system.backfilled(window.system);
                 self.more_before = window.back.is_some();
                 self.more_after = window.forward.is_some();
                 self.from = window.back;
@@ -732,6 +771,7 @@ impl Loaded {
         }
 
         self.history = History::new();
+        self.system = SystemHistory::new();
         self.focus = None;
         self.from = None;
         self.forward = None;
@@ -789,6 +829,15 @@ impl Loaded {
                 Some(message)
             })
             .collect()
+    }
+
+    /// One batch of events as membership changes.
+    ///
+    /// No waiting list of its own, unlike [`Self::read`]: a membership event
+    /// is never encrypted the way a message can be, so there is no key for
+    /// one of these to arrive late for.
+    fn read_system(&self, events: &[TimelineEvent]) -> Vec<SystemMessage> {
+        events.iter().filter_map(facts::system).collect()
     }
 
     /// Who this batch says is typing, when it says anything about it.
@@ -1181,6 +1230,7 @@ impl Loaded {
             room_id: self.room_id.clone(),
             answered: self.answers(&messages),
             messages,
+            system: self.system.messages().to_vec(),
             more_before: self.more_before,
             more_after: self.more_after,
             focus: self.focus.clone(),

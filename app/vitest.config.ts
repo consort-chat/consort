@@ -14,9 +14,59 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    /*
+      One stylesheet, processed rather than stubbed.
+
+      Vitest replaces CSS imports with nothing by default, which is right for
+      almost everything here: no test should turn on a colour. The exception is
+      a target size. WCAG 2.5.8 asks 24 by 24 CSS pixels of anything you have
+      to hit, this repository has been under it twice (#82, and #102 is still
+      open), and both times the control took its height from the words in it,
+      which is the shape where reading the rule and believing it is exactly
+      what fails. With the file processed, jsdom resolves the cascade and the
+      floor can be measured through the same import the component uses, so a
+      rule that stops matching fails the test as loudly as a number that drops.
+    */
+    css: { include: [/CallPanel\.css$/] },
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true,
+    /*
+      Two runs of the same suite, split on whether the test wants CSS.
+
+      Vitest replaces CSS imports with nothing, which is right for almost
+      everything: no test should turn on a colour. A target size is the
+      exception. WCAG 2.5.8 asks 24 by 24 CSS pixels of anything there is to
+      press, the row under a message has been under it three times (#82, and
+      #102 twice over), and every time the control took its height from the
+      words or the glyph inside it, which is the shape where reading the
+      stylesheet and believing it is exactly what fails. Processed, jsdom
+      resolves the cascade and the floor can be read back.
+
+      It cannot be switched on for everything, which is why this is a split
+      rather than one flag. `RoomTimeline.css` hides the message toolbar until
+      it is hovered, and `pointer-events: none` makes `userEvent` refuse to
+      press those controls: 65 tests fail on styling that is doing its job. So
+      `.css.test.tsx` is the name for a test that measures a stylesheet, and it
+      is the only kind that gets one.
+    */
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "behaviour",
+          include: ["src/**/*.test.{ts,tsx}"],
+          exclude: ["src/**/*.css.test.tsx"],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "styles",
+          include: ["src/**/*.css.test.tsx"],
+          css: true,
+        },
+      },
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "lcov"],

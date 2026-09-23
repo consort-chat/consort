@@ -492,11 +492,23 @@
   margin-top: var(--space-1);
 }
 
+/*
+  The height is the pill's, not the text's. At `--text-xs` with a pixel above
+  and below it stood 20.8px, under the 24px WCAG asks of a target (#102).
+
+  24 rather than the 28 the thread pill took: that one is alone on its line, and
+  this is a row of however many people reacted, wrapped, under every message
+  that has any. Four pixels each is the difference between a row that reads as
+  a footnote and one that reads as a toolbar, and 24 is what the rule asks for.
+  It is also what `.timeline__action` above already stands, so the things under
+  a message agree on a size.
+*/
 .timeline__reaction {
   display: flex;
   gap: var(--space-1);
   align-items: center;
-  padding: 1px var(--space-2);
+  min-height: 24px;
+  padding: 0 var(--space-2);
   background: var(--surface-raised);
   border: 1px solid var(--line-subtle);
   border-radius: 999px;
@@ -549,6 +561,13 @@
   display: grid;
   place-items: center;
   width: 26px;
+  /*
+    Height of its own, for the same reason as the pills. It had none at all: a
+    15px glyph and a border came to 17px, and in the row it stood at whatever
+    the pills beside it stretched it to. The width was always over the floor
+    and is untouched.
+  */
+  min-height: 24px;
   padding: 0;
   background: none;
   border: 1px solid transparent;
@@ -1511,4 +1530,20 @@
 
 .timeline__day-said {
   flex: none;
+}
+
+/*
+  One membership change: a join, an invite, a leave, a kick or a ban.
+
+  Quieter than either separator above, on purpose: a day divider and the
+  unread line are both about the reader's own place in the room, and this is
+  a fact about the room itself, closer in weight to a timestamp than to a
+  heading. No rule either side, so it reads as one small sentence among the
+  messages rather than as a break in them.
+*/
+.timeline__system {
+  margin: var(--space-1) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
 }

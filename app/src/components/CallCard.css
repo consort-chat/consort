@@ -1,0 +1,164 @@
+/*
+  The call you are in, floating over whatever you are reading.
+
+  Fixed rather than a cell in the shell's grid. It has to be able to sit
+  anywhere in the window, including over the pane, and it has to stay where it
+  was put while the thing underneath scrolls.
+
+  z-index 40, and the neighbours written down because there is no scale in
+  `tokens.css` to read them off: the settings dialog and the image viewer are
+  at 100, `PersonMenu` is at 60, `ReactionPicker` is at 20. Above the shell and
+  below the modals.
+
+  Below the person menu is the number that matters, and it is the sidebar's
+  menu it matters for: this is a stacking context, so the menu a face here
+  opens paints above the card whatever its own z-index says, but the one the
+  channel list opens is somewhere else in the tree and would go under the card
+  if the card outranked it.
+
+  Nothing here clips: no `overflow` on the card, so a menu can be taller than
+  the card it was opened from and still be read.
+*/
+.call-card {
+  --avatar-size: 48px;
+
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 40;
+  display: grid;
+  gap: var(--space-2);
+  width: 240px;
+  padding: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-raised);
+}
+
+/*
+  Expanded is one change said twice: bigger faces, and room for more of them
+  across. Nothing appears that was not there and nothing moves anywhere else,
+  which is what keeps a double-click reversible by another double-click.
+*/
+.call-card[data-expanded="true"] {
+  --avatar-size: 72px;
+
+  gap: var(--space-3);
+  width: 420px;
+  padding: var(--space-3);
+}
+
+.call-card__bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/*
+  The handle. A whole row of it rather than a grab dot in the corner, because
+  the thing somebody reaches for to move a card is its title bar.
+*/
+.call-card__grip {
+  display: block;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  text-align: left;
+  cursor: grab;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.call-card__grip:active {
+  cursor: grabbing;
+}
+
+.call-card__grip:hover {
+  background: var(--surface-overlay);
+}
+
+.call-card__grip:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.call-card__where {
+  display: block;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-card__control {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font-size: var(--text-base);
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.call-card__control:hover {
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+/* Expanded, said on the control that did it as well as by the card's size. */
+.call-card__control[aria-pressed="true"] {
+  color: var(--text-secondary);
+  background: var(--surface-overlay);
+}
+
+.call-card__control:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.call-card__glyph {
+  width: 13px;
+  height: 13px;
+}
+
+/*
+  Reflowed by how many people are in the call rather than by the width of the
+  window, because the window is the size somebody made it and the card is a
+  fixed thing floating on top of it.
+
+  `auto-fill` against the face's own size, so the number across follows how big
+  a face is: three to a row while the card is its usual size, four once it has
+  been expanded and the faces have grown with it.
+*/
+.call-card__people {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fill,
+    minmax(calc(var(--avatar-size) + var(--space-4)), 1fr)
+  );
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+  A join in flight, which has a channel and no roster yet. Amber and the same
+  word the sidebar uses, because a card that said nothing for the several
+  seconds a join can take would read as one that had failed to draw.
+*/
+.call-card__waiting {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--amber);
+}

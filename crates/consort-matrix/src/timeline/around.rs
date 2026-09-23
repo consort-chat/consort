@@ -23,7 +23,7 @@ use matrix_sdk::Room;
 use matrix_sdk::ruma::UInt;
 
 use crate::error::{Error, Result};
-use crate::timeline::dto::Message;
+use crate::timeline::dto::{Message, SystemMessage};
 use crate::timeline::facts;
 
 /// How many messages to ask for around the one being gone to.
@@ -38,6 +38,9 @@ const CONTEXT: u32 = 24;
 pub struct Around {
     /// Oldest first, like everything else here.
     pub messages: Vec<Message>,
+    /// The membership changes in this same window, on the same terms as
+    /// `messages`.
+    pub system: Vec<SystemMessage>,
     /// Where a page older than this window starts, or `None` at the beginning
     /// of the room.
     pub back: Option<String>,
@@ -75,17 +78,20 @@ pub async fn around(room: &Room, event_id: &str) -> Result<Around> {
     // the room's timeline drawn at a different place in it. A window that drew
     // them would be the same conversation twice, once here and once in the
     // panel, which is the whole reason `facts` has two readings.
-    let messages = window
+    let events: Vec<&matrix_sdk::deserialized_responses::TimelineEvent> = window
         .events_before
         .iter()
         .rev()
         .chain(window.event.iter())
         .chain(window.events_after.iter())
-        .filter_map(facts::message)
         .collect();
+
+    let messages = events.iter().copied().filter_map(facts::message).collect();
+    let system = events.iter().copied().filter_map(facts::system).collect();
 
     Ok(Around {
         messages,
+        system,
         back: window.prev_batch_token,
         forward: window.next_batch_token,
     })

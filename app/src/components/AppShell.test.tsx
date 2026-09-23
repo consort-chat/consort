@@ -158,12 +158,16 @@ function shell({
   showRoom?: { roomId: string } | null;
   onRoomShown?: Mock<() => void>;
 } = {}) {
-  const draw = (nextRooms: Rooms, nextShowRoom: { roomId: string } | null) => (
+  const draw = (
+    nextRooms: Rooms,
+    nextShowRoom: { roomId: string } | null,
+    nextCall: Call,
+  ) => (
     <AppShell
       profile={profile}
       rooms={nextRooms}
       connection={{ state: "live" }}
-      call={call}
+      call={nextCall}
       selfAudio={selfAudio}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
@@ -183,14 +187,22 @@ function shell({
       onSignedOut={onSignedOut}
     />
   );
-  const { container, rerender } = render(draw(rooms, showRoom));
+  const { container, rerender } = render(draw(rooms, showRoom, call));
   /*
-    Hand the same shell a new room list, which is what every sync that touches
-    anything does. A second `render` would be a second shell, and the bug this
-    exists for is about what an existing one does when the tree arrives again.
+    Hand the same shell a new tree rather than rendering a second one, which
+    would be a second shell. A room list arriving again is what every sync
+    that touches anything does, and the shell holds state the call moves
+    through, so some of what it does is only visible across a change rather
+    than in one render.
   */
-  const again = (next: { rooms?: Rooms; showRoom?: { roomId: string } | null }) =>
-    rerender(draw(next.rooms ?? rooms, next.showRoom ?? showRoom));
+  const again = (next: {
+    rooms?: Rooms;
+    showRoom?: { roomId: string } | null;
+    call?: Call;
+  }) =>
+    rerender(
+      draw(next.rooms ?? rooms, next.showRoom ?? showRoom, next.call ?? call),
+    );
   return {
     container,
     rerender,
@@ -760,6 +772,117 @@ describe("AppShell", () => {
       const panel = screen.getByRole("group", { name: /voice connection/i });
       expect(panel).toHaveTextContent(/voice channel/i);
       expect(panel).not.toHaveTextContent(LOUNGE);
+    });
+
+    it("floats a card for the call it is in", () => {
+      // Wiring rather than behaviour: everything the card draws is already in
+      // the shell, and a card that has to subscribe to anything is a card in
+      // the wrong place.
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+      });
+
+      expect(screen.getByRole("region", { name: "Call in Lounge" })).toBeVisible();
+    });
+
+    it("floats no card when there is no call", () => {
+      shell({ rooms: withVoice });
+
+      expect(screen.queryByRole("region", { name: /^Call in/ })).toBeNull();
+    });
+
+    describe("putting the card away and getting it back", () => {
+      const IN_LOUNGE: Call = {
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [],
+        trouble: null,
+      };
+      const card = () => screen.queryByRole("region", { name: /^Call in/ });
+      /*
+        Inside the voice strip, and named exactly. The channel list has a
+        "Read Lounge without connecting" on it, which a looser match takes as
+        well and which is not this.
+      */
+      const line = () =>
+        within(screen.getByRole("group", { name: /voice connection/i })).getByRole(
+          "button",
+          { name: /^(voice connected|connecting)$/i },
+        );
+
+      it("brings the card back from the panel after it has been hidden", async () => {
+        // The whole point. Hiding used to be a door that only shut: the card
+        // drew nothing, its own controls went with it, and there was nothing
+        // anywhere else that asked for it back short of rejoining the call.
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+
+        await userEvent.click(
+          screen.getByRole("button", { name: "Hide the call card" }),
+        );
+        expect(card()).toBeNull();
+
+        await userEvent.click(line());
+
+        expect(card()).toBeVisible();
+      });
+
+      it("puts the card away from the same control", async () => {
+        // One control, both directions. Pressing it while the card is up has
+        // to do something, or it is a button that is dead most of the time.
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+        expect(card()).toBeVisible();
+
+        await userEvent.click(line());
+
+        expect(card()).toBeNull();
+      });
+
+      it("says which way it will go, all the way through", async () => {
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+        expect(line()).toHaveAttribute("aria-expanded", "true");
+
+        await userEvent.click(line());
+        expect(line()).toHaveAttribute("aria-expanded", "false");
+
+        await userEvent.click(line());
+        expect(line()).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("brings the card back for the next call on its own", async () => {
+        // Putting it away is about this call. A card that stayed shut until
+        // somebody found the control again would be a setting nobody chose.
+        const { again } = shell({ rooms: withVoice, call: IN_LOUNGE });
+
+        await userEvent.click(
+          screen.getByRole("button", { name: "Hide the call card" }),
+        );
+        expect(card()).toBeNull();
+
+        again({ call: { state: "disconnected" } });
+        again({ call: { state: "connecting", roomId: LOUNGE } });
+
+        expect(card()).toBeVisible();
+      });
+
+      it("offers nothing to press when there is no call", () => {
+        // The card only exists inside a call, so neither does the way back.
+        shell({ rooms: withVoice });
+
+        expect(
+          screen.queryByRole("group", { name: /voice connection/i }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", {
+            name: /^(voice connected|connecting)$/i,
+          }),
+        ).toBeNull();
+      });
     });
 
     it("shows no connection panel for a join that failed", () => {

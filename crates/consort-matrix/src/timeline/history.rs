@@ -28,7 +28,7 @@
 
 use std::collections::HashSet;
 
-use crate::timeline::dto::{Message, MessageKind};
+use crate::timeline::dto::{Message, MessageKind, SystemMessage};
 
 /// The messages loaded for one room.
 #[derive(Debug, Default)]
@@ -191,6 +191,61 @@ pub fn redact(message: &mut Message, by: Option<&str>) -> bool {
     message.deleted_by = by.map(str::to_owned);
     message.kind = MessageKind::Deleted;
     true
+}
+
+/// The membership changes loaded for one room.
+///
+/// [`History`]'s smaller sibling: the same arrival-order-kept, dedup-by-ID
+/// rules apply and are not restated here, only the ways this is simpler.
+/// There is no [`History::replace`] or [`History::forget`], because neither
+/// has a membership-change equivalent yet: a `SystemMessage` is never held as
+/// a wait for a key the way an undecryptable message is, so nothing here is
+/// ever swapped or withdrawn after arriving.
+#[derive(Debug, Default)]
+pub struct SystemHistory {
+    messages: Vec<SystemMessage>,
+    seen: HashSet<String>,
+}
+
+impl SystemHistory {
+    /// Nothing loaded yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// What is loaded, oldest first.
+    pub fn messages(&self) -> &[SystemMessage] {
+        &self.messages
+    }
+
+    /// Add what a sync just delivered, at the live end. See
+    /// [`History::arrived`].
+    pub fn arrived(&mut self, batch: Vec<SystemMessage>) -> bool {
+        let fresh: Vec<SystemMessage> = batch
+            .into_iter()
+            .filter(|message| self.seen.insert(message.id.clone()))
+            .collect();
+        if fresh.is_empty() {
+            return false;
+        }
+
+        self.messages.extend(fresh);
+        true
+    }
+
+    /// Add a page of history, at the old end. See [`History::backfilled`].
+    pub fn backfilled(&mut self, batch: Vec<SystemMessage>) -> bool {
+        let fresh: Vec<SystemMessage> = batch
+            .into_iter()
+            .filter(|message| self.seen.insert(message.id.clone()))
+            .collect();
+        if fresh.is_empty() {
+            return false;
+        }
+
+        self.messages.splice(..0, fresh);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -489,5 +544,74 @@ mod tests {
 
         assert!(history.arrived(vec![said("$1", "first"), said("$2", "second")]));
         assert_eq!(bodies(&history), vec!["first", "second"]);
+    }
+}
+
+#[cfg(test)]
+mod system_history_tests {
+    use super::*;
+    use crate::timeline::dto::SystemMessageKind;
+
+    fn joined(id: &str, subject: &str) -> SystemMessage {
+        SystemMessage {
+            id: id.to_owned(),
+            at: 1_000,
+            actor: subject.to_owned(),
+            subject: subject.to_owned(),
+            kind: SystemMessageKind::Joined,
+        }
+    }
+
+    fn subjects(history: &SystemHistory) -> Vec<&str> {
+        history
+            .messages()
+            .iter()
+            .map(|message| message.subject.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_fresh_system_history_holds_nothing() {
+        assert!(SystemHistory::new().messages().is_empty());
+    }
+
+    #[test]
+    fn what_arrives_goes_on_the_end() {
+        let mut history = SystemHistory::new();
+
+        history.arrived(vec![joined("$1", "ada"), joined("$2", "bragoodle")]);
+        history.arrived(vec![joined("$3", "grace")]);
+
+        assert_eq!(subjects(&history), vec!["ada", "bragoodle", "grace"]);
+    }
+
+    #[test]
+    fn a_page_of_history_goes_on_the_front() {
+        let mut history = SystemHistory::new();
+        history.arrived(vec![joined("$3", "grace")]);
+
+        history.backfilled(vec![joined("$1", "ada"), joined("$2", "bragoodle")]);
+
+        assert_eq!(subjects(&history), vec!["ada", "bragoodle", "grace"]);
+    }
+
+    #[test]
+    fn a_membership_change_that_arrives_twice_is_held_once() {
+        let mut history = SystemHistory::new();
+        history.arrived(vec![joined("$1", "ada")]);
+
+        history.backfilled(vec![joined("$0", "grace"), joined("$1", "ada")]);
+
+        assert_eq!(subjects(&history), vec!["grace", "ada"]);
+    }
+
+    #[test]
+    fn a_batch_of_nothing_new_is_reported_as_nothing_new() {
+        let mut history = SystemHistory::new();
+        history.arrived(vec![joined("$1", "ada")]);
+
+        assert!(!history.arrived(vec![joined("$1", "ada")]));
+        assert!(!history.arrived(Vec::new()));
+        assert!(!history.backfilled(Vec::new()));
     }
 }

@@ -1,6 +1,6 @@
-import { Fragment, useState, type RefObject } from "react";
+import { Fragment, useMemo, useState, type RefObject } from "react";
 
-import type { Message, MessageKind, Participant } from "../lib/api";
+import type { Message, MessageKind, Participant, SystemMessage } from "../lib/api";
 import { flashMessage } from "../lib/flash";
 import { withAddressesNamed } from "../lib/matrixTo";
 import { useRoomLinks } from "../lib/roomLinks";
@@ -433,6 +433,95 @@ function DaySeparator({ label }: { label: string }) {
 }
 
 /**
+ * What a [`SystemMessage`] says, in words.
+ *
+ * `actor` and `subject` are already resolved to display names, or left as
+ * Matrix IDs when the room has not told us a name: see the caller, which
+ * reads both out of the same `names` lookup the bylines use.
+ *
+ * Exported for the tests, on the same terms as [`group`] above: the sentence
+ * is the part worth pinning and the markup around it is not.
+ */
+export function systemMessageText(
+  kind: SystemMessage["kind"],
+  actor: string,
+  subject: string,
+): string {
+  switch (kind) {
+    case "joined":
+      return `${subject} joined the room`;
+    case "invited":
+      return `${actor} invited ${subject}`;
+    case "left":
+      return `${subject} left the room`;
+    case "kicked":
+      return `${actor} removed ${subject} from the room`;
+    case "banned":
+      return `${actor} banned ${subject}`;
+  }
+}
+
+/**
+ * One membership change, drawn as a quiet line rather than as a message.
+ *
+ * No byline, no bubble, no actions: a join or a leave is not something
+ * anybody said, and drawing it as though it were would put "Add a reaction"
+ * under a sentence Consort wrote about the room rather than a person wrote
+ * in it.
+ */
+function SystemMessageLine({
+  message,
+  names,
+}: {
+  message: SystemMessage;
+  names: Record<string, string>;
+}) {
+  const actor = names[message.actor] ?? message.actor;
+  const subject = names[message.subject] ?? message.subject;
+
+  return (
+    <p className="timeline__system" role="note">
+      {systemMessageText(message.kind, actor, subject)}
+    </p>
+  );
+}
+
+/** One row of the timeline: a run of messages, or one membership change. */
+type Row =
+  | { kind: "group"; at: number; group: Group }
+  | { kind: "system"; at: number; message: SystemMessage };
+
+/**
+ * Groups and membership changes, in the order they are drawn in.
+ *
+ * Merged by `at` rather than by the room's own event order, which neither
+ * side carries any more once split into two lists: see [`SystemMessage.at`]
+ * in `lib/api.ts` for what that costs. `Array.prototype.sort` is stable, so
+ * two rows landing on the same millisecond keep the order they were built
+ * in, which is groups before the system lines beside them. An arbitrary
+ * choice between two things that are, at that resolution, simultaneous.
+ *
+ * A membership change can only land between two groups, never inside one:
+ * a group's `at` is its first message's, fixed once the group exists, so a
+ * join in the middle of somebody's burst of messages sorts to one side of
+ * the whole burst rather than the exact message it fell between. Accepted
+ * rather than fixed, on the same terms as the approximation above: a
+ * membership change inside somebody else's burst of messages is rare, and
+ * splitting a group to seat one correctly would be a second sorting rule
+ * for a case this uncommon.
+ */
+function merged(groups: Group[], system: SystemMessage[]): Row[] {
+  const rows: Row[] = [
+    ...groups.map((group): Row => ({ kind: "group", at: group.at, group })),
+    ...system.map(
+      (message): Row => ({ kind: "system", at: message.at, message }),
+    ),
+  ];
+  rows.sort((left, right) => left.at - right.at);
+  return rows;
+}
+
+/**
  * Whether the reader could correct this message, if a caller offers the way.
  *
  * Their own, and one of the three kinds an edit can replace. The list is not a
@@ -561,6 +650,7 @@ function DeletedBody({ by }: { by: string | null }) {
  */
 export function MessageGroups({
   groups,
+  system,
   names,
   roomId,
   selfId,
@@ -580,6 +670,14 @@ export function MessageGroups({
   newDay,
 }: {
   groups: Group[];
+  /**
+   * Membership changes to draw alongside `groups`, merged in by when they
+   * happened.
+   *
+   * Absent inside the thread panel, which has no membership changes of its
+   * own to show: a join or a leave is a room-level event, not a reply.
+   */
+  system?: SystemMessage[];
   /** Display names by user ID, for whoever the room has told us about. */
   names: Record<string, string>;
   roomId: string;
@@ -735,6 +833,10 @@ export function MessageGroups({
   // For the quoted line above a reply, which cannot hold a badge and so says
   // what the badge would have said.
   const { nameOf } = useRoomLinks();
+  const rows = useMemo(
+    () => merged(groups, system ?? []),
+    [groups, system],
+  );
 
   /** Open the panel under this control, or shut the one already open there. */
   function toggle(id: string, at: Anchor) {
@@ -797,7 +899,18 @@ export function MessageGroups({
 
   return (
     <>
-      {groups.map((one) => {
+      {rows.map((row) => {
+        if (row.kind === "system") {
+          return (
+            <SystemMessageLine
+              key={row.message.id}
+              message={row.message}
+              names={names}
+            />
+          );
+        }
+
+        const one = row.group;
         // Their display name if the room has told us one, and their user ID if
         // it has not. Whichever it is, it is what the byline draws, what the
         // group announces itself as, and what the card is about.

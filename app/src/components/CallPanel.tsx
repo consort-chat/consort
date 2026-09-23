@@ -152,6 +152,16 @@ interface Props {
    * spends an evening blaming their microphone.
    */
   audioProblem?: string | null;
+  /**
+   * Whether the floating call card is on screen.
+   *
+   * Only ever read, never set here. The state line below is what turns it on
+   * and off, and it is here rather than on the card because a card that has
+   * drawn nothing has no control left to press.
+   */
+  cardShown: boolean;
+  /** Show the call card, or put it away. One control, both directions. */
+  onToggleCard: () => void;
   onDisconnect: () => void;
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
@@ -179,6 +189,8 @@ export function CallPanel({
   channelName,
   selfAudio,
   audioProblem = null,
+  cardShown,
+  onToggleCard,
   onDisconnect,
   onSetMuted,
   onSetDeafened,
@@ -206,11 +218,39 @@ export function CallPanel({
         {/*
           The state is written out, not only coloured. Mint against amber is
           the reinforcement, never the message.
+
+          A button, because it is also the way the call card comes back. The
+          card can be put away from its own corner and there was nothing that
+          brought it back, which left somebody in a call with no card and
+          nowhere to ask for one. This line is the answer: it is already the
+          one thing on screen that is about the call and nothing else, it is
+          in the part of the sidebar that never scrolls, and it costs no room
+          in a strip that has none to give.
+
+          `aria-expanded` rather than a label that changes, the way the room
+          header does it: the name stays put across the press, which is what
+          stops a screen reader announcing it as a different button each time.
+
+          Both directions on the one control. Pressing it while the card is up
+          puts it away, which is what "toggle" has to mean for the press to be
+          worth making twice.
         */}
-        <span className="call-panel__state">
+        <button
+          type="button"
+          className="call-panel__state"
+          aria-expanded={cardShown}
+          title={cardShown ? "Hide the call card" : "Show the call card"}
+          onClick={onToggleCard}
+        >
           <i className="call-panel__dot" aria-hidden="true" />
-          {callLabel(call)}
-        </span>
+          {/*
+            The words in a span of their own, so the ellipsis has a block to
+            happen in. `text-overflow` on the flex container above it never
+            reached the bare text node, so a label too long for the column was
+            cut off mid-letter rather than trailed off.
+          */}
+          <span className="call-panel__label">{callLabel(call)}</span>
+        </button>
         <span className="call-panel__channel" title={channelName ?? undefined}>
           {channelName ?? "Voice channel"}
         </span>
