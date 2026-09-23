@@ -49,12 +49,18 @@ function inCall(participants: Participant[]): Call {
   return { state: "connected", roomId: LOUNGE, participants, trouble: null };
 }
 
-function card(call: Call, speaking?: ReadonlySet<string>) {
+function card(
+  call: Call,
+  speaking?: ReadonlySet<string>,
+  away: { shown?: boolean; onHide?: () => void } = {},
+) {
   return (
     <CallCard
       call={call}
       channelName="Lounge"
       selfId="@bob:example.org"
+      shown={away.shown ?? true}
+      onHide={away.onHide ?? vi.fn()}
       onOpenRoom={vi.fn()}
       {...(speaking === undefined ? {} : { speaking })}
     />
@@ -132,6 +138,8 @@ describe("CallCard", () => {
           call={inCall([])}
           channelName={null}
           selfId="@bob:example.org"
+          shown
+          onHide={vi.fn()}
           onOpenRoom={vi.fn()}
         />,
       );
@@ -357,30 +365,122 @@ describe("CallCard", () => {
   });
 
   describe("closing it", () => {
-    it("hides the card for the rest of the call", async () => {
-      render(card(inCall([person("@ada:example.org", "Ada")])));
+    it("asks to be put away rather than putting itself away", async () => {
+      // The shell holds whether the card is up, because the control that
+      // brings it back is in the sidebar and has to outlive this markup.
+      const onHide = vi.fn();
+      render(
+        card(inCall([person("@ada:example.org", "Ada")]), undefined, {
+          onHide,
+        }),
+      );
 
       await userEvent.click(
         screen.getByRole("button", { name: "Hide the call card" }),
+      );
+
+      expect(onHide).toHaveBeenCalledTimes(1);
+    });
+
+    it("draws nothing once it has been put away", () => {
+      render(
+        card(inCall([person("@ada:example.org", "Ada")]), undefined, {
+          shown: false,
+        }),
       );
 
       expect(onScreen()).toBeNull();
     });
 
-    it("brings it back for the next call", async () => {
-      // Closing it is about this call. A card that stayed shut until a reload
-      // would be a feature somebody switched off by accident.
+    it("comes back where it was left", () => {
+      // The place it was moved to survives being put away, because the hook
+      // outlives the markup. A card that came back in its opening corner
+      // would have thrown away the drag that put it somewhere useful.
       const { rerender } = render(
         card(inCall([person("@ada:example.org", "Ada")])),
       );
+      stubLayout({ left: 300, top: 200 });
+      fireEvent.keyDown(screen.getByRole("button", { name: /^Move the/ }), {
+        key: "ArrowRight",
+      });
+      expect(onScreen()).toHaveStyle({ left: "316px" });
 
-      await userEvent.click(
-        screen.getByRole("button", { name: "Hide the call card" }),
+      rerender(
+        card(inCall([person("@ada:example.org", "Ada")]), undefined, {
+          shown: false,
+        }),
       );
-      rerender(card({ state: "disconnected" }));
-      rerender(card({ state: "connecting", roomId: LOUNGE }));
+      rerender(card(inCall([person("@ada:example.org", "Ada")])));
 
-      expect(onScreen()).toBeVisible();
+      expect(onScreen()).toHaveStyle({ left: "316px" });
+    });
+
+    it("comes back on screen when the window shrank while it was away", () => {
+      // The edge case the clamp is for. A card dragged against the right edge
+      // and then put away is not being measured by anything: the node is
+      // gone, so the resize listener has nothing to read and the place it was
+      // left at stays where it was. Give the window back smaller and that
+      // place is outside it, so a restore that trusted the old coordinate
+      // would put the card where nobody can reach it, and the only way back
+      // would be the drag handle that went with it.
+      const people = [person("@ada:example.org", "Ada")];
+      const { rerender } = render(card(inCall(people)));
+      stubLayout({ left: 300, top: 200 });
+
+      const handle = screen.getByRole("button", { name: /^Move the/ });
+      fireEvent.pointerDown(handle, { clientX: 320, clientY: 210 });
+      fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+      fireEvent.pointerUp(window);
+      expect(onScreen()).toHaveStyle({
+        left: `${1024 - 240 - 8}px`,
+        top: `${768 - 160 - 8}px`,
+      });
+
+      rerender(card(inCall(people), undefined, { shown: false }));
+      expect(onScreen()).toBeNull();
+
+      // Smaller, with nothing on screen to notice. The listener runs and
+      // finds no card to measure, which is what leaves the stale coordinate.
+      Object.defineProperty(window, "innerWidth", {
+        value: 640,
+        configurable: true,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        value: 480,
+        configurable: true,
+      });
+      fireEvent(window, new Event("resize"));
+
+      /*
+        The card that comes back is a new node, so the stub above went with
+        the old one. On the prototype for this one restore, because the size
+        has to be readable the moment the layout effect runs and there is no
+        gap between the commit and that effect to put it back in.
+      */
+      const measured = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = function () {
+        return {
+          left: 0,
+          top: 0,
+          width: 240,
+          height: 160,
+          right: 240,
+          bottom: 160,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+      try {
+        rerender(card(inCall(people)));
+      } finally {
+        Element.prototype.getBoundingClientRect = measured;
+      }
+
+      expect(onScreen()).toHaveStyle({
+        left: `${640 - 240 - 8}px`,
+        top: `${480 - 160 - 8}px`,
+      });
     });
 
     it("leaves the call alone", () => {

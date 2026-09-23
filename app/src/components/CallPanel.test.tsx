@@ -11,23 +11,41 @@ function panel(
   call: Call,
   channelName: string | null = "Lounge",
   selfAudio: SelfAudio = HEARING,
+  cardShown = true,
 ) {
   const onDisconnect = vi.fn();
   const onSetMuted = vi.fn();
   const onSetDeafened = vi.fn();
   const onSetAway = vi.fn();
+  const onToggleCard = vi.fn();
   const { container } = render(
     <CallPanel
       call={call}
       channelName={channelName}
       selfAudio={selfAudio}
+      cardShown={cardShown}
+      onToggleCard={onToggleCard}
       onDisconnect={onDisconnect}
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
       onSetAway={onSetAway}
     />,
   );
-  return { container, onDisconnect, onSetMuted, onSetDeafened, onSetAway };
+  return {
+    container,
+    onDisconnect,
+    onSetMuted,
+    onSetDeafened,
+    onSetAway,
+    onToggleCard,
+  };
+}
+
+/** The state line, which is also the way the call card comes back. */
+function stateLine() {
+  return screen.queryByRole("button", {
+    name: /^(voice connected|connecting)$/i,
+  });
 }
 
 /** A call that is up, which is the only state the controls are drawn in. */
@@ -314,5 +332,93 @@ describe("CallPanel", () => {
     const { container } = panel({ state: "disconnected" });
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  describe("the state line, which is the way the call card comes back", () => {
+    it("is a button rather than a line of text", () => {
+      // The card can be put away from its own corner, and before this there
+      // was nothing anywhere that brought it back.
+      panel(CONNECTED);
+
+      expect(stateLine()).toBeVisible();
+    });
+
+    it("says whether the card is up, rather than only drawing it", () => {
+      panel(CONNECTED, "Lounge", HEARING, true);
+
+      expect(stateLine()).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("says when the card is away", () => {
+      panel(CONNECTED, "Lounge", HEARING, false);
+
+      expect(stateLine()).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("puts the card away when it is up", async () => {
+      // Both directions on the one control. A press that only ever showed
+      // would be a control that does nothing most of the time it is pressed.
+      const { onToggleCard } = panel(CONNECTED, "Lounge", HEARING, true);
+
+      await userEvent.click(stateLine()!);
+
+      expect(onToggleCard).toHaveBeenCalledTimes(1);
+    });
+
+    it("brings the card back when it is away", async () => {
+      const { onToggleCard } = panel(CONNECTED, "Lounge", HEARING, false);
+
+      await userEvent.click(stateLine()!);
+
+      expect(onToggleCard).toHaveBeenCalledTimes(1);
+    });
+
+    it("can be reached and pressed from the keyboard", async () => {
+      // The first thing in the strip, so one Tab from the top of it. A
+      // control only a pointer can reach is a control some people do not have.
+      const { onToggleCard } = panel(CONNECTED);
+
+      await userEvent.tab();
+      expect(stateLine()).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard(" ");
+
+      expect(onToggleCard).toHaveBeenCalledTimes(2);
+    });
+
+    it("says what pressing it will do, and says it fresh each way", () => {
+      panel(CONNECTED, "Lounge", HEARING, true);
+      panel(CONNECTED, "Lounge", HEARING, false);
+
+      const [up, away] = screen.getAllByRole("button", {
+        name: /voice connected/i,
+      });
+      expect(up).toHaveAttribute("title", "Hide the call card");
+      expect(away).toHaveAttribute("title", "Show the call card");
+    });
+
+    it("stands at least the 24px WCAG asks of a target", () => {
+      /*
+        Measured off the real stylesheet rather than trusted. jsdom resolves
+        the cascade, so this catches a rule that stopped matching as well as
+        one whose number went under: #82 was this exact failure on the thread
+        pill and #102 is still open on the reaction pills, and both were text
+        that took its height from the words in it.
+      */
+      panel(CONNECTED);
+
+      const line = stateLine();
+      expect(line).not.toBeNull();
+      expect(
+        parseFloat(getComputedStyle(line!).minHeight),
+      ).toBeGreaterThanOrEqual(24);
+    });
+
+    it("is not there at all when there is no call", () => {
+      // Nothing to show and nothing to bring back, so no control for it.
+      panel({ state: "disconnected" });
+
+      expect(stateLine()).toBeNull();
+    });
   });
 });

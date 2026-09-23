@@ -149,12 +149,12 @@ function shell({
   onDismissRefusal?: Mock<() => void>;
   showRoom?: { roomId: string } | null;
 } = {}) {
-  const { container, rerender } = render(
+  const draw = (nextCall: Call = call) => (
     <AppShell
       profile={profile}
       rooms={rooms}
       connection={{ state: "live" }}
-      call={call}
+      call={nextCall}
       selfAudio={selfAudio}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
@@ -171,9 +171,19 @@ function shell({
       onDismissRefusal={onDismissRefusal}
       showRoom={showRoom}
       onSignedOut={onSignedOut}
-    />,
+    />
   );
-  return { container, rerender, onSignedOut, onJoinVoice, onLeaveVoice };
+  const { container, rerender } = render(draw());
+  return {
+    container,
+    rerender,
+    // The shell holds state the call moves through, so some of what it does
+    // is only visible across a change of call rather than in one render.
+    again: (nextCall: Call) => rerender(draw(nextCall)),
+    onSignedOut,
+    onJoinVoice,
+    onLeaveVoice,
+  };
 }
 
 describe("AppShell", () => {
@@ -698,6 +708,94 @@ describe("AppShell", () => {
       shell({ rooms: withVoice });
 
       expect(screen.queryByRole("region", { name: /^Call in/ })).toBeNull();
+    });
+
+    describe("putting the card away and getting it back", () => {
+      const IN_LOUNGE: Call = {
+        state: "connected",
+        roomId: LOUNGE,
+        participants: [],
+        trouble: null,
+      };
+      const card = () => screen.queryByRole("region", { name: /^Call in/ });
+      /*
+        Inside the voice strip, and named exactly. The channel list has a
+        "Read Lounge without connecting" on it, which a looser match takes as
+        well and which is not this.
+      */
+      const line = () =>
+        within(screen.getByRole("group", { name: /voice connection/i })).getByRole(
+          "button",
+          { name: /^(voice connected|connecting)$/i },
+        );
+
+      it("brings the card back from the panel after it has been hidden", async () => {
+        // The whole point. Hiding used to be a door that only shut: the card
+        // drew nothing, its own controls went with it, and there was nothing
+        // anywhere else that asked for it back short of rejoining the call.
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+
+        await userEvent.click(
+          screen.getByRole("button", { name: "Hide the call card" }),
+        );
+        expect(card()).toBeNull();
+
+        await userEvent.click(line());
+
+        expect(card()).toBeVisible();
+      });
+
+      it("puts the card away from the same control", async () => {
+        // One control, both directions. Pressing it while the card is up has
+        // to do something, or it is a button that is dead most of the time.
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+        expect(card()).toBeVisible();
+
+        await userEvent.click(line());
+
+        expect(card()).toBeNull();
+      });
+
+      it("says which way it will go, all the way through", async () => {
+        shell({ rooms: withVoice, call: IN_LOUNGE });
+        expect(line()).toHaveAttribute("aria-expanded", "true");
+
+        await userEvent.click(line());
+        expect(line()).toHaveAttribute("aria-expanded", "false");
+
+        await userEvent.click(line());
+        expect(line()).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("brings the card back for the next call on its own", async () => {
+        // Putting it away is about this call. A card that stayed shut until
+        // somebody found the control again would be a setting nobody chose.
+        const { again } = shell({ rooms: withVoice, call: IN_LOUNGE });
+
+        await userEvent.click(
+          screen.getByRole("button", { name: "Hide the call card" }),
+        );
+        expect(card()).toBeNull();
+
+        again({ state: "disconnected" });
+        again({ state: "connecting", roomId: LOUNGE });
+
+        expect(card()).toBeVisible();
+      });
+
+      it("offers nothing to press when there is no call", () => {
+        // The card only exists inside a call, so neither does the way back.
+        shell({ rooms: withVoice });
+
+        expect(
+          screen.queryByRole("group", { name: /voice connection/i }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", {
+            name: /^(voice connected|connecting)$/i,
+          }),
+        ).toBeNull();
+      });
     });
 
     it("shows no connection panel for a join that failed", () => {

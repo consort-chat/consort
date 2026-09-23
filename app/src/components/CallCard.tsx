@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useLayoutEffect,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -71,6 +70,16 @@ interface Props {
   speaking?: ReadonlySet<string>;
   /** Whoever is signed in, so a person's card can tell when it is about them. */
   selfId: string;
+  /**
+   * Whether to draw it at all.
+   *
+   * Owned by the shell rather than held here, because the control that brings
+   * it back is the call panel's: a card that has drawn nothing has no button
+   * left to press, so the state has to outlive the markup.
+   */
+  shown: boolean;
+  /** Put it away. The shell decides what that means and when it ends. */
+  onHide: () => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
 }
@@ -93,27 +102,18 @@ export function CallCard({
   channelName,
   speaking = NOBODY,
   selfId,
+  shown,
+  onHide,
   onOpenRoom,
 }: Props) {
   const drag = useDraggable();
   const [expanded, setExpanded] = useState(false);
-  const [hidden, setHidden] = useState(false);
   // Which face was clicked, and where to draw the card about them. One at a
   // time, for the reason the channel list keeps one.
   const [opened, setOpened] = useState<{
     person: Participant;
     at: { x: number; y: number };
   } | null>(null);
-
-  /*
-    A card that was closed is closed for this call and not for good. Reset as
-    the next join goes out rather than when it lands, because that is the
-    moment somebody asked for a call and so the moment they would expect the
-    card back.
-  */
-  useEffect(() => {
-    if (call.state === "connecting") setHidden(false);
-  }, [call.state]);
 
   /*
     Expanding makes it wider, and a card parked against the right edge grows
@@ -126,12 +126,12 @@ export function CallCard({
     drag.keepInView();
     // The function and not the hook's whole answer, which is a fresh object
     // every render and would make this run after every one of them.
-  }, [expanded, drag.keepInView]);
+  }, [expanded, shown, drag.keepInView]);
 
   // The same condition the call panel draws itself on. A second rule for when
   // there is a call is a second thing to keep in step with the first.
   if (call.state === "disconnected" || call.state === "failed") return null;
-  if (hidden) return null;
+  if (!shown) return null;
 
   const where = channelName ?? "Voice channel";
   // A join in flight has no roster yet. The card is drawn anyway, because the
@@ -219,13 +219,17 @@ export function CallCard({
           Hiding, not leaving. A card that covers the conversation and cannot
           be put away is worse than no card, and the sidebar still says you are
           in a call either way.
+
+          Which is also where it comes back from: the call panel's state line
+          is the other end of this, so putting the card away is a thing with
+          two directions rather than a door that only shuts.
         */}
         <button
           type="button"
           className="call-card__control"
           aria-label="Hide the call card"
           title="Hide"
-          onClick={() => setHidden(true)}
+          onClick={onHide}
         >
           &times;
         </button>

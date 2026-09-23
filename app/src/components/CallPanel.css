@@ -29,17 +29,65 @@
   Mint rather than the violet used for selection, because this is not a
   selection: it is a live connection, and mint is what the account strip
   already uses for exactly that.
+
+  A button now, so it carries a button's reset: this strip's look is the
+  colour and the weight below, and none of the chrome a control comes with.
+
+  28px, which is the height every other control in this strip stands at and
+  comfortably over the 24px WCAG asks of a target. The words are 13px and sit
+  on one line, so left to themselves they came to about 18px, which is the
+  shape that fails 2.5.8 (#82 was the same mistake on the thread pill). The
+  height is the control's rather than the text's, so it can be big enough to
+  hit without getting louder. Stretched across the column for the same reason:
+  the width is free here, and a wider target is a cheaper one.
 */
 .call-panel__state {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
   overflow: hidden;
+  font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--mint);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
+/*
+  The words, in a block of their own.
+
+  `text-overflow` never reached them while they were a bare text node inside
+  the flex container above: an anonymous flex item is not the block the
+  property needs, so a label wider than the column was cut off mid-letter
+  instead of trailing away. `min-width: 0` because a flex item will not shrink
+  below its content without it, which is the other half of the same clip.
+*/
+.call-panel__label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+  The surface only. Mint is this line's whole message and the one colour the
+  voice work reserves, so a hover that changed it would be spending the signal
+  on a pointer being nearby.
+*/
+.call-panel__state:hover {
+  background: var(--surface-raised);
+}
+
+.call-panel__state:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
 }
 
 .call-panel__dot {
