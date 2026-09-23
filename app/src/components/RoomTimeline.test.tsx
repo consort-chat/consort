@@ -1936,6 +1936,60 @@ describe("a room that is not showing the present", () => {
     await waitFor(() => expect(timelinePresent).toHaveBeenCalled());
   });
 
+  it("says where the message went when the way back is not taken", async () => {
+    // The box empties only once the homeserver has the message, so an empty
+    // box with nothing new in the room is a state that otherwise never
+    // happens, and the natural reading of it is that the message is gone.
+    timelinePresent.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+
+    expect(
+      await screen.findByText(/went to the end of the room/i),
+    ).toBeVisible();
+    // Not as a failure. The message did go, and an alert about the jump that
+    // followed it would say the opposite of what happened.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("stops saying it once the room has been back to the present", async () => {
+    // Otherwise the next window somebody jumps into, about nothing they sent,
+    // carries the same sentence.
+    timelinePresent.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+    await screen.findByText(/went to the end of the room/i);
+
+    await arrive(timeline([said("$2", BOB, "quite")]));
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    expect(screen.getByText(/showing older messages/i)).toBeVisible();
+    expect(
+      screen.queryByText(/went to the end of the room/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says nothing of the sort about an edit made in a window", async () => {
+    // An edit changes the message being read, which is in the window and on
+    // screen. Nothing went anywhere nobody is looking.
+    timelinePresent.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    await arrive(timeline([said("$1", BOB, "teh typo")], { focus: "$1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    await userEvent.clear(screen.getByRole("textbox"));
+    await userEvent.type(screen.getByRole("textbox"), "the typo");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(timelineEdit).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/went to the end of the room/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("goes to a message a reply names but does not draw", async () => {
     // The row is drawn from what the room looked up, so it says who wrote it
     // and what they said. Pressing it is the only way to the message itself.

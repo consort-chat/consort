@@ -212,6 +212,22 @@ export function RoomTimeline({
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   /*
+    Whether something said from a window of older history is at the live end
+    of the room, where this pane is not looking.
+
+    Said by the pane rather than left to the jump that follows a send, because
+    that jump reports nothing: it is dropped in silence by a watcher that has
+    ended and by a room that closed as it arrived, and the command carrying it
+    answers the same way whether or not anything happened. The composer empties
+    only once the homeserver has the message, which makes an empty box with
+    nothing new in the room a state that otherwise never happens, and the
+    natural reading of it is that the message is gone.
+
+    Cleared by a timeline arriving at the present, which is the one thing that
+    proves the way back was taken.
+  */
+  const [sentAway, setSentAway] = useState(false);
+  /*
     Which thread has been asked for and not yet arrived. `threadOpen` answers
     immediately, because it is a message to the room's watcher in Rust rather
     than a fetch, so the command settling says nothing about whether the panel
@@ -826,6 +842,14 @@ export function RoomTimeline({
     following.current = false;
   }, [focus, timeline.messages, timeline.loading, mine]);
 
+  /*
+    Back at the present, so whatever was sent from a window is drawn with
+    everything else and there is nothing left to say about where it went.
+  */
+  useEffect(() => {
+    if (timeline.focus === undefined) setSentAway(false);
+  }, [timeline.focus]);
+
   // Nothing but the passing of time takes the tick off the copy control.
   useEffect(() => {
     if (copied === null) return;
@@ -1043,7 +1067,17 @@ export function RoomTimeline({
       // belong: the message went to the live end of the room, and watching it
       // not appear is worse than being moved to where it did.
       if (timeline.focus !== undefined) {
-        void timelinePresent().catch(() => {});
+        // Said as well as asked for, because the ask can be dropped on the way
+        // and nothing answers back to say it was. An edit is left out: what it
+        // changed is the message in the window, which is on screen either way.
+        if (editing === null) setSentAway(true);
+        void timelinePresent().catch(() => {
+          // Nothing to add to what the pane is already saying, which does
+          // not depend on this having worked. An alert here would be about
+          // the jump and would read as the send having failed, which is the
+          // one thing it did not do: the box emptied because the homeserver
+          // has the message.
+        });
       }
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
@@ -1111,8 +1145,15 @@ export function RoomTimeline({
       */}
       {mine && timeline.focus !== undefined && (
         <div className="timeline__elsewhere">
-          <p className="timeline__elsewhere-said">
+          {/*
+            A live region because the second sentence arrives without anything
+            else on screen changing: the box empties, and for somebody reading
+            with a screen reader that is the whole of it. Polite rather than an
+            alert, which would announce a send that worked as a failure.
+          */}
+          <p className="timeline__elsewhere-said" role="status">
             Showing older messages.
+            {sentAway && " Your message went to the end of the room."}
           </p>
           <button
             type="button"
