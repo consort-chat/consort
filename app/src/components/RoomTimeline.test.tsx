@@ -326,7 +326,15 @@ describe("RoomTimeline", () => {
     // on the way out is about a room nobody is reading any more.
     timelineTyping.mockRejectedValue({ message: "gone", detail: "gone" });
     timelineClose.mockRejectedValue({ message: "gone", detail: "gone" });
-    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
+    const { unmount } = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 
     unmount();
