@@ -29,6 +29,11 @@ const timelineSend = vi.hoisted(() => vi.fn());
 const timelineReply = vi.hoisted(() => vi.fn());
 const timelineEdit = vi.hoisted(() => vi.fn());
 const timelineCopyLink = vi.hoisted(() => vi.fn());
+// The two halves of a reaction pill: the first one on a key, and taking a
+// key back. Which of them a press is depends on whether this session already
+// has an annotation on it.
+const timelineReact = vi.hoisted(() => vi.fn());
+const timelineUnreact = vi.hoisted(() => vi.fn());
 const timelineMarkRead = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
@@ -65,6 +70,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineReply,
   timelineEdit,
   timelineCopyLink,
+  timelineReact,
+  timelineUnreact,
   timelineMarkRead,
   memberNames,
   memberAvatar,
@@ -74,11 +81,18 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
 }));
 
-import { RoomTimeline } from "./RoomTimeline";
+import { COPIED_FOR, RoomTimeline } from "./RoomTimeline";
 import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
-import type { Channel, Message, Thread, Timeline, Typing } from "../lib/api";
+import type {
+  Channel,
+  Message,
+  Reaction,
+  Thread,
+  Timeline,
+  Typing,
+} from "../lib/api";
 
 const GENERAL = "!general:example.org";
 const ADA = "@ada:example.org";
@@ -203,6 +217,8 @@ beforeEach(() => {
   timelineReply.mockReset().mockResolvedValue(undefined);
   timelineEdit.mockReset().mockResolvedValue(undefined);
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
+  timelineReact.mockReset().mockResolvedValue(undefined);
+  timelineUnreact.mockReset().mockResolvedValue(undefined);
   timelineMarkRead.mockReset().mockResolvedValue(undefined);
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada", [BOB]: "Bob" });
   memberAvatar.mockReset().mockResolvedValue(null);
@@ -260,6 +276,22 @@ describe("RoomTimeline", () => {
     await waitFor(() => expect(resendState).toHaveBeenCalled());
   });
 
+  it("says why a room would not open", async () => {
+    // The one failure that leaves the pane with nothing in it, so the
+    // alternative is an empty room that reads as a quiet one. The sentence
+    // shown is the one written for a person, never the homeserver's code.
+    timelineOpen.mockRejectedValue({
+      message: "You are not in that room.",
+      detail: "M_FORBIDDEN: not in room",
+    });
+    await pane();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "You are not in that room.",
+    );
+    expect(screen.queryByText(/M_FORBIDDEN/)).not.toBeInTheDocument();
+  });
+
   it("closes the room when it goes", async () => {
     const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
@@ -267,6 +299,21 @@ describe("RoomTimeline", () => {
     unmount();
 
     await waitFor(() => expect(timelineClose).toHaveBeenCalled());
+  });
+
+  it("goes quietly when neither the close nor the last typing notice is taken", async () => {
+    // Both are swallowed on purpose, and both still have to be asked for: the
+    // room has to stop being watched and the name has to come down. A failure
+    // on the way out is about a room nobody is reading any more.
+    timelineTyping.mockRejectedValue({ message: "gone", detail: "gone" });
+    timelineClose.mockRejectedValue({ message: "gone", detail: "gone" });
+    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
+    await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+
+    unmount();
+
+    await waitFor(() => expect(timelineClose).toHaveBeenCalled());
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
   });
 
   it("draws messages in the order they were said", async () => {
@@ -627,6 +674,33 @@ describe("RoomTimeline", () => {
     expect(timelineEarlier).toHaveBeenCalled();
   });
 
+  it("says nothing when the page above will not come", async () => {
+    // Swallowed on purpose: the watcher has gone, which is what a scroll
+    // landing at the same moment as a room change is.
+    timelineEarlier.mockRejectedValue({ message: "gone", detail: "gone" });
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+
+    await scrollTo(50);
+
+    await waitFor(() => expect(timelineEarlier).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("draws a sender's user ID when their name cannot be looked up", async () => {
+    // Swallowed on purpose too, and this is what makes it right: a user ID is
+    // still something a person recognises, so there is something to draw. An
+    // alert about a display name would be worse than the ID.
+    memberNames.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+
+    await arrive(timeline([said("$1", ADA, "hello")]));
+
+    expect(await screen.findByRole("button", { name: ADA })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("keeps the reader on the message they were reading when a page lands", async () => {
     // A page arrives above them and moves everything down by its own height.
     // Holding scrollTop instead would leave them at the top of a page they
@@ -972,6 +1046,21 @@ describe("RoomTimeline", () => {
     expect(await screen.findByRole("dialog", { name: ADA })).toBeVisible();
   });
 
+  it("closes the card again", async () => {
+    // Escape rather than a second press on the name, because the card is
+    // drawn over the control that opened it.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+    await userEvent.click(await screen.findByRole("button", { name: "Ada" }));
+    await screen.findByRole("dialog", { name: "Ada" });
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Ada" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("draws the clock time beside a group", async () => {
     await pane();
 
@@ -1038,6 +1127,22 @@ describe("opening a thread", () => {
     ).not.toBeDisabled();
   });
 
+  it("takes presses again when the thread could not be asked for at all", async () => {
+    // Cleared here as well as on the channel, because a command that failed
+    // publishes nothing and the control would otherwise keep turning.
+    threadOpen.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    await arrive(timeline([withThread()]));
+
+    await userEvent.click(screen.getByRole("button", { name: /3 replies/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /3 replies/i }),
+      ).not.toBeDisabled(),
+    );
+  });
+
   it("says who is typing", async () => {
     await pane();
 
@@ -1098,6 +1203,35 @@ describe("opening a thread", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
+  });
+
+  it("keeps the box working when the room will not take a typing notice", async () => {
+    // Swallowed on purpose, both ways round. A name that failed to appear
+    // beside a room is not news, and an alert about one would interrupt the
+    // message being written.
+    timelineTyping.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    const box = screen.getByRole("textbox");
+
+    await userEvent.type(box, "hello");
+    await userEvent.clear(box);
+
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, true);
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, false);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("sends the message even when saying it stopped typing fails", async () => {
+    // The notice is the smaller half of the send, and the message went. An
+    // alert here would read as the message having failed.
+    timelineTyping.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+
+    expect(timelineSend).toHaveBeenCalledWith(GENERAL, "quite");
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
 
@@ -1510,6 +1644,22 @@ describe("sending an attachment", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("says why the picker would not open", async () => {
+    // A picker that cannot open and a picker that was closed look identical
+    // from here, so the one that failed has to say so.
+    pickAttachment.mockRejectedValue({
+      message: "No file picker is available here.",
+      detail: "xdg-desktop-portal is not running",
+    });
+    await pane();
+
+    await userEvent.click(screen.getByRole("button", { name: "Attach a file" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No file picker is available here.",
+    );
+  });
+
   it("sends the file with the box as its caption", async () => {
     pickAttachment.mockResolvedValue(CHOSEN);
     await pane();
@@ -1789,6 +1939,27 @@ describe("copying a message address", () => {
       screen.queryByRole("button", { name: "Link copied" }),
     ).not.toBeInTheDocument();
   });
+
+  it("takes the tick off again on its own", async () => {
+    // Nothing but the passing of time does. A copy has no second half to wait
+    // for, and the control has to come back for the next message.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    try {
+      await pane();
+      await arrive(timeline([said("$1", ADA, "the original")]));
+      await user.click(screen.getByRole("button", { name: "Copy link" }));
+      await screen.findByRole("button", { name: "Link copied" });
+
+      await act(async () => {
+        vi.advanceTimersByTime(COPIED_FOR);
+      });
+
+      expect(screen.getByRole("button", { name: "Copy link" })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("going to a message somebody linked", () => {
@@ -1867,6 +2038,22 @@ describe("going to a message somebody linked", () => {
     await arrive(timeline([said("$1", ADA, "the one"), said("$2", BOB, "next")]));
 
     expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("says why the window around a message could not be fetched", async () => {
+    // A link into a room can name something this account cannot read. The
+    // window never arrives, so without this the press does nothing at all.
+    timelineGoTo.mockRejectedValue({
+      message: "That message is not in this room.",
+      detail: "M_NOT_FOUND",
+    });
+    await focused({ eventId: "$missing" });
+
+    await arrive(timeline([said("$1", ADA, "the one")]));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That message is not in this room.",
+    );
   });
 });
 
@@ -1973,5 +2160,124 @@ describe("a room that is not showing the present", () => {
 
     expect(scrollIntoView).toHaveBeenCalled();
     expect(timelineGoTo).not.toHaveBeenCalled();
+  });
+
+  it("says why it could not come back to the present", async () => {
+    // The only way out of a window, so a press that does nothing strands
+    // somebody in last March with no other route to the bottom.
+    timelinePresent.mockRejectedValue({
+      message: "This room is no longer being watched.",
+      detail: "no watcher",
+    });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /back to the present/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This room is no longer being watched.",
+    );
+  });
+
+  it("still sends from a window when coming back to the present fails", async () => {
+    // Swallowed there rather than drawn, because the message did go. An alert
+    // about the scroll that followed it would read as the send having failed.
+    timelinePresent.mockRejectedValue({ message: "gone", detail: "gone" });
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+
+    expect(timelineSend).toHaveBeenCalledWith(GENERAL, "quite");
+    await waitFor(() => expect(timelinePresent).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says nothing when the page below will not come", async () => {
+    // The same swallow as the page above, for the same reason: a scroll
+    // landing at the same moment as a room change is not worth a sentence.
+    timelineLater.mockRejectedValue({ message: "gone", detail: "gone" });
+    fakeScrolling(900, 300);
+    await pane();
+    await arrive(
+      timeline([said("$1", ADA, "last March")], {
+        focus: "$1",
+        moreAfter: true,
+      }),
+    );
+
+    await scrollTo(600);
+
+    await waitFor(() => expect(timelineLater).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+describe("reacting to a message", () => {
+  /** A message carrying one key, as the room publishes it. */
+  function reacted(reaction: Reaction): Message {
+    return { ...said("$1", ADA, "the question"), reactions: [reaction] };
+  }
+
+  /** The pill, whose name is its key and its count: the glyph itself is hidden. */
+  function pill(): HTMLElement {
+    return screen.getByRole("button", { name: "👍, 1" });
+  }
+
+  it("adds a key this session has not used", async () => {
+    await pane();
+    await arrive(timeline([reacted({ key: "👍", count: 1 })]));
+
+    await userEvent.click(pill());
+
+    expect(timelineReact).toHaveBeenCalledWith(GENERAL, "$1", "👍");
+    expect(timelineUnreact).not.toHaveBeenCalled();
+  });
+
+  it("takes back the one this session already has", async () => {
+    // A pill is one control, and the annotation this session holds is what
+    // decides which of the two a press is. The event ID is what gets redacted.
+    await pane();
+    await arrive(timeline([reacted({ key: "👍", count: 1, mine: "$mine" })]));
+
+    await userEvent.click(pill());
+
+    expect(timelineUnreact).toHaveBeenCalledWith(GENERAL, "$mine");
+    expect(timelineReact).not.toHaveBeenCalled();
+  });
+
+  it("says why a reaction did not land", async () => {
+    // The pills are drawn from what the room published, so a press that
+    // failed changes nothing on screen. Without a sentence it reads as a
+    // control that does nothing.
+    timelineReact.mockRejectedValue({
+      message: "You are not in that room.",
+      detail: "M_FORBIDDEN",
+    });
+    await pane();
+    await arrive(timeline([reacted({ key: "👍", count: 1 })]));
+
+    await userEvent.click(pill());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "You are not in that room.",
+    );
+  });
+
+  it("says why one could not be taken back", async () => {
+    timelineUnreact.mockRejectedValue({
+      message: "The homeserver would not remove it.",
+      detail: "M_FORBIDDEN",
+    });
+    await pane();
+    await arrive(timeline([reacted({ key: "👍", count: 1, mine: "$mine" })]));
+
+    await userEvent.click(pill());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The homeserver would not remove it.",
+    );
   });
 });
