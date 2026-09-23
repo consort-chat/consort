@@ -2610,9 +2610,15 @@ describe("a room that is not showing the present", () => {
     );
   });
 
-  it("still sends from a window when coming back to the present fails", async () => {
-    // Swallowed there rather than drawn, because the message did go. An alert
-    // about the scroll that followed it would read as the send having failed.
+  it("sends from a window without reaching for the way back at all", async () => {
+    // Rigged to fail, and never called. A send used to carry the reader to the
+    // live end to show them their message land, and this test was written for
+    // that: the scroll failing was swallowed, because an alert about it would
+    // have read as the send having failed. #101 took the scroll away and says
+    // where the message went instead, so the swallow has nothing left to
+    // swallow. What is worth pinning now is the independence itself. A way
+    // back that is broken is not a send that is broken, and the only thing
+    // keeping those two apart is the send path never touching it.
     timelinePresent.mockRejectedValue({ message: "gone", detail: "gone" });
     await pane();
     await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
@@ -2620,7 +2626,10 @@ describe("a room that is not showing the present", () => {
     await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
 
     expect(timelineSend).toHaveBeenCalledWith(GENERAL, "quite");
-    await waitFor(() => expect(timelinePresent).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/went to the end of the room/i),
+    ).toBeVisible();
+    expect(timelinePresent).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
