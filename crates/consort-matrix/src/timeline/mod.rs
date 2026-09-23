@@ -56,7 +56,7 @@ mod sending;
 mod thread;
 
 pub use dto::{
-    Media, Message, MessageKind, Reaction, SystemMessage, SystemMessageKind, Thread, ThreadSummary,
+    Media, Message, MessageKind, Reaction, SystemChange, SystemMessage, Thread, ThreadSummary,
     Timeline, Typing,
 };
 pub use edits::Edits;

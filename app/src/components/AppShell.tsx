@@ -185,6 +185,17 @@ interface Props {
    * Absent when nothing has been clicked, which is almost always.
    */
   showRoom?: { roomId: string } | null;
+  /**
+   * Say that the room above has been shown, so the ask is not made again.
+   *
+   * The effect that reads `showRoom` re-runs on every room list, deliberately,
+   * so that a notification about a room joined a moment ago is retried rather
+   * than lost. The retry has no way of its own to know it has already
+   * succeeded, so an ask nobody takes back drags the selection to that room on
+   * every sync for the rest of the session (#103). Only the shell knows it
+   * landed; only the caller can spend it.
+   */
+  onRoomShown?: () => void;
   onSignedOut: () => void;
 }
 
@@ -225,6 +236,7 @@ export function AppShell({
   callRefused,
   onDismissRefusal,
   showRoom = null,
+  onRoomShown,
   onSignedOut,
 }: Props) {
   /*
@@ -381,8 +393,8 @@ export function AppShell({
   */
   useEffect(() => {
     if (showRoom === null) return;
-    openRoom(showRoom.roomId);
-  }, [showRoom, openRoom]);
+    if (openRoom(showRoom.roomId)) onRoomShown?.();
+  }, [showRoom, openRoom, onRoomShown]);
 
   /*
     The right of the window holds one thing at a time, which is what every
@@ -399,6 +411,15 @@ export function AppShell({
   }
   // Stable, because the thread panel watches it in an effect.
   const hideInfo = useCallback(() => setInfoOpen(false), []);
+  /*
+    The pane has the message a link asked for, so the ask is done with. Kept
+    until then rather than cleared where it is set, because the pane is keyed
+    on the room and `follow` changes both at once: clearing on a room change
+    would have to lose a race with the press arriving beside it.
+
+    Stable, because the pane calls this from an effect that watches it.
+  */
+  const spendFocus = useCallback(() => setFocus(null), []);
 
   /*
     Putting the card away is about this call and not for good. Reset as the
@@ -603,6 +624,7 @@ export function AppShell({
             channel={channel}
             selfId={profile.user_id}
             focus={focus}
+            onFocusTaken={spendFocus}
             onOpenRoom={openRoom}
             infoOpen={infoOpen}
             onToggleInfo={toggleInfo}

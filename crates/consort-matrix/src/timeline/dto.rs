@@ -452,20 +452,21 @@ pub enum MessageKind {
     Deleted,
 }
 
-/// One membership change in a room: a join, an invite, a leave, a kick or a
-/// ban.
+/// One thing that happened to a room rather than in it: somebody's membership
+/// changing, or the room's name, topic or picture changing.
 ///
-/// Carries who did it and who it was done to as bare Matrix IDs, on the same
-/// terms as [`Message::sender`], rather than a composed sentence. The
-/// interface already resolves IDs to display names for the voice roster and
-/// for replies, and building the English here would mean building it again
-/// in every locale Consort ever gains; the two IDs are enough for the
-/// interface to write "so-and-so joined the room" in whatever language it is
-/// drawing in.
+/// Carries the people involved as bare Matrix IDs, on the same terms as
+/// [`Message::sender`], rather than a composed sentence. The interface already
+/// resolves IDs to display names for the voice roster and for replies, and
+/// building the English here would mean building it again in every locale
+/// Consort ever gains; the IDs are enough for the interface to write
+/// "so-and-so joined the room" in whatever language it is drawing in.
 ///
-/// Only membership is read yet. Name, topic and avatar changes carry no
-/// event this reads, on the same terms `facts::message` leaves every other
-/// state event undrawn: see `facts::system` for why membership went first.
+/// `actor` is the only thing every one of these has in common, because it is
+/// the only thing every one of them is: somebody did this. What was done sits
+/// in [`SystemChange`], which carries whatever that particular change is
+/// about. A membership change is about a person and a rename is about a new
+/// name, and those are not the same field wearing two hats.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemMessage {
@@ -476,35 +477,91 @@ pub struct SystemMessage {
     /// Used only to place this line among the messages when the interface
     /// draws the two together, which is an approximation rather than the
     /// server's own order: see [`History`](super::History) for why messages
-    /// themselves are deliberately not sorted by this. A membership change
-    /// lands beside the messages nearest its timestamp rather than at its
-    /// exact position in the room's single timeline, which the two lists
-    /// held apart from each other cannot recover.
+    /// themselves are deliberately not sorted by this. One of these lands
+    /// beside the messages nearest its timestamp rather than at its exact
+    /// position in the room's single timeline, which the two lists held apart
+    /// from each other cannot recover.
     pub at: u64,
-    /// Who made the change: the sender of the `m.room.member` event.
+    /// Who made the change: the sender of the state event.
     ///
-    /// For a join this is also `subject`; for an invite, a kick or a ban it
-    /// is whoever sent the invitation, or made the removal.
+    /// For a join this is also the subject; for an invite, a kick or a ban it
+    /// is whoever sent the invitation, or made the removal; for a room change
+    /// it is whoever changed the room.
     pub actor: String,
-    /// Who the change is about: the event's state key.
-    pub subject: String,
-    /// What changed.
-    pub kind: SystemMessageKind,
+    /// What was done, and whatever that particular change is about.
+    ///
+    /// Flattened, so the wire carries `kind` beside `actor` rather than
+    /// nested under a field of its own, which is what lets the interface
+    /// switch on one discriminant and read the payload the arm it took
+    /// actually has.
+    #[serde(flatten)]
+    pub change: SystemChange,
 }
 
-/// What sort of membership change a [`SystemMessage`] reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SystemMessageKind {
+/// What a [`SystemMessage`] reports, and what that change is about.
+///
+/// Tagged by `kind` on the wire, so TypeScript reads it as a discriminated
+/// union: an arm that matched `renamed` has a `name` and no `subject`, and the
+/// compiler on both sides is what says so. The alternative was one `subject`
+/// string standing for a person in five variants and a room name in three,
+/// which would make "the room was renamed to @ada:example.org" a value this
+/// type could hold.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SystemChange {
     /// `subject` joined the room, for the first time or again after having
     /// left it.
-    Joined,
-    /// `actor` invited `subject`.
-    Invited,
+    Joined {
+        /// Who joined, which for a join is also the actor.
+        subject: String,
+    },
+    /// The actor invited `subject`.
+    Invited {
+        /// Who was invited.
+        subject: String,
+    },
     /// `subject` left the room on their own.
-    Left,
-    /// `actor` removed `subject` from the room.
-    Kicked,
-    /// `actor` banned `subject`.
-    Banned,
+    Left {
+        /// Who left, which for a self-leave is also the actor.
+        subject: String,
+    },
+    /// The actor removed `subject` from the room.
+    Kicked {
+        /// Who was removed.
+        subject: String,
+    },
+    /// The actor banned `subject`.
+    Banned {
+        /// Who was banned.
+        subject: String,
+    },
+    /// The actor changed the room's name.
+    Renamed {
+        /// The new name, or `None` when the name was removed.
+        ///
+        /// A room name is cleared by setting it to the empty string rather
+        /// than by redacting the event, so an empty one is a removal and not
+        /// a name: see `facts::or_cleared`.
+        name: Option<String>,
+    },
+    /// The actor changed the room's topic.
+    TopicChanged {
+        /// The new topic, or `None` when the topic was removed, on the same
+        /// terms as [`SystemChange::Renamed`].
+        ///
+        /// The plain-text topic only. `m.topic` carries the same thing in
+        /// several mimetypes and a one-line note about the room is not the
+        /// place to start rendering HTML.
+        topic: Option<String>,
+    },
+    /// The actor changed the room's picture.
+    AvatarChanged {
+        /// The new picture as an `mxc:` URI, or `None` when it was removed.
+        ///
+        /// Carried because removing a picture and changing one are different
+        /// sentences and this is what tells them apart. `m.room.avatar`
+        /// clears itself by omitting `url` rather than by emptying it, so
+        /// unlike a name or a topic this one arrives as an `Option` already.
+        url: Option<String>,
+    },
 }

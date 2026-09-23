@@ -550,15 +550,16 @@ mod tests {
 #[cfg(test)]
 mod system_history_tests {
     use super::*;
-    use crate::timeline::dto::SystemMessageKind;
+    use crate::timeline::dto::SystemChange;
 
     fn joined(id: &str, subject: &str) -> SystemMessage {
         SystemMessage {
             id: id.to_owned(),
             at: 1_000,
             actor: subject.to_owned(),
-            subject: subject.to_owned(),
-            kind: SystemMessageKind::Joined,
+            change: SystemChange::Joined {
+                subject: subject.to_owned(),
+            },
         }
     }
 
@@ -566,7 +567,10 @@ mod system_history_tests {
         history
             .messages()
             .iter()
-            .map(|message| message.subject.as_str())
+            .map(|message| match &message.change {
+                SystemChange::Joined { subject } => subject.as_str(),
+                other => panic!("these tests build joins and nothing else: {other:?}"),
+            })
             .collect()
     }
 
