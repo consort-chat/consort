@@ -11,7 +11,18 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-2);
+  /*
+    Half a gap across, and the last four pixels of #104. "Voice connected" is
+    106px in this desktop's interface font and the column is 104px wide once
+    the fourth control has moved behind the chevron, so the button that went is
+    most of the repair and this is the rest of it. The controls read as a group
+    from the 2px they sit at against each other, so they do not need the room
+    to say it twice.
+
+    Down the way it is unchanged, because what is under here is the sentence
+    about a call that cannot be heard, and that wants the air.
+  */
+  gap: var(--space-2) var(--space-1);
   padding: var(--space-2) var(--space-3);
   background: var(--surface-void);
   border-top: 1px solid var(--line-subtle);
@@ -148,6 +159,11 @@
 /*
   The three controls, as one cell of the panel's grid.
 
+  Three and not four, which is what #104 was about: four buttons and a label do
+  not share a 240px column, and the label was the one being cut. Deafen and
+  away moved behind the chevron in the middle, which is one button's worth of
+  column handed back to the words.
+
   Tight against each other rather than evenly spread. They are one instrument
   with three keys, and the eye should find the row before it finds any one
   button in it. The gap is smaller than the panel's own so the group reads as a
@@ -201,9 +217,88 @@
 }
 
 .call-panel__control:focus-visible,
-.call-panel__leave:focus-visible {
+.call-panel__leave:focus-visible,
+.call-panel__more-action:focus-visible {
   outline: 2px solid var(--violet);
   outline-offset: 2px;
+}
+
+/*
+  What the chevron hangs from, so the panel has something to be measured
+  against. A flex item of the row like the buttons either side of it, and the
+  same height, because the anchor is the control.
+*/
+.call-panel__more {
+  position: relative;
+  display: flex;
+}
+
+.call-panel__more-toggle .call-panel__glyph {
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+/* Right while they are away, up once they are out, which is where they go. */
+.call-panel__more-toggle[aria-expanded="true"] .call-panel__glyph {
+  transform: rotate(-90deg);
+}
+
+/*
+  The panel, above the control and pinned to its right edge.
+
+  Above, because this strip is the last row of the sidebar and there is nothing
+  below it to open into. Right, because the sidebar clips what leaves it and
+  the control is already against that edge, so a panel growing the other way is
+  a panel growing into the column rather than out of the window.
+*/
+.call-panel__more-actions {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-1));
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  padding: var(--space-1);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+}
+
+/*
+  One action per row, with its name written out. The room the row did not have
+  is the whole reason these are in here, so spending it on words is the point.
+
+  28px in a literal `min-height`, which is what everything else in this strip
+  stands at and over the 24 that WCAG 2.5.8 asks. Literal rather than reached
+  through padding around the words: jsdom resolves no `var()` and lays nothing
+  out, so a floor written any other way is a floor no test can read (#107).
+*/
+.call-panel__more-action {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
+.call-panel__more-action:hover {
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+}
+
+/* Set is red here too, for the reason the row gives above. */
+.call-panel__more-action[aria-pressed="true"],
+.call-panel__more-action[aria-pressed="true"]:hover {
+  color: var(--danger);
 }
 
 /*
@@ -231,7 +326,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .call-panel__leave {
+  .call-panel__leave,
+  .call-panel__more-toggle .call-panel__glyph {
     transition: none;
   }
 }

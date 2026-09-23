@@ -48,6 +48,16 @@ function stateLine() {
   });
 }
 
+/** The control that holds the two actions that are not in the row. */
+function disclosure() {
+  return screen.getByRole("button", { name: /more voice actions/i });
+}
+
+/** Open it, which is what every test of what is behind it starts with. */
+async function openMore() {
+  await userEvent.click(disclosure());
+}
+
 /** A call that is up, which is the only state the controls are drawn in. */
 const CONNECTED: Call = {
   state: "connected",
@@ -193,11 +203,12 @@ describe("CallPanel", () => {
     expect(container).not.toHaveTextContent(LOUNGE);
   });
 
-  it("offers mute and deafen beside the way out", () => {
+  it("keeps the microphone and the way out in the row itself", () => {
+    // The two a hand reaches for without reading anything. Everything else
+    // moved behind one control so the state line has a column to sit in.
     panel(CONNECTED);
 
     expect(screen.getByRole("button", { name: /mute microphone/i })).toBeVisible();
-    expect(screen.getByRole("button", { name: /deafen/i })).toBeVisible();
     expect(
       screen.getByRole("button", { name: /disconnect from voice/i }),
     ).toBeVisible();
@@ -232,10 +243,6 @@ describe("CallPanel", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByRole("button", { name: /deafen/i })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
   });
 
   it("shows the microphone as off while deafened, without saying it was muted", async () => {
@@ -266,7 +273,8 @@ describe("CallPanel", () => {
       deafened: true,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: /deafen/i }));
+    await openMore();
+    await userEvent.click(screen.getByRole("button", { name: /^deafen$/i }));
 
     expect(onSetDeafened).toHaveBeenCalledWith(false);
   });
@@ -274,7 +282,8 @@ describe("CallPanel", () => {
   it("asks to be marked away", async () => {
     const { onSetAway } = panel(CONNECTED, "Lounge", HEARING);
 
-    await userEvent.click(screen.getByRole("button", { name: /away/i }));
+    await openMore();
+    await userEvent.click(screen.getByRole("button", { name: /^away$/i }));
 
     expect(onSetAway).toHaveBeenCalledWith(true);
   });
@@ -286,7 +295,8 @@ describe("CallPanel", () => {
       away: true,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: /away/i }));
+    await openMore();
+    await userEvent.click(screen.getByRole("button", { name: /^away$/i }));
 
     expect(onSetAway).toHaveBeenCalledWith(false);
   });
@@ -306,7 +316,9 @@ describe("CallPanel", () => {
     // listening, and a deafen indicator would say otherwise.
     panel(CONNECTED, "Lounge", { muted: false, deafened: false, away: true });
 
-    expect(screen.getByRole("button", { name: /deafen/i })).toHaveAttribute(
+    await openMore();
+
+    expect(screen.getByRole("button", { name: /^deafen$/i })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -419,6 +431,193 @@ describe("CallPanel", () => {
       panel({ state: "disconnected" });
 
       expect(stateLine()).toBeNull();
+    });
+  });
+
+  describe("the control the quieter actions moved behind", () => {
+    it("keeps deafen and away out of the row until they are asked for", () => {
+      // The whole point of #104: four controls and a label do not fit the
+      // column, and the label is what lost. These two are the ones that go.
+      panel(CONNECTED);
+
+      expect(screen.queryByRole("button", { name: /^deafen$/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^away$/i })).toBeNull();
+    });
+
+    it("hands them over when it is pressed", async () => {
+      panel(CONNECTED);
+
+      await openMore();
+
+      expect(screen.getByRole("button", { name: /^deafen$/i })).toBeVisible();
+      expect(screen.getByRole("button", { name: /^away$/i })).toBeVisible();
+    });
+
+    it("says whether they are out, rather than only drawing them", () => {
+      panel(CONNECTED);
+
+      expect(disclosure()).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("says so the other way once they are", async () => {
+      panel(CONNECTED);
+
+      await openMore();
+
+      expect(disclosure()).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("puts them away again when it is pressed a second time", async () => {
+      // One control, both directions, the same rule the state line follows.
+      panel(CONNECTED);
+
+      await openMore();
+      await userEvent.click(disclosure());
+
+      expect(screen.queryByRole("button", { name: /^deafen$/i })).toBeNull();
+    });
+
+    it("keeps its name the same whichever way it is set", async () => {
+      // The convention the rest of this strip follows: a button whose
+      // accessible name changes under the cursor is announced as a new
+      // button. The tooltip is where the wording may follow the state.
+      panel(CONNECTED);
+
+      expect(disclosure()).toHaveAttribute("title", "More voice actions");
+
+      await openMore();
+
+      expect(disclosure()).toHaveAttribute("title", "Hide the other actions");
+    });
+
+    it("can be reached and opened from the keyboard", async () => {
+      // Second in the strip, behind the state line and the microphone. A
+      // control only a pointer can reach is a control some people do not have.
+      panel(CONNECTED);
+
+      await userEvent.tab();
+      await userEvent.tab();
+      await userEvent.tab();
+      expect(disclosure()).toHaveFocus();
+
+      await userEvent.keyboard("{Enter}");
+
+      expect(screen.getByRole("button", { name: /^deafen$/i })).toBeVisible();
+    });
+
+    it("moves focus into what it opened", async () => {
+      // Otherwise the panel is out and the next Tab is somewhere else
+      // entirely, which for a keyboard is the same as it never having opened.
+      panel(CONNECTED);
+
+      await openMore();
+
+      expect(screen.getByRole("button", { name: /^deafen$/i })).toHaveFocus();
+    });
+
+    it("closes on Escape and hands the focus back", async () => {
+      panel(CONNECTED);
+
+      await openMore();
+      await userEvent.keyboard("{Escape}");
+
+      expect(screen.queryByRole("button", { name: /^deafen$/i })).toBeNull();
+      expect(disclosure()).toHaveFocus();
+    });
+
+    it("keeps its Escape to itself", async () => {
+      /*
+        `ThreadPanel` and `RoomInfoPanel` both shut on an Escape they hear on
+        the window. One press should close the panel in front, not that one as
+        well as whatever is open behind it.
+      */
+      const behind = vi.fn();
+      window.addEventListener("keydown", behind);
+      try {
+        panel(CONNECTED);
+
+        await openMore();
+        await userEvent.keyboard("{Escape}");
+
+        expect(behind).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keydown", behind);
+      }
+    });
+
+    it("lets Escape past while nothing is open", async () => {
+      // The other half of the same rule. A call is up for hours, and a strip
+      // that swallowed every Escape for the length of one would take the key
+      // away from the thread panel it is meant to close.
+      const behind = vi.fn();
+      window.addEventListener("keydown", behind);
+      try {
+        panel(CONNECTED);
+
+        await userEvent.keyboard("{Escape}");
+
+        expect(behind).toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("keydown", behind);
+      }
+    });
+
+    it("closes when a press lands somewhere else", async () => {
+      panel(CONNECTED);
+
+      await openMore();
+      await userEvent.click(document.body);
+
+      expect(screen.queryByRole("button", { name: /^deafen$/i })).toBeNull();
+    });
+
+    it("stays open across a press, so the switch can be seen to have taken", async () => {
+      // These are toggles rather than commands. Shutting the panel on the
+      // press would hide the one piece of feedback that says it worked, and
+      // would take the focus with it.
+      const { onSetDeafened } = panel(CONNECTED);
+
+      await openMore();
+      await userEvent.click(screen.getByRole("button", { name: /^deafen$/i }));
+
+      expect(onSetDeafened).toHaveBeenCalledWith(true);
+      expect(screen.getByRole("button", { name: /^away$/i })).toBeVisible();
+    });
+
+    it("stands at least the 24px WCAG asks of a target", () => {
+      /*
+        Read off the real stylesheet, the same way the state line is. jsdom
+        resolves no `var()` and lays nothing out, so a literal declaration is
+        the only shape this can be held in (#107).
+      */
+      panel(CONNECTED);
+
+      const style = getComputedStyle(disclosure());
+      expect(parseFloat(style.width)).toBeGreaterThanOrEqual(24);
+      expect(parseFloat(style.height)).toBeGreaterThanOrEqual(24);
+    });
+
+    it("gives the same 24px to each action it opens", async () => {
+      // A row of text in a panel is exactly the shape that comes out at 19px
+      // and fails 2.5.8, which is what #107 is open about one panel over.
+      panel(CONNECTED);
+
+      await openMore();
+
+      for (const name of [/^deafen$/i, /^away$/i]) {
+        const action = screen.getByRole("button", { name });
+        expect(
+          parseFloat(getComputedStyle(action).minHeight),
+        ).toBeGreaterThanOrEqual(24);
+      }
+    });
+
+    it("is not there at all when there is no call", () => {
+      panel({ state: "disconnected" });
+
+      expect(
+        screen.queryByRole("button", { name: /more voice actions/i }),
+      ).toBeNull();
     });
   });
 });

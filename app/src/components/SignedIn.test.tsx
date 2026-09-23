@@ -1568,9 +1568,14 @@ describe("SignedIn voice calls", () => {
   });
 
   it("asks to deafen from the connection panel", async () => {
+    // Behind the chevron since #104, so the press that reaches the call
+    // thread is the second one.
     await inACall();
 
-    await userEvent.click(screen.getByRole("button", { name: /deafen/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: /more voice actions/i }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^deafen$/i }));
 
     expect(callSetDeafened).toHaveBeenCalledWith(true);
   });

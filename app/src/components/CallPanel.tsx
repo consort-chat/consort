@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+
 import { microphoneOff, type Call, type SelfAudio } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
@@ -118,6 +120,177 @@ function ClockIcon({ on }: { on: boolean }) {
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" stroke={on ? "var(--surface)" : "currentColor"} />
     </svg>
+  );
+}
+
+/**
+ * A chevron, pointing where the panel comes out.
+ *
+ * Right while the quieter actions are put away, which is the arrow the issue
+ * asked for, and up once they are out, because up is where they go: this strip
+ * is the bottom of the sidebar and there is nowhere below it. An arrow still
+ * aiming right with the panel open would be pointing at the edge of the
+ * window.
+ */
+function ChevronIcon() {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+/**
+ * Deafen and away, behind one control.
+ *
+ * Four buttons and a label do not fit a 240px column, and the label is what
+ * lost: "Voice connected" was arriving as a word and a half. These two are the
+ * pair that goes, because they are the two nobody reaches for in a hurry.
+ * Muting and hanging up stay where a hand finds them without reading anything.
+ *
+ * Above the control rather than below it, and floating rather than a second
+ * row. A row that appeared inside the strip would push the channel list up
+ * every time somebody looked at it, and there is no room under the strip to
+ * push into.
+ *
+ * Its own component, and not because it is reused. `CallPanel` returns null
+ * before it does anything when there is no call, so state belonging to the row
+ * cannot be held above that line without the hooks moving with it.
+ */
+function MoreActions({
+  deafened,
+  away,
+  onSetDeafened,
+  onSetAway,
+}: {
+  deafened: boolean;
+  away: boolean;
+  onSetDeafened: (deafened: boolean) => void;
+  onSetAway: (away: boolean) => void;
+}) {
+  const [shown, setShown] = useState(false);
+  const wrap = useRef<HTMLSpanElement | null>(null);
+  const toggle = useRef<HTMLButtonElement | null>(null);
+  const first = useRef<HTMLButtonElement | null>(null);
+
+  /*
+    Focus follows the panel out. Without it the actions are on screen and the
+    next Tab is somewhere else entirely, which for a keyboard is the same as
+    the control having done nothing.
+  */
+  useEffect(() => {
+    if (shown) first.current?.focus();
+  }, [shown]);
+
+  useEffect(() => {
+    if (!shown) return;
+
+    function hide() {
+      /*
+        The focus goes back to the control that opened this, but only when the
+        panel still has it. A press somewhere else has already chosen where
+        focus is going, and pulling it back here would take it from them.
+      */
+      if (wrap.current?.contains(document.activeElement) === true) {
+        toggle.current?.focus();
+      }
+      setShown(false);
+    }
+
+    function onEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      // Stopped here, so one press shuts this rather than also reaching
+      // whatever else on the window is listening for it.
+      event.stopPropagation();
+      hide();
+    }
+
+    /*
+      `mousedown` rather than `click`, on the same terms as every other
+      dismissable thing here: a drag that starts inside and ends outside is not
+      somebody asking for this to close. Measured against the wrapper rather
+      than the panel, so that a press on the control itself closes it once
+      instead of closing it and letting the click open it again.
+    */
+    function elsewhere(event: MouseEvent) {
+      if (event.target instanceof Node && wrap.current?.contains(event.target)) {
+        return;
+      }
+      hide();
+    }
+
+    document.addEventListener("keydown", onEscape);
+    document.addEventListener("mousedown", elsewhere);
+    return () => {
+      document.removeEventListener("keydown", onEscape);
+      document.removeEventListener("mousedown", elsewhere);
+    };
+  }, [shown]);
+
+  return (
+    <span className="call-panel__more" ref={wrap}>
+      {/*
+        `aria-expanded` and a name that stays put, the way the state line above
+        does it and for the same reason: a button renamed under the cursor is
+        announced as a different button each press. The tooltip is where the
+        wording is allowed to follow the state.
+      */}
+      <button
+        type="button"
+        className="call-panel__control call-panel__more-toggle"
+        ref={toggle}
+        aria-expanded={shown}
+        aria-label="More voice actions"
+        title={shown ? "Hide the other actions" : "More voice actions"}
+        onClick={() => setShown(!shown)}
+      >
+        <ChevronIcon />
+      </button>
+      {shown && (
+        /*
+          Written out rather than drawn, which is the one thing this panel has
+          that the row did not have room for. The words are the accessible name
+          as well, so they hold still across a press while `aria-pressed`
+          carries which way the switch is set.
+
+          Nothing closes on a press. These are toggles, not commands, and
+          shutting the panel would hide the one piece of feedback saying the
+          press took, as well as taking the focus with it.
+        */
+        <div className="call-panel__more-actions">
+          <button
+            type="button"
+            className="call-panel__more-action"
+            ref={first}
+            onClick={() => onSetDeafened(!deafened)}
+            aria-pressed={deafened}
+            title={deafened ? "Undeafen" : "Deafen"}
+          >
+            <HeadphonesIcon off={deafened} />
+            Deafen
+          </button>
+          <button
+            type="button"
+            className="call-panel__more-action"
+            onClick={() => onSetAway(!away)}
+            aria-pressed={away}
+            title={away ? "You are away" : "Mark yourself away"}
+          >
+            <ClockIcon on={away} />
+            Away
+          </button>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -261,11 +434,14 @@ export function CallPanel({
         because none of these has its purpose written beside it and one of them
         ends a conversation.
 
-        `aria-pressed` on the two that toggle, and not on the one that does not.
+        `aria-pressed` on the one that toggles, and not on the two that do not.
         A screen reader then says "mute, pressed" rather than leaving somebody
         to work out from a label whether the thing they just did took. The
         labels stay put across the press for the same reason: a button whose
         name changes under the cursor is announced as a new button.
+
+        Three of them, still in severity order: what this session says, then
+        the quieter pair behind the chevron, then the way out.
       */}
       <div className="call-panel__controls">
         <button
@@ -279,32 +455,12 @@ export function CallPanel({
           <MicrophoneIcon off={off} />
         </button>
 
-        <button
-          type="button"
-          className="call-panel__control"
-          onClick={() => onSetDeafened(!deafened)}
-          aria-pressed={deafened}
-          aria-label="Deafen"
-          title={deafened ? "Undeafen" : "Deafen"}
-        >
-          <HeadphonesIcon off={deafened} />
-        </button>
-
-        {/*
-          Between deafen and hang up, which is where it belongs by severity:
-          the two to its left change what this session hears and says, this one
-          says where the person is, and the one to its right ends the call.
-        */}
-        <button
-          type="button"
-          className="call-panel__control"
-          onClick={() => onSetAway(!away)}
-          aria-pressed={away}
-          aria-label="Mark yourself away"
-          title={away ? "You are away" : "Mark yourself away"}
-        >
-          <ClockIcon on={away} />
-        </button>
+        <MoreActions
+          deafened={deafened}
+          away={away}
+          onSetDeafened={onSetDeafened}
+          onSetAway={onSetAway}
+        />
 
         <button
           type="button"
