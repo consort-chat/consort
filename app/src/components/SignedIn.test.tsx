@@ -17,6 +17,7 @@ const onShowRoom = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 const callSetMuted = vi.hoisted(() => vi.fn());
 const callSetDeafened = vi.hoisted(() => vi.fn());
+const callSetAway = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
 const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
@@ -61,6 +62,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onAudio,
   callSetMuted,
   callSetDeafened,
+  callSetAway,
   callConnect,
   callDisconnect,
   roomAvatar,
@@ -85,6 +87,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { SignedIn } from "./SignedIn";
 import type {
   Call,
+  CallRefused,
   Channel,
   Connection,
   KeyBackup,
@@ -198,6 +201,7 @@ function resetApiMocks() {
   onAudio.mockReset().mockResolvedValue(() => {});
   callSetMuted.mockReset().mockResolvedValue(undefined);
   callSetDeafened.mockReset().mockResolvedValue(undefined);
+  callSetAway.mockReset().mockResolvedValue(undefined);
   callConnect.mockReset().mockResolvedValue(undefined);
   callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
@@ -657,6 +661,57 @@ describe("SignedIn verification state", () => {
       expect(stopVerification).toHaveBeenCalled();
       expect(stopFlows).toHaveBeenCalled();
     });
+  });
+
+  it("survives every channel firing after the screen has gone", async () => {
+    /*
+      Stopping a listener is a promise, so there is a window between this
+      screen leaving and the listeners actually stopping, and anything already
+      on its way lands in it. Every handler guards on that.
+
+      A smoke test rather than a proof of the guards: React drops a state
+      update aimed at a component that has gone without complaining either
+      way. What it does catch is a handler that reads its payload before
+      checking, or that touches anything the unmount took with it.
+    */
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
+    const channels: Array<[typeof onConnection, unknown]> = [
+      [onConnection, { state: "live" }],
+      [onVerification, { state: "verified" }],
+      [onVerificationFlow, aRequest("$late")],
+      [onKeyBackup, { state: "backingUp" }],
+      [onRooms, { spaces: [] }],
+      [onCall, { state: "disconnected" }],
+      [
+        onCallRefused,
+        {
+          roomId: "!lounge:example.org",
+          readiness: { state: "sessionUnverified" },
+        },
+      ],
+      [onSelfAudio, { muted: true, deafened: false }],
+      [onSpeaking, ["@ada:example.org"]],
+      [onShowRoom, "!general:example.org"],
+      [onAudio, { state: "callAudioFailed", error: "no output device" }],
+    ];
+    const { unmount } = render(
+      <SignedIn profile={profile} onSignedOut={vi.fn()} />,
+    );
+    await waitFor(() => expect(onAudio).toHaveBeenCalled());
+    // Held across the unmount, which is the whole point: an event in flight
+    // has the handler already and does not go back to the channel for it.
+    const late = channels.map(([channel, payload]) => {
+      const registered = channel.mock.calls.at(-1) as
+        | [(payload: unknown) => void]
+        | undefined;
+      if (!registered) throw new Error("a channel was never subscribed to");
+      return () => registered[0](payload);
+    });
+
+    unmount();
+
+    for (const fire of late) fire();
+    expect(complaints).not.toHaveBeenCalled();
   });
 });
 
@@ -1757,6 +1812,151 @@ describe("SignedIn voice calls", () => {
     await waitFor(() => expect(complaints).toHaveBeenCalled());
     expect(voice().getByRole("button", { name: "Lounge" })).toBeVisible();
     complaints.mockRestore();
+  });
+
+  it("asks to be marked away from the connection panel", async () => {
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /mark yourself away/i }),
+    );
+
+    expect(callSetAway).toHaveBeenCalledWith(true);
+  });
+
+  it("shows nothing about being away until the channel says so", async () => {
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /mark yourself away/i }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /mark yourself away/i }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("draws being away once the channel reports it", async () => {
+    await inACall();
+
+    act(() =>
+      selfAudioHandler()({ muted: false, deafened: false, away: true }),
+    );
+
+    expect(
+      screen.getByRole("button", { name: /mark yourself away/i }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  /*
+    The same rule as the successful press, and the case that makes it matter:
+    the control reflects what the call thread did, so an ask that never got
+    there leaves the control alone. Three controls and one rule, so one table
+    rather than three copies free to drift apart.
+  */
+  it.each([
+    ["Mute microphone", callSetMuted],
+    ["Deafen", callSetDeafened],
+    ["Mark yourself away", callSetAway],
+  ])("leaves %s alone when the ask never reached the call", async (name, ask) => {
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
+    ask.mockRejectedValue({ message: "not in a call", detail: "not in a call" });
+    await inACall();
+
+    await userEvent.click(screen.getByRole("button", { name }));
+
+    await waitFor(() => expect(complaints).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("stays in the call when leaving it never reached the call thread", async () => {
+    // Nothing is set on the way out either. A panel that closed on a request
+    // that failed would claim this session had left a call it is still in.
+    const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
+    callDisconnect.mockRejectedValue({
+      message: "not in a call",
+      detail: "not in a call",
+    });
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /disconnect from voice/i }),
+    );
+
+    await waitFor(() => expect(complaints).toHaveBeenCalled());
+    expect(
+      screen.getByRole("group", { name: /voice connection/i }),
+    ).toBeVisible();
+  });
+
+  /** The handler the component registered for joins that were refused. */
+  function refusedHandler(): (refusal: CallRefused) => void {
+    const registered = onCallRefused.mock.calls.at(-1) as
+      | [(refusal: CallRefused) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to refused joins");
+    }
+    return registered[0];
+  }
+
+  it("says why a click on a voice channel did nothing", async () => {
+    // A refusal is an incident, and `resendState` never repeats one. A wrong
+    // handler would get no second chance to be noticed here: the click
+    // would simply look like one that missed.
+    await showing();
+
+    act(() =>
+      refusedHandler()({
+        roomId: LOUNGE,
+        readiness: { state: "sessionUnverified" },
+      }),
+    );
+
+    const notice = screen.getByRole("alert", {
+      name: "Voice channel not joined",
+    });
+    expect(notice).toHaveTextContent("Lounge was not joined.");
+    expect(notice).toHaveTextContent(/able to hear you/i);
+  });
+
+  it("takes the refusal down when it is dismissed", async () => {
+    // Dismissed rather than timed out, which is why this state is owned up
+    // here: anything lower down would be cleared by the next re-render.
+    await showing();
+    act(() =>
+      refusedHandler()({
+        roomId: LOUNGE,
+        readiness: { state: "sessionUnverified" },
+      }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(
+      screen.queryByRole("alert", { name: "Voice channel not joined" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears a refusal when the channel is asked for again", async () => {
+    // Otherwise a second attempt looks like it was declined again before the
+    // call thread has answered at all.
+    await showing();
+    act(() =>
+      refusedHandler()({
+        roomId: LOUNGE,
+        readiness: { state: "sessionUnverified" },
+      }),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+
+    expect(
+      screen.queryByRole("alert", { name: "Voice channel not joined" }),
+    ).not.toBeInTheDocument();
   });
 
   it("stops listening to the call channel when it unmounts", async () => {

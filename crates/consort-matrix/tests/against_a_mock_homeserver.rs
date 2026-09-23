@@ -5369,6 +5369,115 @@ mod timeline {
         }
 
         #[tokio::test]
+        async fn a_window_read_forwards_to_the_live_end_stops_being_a_window() {
+            // Scrolling down through a window ends at the newest message in
+            // the room. Still calling that a window leaves the notice up over
+            // the message somebody is looking at, saying the opposite of where
+            // they are.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                None,
+                Some("t-newer"),
+            )
+            .await;
+
+            let (watch, seen) = watching(client).await;
+            watch.go_to(OLD.to_owned());
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+
+            watch.later();
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.messages.len() > 1)
+            })
+            .await;
+            drop(watch);
+
+            let caught_up = at_rest(&reports).unwrap();
+            assert!(
+                !caught_up.more_after,
+                "the page said there was nothing after it"
+            );
+            assert_eq!(
+                caught_up.focus, None,
+                "what is loaded now ends where the room does"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_window_that_has_caught_up_takes_what_the_sync_brings() {
+            // The other half of giving the window up, and the one that would
+            // otherwise be invisible: a room that goes on dropping arrivals
+            // reads as one nobody is saying anything in.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![said("$now:example.org", "the present", 9_000)],
+                None,
+            )
+            .await;
+            mount_context(
+                &server,
+                Vec::new(),
+                said(OLD, "the one being answered", 3_000),
+                Vec::new(),
+                None,
+                Some("t-newer"),
+            )
+            .await;
+            syncing(
+                &server,
+                vec![arriving("$new:example.org", "said just now", 9_500)],
+            )
+            .await;
+
+            let (watch, seen) = watching(client.clone()).await;
+            watch.go_to(OLD.to_owned());
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_some())
+            })
+            .await;
+            watch.later();
+            wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| report.focus.is_none())
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                at_rest(reports).is_some_and(|report| bodies(report).contains(&"said just now"))
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            assert_eq!(
+                bodies(at_rest(&reports).unwrap()),
+                vec!["the one being answered", "the present", "said just now"]
+            );
+        }
+
+        #[tokio::test]
         async fn coming_back_to_the_present_reads_the_live_end_again() {
             let server = MatrixMockServer::new().await;
             let (_dir, client) = signed_in(&server).await;

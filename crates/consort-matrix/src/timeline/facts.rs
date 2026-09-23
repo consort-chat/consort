@@ -52,6 +52,7 @@
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::events::room::MediaSource;
+use matrix_sdk::ruma::events::room::member::MembershipState;
 use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
 use matrix_sdk::ruma::events::room::message::{
     FormattedBody, MessageFormat, MessageType, RedactedRoomMessageEventContent, Relation,
@@ -59,12 +60,14 @@ use matrix_sdk::ruma::events::room::message::{
 };
 use matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent;
 use matrix_sdk::ruma::events::{
-    AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent,
-    RedactedSyncMessageLikeEvent, SyncMessageLikeEvent,
+    AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncStateEvent, AnySyncTimelineEvent,
+    RedactedSyncMessageLikeEvent, SyncMessageLikeEvent, SyncStateEvent,
 };
 use matrix_sdk::ruma::serde::Raw;
 
-use crate::timeline::dto::{Media, Message, MessageKind, ThreadSummary};
+use crate::timeline::dto::{
+    Media, Message, MessageKind, SystemMessage, SystemMessageKind, ThreadSummary,
+};
 
 /// One `m.reaction` event, unpacked.
 ///
@@ -304,6 +307,73 @@ pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
         html: formatted
             .filter(|formatted| formatted.format == MessageFormat::Html)
             .map(|formatted| formatted.body),
+    })
+}
+
+/// One event as a membership change, or `None` when it is not one to draw.
+///
+/// The first state event this module reads at all: see the module doc for
+/// why every other one is skipped. Membership goes first because it is the
+/// one every other Matrix client shows by default, and because a room where
+/// people quietly come and go with nothing said about it is the complaint
+/// this function exists to answer.
+///
+/// A room name, topic or avatar change is not read here yet, and neither is
+/// a power level change or a profile update with the membership left as it
+/// was. All of them are `None`, the same as any other state event `message`
+/// does not draw; there is no line missing so much as a line not yet
+/// written.
+pub fn system(event: &TimelineEvent) -> Option<SystemMessage> {
+    let AnySyncTimelineEvent::State(AnySyncStateEvent::RoomMember(SyncStateEvent::Original(
+        member,
+    ))) = event.raw().deserialize().ok()?
+    else {
+        // Every message-like event, every other state event, and a redacted
+        // membership change, which has no `membership` left to compare.
+        return None;
+    };
+
+    let previous = member
+        .unsigned
+        .prev_content
+        .as_ref()
+        .map(|prev| prev.membership.clone());
+
+    let kind = match (previous, &member.content.membership) {
+        // A rejoin reads the same as a first join: there is nothing loaded
+        // here that remembers whether this account has seen this member
+        // before, and the two sentences would say the same thing anyway.
+        (prev, MembershipState::Join) if prev.as_ref() != Some(&MembershipState::Join) => {
+            SystemMessageKind::Joined
+        }
+        // Already a member, so this is a display name or avatar change, not
+        // a membership change. Left undrawn on the same terms as a room name
+        // change: see the module doc.
+        (Some(MembershipState::Join), MembershipState::Join) => return None,
+        (_, MembershipState::Invite) => SystemMessageKind::Invited,
+        (Some(MembershipState::Join), MembershipState::Leave) => {
+            // Left on their own unless somebody else's hand is on the door:
+            // a kick is also `membership: leave`, told apart only by whether
+            // the sender is the member being removed.
+            if member.sender == member.state_key {
+                SystemMessageKind::Left
+            } else {
+                SystemMessageKind::Kicked
+            }
+        }
+        (_, MembershipState::Ban) => SystemMessageKind::Banned,
+        // A withdrawn or declined invite, a knock, a leave from anything
+        // other than having joined, or a membership this build has no
+        // variant for. None of them has a sentence yet.
+        _ => return None,
+    };
+
+    Some(SystemMessage {
+        id: member.event_id.to_string(),
+        at: member.origin_server_ts.0.into(),
+        actor: member.sender.to_string(),
+        subject: member.state_key.to_string(),
+        kind,
     })
 }
 
@@ -1713,5 +1783,153 @@ mod tests {
         }));
 
         assert_eq!(message(&said).map(|said| said.mentions), Some(vec![]));
+    }
+
+    /// One `m.room.member` event, with an optional `prev_content` on
+    /// `unsigned` for the cases that turn on what came before.
+    fn membership(
+        sender: &str,
+        state_key: &str,
+        membership: &str,
+        prev_membership: Option<&str>,
+    ) -> TimelineEvent {
+        let mut value = json!({
+            "type": "m.room.member",
+            "event_id": "$member:example.org",
+            "sender": sender,
+            "state_key": state_key,
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": { "membership": membership },
+        });
+        if let Some(prev) = prev_membership {
+            value["unsigned"] = json!({
+                "prev_content": { "membership": prev },
+            });
+        }
+        event(value)
+    }
+
+    #[test]
+    fn a_first_join_is_a_join() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@ada:example.org",
+            "join",
+            None,
+        ))
+        .expect("a first join is drawn");
+
+        assert_eq!(said.id, "$member:example.org");
+        assert_eq!(said.at, 1_700_000_000_000);
+        assert_eq!(said.actor, "@ada:example.org");
+        assert_eq!(said.subject, "@ada:example.org");
+        assert_eq!(said.kind, SystemMessageKind::Joined);
+    }
+
+    #[test]
+    fn a_rejoin_after_leaving_is_also_a_join() {
+        // Nothing loaded here remembers whether this account has seen this
+        // member before, and the two sentences would say the same thing
+        // anyway.
+        let said = system(&membership(
+            "@ada:example.org",
+            "@ada:example.org",
+            "join",
+            Some("leave"),
+        ))
+        .expect("a rejoin is drawn as a join");
+
+        assert_eq!(said.kind, SystemMessageKind::Joined);
+    }
+
+    #[test]
+    fn a_display_name_change_is_not_a_membership_change() {
+        // Already a member on both sides of this event: the only thing that
+        // changed is the profile riding along on the membership event.
+        assert!(
+            system(&membership(
+                "@ada:example.org",
+                "@ada:example.org",
+                "join",
+                Some("join"),
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn being_invited_names_who_sent_it() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@bragoodle:example.org",
+            "invite",
+            None,
+        ))
+        .expect("an invite is drawn");
+
+        assert_eq!(said.actor, "@ada:example.org");
+        assert_eq!(said.subject, "@bragoodle:example.org");
+        assert_eq!(said.kind, SystemMessageKind::Invited);
+    }
+
+    #[test]
+    fn leaving_your_own_way_out_is_a_leave() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@ada:example.org",
+            "leave",
+            Some("join"),
+        ))
+        .expect("a self-leave is drawn");
+
+        assert_eq!(said.kind, SystemMessageKind::Left);
+    }
+
+    #[test]
+    fn being_shown_the_door_by_somebody_else_is_a_kick() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@bragoodle:example.org",
+            "leave",
+            Some("join"),
+        ))
+        .expect("a kick is drawn");
+
+        assert_eq!(said.actor, "@ada:example.org");
+        assert_eq!(said.subject, "@bragoodle:example.org");
+        assert_eq!(said.kind, SystemMessageKind::Kicked);
+    }
+
+    #[test]
+    fn a_ban_is_a_ban_whoever_it_was_aimed_at() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@bragoodle:example.org",
+            "ban",
+            Some("join"),
+        ))
+        .expect("a ban is drawn");
+
+        assert_eq!(said.kind, SystemMessageKind::Banned);
+    }
+
+    #[test]
+    fn a_withdrawn_invite_has_no_sentence_yet() {
+        // `leave` from `invite` rather than from `join`: nobody was ever a
+        // member, so neither "left" nor "kicked" is true of them.
+        assert!(
+            system(&membership(
+                "@ada:example.org",
+                "@bragoodle:example.org",
+                "leave",
+                Some("invite"),
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn an_ordinary_message_is_not_a_membership_change() {
+        assert!(system(&sent(text("hello"))).is_none());
     }
 }
