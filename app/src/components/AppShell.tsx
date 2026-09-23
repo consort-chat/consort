@@ -402,6 +402,15 @@ export function AppShell({
   }
   // Stable, because the thread panel watches it in an effect.
   const hideInfo = useCallback(() => setInfoOpen(false), []);
+  /*
+    The pane has the message a link asked for, so the ask is done with. Kept
+    until then rather than cleared where it is set, because the pane is keyed
+    on the room and `follow` changes both at once: clearing on a room change
+    would have to lose a race with the press arriving beside it.
+
+    Stable, because the pane calls this from an effect that watches it.
+  */
+  const spendFocus = useCallback(() => setFocus(null), []);
 
   const links = useMemo<RoomLinks>(
     () => ({
@@ -593,6 +602,7 @@ export function AppShell({
             channel={channel}
             selfId={profile.user_id}
             focus={focus}
+            onFocusTaken={spendFocus}
             onOpenRoom={openRoom}
             infoOpen={infoOpen}
             onToggleInfo={toggleInfo}

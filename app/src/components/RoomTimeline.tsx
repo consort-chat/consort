@@ -182,6 +182,7 @@ export function RoomTimeline({
   channel,
   selfId,
   focus,
+  onFocusTaken,
   onOpenRoom,
   onUnfold,
   infoOpen,
@@ -199,6 +200,17 @@ export function RoomTimeline({
    * and stops there.
    */
   focus?: { eventId: string } | null;
+  /**
+   * Say that the ask above has been taken, so it is not handed over again.
+   *
+   * This pane is keyed on the room, so leaving a room and coming back mounts a
+   * fresh one, and a fresh one reads its initial `focus` as a new press. It
+   * cannot tell that from the real thing: a link to a message in another room
+   * legitimately mounts a pane whose first ask is a press. Only whoever holds
+   * the ask knows whether one has happened since, so this end only says when
+   * it has taken one (#105).
+   */
+  onFocusTaken?: () => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
   /**
@@ -790,12 +802,21 @@ export function RoomTimeline({
     });
   }, [mine, atTheBottom, timeline.focus, timeline.messages]);
 
-  // Recorded rather than acted on, so that a press arriving before the room has
-  // any messages is not lost. The effect below is what spends it.
+  /*
+    Recorded rather than acted on, so that a press arriving before the room has
+    any messages is not lost. The effect below is what spends it.
+
+    Taking it is also where the ask is handed back, rather than where it lands:
+    a link naming a message this account cannot read never lands, and an ask
+    waiting for that would be handed back never rather than late. Once it is in
+    the ref it no longer needs the prop, so clearing it changes nothing here.
+  */
   useEffect(() => {
     const eventId = focus?.eventId;
-    if (eventId !== undefined) wanted.current = eventId;
-  }, [focus]);
+    if (eventId === undefined) return;
+    wanted.current = eventId;
+    onFocusTaken?.();
+  }, [focus, onFocusTaken]);
 
   /*
     Go to a message somebody followed a link to, once it is drawn.
