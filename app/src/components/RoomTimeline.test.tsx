@@ -1951,16 +1951,22 @@ describe("copying a message address", () => {
       await user.click(screen.getByRole("button", { name: "Copy link" }));
       await screen.findByRole("button", { name: "Link copied" });
 
+      // Settle the effects before touching the clock. The tick appears in the
+      // commit and the timeout that takes it off is set by an effect, which
+      // React runs in a later task, so the tick being on screen does not mean
+      // the timer exists yet. Advancing while it does not lands it COPIED_FOR
+      // past where the clock stopped, out of reach of anything after this, and
+      // which of the two happens first is down to how busy the machine is.
+      await act(async () => {});
+
       await act(async () => {
         vi.advanceTimersByTime(COPIED_FOR);
       });
 
-      // Polled rather than demanded. The assertion is about the tick coming
-      // off, not about which tick of the clock React commits it on, and a
-      // loaded CI machine is where those two come apart.
-      expect(
-        await screen.findByRole("button", { name: "Copy link" }),
-      ).toBeVisible();
+      // Demanded, not polled. The clock is already past COPIED_FOR and act has
+      // flushed what that fired, so the tick is either off by now or the thing
+      // this test is about is broken.
+      expect(screen.getByRole("button", { name: "Copy link" })).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
