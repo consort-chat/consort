@@ -135,6 +135,7 @@ function shell({
   callRefused = null,
   onDismissRefusal = vi.fn(),
   showRoom = null,
+  onRoomShown = vi.fn(),
 }: {
   rooms?: Rooms;
   call?: Call;
@@ -148,11 +149,12 @@ function shell({
   callRefused?: CallRefused | null;
   onDismissRefusal?: Mock<() => void>;
   showRoom?: { roomId: string } | null;
+  onRoomShown?: Mock<() => void>;
 } = {}) {
-  const { container, rerender } = render(
+  const draw = (nextRooms: Rooms, nextShowRoom: { roomId: string } | null) => (
     <AppShell
       profile={profile}
-      rooms={rooms}
+      rooms={nextRooms}
       connection={{ state: "live" }}
       call={call}
       selfAudio={selfAudio}
@@ -169,11 +171,28 @@ function shell({
       onSetAway={onSetAway}
       callRefused={callRefused}
       onDismissRefusal={onDismissRefusal}
-      showRoom={showRoom}
+      showRoom={nextShowRoom}
+      onRoomShown={onRoomShown}
       onSignedOut={onSignedOut}
-    />,
+    />
   );
-  return { container, rerender, onSignedOut, onJoinVoice, onLeaveVoice };
+  const { container, rerender } = render(draw(rooms, showRoom));
+  /*
+    Hand the same shell a new room list, which is what every sync that touches
+    anything does. A second `render` would be a second shell, and the bug this
+    exists for is about what an existing one does when the tree arrives again.
+  */
+  const again = (next: { rooms?: Rooms; showRoom?: { roomId: string } | null }) =>
+    rerender(draw(next.rooms ?? rooms, next.showRoom ?? showRoom));
+  return {
+    container,
+    rerender,
+    again,
+    onRoomShown,
+    onSignedOut,
+    onJoinVoice,
+    onLeaveVoice,
+  };
 }
 
 describe("AppShell", () => {
@@ -198,6 +217,61 @@ describe("AppShell", () => {
     memberNames.mockReset().mockResolvedValue({});
     roomAt.mockReset().mockResolvedValue("!tech:example.org");
     threadOpen.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("says so once the room a notification asked for is shown", async () => {
+    /*
+      The whole of #103. `showRoom` is an ask, and an ask that is never taken
+      back is read again by an effect that re-runs on every room list, which
+      drags the selection back to that room on every sync. Only the shell knows
+      whether it landed, so saying so is the shell's job, and spending it is
+      the caller's.
+    */
+    const rooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!tech:example.org", "tech")],
+        },
+      ],
+    };
+
+    const { onRoomShown } = shell({
+      rooms,
+      showRoom: { roomId: "!tech:example.org" },
+    });
+
+    await screen.findByRole("heading", { level: 1, name: "#tech" });
+    expect(onRoomShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing while the rail still does not have the room", async () => {
+    // The retry above is the reason the effect watches the room list at all,
+    // and a retry that reported success would spend an ask it never took.
+    const empty: Rooms = {
+      spaces: [{ id: "home", name: "Home", avatar: null, channels: [] }],
+    };
+    const arrived: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!tech:example.org", "tech")],
+        },
+      ],
+    };
+    const asked = { roomId: "!tech:example.org" };
+
+    const { again, onRoomShown } = shell({ rooms: empty, showRoom: asked });
+    expect(onRoomShown).not.toHaveBeenCalled();
+
+    again({ rooms: arrived });
+
+    await screen.findByRole("heading", { level: 1, name: "#tech" });
+    expect(onRoomShown).toHaveBeenCalledTimes(1);
   });
 
   it("shows the room a notification was clicked to get to", async () => {

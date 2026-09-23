@@ -1234,6 +1234,35 @@ describe("SignedIn the room list", () => {
     );
   });
 
+  it("does not go back to the notified room when a later room list arrives", async () => {
+    /*
+      #103, end to end, because the two halves live in different components:
+      the ask is held here and the shell is what shows the room. The effect
+      that reads it re-runs whenever the room list changes, which is every sync
+      that touches anything, so an ask nobody takes back drags the selection
+      home again and again. Since #94 that is a history entry each time too.
+    */
+    await showing();
+    await screen.findByRole("button", { name: "Kahu HQ" });
+    act(() => showRoomHandler()("!general:example.org"));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "#general",
+    );
+
+    // Away from it, under their own steam.
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+
+    // A sync. The tree is new, which is the whole of what it takes.
+    act(() => roomsHandler()({ spaces: [homeSpace, kahuHq] }));
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+  });
+
   it("shows a space's channels when its rail icon is clicked", async () => {
     await showing();
     await screen.findByRole("button", { name: "Kahu HQ" });

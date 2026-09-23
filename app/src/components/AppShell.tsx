@@ -184,6 +184,17 @@ interface Props {
    * Absent when nothing has been clicked, which is almost always.
    */
   showRoom?: { roomId: string } | null;
+  /**
+   * Say that the room above has been shown, so the ask is not made again.
+   *
+   * The effect that reads `showRoom` re-runs on every room list, deliberately,
+   * so that a notification about a room joined a moment ago is retried rather
+   * than lost. The retry has no way of its own to know it has already
+   * succeeded, so an ask nobody takes back drags the selection to that room on
+   * every sync for the rest of the session (#103). Only the shell knows it
+   * landed; only the caller can spend it.
+   */
+  onRoomShown?: () => void;
   onSignedOut: () => void;
 }
 
@@ -224,6 +235,7 @@ export function AppShell({
   callRefused,
   onDismissRefusal,
   showRoom = null,
+  onRoomShown,
   onSignedOut,
 }: Props) {
   /*
@@ -372,8 +384,8 @@ export function AppShell({
   */
   useEffect(() => {
     if (showRoom === null) return;
-    openRoom(showRoom.roomId);
-  }, [showRoom, openRoom]);
+    if (openRoom(showRoom.roomId)) onRoomShown?.();
+  }, [showRoom, openRoom, onRoomShown]);
 
   /*
     The right of the window holds one thing at a time, which is what every
