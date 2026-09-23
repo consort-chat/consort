@@ -87,6 +87,17 @@ pub struct Channel {
     /// than no subtitle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
+    /// The room's published address, when it has one.
+    ///
+    /// The canonical alias only. A room may also carry alternatives, and those
+    /// are names the same room answers to rather than the one it calls itself,
+    /// so listing them would be several addresses under a heading that reads
+    /// as the address.
+    ///
+    /// Absent for a room that publishes none, which is most private rooms, and
+    /// absent for a room a space lists that this account has not joined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub kind: ChannelKind,
     pub avatar: Option<String>,
     /// False for a room a space lists that this account has not joined. Those
@@ -294,6 +305,7 @@ mod tests {
             id: "!a:example.org".to_owned(),
             name: Some("general".to_owned()),
             topic: None,
+            alias: None,
             kind: ChannelKind::Text,
             avatar: None,
             joined: true,
@@ -359,6 +371,26 @@ mod tests {
         .unwrap();
 
         assert_eq!(json["topic"], "Where the good links go");
+    }
+
+    #[test]
+    fn a_channel_with_no_alias_leaves_the_key_out() {
+        // The same absence the topic gets, and for the same reason: the
+        // frontend's `alias?: string` is the whole of what it has to check.
+        let json = serde_json::to_value(channel()).unwrap();
+
+        assert!(json.get("alias").is_none());
+    }
+
+    #[test]
+    fn a_channel_with_an_alias_sends_it() {
+        let json = serde_json::to_value(Channel {
+            alias: Some("#general:example.org".to_owned()),
+            ..channel()
+        })
+        .unwrap();
+
+        assert_eq!(json["alias"], "#general:example.org");
     }
 
     #[test]

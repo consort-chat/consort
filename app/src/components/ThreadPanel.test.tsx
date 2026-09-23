@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +16,7 @@ const resendState = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const timelineCopyLink = vi.hoisted(() => vi.fn());
 const timelineEdit = vi.hoisted(() => vi.fn());
+const timelineDelete = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
@@ -24,6 +32,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberAvatar,
   timelineCopyLink,
   timelineEdit,
+  timelineDelete,
   memberProfile,
   audioSettings,
   setPersonVolume,
@@ -78,6 +87,7 @@ beforeEach(() => {
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada" });
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
   timelineEdit.mockReset().mockResolvedValue(undefined);
+  timelineDelete.mockReset().mockResolvedValue(undefined);
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
@@ -97,6 +107,7 @@ function draw() {
     <ThreadPanel
       selfId={ADA}
       onOpenRoom={vi.fn()}
+      onOpen={vi.fn()}
       width={400}
       onResize={resized}
     />,
@@ -169,7 +180,10 @@ describe("ThreadPanel", () => {
   it("draws the message the thread hangs from and its replies", async () => {
     await opened();
 
-    expect(screen.getByText("what shall we call it")).toBeVisible();
+    // Twice over, since the head is named after the root as well as drawing
+    // it below the rule. The second is the message itself.
+    const [, root] = screen.getAllByText("what shall we call it");
+    expect(root).toBeVisible();
     expect(screen.getByText("Consort")).toBeVisible();
   });
 
@@ -467,6 +481,58 @@ describe("ThreadPanel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Consort!");
   });
 
+  it("deletes a reply once the question hanging off the control is answered", async () => {
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() =>
+      expect(timelineDelete).toHaveBeenCalledWith(GENERAL, "$a:example.org"),
+    );
+  });
+
+  it("sends nothing on the first press of Delete", async () => {
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+
+    expect(timelineDelete).not.toHaveBeenCalled();
+  });
+
+  it("deletes the message the thread hangs from as readily as a reply", async () => {
+    // Drawn above the rule rather than in the list, and still a message this
+    // account sent. What it leaves behind is a thread with no way into it
+    // from the room, which is recorded on the pull request rather than
+    // guarded against here.
+    await opened();
+
+    await userEvent.click(action("Delete", 0));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() =>
+      expect(timelineDelete).toHaveBeenCalledWith(GENERAL, "$root:example.org"),
+    );
+  });
+
+  it("says so when the homeserver refuses the deletion", async () => {
+    timelineDelete.mockRejectedValue({ message: "The homeserver refused that." });
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(
+      await screen.findByText("The homeserver refused that."),
+    ).toBeVisible();
+  });
+
   it("puts the box back to an ordinary reply once the correction lands", async () => {
     await opened();
 
@@ -589,12 +655,66 @@ describe("ThreadPanel", () => {
   });
 });
 
+describe("what the panel is called", () => {
+  it("is named after the message the thread hangs from", async () => {
+    // "Thread" is what this said, which is true of every thread and so says
+    // nothing about the one somebody is reading.
+    await opened();
+
+    expect(
+      screen.getByRole("heading", { name: "what shall we call it" }),
+    ).toBeVisible();
+  });
+
+  it("says what was written rather than how it was written", async () => {
+    await opened({
+      ...OPEN,
+      root: {
+        ...said("$root:example.org", "**ship it** on [friday](https://example.org)"),
+        html: '<p><strong>ship it</strong> on <a href="https://example.org">friday</a></p>',
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: "ship it on friday" })).toBeVisible();
+  });
+
+  it("goes back to the plain word when the root could not be fetched", async () => {
+    // A redaction and a missing key both look like this, and a blank head
+    // above a column of replies reads as a panel that failed to load.
+    const { root: _root, ...rootless } = OPEN;
+    await opened(rootless);
+
+    expect(screen.getByRole("heading", { name: "Thread" })).toBeVisible();
+  });
+
+  it("reads out a message that is nothing but a custom emoji", async () => {
+    // There are no words in an `img`, and the shortcode the sender typed is
+    // what somebody would say out loud.
+    await opened({
+      ...OPEN,
+      root: {
+        ...said("$root:example.org", ":shipit:"),
+        html: '<img data-mx-emoticon src="mxc://example.org/ship" alt=":shipit:">',
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: ":shipit:" })).toBeVisible();
+  });
+
+  it("names an attachment nobody captioned", async () => {
+    await opened({ ...OPEN, root: picture("$root:example.org") });
+
+    expect(screen.getByRole("heading", { name: "screenshot.png" })).toBeVisible();
+  });
+});
+
 describe("the panel's width", () => {
   it("is drawn at whatever it was given", async () => {
     const { container } = render(
       <ThreadPanel
         selfId={ADA}
         onOpenRoom={vi.fn()}
+      onOpen={vi.fn()}
         width={480}
         onResize={vi.fn()}
       />,

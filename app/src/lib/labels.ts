@@ -61,6 +61,23 @@ export function channelLabel(channel: Channel): string {
 }
 
 /**
+ * What to write at the top of a channel.
+ *
+ * The hash on a text channel and nothing on a voice one, which is how every
+ * client that has both draws them. Separate from `channelLabel` because a list
+ * row and a heading want different things: the hash is decoration a narrow
+ * column cannot spare, and it is what makes a heading read as a room.
+ *
+ * Shared so that the pane's own heading and the panel of details it opens
+ * cannot drift. A heading saying `#general` above a panel saying `general`
+ * reads as two rooms.
+ */
+export function channelHeading(channel: Channel): string {
+  const name = channelLabel(channel);
+  return channel.kind === "voice" ? name : `#${name}`;
+}
+
+/**
  * One short phrase per call state.
  *
  * Deliberately not the same words as `connectionLabel`. Both channels have a

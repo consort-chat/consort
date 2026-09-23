@@ -51,11 +51,21 @@
   border-bottom: 1px solid var(--line-subtle);
 }
 
+/*
+  The message the thread hangs from, in one line. One line whatever was said:
+  the head is as wide as the panel somebody dragged, and a long first message
+  would otherwise wrap into a paragraph above the conversation or push the
+  close control off the edge.
+*/
 .thread__name {
+  min-width: 0;
   margin: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: var(--text-lg);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .thread__close {

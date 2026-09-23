@@ -1743,10 +1743,14 @@ describe("SignedIn voice calls", () => {
     callConnect.mockRejectedValue(new Error("not signed in"));
     await showing();
 
-    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+    // Scoped to the list, because selecting the channel puts a second control
+    // called Lounge on the screen: the room's own heading, which opens its
+    // details. This is about the row that was pressed.
+    const voice = () => within(screen.getByRole("region", { name: "Voice" }));
+    await userEvent.click(voice().getByRole("button", { name: "Lounge" }));
 
     await waitFor(() => expect(complaints).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    expect(voice().getByRole("button", { name: "Lounge" })).toBeVisible();
     complaints.mockRestore();
   });
 

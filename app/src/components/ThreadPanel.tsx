@@ -17,6 +17,7 @@ import {
   threadOpen,
   threadSend,
   timelineCopyLink,
+  timelineDelete,
   timelineEdit,
   timelineReact,
   timelineUnreact,
@@ -24,8 +25,9 @@ import {
   type Participant,
   type Thread,
 } from "../lib/api";
+import { useRoomLinks } from "../lib/roomLinks";
 import { ComposerTarget } from "./ComposerTarget";
-import { MessageGroups, group } from "./MessageGroups";
+import { MessageGroups, group, previewOf } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
 import { AT_THE_BOTTOM, COPIED_FOR } from "./RoomTimeline";
 import "./ThreadPanel.css";
@@ -85,6 +87,7 @@ export function clampThreadWidth(width: number): number {
 export function ThreadPanel({
   selfId,
   onOpenRoom,
+  onOpen,
   width,
   onResize,
 }: {
@@ -92,6 +95,15 @@ export function ThreadPanel({
   selfId: string;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
+  /**
+   * Said whenever a thread is on screen.
+   *
+   * Which thread is open is Rust's answer rather than the shell's, so the
+   * shell has no other way to learn that this column is now spoken for. It
+   * uses it to put the room's details away: two panels beside a room leave the
+   * room a strip.
+   */
+  onOpen: () => void;
   /** How wide to draw, in pixels. Held by the shell, so a shut panel keeps it. */
   width: number;
   /** Report a width the grip was dragged or nudged to. Already clamped. */
@@ -168,6 +180,10 @@ export function ThreadPanel({
       });
     };
   }, []);
+
+  useEffect(() => {
+    if (thread !== null) onOpen();
+  }, [thread, onOpen]);
 
   const roomId = thread?.roomId ?? "";
   /*
@@ -295,6 +311,22 @@ export function ThreadPanel({
     return () => window.clearTimeout(timer);
   }, [copied]);
 
+  const { nameOf } = useRoomLinks();
+  /*
+    What the panel is called: the message the whole thing hangs from, in one
+    line. "Thread" is what this used to say, which is true of every thread and
+    so tells somebody reading a long one nothing about which conversation they
+    are in. It goes back to the word when the root could not be fetched, which
+    a redaction and a missing key both look like.
+
+    Remembered rather than worked out on every render, because the panel
+    redraws on every keystroke in the box below it and this reads a message
+    that has not changed.
+  */
+  const topic = useMemo(
+    () => (thread?.root === undefined ? "Thread" : previewOf(thread.root, nameOf)),
+    [thread?.root, nameOf],
+  );
   const replies = useMemo(
     () => group(thread?.messages ?? []),
     [thread?.messages],
@@ -408,6 +440,35 @@ export function ThreadPanel({
   }
 
   /**
+   * Delete a message this account sent.
+   *
+   * Reached once the question hanging off the control has been answered, so
+   * this sends the redaction rather than asking again.
+   *
+   * The composer is put back first when it was pointed at this message.
+   * Pressing Edit and then Delete is two presses apart, and what it would
+   * otherwise leave behind is a correction addressed to an event with nothing
+   * left to correct.
+   *
+   * Nothing is echoed, on the same terms as every other send: the words stay
+   * on screen until the sync brings the redaction back.
+   */
+  function remove(message: Message) {
+    // The same guard `copyLink` carries. A panel with no thread in it draws
+    // nothing, so nothing in it can be pressed, but the room ID is read off
+    // the thread and the compiler is right that it could be absent.
+    if (thread === null) return;
+    if (editingNow.current?.id === message.id) stopEditing();
+    // The box is left alone here, unlike the line above. What is in it while
+    // answering is something somebody typed rather than a copy of the old
+    // message, and it is still worth sending somewhere else.
+    if (answering?.id === message.id) setAnswering(null);
+    void timelineDelete(thread.roomId, message.id).catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
+  /**
    * Put one reply's address on the clipboard.
    *
    * A reply in a thread has an address like anything else said in the room, and
@@ -484,7 +545,7 @@ export function ThreadPanel({
         onKeyDown={nudge}
       />
       <div className="thread__head">
-        <h2 className="thread__name">Thread</h2>
+        <h2 className="thread__name">{topic}</h2>
         <button
           type="button"
           className="thread__close"
@@ -515,6 +576,7 @@ export function ThreadPanel({
               onAbout={(person, at) => setOpened({ person, at })}
               onReply={reply}
               onEdit={edit}
+              onDelete={remove}
               onReact={react}
               onCopyLink={copyLink}
             />
@@ -542,6 +604,7 @@ export function ThreadPanel({
           onAbout={(person, at) => setOpened({ person, at })}
           onReply={reply}
           onEdit={edit}
+          onDelete={remove}
           onReact={react}
           onCopyLink={copyLink}
         />

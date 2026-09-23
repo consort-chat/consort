@@ -1,0 +1,89 @@
+/*
+  The question asked before a message is deleted, hanging off the control that
+  asked it.
+
+  Wider than the reaction picker and for a different reason: that one is a grid
+  of glyphs, and this is two sentences somebody has to read before answering.
+*/
+.confirm {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  width: 17rem;
+  padding: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  text-align: left;
+}
+
+.confirm__asks {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/*
+  Quieter than the question and deliberately not hidden behind a disclosure.
+  It is the half that says what deleting actually does, and somebody deciding
+  needs it in front of them rather than a click away.
+*/
+.confirm__says {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.confirm__choices {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+  margin-top: var(--space-2);
+}
+
+.confirm__stop,
+.confirm__go {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.confirm__stop {
+  background: none;
+  border: 1px solid var(--line-strong);
+  color: var(--text-primary);
+}
+
+.confirm__stop:hover {
+  background: var(--surface-overlay);
+}
+
+/*
+  The irreversible half, coloured as such. It is also the one that does not
+  hold the focus when this opens, so the colour is saying what the focus ring
+  is deliberately not pointing at.
+*/
+.confirm__go {
+  background: var(--danger-surface);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.confirm__go:hover {
+  background: var(--danger);
+  color: var(--surface-base);
+}
+
+.confirm__stop:focus-visible,
+.confirm__go:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}

@@ -36,17 +36,31 @@
 //! render. Both are drawn as themselves. A gap that says nothing about itself
 //! is indistinguishable from nobody having spoken, and those are very different
 //! things to be looking at.
+//!
+//! A redacted message, for the same reason and one more. [`deleted`] builds the
+//! mark left where it was out of the envelope, which survives a redaction when
+//! the content does not. The extra reason is that a room is read in more than
+//! one client: every other one draws a mark here, and a Consort that closed
+//! over the gap would leave the reply underneath answering nothing.
+//!
+//! What cannot be recovered is which conversation it was in. A redaction
+//! strips `m.relates_to` along with everything else, so a thread reply that is
+//! paged back in after being deleted is indistinguishable from a message in
+//! the room, and is drawn there. Nothing here can tell them apart, and
+//! guessing would be worse than the noise.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::events::room::MediaSource;
 use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
 use matrix_sdk::ruma::events::room::message::{
-    FormattedBody, MessageFormat, MessageType, Relation, RoomMessageEventContentWithoutRelation,
+    FormattedBody, MessageFormat, MessageType, RedactedRoomMessageEventContent, Relation,
+    RoomMessageEventContentWithoutRelation,
 };
 use matrix_sdk::ruma::events::room::redaction::SyncRoomRedactionEvent;
 use matrix_sdk::ruma::events::{
-    AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent, SyncMessageLikeEvent,
+    AnySyncEphemeralRoomEvent, AnySyncMessageLikeEvent, AnySyncTimelineEvent,
+    RedactedSyncMessageLikeEvent, SyncMessageLikeEvent,
 };
 use matrix_sdk::ruma::serde::Raw;
 
@@ -206,14 +220,29 @@ pub fn annotation(event: &TimelineEvent) -> Option<Annotated> {
     })
 }
 
+/// One `m.room.redaction`, unpacked.
+///
+/// Its own type rather than the event ID alone, because who did it is now
+/// drawn. See [`Annotated`] for why a pair of strings is a struct here.
+pub struct Redaction {
+    /// The event it removes.
+    pub event_id: String,
+    /// Who removed it.
+    ///
+    /// Not always whoever wrote the message. A moderator can redact somebody
+    /// else's, and the mark left behind has to be able to say which of the two
+    /// happened rather than putting one story under the other's name.
+    pub sender: String,
+}
+
 /// The event a redaction removes, when the event is one.
 ///
-/// Both fields are read, because which of them carries it is the room
-/// version's business: room 11 moved `redacts` into the content and older
+/// Both fields are read for the ID, because which of them carries it is the
+/// room version's business: room 11 moved `redacts` into the content and older
 /// rooms keep it at the top level. Answering that properly needs the room's
 /// version, which this module deliberately has no access to, and taking
 /// whichever is present gets the same answer without it.
-pub fn redaction(event: &TimelineEvent) -> Option<String> {
+pub fn redaction(event: &TimelineEvent) -> Option<Redaction> {
     let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomRedaction(
         SyncRoomRedactionEvent::Original(redacted),
     )) = event.raw().deserialize().ok()?
@@ -221,10 +250,13 @@ pub fn redaction(event: &TimelineEvent) -> Option<String> {
         return None;
     };
 
-    redacted
-        .redacts
-        .or(redacted.content.redacts)
-        .map(|id| id.to_string())
+    Some(Redaction {
+        event_id: redacted
+            .redacts
+            .or(redacted.content.redacts)
+            .map(|id| id.to_string())?,
+        sender: redacted.sender.to_string(),
+    })
 }
 
 /// One event as an edit of another, or `None` when it is not one.
@@ -280,13 +312,18 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         return undecryptable(event);
     }
 
-    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
-        SyncMessageLikeEvent::Original(said),
-    )) = event.raw().deserialize().ok()?
+    let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(said)) =
+        event.raw().deserialize().ok()?
     else {
-        // Every state event, every reaction, and a redacted message, which has
-        // no content left to draw.
+        // Every state event and every reaction.
         return None;
+    };
+
+    let said = match said {
+        SyncMessageLikeEvent::Original(said) => said,
+        // Emptied by the homeserver. There is nothing left to read, which is
+        // exactly what the mark says.
+        SyncMessageLikeEvent::Redacted(gone) => return deleted(&gone),
     };
 
     // Before the body is read, because both of these have one and drawing it
@@ -440,6 +477,8 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         }),
         reply_to,
         mentions,
+        // Nobody has, or this would not have deserialised as an original.
+        deleted_by: None,
         kind,
     })
 }
@@ -563,7 +602,50 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         reactions: Vec::new(),
         reply_to: None,
         mentions: Vec::new(),
+        deleted_by: None,
         kind: MessageKind::Undecryptable,
+    })
+}
+
+/// The mark left where a redacted message was.
+///
+/// Built out of the envelope, which a redaction leaves alone: the event ID,
+/// who wrote it and when. The content is gone and nothing here invents any, so
+/// the body is empty and the words on screen are the interface's. That is also
+/// what lets the mark name a moderator by their display name, which this side
+/// does not know.
+///
+/// `thread` is absent and cannot be otherwise. A bundled thread summary lives
+/// in `unsigned`, and a redacted event's `unsigned` carries `redacted_because`
+/// and nothing else, so there is no count here to read. See
+/// [`crate::timeline::History::redacted`], which clears it from the other end
+/// so that the two paths draw the same room.
+fn deleted(
+    gone: &RedactedSyncMessageLikeEvent<RedactedRoomMessageEventContent>,
+) -> Option<Message> {
+    Some(Message {
+        id: gone.event_id.to_string(),
+        sender: gone.sender.to_string(),
+        at: gone.origin_server_ts.0.into(),
+        body: String::new(),
+        html: None,
+        media: None,
+        thread: None,
+        edited: false,
+        reactions: Vec::new(),
+        reply_to: None,
+        mentions: Vec::new(),
+        // One field off the raw redaction rather than a match over
+        // `AnyRedactionEvent`, which is non-exhaustive and has variants this
+        // has no use for. A homeserver that sent no sender leaves it `None`,
+        // and the mark then names nobody rather than guessing.
+        deleted_by: gone
+            .unsigned
+            .redacted_because
+            .get_field::<String>("sender")
+            .ok()
+            .flatten(),
+        kind: MessageKind::Deleted,
     })
 }
 
@@ -1415,28 +1497,106 @@ mod tests {
         assert_eq!(message(&reacted), None);
     }
 
-    #[test]
-    fn a_redacted_message_is_not_drawn() {
-        // Its content is gone, so there is nothing to show. A tombstone in its
-        // place is a thing to build once there is a reason to.
-        let redacted = event(json!({
+    /// A message the homeserver has emptied, redacted by `by`.
+    fn emptied(by: Value) -> TimelineEvent {
+        event(json!({
             "type": "m.room.message",
             "event_id": "$gone:example.org",
             "sender": "@ada:example.org",
             "origin_server_ts": 1_700_000_000_000u64,
             "content": {},
-            "unsigned": {
-                "redacted_because": {
-                    "type": "m.room.redaction",
-                    "event_id": "$redaction:example.org",
-                    "sender": "@ada:example.org",
-                    "origin_server_ts": 1_700_000_000_001u64,
-                    "content": {},
-                },
-            },
+            "unsigned": { "redacted_because": by },
+        }))
+    }
+
+    /// One `m.room.redaction` as it appears in `redacted_because`.
+    fn because(sender: &str) -> Value {
+        json!({
+            "type": "m.room.redaction",
+            "event_id": "$redaction:example.org",
+            "sender": sender,
+            "origin_server_ts": 1_700_000_000_001u64,
+            "content": {},
+        })
+    }
+
+    #[test]
+    fn a_redacted_message_is_drawn_as_a_mark() {
+        // The gap is the thing being avoided, and it is the argument the two
+        // tests below this one make as well. A message that vanishes leaves
+        // the reply under it answering nothing, and every other client in the
+        // room draws a mark here, so closing over it would make one room look
+        // like two depending on what it was opened in.
+        let gone = message(&emptied(because("@ada:example.org")))
+            .expect("a redacted message is still drawn");
+
+        assert_eq!(gone.kind, MessageKind::Deleted);
+        // The envelope survives a redaction, which is what this is built from.
+        assert_eq!(gone.sender, "@ada:example.org");
+        assert_eq!(gone.at, 1_700_000_000_000);
+        // And nothing else is invented. The words on screen belong to the
+        // interface, which is also what lets it name a moderator by the
+        // display name this side has never heard of.
+        assert_eq!(gone.body, "");
+        assert_eq!(gone.html, None);
+        assert_eq!(gone.media, None);
+    }
+
+    #[test]
+    fn a_mark_carries_who_did_it() {
+        // A moderator removing somebody's message and that person removing
+        // their own are one event type with a different sender on it. Without
+        // this the mark under somebody's name says they deleted what they
+        // said, which for half the redactions in a moderated room is untrue.
+        let gone = message(&emptied(because("@mod:example.org"))).unwrap();
+
+        assert_eq!(gone.deleted_by.as_deref(), Some("@mod:example.org"));
+        assert_eq!(gone.sender, "@ada:example.org");
+    }
+
+    #[test]
+    fn a_mark_names_nobody_when_the_redaction_does_not() {
+        // `redacted_because` is the homeserver's to fill in. Unknown is read
+        // as unknown rather than as the author, because of the two readings
+        // only one can say something untrue.
+        let gone = message(&emptied(json!({ "type": "m.room.redaction" }))).unwrap();
+
+        assert_eq!(gone.deleted_by, None);
+        assert_eq!(gone.kind, MessageKind::Deleted);
+    }
+
+    #[test]
+    fn a_redaction_says_what_it_removes_and_who_removed_it() {
+        let removal = event(json!({
+            "type": "m.room.redaction",
+            "event_id": "$redaction:example.org",
+            "sender": "@mod:example.org",
+            "origin_server_ts": 1_700_000_000_001u64,
+            "redacts": "$gone:example.org",
+            "content": {},
         }));
 
-        assert_eq!(message(&redacted), None);
+        let read = redaction(&removal).expect("a redaction is one");
+        assert_eq!(read.event_id, "$gone:example.org");
+        assert_eq!(read.sender, "@mod:example.org");
+    }
+
+    #[test]
+    fn a_redaction_that_names_its_target_in_the_content_is_read_too() {
+        // Room 11 moved `redacts` inside the content. Reading only the top
+        // level would leave every redaction in a modern room unswept.
+        let removal = event(json!({
+            "type": "m.room.redaction",
+            "event_id": "$redaction:example.org",
+            "sender": "@ada:example.org",
+            "origin_server_ts": 1_700_000_000_001u64,
+            "content": { "redacts": "$gone:example.org" },
+        }));
+
+        assert_eq!(
+            redaction(&removal).map(|read| read.event_id),
+            Some("$gone:example.org".to_owned())
+        );
     }
 
     #[test]

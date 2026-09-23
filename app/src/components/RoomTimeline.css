@@ -31,6 +31,35 @@
 }
 
 /*
+  The name, as the thing that opens the room's details.
+
+  Styled back down to the heading it sits inside rather than up into a button:
+  a header that suddenly reads as a control is a header nobody trusts, and the
+  hover is the whole of the invitation. Inheriting the type is what keeps the
+  two identical, so the heading's size can change in one place.
+*/
+.timeline__about {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.timeline__about:hover {
+  color: var(--violet-hover);
+}
+
+.timeline__about:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
   `min-width: 0`, so the ellipsis below has something to happen against.
 
   The rule under it is what makes this read as the room's header rather than
@@ -378,6 +407,26 @@
 .timeline__message:focus-within .timeline__actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+/*
+  Held open while the question about deleting is up.
+
+  Focus is inside it, so `:focus-within` above already covers the ordinary
+  case. This covers the one it does not: a click on the panel's own words
+  rather than its buttons takes the focus out, and without this the question
+  and the row it hangs from would fade out from under the hand that is
+  answering it.
+*/
+.timeline__actions[data-asking="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Something for the question to hang from, as the picker's control has. */
+.timeline__remove {
+  position: relative;
+  display: flex;
 }
 
 .timeline__action {
@@ -846,16 +895,25 @@
   the one thing about a thread worth spotting while scrolling past.
 
   Not the mint, which belongs to voice and presence. A thread is neither.
+
+  Quiet is about colour and nothing else. It used to be about size too: at
+  `--text-xs` with two pixels above and below, this stood 22px tall, under the
+  24px WCAG asks of a target and small enough that opening a thread meant
+  aiming at it (#82). The height below is the control's, not the text's, so it
+  can be comfortably bigger than the words in it without getting louder.
 */
 .timeline__thread {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
   margin-top: var(--space-1);
-  padding: 2px var(--space-2);
+  padding: 0 var(--space-3);
   background: var(--surface-raised);
   border: 1px solid var(--line-subtle);
   border-radius: 999px;
   color: var(--text-muted);
   font: inherit;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
   transition:
@@ -890,7 +948,8 @@
 
 .timeline__thread[data-opening="true"]::before {
   content: "";
-  display: inline-block;
+  /* A flex item now, so the row above centres it and it keeps its size. */
+  flex: none;
   width: 0.75em;
   height: 0.75em;
   margin-right: var(--space-1);
@@ -898,7 +957,6 @@
   /* The gap is what makes a ring look like it is turning at all. */
   border-top-color: transparent;
   border-radius: 50%;
-  vertical-align: -1px;
   animation: timeline-waiting 900ms linear infinite;
 }
 
@@ -1044,6 +1102,28 @@
 */
 .timeline__body[data-kind="notice"] {
   color: var(--text-muted);
+}
+
+/*
+  The mark where a message was.
+
+  Quieter than the two below it, which are waits: an undecryptable message may
+  still arrive and an unsupported one is a limit of this build, so both are
+  drawn as something being missed. This one is finished, and a mark that shouts
+  would make every deleted line in a room louder than the conversation around
+  it.
+
+  Italic rather than boxed for the same reason. The box those two carry says
+  "something belongs here"; nothing belongs here any more.
+*/
+.timeline__deleted {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: italic;
 }
 
 /*

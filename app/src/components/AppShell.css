@@ -11,13 +11,15 @@
   long unbroken string, a room ID for instance, would push the whole layout
   wider than the window and put a horizontal scrollbar on the app.
 
-  The fourth column is the thread panel, and `auto` because it is usually not
-  there at all: the panel draws nothing while no thread is open, and a track
-  with nothing in it takes no width.
+  The last two columns are the thread panel and the room's details, and `auto`
+  because usually neither is there at all: each draws nothing while it is shut,
+  and a track with nothing in it takes no width. Two tracks rather than one
+  shared between them, because a grid track cannot hold two panels side by
+  side and the shell already keeps them from being open at once.
 */
 .shell {
   display: grid;
-  grid-template-columns: 72px 240px minmax(0, 1fr) auto;
+  grid-template-columns: 72px 240px minmax(0, 1fr) auto auto;
   height: 100%;
   background: var(--surface-base);
 }
@@ -28,7 +30,7 @@
   click away and the control that unfolds is in the pane's own header.
 */
 .shell[data-sidebar="folded"] {
-  grid-template-columns: 72px 0 minmax(0, 1fr) auto;
+  grid-template-columns: 72px 0 minmax(0, 1fr) auto auto;
 }
 
 /*

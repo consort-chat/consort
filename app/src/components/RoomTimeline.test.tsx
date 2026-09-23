@@ -28,6 +28,7 @@ const timelineTyping = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const timelineReply = vi.hoisted(() => vi.fn());
 const timelineEdit = vi.hoisted(() => vi.fn());
+const timelineDelete = vi.hoisted(() => vi.fn());
 const timelineCopyLink = vi.hoisted(() => vi.fn());
 const timelineMarkRead = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
@@ -64,6 +65,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineSend,
   timelineReply,
   timelineEdit,
+  timelineDelete,
   timelineCopyLink,
   timelineMarkRead,
   memberNames,
@@ -202,6 +204,7 @@ beforeEach(() => {
   timelineSend.mockReset().mockResolvedValue(undefined);
   timelineReply.mockReset().mockResolvedValue(undefined);
   timelineEdit.mockReset().mockResolvedValue(undefined);
+  timelineDelete.mockReset().mockResolvedValue(undefined);
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
   timelineMarkRead.mockReset().mockResolvedValue(undefined);
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada", [BOB]: "Bob" });
@@ -224,7 +227,15 @@ beforeEach(() => {
 
 /** Render the pane and hand back a way to publish into it. */
 async function pane(channel: Channel = general) {
-  render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={channel} />);
+  render(
+    <RoomTimeline
+      selfId="@bob:example.org"
+      onOpenRoom={vi.fn()}
+      infoOpen={false}
+      onToggleInfo={vi.fn()}
+      channel={channel}
+    />,
+  );
   await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 }
 
@@ -261,7 +272,15 @@ describe("RoomTimeline", () => {
   });
 
   it("closes the room when it goes", async () => {
-    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
+    const { unmount } = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 
     unmount();
@@ -555,11 +574,27 @@ describe("RoomTimeline", () => {
   it("puts the hash on a text channel and not on a voice one", async () => {
     // The hash is the text channel's, and only the text channel's. It is how
     // every client anybody already uses says which of the two this is.
-    const { unmount } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
+    const { unmount } = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("#general");
     unmount();
 
-    render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={lounge} />);
+    render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={lounge}
+      />,
+    );
 
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent("Lounge");
@@ -573,10 +608,68 @@ describe("RoomTimeline", () => {
   });
 
   it("draws no subtitle for a room with no topic", async () => {
-    const { container } = render(<RoomTimeline selfId="@bob:example.org" onOpenRoom={vi.fn()} channel={general} />);
+    const { container } = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
 
     expect(container.querySelector(".timeline__topic")).toBeNull();
+  });
+
+  it("opens the room's details from its name", async () => {
+    // Issue #85: the header was a line of text and pressing it did nothing.
+    const onToggleInfo = vi.fn();
+    render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={onToggleInfo}
+        channel={general}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+
+    expect(onToggleInfo).toHaveBeenCalled();
+  });
+
+  it("says whether the details it opens are already up", async () => {
+    // One control both ways, so it has to say which way the next press goes.
+    const { unmount } = render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "#general" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    unmount();
+
+    render(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "#general" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 
   it("asks for the page above when the reader gets near the top", async () => {
@@ -1384,6 +1477,116 @@ describe("correcting a message", () => {
   });
 });
 
+describe("deleting a message", () => {
+  /** Press Delete on this account's own message and answer the question yes. */
+  async function deleting() {
+    await pane();
+    await arrive(timeline([said("$1", BOB, "wrong number")]));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+  }
+
+  it("offers the control on this account's own message and not on another's", async () => {
+    await pane();
+    await arrive(
+      timeline([
+        said("$1", BOB, "wrong number"),
+        said("$2", ADA, "what they said"),
+      ]),
+    );
+
+    expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(1);
+  });
+
+  it("sends nothing until the question has been answered", async () => {
+    await pane();
+    await arrive(timeline([said("$1", BOB, "wrong number")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(timelineDelete).not.toHaveBeenCalled();
+  });
+
+  it("redacts the message once the question is answered", async () => {
+    await deleting();
+
+    expect(timelineDelete).toHaveBeenCalledWith(GENERAL, "$1");
+  });
+
+  it("says so when the homeserver refuses", async () => {
+    // A moderated room can refuse a redaction, and the SDK's HTTP error is
+    // not a sentence to put on a screen.
+    timelineDelete.mockRejectedValue({
+      message: "That did not work.",
+      detail: "no",
+    });
+
+    await deleting();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That did not work.",
+    );
+  });
+
+  it("puts the composer back when the message being edited is deleted", async () => {
+    // Two presses apart, and what it would otherwise leave behind is a
+    // correction addressed to an event with nothing left to correct.
+    await pane();
+    await arrive(timeline([said("$1", BOB, "wrong number")]));
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Stop editing" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+  });
+
+  it("keeps a half-written reply when the message being answered is deleted", async () => {
+    // The other way round from an edit. What is in the box is something
+    // somebody typed, and it is still worth sending somewhere else.
+    await pane();
+    await arrive(
+      timeline([
+        said("$1", ADA, "the one being answered"),
+        said("$2", BOB, "wrong number"),
+      ]),
+    );
+    const [theirs] = screen.getAllByRole("button", { name: "Reply" });
+    await userEvent.click(theirs as HTMLElement);
+    await userEvent.type(screen.getByRole("textbox"), "half a sentence");
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(screen.getByRole("textbox")).toHaveValue("half a sentence");
+  });
+
+  it("draws the mark when the redaction comes back", async () => {
+    // There is no local echo, so the message stays on screen until the sync
+    // brings the redaction round, which is when this arrives.
+    await deleting();
+    expect(screen.getByText("wrong number")).toBeInTheDocument();
+
+    await arrive(
+      timeline([
+        { ...said("$1", BOB, ""), kind: "deleted" as const, deletedBy: BOB },
+      ]),
+    );
+
+    expect(await screen.findByText("Message deleted")).toBeInTheDocument();
+    expect(screen.queryByText("wrong number")).not.toBeInTheDocument();
+  });
+});
+
 describe("the up arrow", () => {
   it("opens the last message this account sent", async () => {
     // The binding everybody reaches for without thinking.
@@ -1625,13 +1828,27 @@ describe("sending an attachment", () => {
     // picture that goes to the wrong people.
     pickAttachment.mockResolvedValue(CHOSEN);
     const { rerender } = render(
-      <RoomTimeline selfId={BOB} onOpenRoom={vi.fn()} channel={general} />,
+      <RoomTimeline
+        selfId={BOB}
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={general}
+      />,
     );
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
     await userEvent.click(screen.getByRole("button", { name: "Attach a file" }));
     await screen.findByText("holiday.png");
 
-    rerender(<RoomTimeline selfId={BOB} onOpenRoom={vi.fn()} channel={lounge} />);
+    rerender(
+      <RoomTimeline
+        selfId={BOB}
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={lounge}
+      />,
+    );
 
     await waitFor(() =>
       expect(screen.queryByText("holiday.png")).not.toBeInTheDocument(),
@@ -1798,6 +2015,8 @@ describe("going to a message somebody linked", () => {
       <RoomTimeline
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
         channel={general}
         focus={focus}
       />,

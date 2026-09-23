@@ -718,6 +718,7 @@ mod tests {
                         id: "!lounge:example.org".to_owned(),
                         name: Some("Lounge".to_owned()),
                         topic: None,
+                        alias: None,
                         kind: ChannelKind::Voice,
                         avatar: None,
                         joined: true,

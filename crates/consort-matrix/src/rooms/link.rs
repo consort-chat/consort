@@ -1,12 +1,15 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Which room a link points at.
+//! A room and its `matrix.to` address, in both directions.
 //!
 //! A `matrix.to` address names a room one of two ways. A room ID is the room
 //! itself and needs nothing but parsing. An alias is a name a homeserver's
 //! directory holds, it can be moved, and it may belong to a server this one has
 //! only heard of, so the only way to turn one into a room is to ask.
+//!
+//! Writing one is the same two cases read backwards, and the SDK decides
+//! between them: see [`permalink`].
 //!
 //! ## Why this also answers whether we are in it
 //!
@@ -21,6 +24,29 @@ use matrix_sdk::Client;
 use matrix_sdk::ruma::{OwnedRoomId, RoomAliasId, RoomId};
 
 use crate::error::{Error, Result};
+
+/// A `matrix.to` address for one room, to give to somebody else.
+///
+/// `matrix.to` for the reason a message's address is: a link is pasted into
+/// places that are not Matrix clients, and this is the form that opens in a
+/// browser for somebody who has no client at all.
+///
+/// Which of the two forms comes back is the SDK's decision and the right one:
+/// a published alias if the room has one, because that is the address the room
+/// chose and the one a person can read, and otherwise the room ID with the
+/// three servers most likely to know it, because a bare room ID is a name with
+/// nowhere to ask.
+pub async fn permalink(client: &Client, room_id: &str) -> Result<String> {
+    let parsed = RoomId::parse(room_id).map_err(|_| Error::NoSuchRoom {
+        room_id: room_id.to_owned(),
+    })?;
+
+    let room = client.get_room(&parsed).ok_or_else(|| Error::NoSuchRoom {
+        room_id: room_id.to_owned(),
+    })?;
+
+    Ok(room.matrix_to_permalink().await?.to_string())
+}
 
 /// The joined room one address names, whether it is an ID or an alias.
 ///
