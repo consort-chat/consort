@@ -588,6 +588,18 @@ impl Loaded {
         }
 
         self.resolve(room).await;
+        // A window read forwards until the homeserver has nothing after it is
+        // not a window any more: what is loaded ends where the room does. Held
+        // on to, it says a reader at the newest message in the room is looking
+        // at older ones, and it goes on telling the sync arm to drop every
+        // message that arrives, so the room reads as frozen at its own bottom.
+        //
+        // Nothing arriving is lost to giving it up here. A sync that landed
+        // while the page was being read is still waiting on the broadcast
+        // receiver, and the loop reaches it with the window already gone.
+        if matches!(towards, Direction::Forward) && !self.more_after {
+            self.focus = None;
+        }
         self.loading(towards, false);
         self.publish(on_change);
     }

@@ -759,6 +759,46 @@ describe("RoomTimeline", () => {
     expect(screen.getByRole("log").scrollTop).toBe(400);
   });
 
+  it("does not drag a reader down when they send from up the history", async () => {
+    // Sending a message is not a request to stop reading. Somebody catching up
+    // on this morning while answering something else would have to scroll back
+    // after every line they sent.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+    await scrollTo(400);
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+    await waitFor(() => expect(timelineSend).toHaveBeenCalled());
+    layout.scrollHeight = 1_000;
+    await arrive(
+      timeline([said("$1", ADA, "hello"), said("$2", BOB, "quite")], {
+        moreBefore: true,
+      }),
+    );
+
+    expect(screen.getByRole("log").scrollTop).toBe(400);
+  });
+
+  it("follows the message down for somebody who was at the bottom", async () => {
+    // The other half, and the one that must not change: at the bottom of the
+    // room, what they just said is the next thing to read.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")], { moreBefore: true }));
+
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+    await waitFor(() => expect(timelineSend).toHaveBeenCalled());
+    layout.scrollHeight = 1_200;
+    await arrive(
+      timeline([said("$1", ADA, "hello"), said("$2", BOB, "quite")], {
+        moreBefore: true,
+      }),
+    );
+
+    expect(screen.getByRole("log").scrollTop).toBe(900);
+  });
+
   it("stays at the bottom when a picture finishes loading", async () => {
     // Growing is not scrolling. The box gets taller under somebody already at
     // the bottom, no event fires and nothing re-renders, so without a listener
@@ -2143,16 +2183,105 @@ describe("a room that is not showing the present", () => {
     expect(timelineLater).not.toHaveBeenCalled();
   });
 
-  it("comes back to the present when something is sent from a window", async () => {
-    // The message went to the live end of the room. Watching it not appear is
-    // worse than being moved to where it did.
+  it("says where the message went, and stays where the reader was", async () => {
+    // The box empties only once the homeserver has the message, so an empty
+    // box with nothing new in the room is a state that otherwise never
+    // happens, and the natural reading of it is that the message is gone.
+    // Saying so is the whole answer: moving somebody out of what they were
+    // reading to show them their own message is a scroll back every time.
+    fakeScrolling(900, 300);
     await pane();
     await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+    await scrollTo(300);
 
     await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
 
     expect(timelineSend).toHaveBeenCalledWith(GENERAL, "quite");
-    await waitFor(() => expect(timelinePresent).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/went to the end of the room/i),
+    ).toBeVisible();
+    expect(timelinePresent).not.toHaveBeenCalled();
+    expect(screen.getByRole("log").scrollTop).toBe(300);
+    // Not as a failure. The message did go, and an alert would say the
+    // opposite of what happened.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("stops saying it once the room has been back to the present", async () => {
+    // Otherwise the next window somebody jumps into, about nothing they sent,
+    // carries the same sentence.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+    await userEvent.type(screen.getByRole("textbox"), "quite{Enter}");
+    await screen.findByText(/went to the end of the room/i);
+
+    await arrive(timeline([said("$2", BOB, "quite")]));
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+
+    expect(screen.getByText(/showing older messages/i)).toBeVisible();
+    expect(
+      screen.queryByText(/went to the end of the room/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lands at the bottom when the way back to the present was pressed", async () => {
+    // The opposite ask from a jump, and the one place a reader does want to be
+    // moved: they asked to be at the live end of the room.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(timeline([said("$1", ADA, "last March")], { focus: "$1" }));
+    await scrollTo(200);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /back to the present/i }),
+    );
+    layout.scrollHeight = 1_200;
+    await arrive(timeline([said("$9", BOB, "the present")]));
+
+    expect(timelinePresent).toHaveBeenCalled();
+    expect(screen.getByRole("log").scrollTop).toBe(900);
+  });
+
+  it("leaves the reader among the messages a window read its way into", async () => {
+    // A window that reaches the live end stops being a window, which is not a
+    // press and not a jump: it is the page somebody scrolled to the bottom of
+    // the room to get, and dropping them at the end of it skips the lot.
+    const layout = fakeScrolling(900, 300);
+    await pane();
+    await arrive(
+      timeline([said("$1", ADA, "last March")], {
+        focus: "$1",
+        moreAfter: true,
+      }),
+    );
+    await scrollTo(500);
+
+    layout.scrollHeight = 1_800;
+    await arrive(
+      timeline([said("$1", ADA, "last March"), said("$2", BOB, "and after")]),
+    );
+
+    expect(screen.getByRole("log").scrollTop).toBe(500);
+    expect(
+      screen.queryByText(/showing older messages/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says nothing of the sort about an edit made in a window", async () => {
+    // An edit changes the message being read, which is in the window and on
+    // screen. Nothing went anywhere nobody is looking.
+    await pane();
+    await arrive(timeline([said("$1", BOB, "teh typo")], { focus: "$1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    await userEvent.clear(screen.getByRole("textbox"));
+    await userEvent.type(screen.getByRole("textbox"), "the typo");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(timelineEdit).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/went to the end of the room/i),
+    ).not.toBeInTheDocument();
   });
 
   it("goes to a message a reply names but does not draw", async () => {

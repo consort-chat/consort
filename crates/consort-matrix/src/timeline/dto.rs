@@ -58,7 +58,9 @@ pub struct Timeline {
     pub more_after: bool,
     /// The message this window was opened around, when it is not the present.
     ///
-    /// `None` for the room as it is normally drawn. Load-bearing rather than
+    /// `None` for the room as it is normally drawn, and for a window that has
+    /// been read forwards until it caught up with the live end, which is the
+    /// room normally drawn by another route. Load-bearing rather than
     /// informational: a reader looking at last March has to be told it is not
     /// the bottom of the room, because everything else about the two looks the
     /// same and a conversation that has stopped arriving is what a broken
