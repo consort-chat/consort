@@ -2,10 +2,12 @@
   What the row under a message measures, read off the stylesheet that draws it.
 
   WCAG 2.5.8 asks 24 by 24 CSS pixels of anything there is to press, and this
-  row has been under it twice: the thread pill (#82), then the reaction pills
-  and the control that adds one (#102). Each time the control took its height
-  from the words or the glyph inside it, which is the shape where reading the
-  stylesheet and believing it is exactly what fails.
+  row has been under it three times: the thread pill (#82), then the reaction
+  pills and the control that adds one (#102). Each time the control took its
+  height from the words or the glyph inside it, which is the shape where
+  reading the stylesheet and believing it is exactly what fails. #88 fixed the
+  first of the three and merged with nothing holding its number in place, so
+  all three are checked here rather than only the two that were just changed.
 
   A file of its own, because it is the only kind of test that wants CSS.
 
@@ -108,5 +110,13 @@ describe("the size of what there is to press under a message", () => {
     standsAtLeastTheFloor(
       screen.getByRole("button", { name: "Add a reaction" }),
     );
+  });
+
+  it("stands the thread pill tall enough to hit", () => {
+    // Not this change. #88 made this one 28px and merged with nothing
+    // asserting it, so the number has been unheld since.
+    drawTheRow();
+
+    standsAtLeastTheFloor(screen.getByRole("button", { name: /3 replies/i }));
   });
 });
