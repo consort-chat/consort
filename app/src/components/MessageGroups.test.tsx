@@ -22,7 +22,7 @@ import {
 import { ConfirmDelete } from "./ConfirmDelete";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
-import type { Message, SystemMessage } from "../lib/api";
+import type { Message, SystemChange, SystemMessage } from "../lib/api";
 
 beforeEach(() => {
   // Both caches are module-level, so one test's answers would otherwise be
@@ -179,18 +179,34 @@ describe("grouping", () => {
   });
 });
 
-describe("membership changes", () => {
+describe("room changes", () => {
   function membership(
     id: string,
-    kind: SystemMessage["kind"],
+    kind: "joined" | "invited" | "left" | "kicked" | "banned",
     actor: string,
     subject: string,
     at = NOON,
   ): SystemMessage {
-    return { id, at, actor, subject, kind };
+    return { id, at, actor, kind, subject };
   }
 
-  /** Draw a room with only membership changes in it, no messages. */
+  /** One change to the room itself rather than to somebody's membership. */
+  function roomChange(
+    id: string,
+    change: Extract<
+      SystemChange,
+      { kind: "renamed" | "topicChanged" | "avatarChanged" }
+    >,
+    at = NOON,
+  ): SystemMessage {
+    return { id, at, actor: ADA, ...change };
+  }
+
+  /** Resolve the two people these tests know, and nobody else. */
+  const named = (userId: string) =>
+    ({ [ADA]: "Ada", [BOB]: "Bob" })[userId] ?? userId;
+
+  /** Draw a room with only room changes in it, no messages. */
   function drawSystem(system: SystemMessage[]) {
     return render(
       <MessageGroups
@@ -213,7 +229,42 @@ describe("membership changes", () => {
     ["kicked", "Ada removed Bob from the room"],
     ["banned", "Ada banned Bob"],
   ] as const)("says what happened for a %s change", (kind, sentence) => {
-    expect(systemMessageText(kind, "Ada", "Bob")).toBe(sentence);
+    expect(systemMessageText({ kind, subject: BOB }, "Ada", named)).toBe(
+      sentence,
+    );
+  });
+
+  it.each([
+    [{ kind: "renamed", name: "tech" }, "Ada changed the room name to tech"],
+    [{ kind: "renamed", name: null }, "Ada removed the room name"],
+    [
+      { kind: "topicChanged", topic: "the build" },
+      "Ada changed the topic to the build",
+    ],
+    [{ kind: "topicChanged", topic: null }, "Ada removed the topic"],
+    [
+      { kind: "avatarChanged", url: "mxc://example.org/tech" },
+      "Ada changed the room picture",
+    ],
+    [{ kind: "avatarChanged", url: null }, "Ada removed the room picture"],
+  ] as const)("says what happened for a %o", (change, sentence) => {
+    expect(systemMessageText(change, "Ada", named)).toBe(sentence);
+  });
+
+  it("draws the room change issue #84 asked for by name", () => {
+    // "tominal has updated the room" is a rename, which is why the
+    // membership half alone did not close #84.
+    drawSystem([roomChange("$1", { kind: "renamed", name: "tech" })]);
+
+    expect(screen.getByText("Ada changed the room name to tech")).toBeVisible();
+  });
+
+  it("never looks a room name up as though it were a person", () => {
+    // A room called the same thing as a user ID is still a room name. The
+    // union is what keeps the names lookup off it.
+    drawSystem([roomChange("$1", { kind: "renamed", name: ADA })]);
+
+    expect(screen.getByText(`Ada changed the room name to ${ADA}`)).toBeVisible();
   });
 
   it("draws a membership change as its own line", () => {
@@ -260,7 +311,7 @@ describe("membership changes", () => {
     );
   });
 
-  it("draws nothing extra when there are no membership changes", () => {
+  it("draws nothing extra when there are no room changes", () => {
     drawSystem([]);
 
     expect(screen.queryByRole("note")).not.toBeInTheDocument();

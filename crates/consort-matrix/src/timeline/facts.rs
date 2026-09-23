@@ -52,7 +52,7 @@
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::events::room::MediaSource;
-use matrix_sdk::ruma::events::room::member::MembershipState;
+use matrix_sdk::ruma::events::room::member::{MembershipState, OriginalSyncRoomMemberEvent};
 use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
 use matrix_sdk::ruma::events::room::message::{
     FormattedBody, MessageFormat, MessageType, RedactedRoomMessageEventContent, Relation,
@@ -66,7 +66,7 @@ use matrix_sdk::ruma::events::{
 use matrix_sdk::ruma::serde::Raw;
 
 use crate::timeline::dto::{
-    Media, Message, MessageKind, SystemMessage, SystemMessageKind, ThreadSummary,
+    Media, Message, MessageKind, SystemChange, SystemMessage, ThreadSummary,
 };
 
 /// One `m.reaction` event, unpacked.
@@ -310,71 +310,116 @@ pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
     })
 }
 
-/// One event as a membership change, or `None` when it is not one to draw.
+/// One event as something that happened to the room, or `None` when it is not
+/// one to draw.
 ///
-/// The first state event this module reads at all: see the module doc for
-/// why every other one is skipped. Membership goes first because it is the
-/// one every other Matrix client shows by default, and because a room where
-/// people quietly come and go with nothing said about it is the complaint
-/// this function exists to answer.
+/// The only state events this module reads: see the module doc for why the
+/// rest are skipped. Membership came first because it is the one every other
+/// Matrix client shows by default. Name, topic and avatar followed because
+/// "somebody has updated the room" is the other half of the same complaint,
+/// and a room that renames itself with nothing said about it reads as though
+/// somebody opened a different room.
 ///
-/// A room name, topic or avatar change is not read here yet, and neither is
-/// a power level change or a profile update with the membership left as it
-/// was. All of them are `None`, the same as any other state event `message`
-/// does not draw; there is no line missing so much as a line not yet
-/// written.
+/// A power level change, a canonical alias, a join rule, a history visibility
+/// and every other state event are still `None`, the same as any event
+/// `message` does not draw; there is no line missing so much as a line not
+/// yet written.
 pub fn system(event: &TimelineEvent) -> Option<SystemMessage> {
-    let AnySyncTimelineEvent::State(AnySyncStateEvent::RoomMember(SyncStateEvent::Original(
-        member,
-    ))) = event.raw().deserialize().ok()?
-    else {
-        // Every message-like event, every other state event, and a redacted
-        // membership change, which has no `membership` left to compare.
+    let AnySyncTimelineEvent::State(state) = event.raw().deserialize().ok()? else {
+        // Every message-like event, and every reaction.
         return None;
     };
 
+    // Each arm names its own event rather than binding one through the enum,
+    // because `id`, `at` and `actor` live on the event and the change does
+    // not: there is nothing common to hoist above this match that would not
+    // have to be taken apart again inside it.
+    match state {
+        AnySyncStateEvent::RoomMember(SyncStateEvent::Original(member)) => Some(SystemMessage {
+            id: member.event_id.to_string(),
+            at: member.origin_server_ts.0.into(),
+            actor: member.sender.to_string(),
+            change: membership(&member)?,
+        }),
+        AnySyncStateEvent::RoomName(SyncStateEvent::Original(named)) => Some(SystemMessage {
+            id: named.event_id.to_string(),
+            at: named.origin_server_ts.0.into(),
+            actor: named.sender.to_string(),
+            change: SystemChange::Renamed {
+                name: or_cleared(named.content.name),
+            },
+        }),
+        AnySyncStateEvent::RoomTopic(SyncStateEvent::Original(topic)) => Some(SystemMessage {
+            id: topic.event_id.to_string(),
+            at: topic.origin_server_ts.0.into(),
+            actor: topic.sender.to_string(),
+            change: SystemChange::TopicChanged {
+                topic: or_cleared(topic.content.topic),
+            },
+        }),
+        AnySyncStateEvent::RoomAvatar(SyncStateEvent::Original(avatar)) => Some(SystemMessage {
+            id: avatar.event_id.to_string(),
+            at: avatar.origin_server_ts.0.into(),
+            actor: avatar.sender.to_string(),
+            change: SystemChange::AvatarChanged {
+                url: avatar.content.url.map(|url| url.to_string()),
+            },
+        }),
+        // Every other state event, and a redacted one of the four above: a
+        // redaction takes the content with it, so there is no name left to
+        // report and no membership left to compare.
+        _ => None,
+    }
+}
+
+/// A state event's new value, or `None` when the event cleared it.
+///
+/// A room name or topic is removed by setting it to the empty string rather
+/// than by redacting the event, so an empty one is a removal and not a name.
+fn or_cleared(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+/// One `m.room.member` event as the change it makes, or `None` when it makes
+/// none worth drawing.
+fn membership(member: &OriginalSyncRoomMemberEvent) -> Option<SystemChange> {
     let previous = member
         .unsigned
         .prev_content
         .as_ref()
         .map(|prev| prev.membership.clone());
+    let subject = || member.state_key.to_string();
 
-    let kind = match (previous, &member.content.membership) {
+    let change = match (previous, &member.content.membership) {
         // A rejoin reads the same as a first join: there is nothing loaded
         // here that remembers whether this account has seen this member
         // before, and the two sentences would say the same thing anyway.
         (prev, MembershipState::Join) if prev.as_ref() != Some(&MembershipState::Join) => {
-            SystemMessageKind::Joined
+            SystemChange::Joined { subject: subject() }
         }
         // Already a member, so this is a display name or avatar change, not
-        // a membership change. Left undrawn on the same terms as a room name
-        // change: see the module doc.
+        // a membership change. Left undrawn on the same terms as every state
+        // event this module still skips: see the header on [`system`].
         (Some(MembershipState::Join), MembershipState::Join) => return None,
-        (_, MembershipState::Invite) => SystemMessageKind::Invited,
+        (_, MembershipState::Invite) => SystemChange::Invited { subject: subject() },
         (Some(MembershipState::Join), MembershipState::Leave) => {
             // Left on their own unless somebody else's hand is on the door:
             // a kick is also `membership: leave`, told apart only by whether
             // the sender is the member being removed.
             if member.sender == member.state_key {
-                SystemMessageKind::Left
+                SystemChange::Left { subject: subject() }
             } else {
-                SystemMessageKind::Kicked
+                SystemChange::Kicked { subject: subject() }
             }
         }
-        (_, MembershipState::Ban) => SystemMessageKind::Banned,
+        (_, MembershipState::Ban) => SystemChange::Banned { subject: subject() },
         // A withdrawn or declined invite, a knock, a leave from anything
         // other than having joined, or a membership this build has no
         // variant for. None of them has a sentence yet.
         _ => return None,
     };
 
-    Some(SystemMessage {
-        id: member.event_id.to_string(),
-        at: member.origin_server_ts.0.into(),
-        actor: member.sender.to_string(),
-        subject: member.state_key.to_string(),
-        kind,
-    })
+    Some(change)
 }
 
 fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
@@ -1822,8 +1867,12 @@ mod tests {
         assert_eq!(said.id, "$member:example.org");
         assert_eq!(said.at, 1_700_000_000_000);
         assert_eq!(said.actor, "@ada:example.org");
-        assert_eq!(said.subject, "@ada:example.org");
-        assert_eq!(said.kind, SystemMessageKind::Joined);
+        assert_eq!(
+            said.change,
+            SystemChange::Joined {
+                subject: "@ada:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1839,7 +1888,12 @@ mod tests {
         ))
         .expect("a rejoin is drawn as a join");
 
-        assert_eq!(said.kind, SystemMessageKind::Joined);
+        assert_eq!(
+            said.change,
+            SystemChange::Joined {
+                subject: "@ada:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1868,8 +1922,12 @@ mod tests {
         .expect("an invite is drawn");
 
         assert_eq!(said.actor, "@ada:example.org");
-        assert_eq!(said.subject, "@bragoodle:example.org");
-        assert_eq!(said.kind, SystemMessageKind::Invited);
+        assert_eq!(
+            said.change,
+            SystemChange::Invited {
+                subject: "@bragoodle:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1882,7 +1940,12 @@ mod tests {
         ))
         .expect("a self-leave is drawn");
 
-        assert_eq!(said.kind, SystemMessageKind::Left);
+        assert_eq!(
+            said.change,
+            SystemChange::Left {
+                subject: "@ada:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1896,8 +1959,12 @@ mod tests {
         .expect("a kick is drawn");
 
         assert_eq!(said.actor, "@ada:example.org");
-        assert_eq!(said.subject, "@bragoodle:example.org");
-        assert_eq!(said.kind, SystemMessageKind::Kicked);
+        assert_eq!(
+            said.change,
+            SystemChange::Kicked {
+                subject: "@bragoodle:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1910,7 +1977,12 @@ mod tests {
         ))
         .expect("a ban is drawn");
 
-        assert_eq!(said.kind, SystemMessageKind::Banned);
+        assert_eq!(
+            said.change,
+            SystemChange::Banned {
+                subject: "@bragoodle:example.org".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1931,5 +2003,161 @@ mod tests {
     #[test]
     fn an_ordinary_message_is_not_a_membership_change() {
         assert!(system(&sent(text("hello"))).is_none());
+    }
+
+    /// One room state event, of whatever type, with whatever content.
+    fn changed(kind: &str, content: serde_json::Value) -> TimelineEvent {
+        event(json!({
+            "type": kind,
+            "event_id": "$changed:example.org",
+            "sender": "@ada:example.org",
+            "state_key": "",
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": content,
+        }))
+    }
+
+    #[test]
+    fn renaming_the_room_says_what_it_is_called_now() {
+        // The line issue #84 asked for by name: "tominal has updated the
+        // room" is a room change, not a membership one.
+        let said =
+            system(&changed("m.room.name", json!({ "name": "tech" }))).expect("a rename is drawn");
+
+        assert_eq!(said.id, "$changed:example.org");
+        assert_eq!(said.at, 1_700_000_000_000);
+        assert_eq!(said.actor, "@ada:example.org");
+        assert_eq!(
+            said.change,
+            SystemChange::Renamed {
+                name: Some("tech".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_room_name_emptied_is_a_name_removed() {
+        // A name is cleared by being set to "", not by the event being
+        // redacted, so an empty one is a removal rather than a room called
+        // nothing.
+        let said = system(&changed("m.room.name", json!({ "name": "" })))
+            .expect("a cleared name is drawn");
+
+        assert_eq!(said.change, SystemChange::Renamed { name: None });
+    }
+
+    #[test]
+    fn changing_the_topic_says_what_it_is_now() {
+        let said = system(&changed("m.room.topic", json!({ "topic": "the build" })))
+            .expect("a topic change is drawn");
+
+        assert_eq!(
+            said.change,
+            SystemChange::TopicChanged {
+                topic: Some("the build".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_topic_emptied_is_a_topic_removed() {
+        let said = system(&changed("m.room.topic", json!({ "topic": "" })))
+            .expect("a cleared topic is drawn");
+
+        assert_eq!(said.change, SystemChange::TopicChanged { topic: None });
+    }
+
+    #[test]
+    fn changing_the_picture_carries_the_new_one() {
+        let said = system(&changed(
+            "m.room.avatar",
+            json!({ "url": "mxc://example.org/tech" }),
+        ))
+        .expect("an avatar change is drawn");
+
+        assert_eq!(
+            said.change,
+            SystemChange::AvatarChanged {
+                url: Some("mxc://example.org/tech".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_picture_removed_carries_no_url() {
+        // `m.room.avatar` clears itself by leaving `url` out rather than by
+        // emptying it, which is why this one variant needs no `or_cleared`.
+        let said = system(&changed("m.room.avatar", json!({}))).expect("a removed avatar is drawn");
+
+        assert_eq!(said.change, SystemChange::AvatarChanged { url: None });
+    }
+
+    #[test]
+    fn the_wire_carries_the_kind_beside_the_actor_rather_than_under_it() {
+        // `SystemChange` is flattened into `SystemMessage`, which is what
+        // lets the TypeScript mirror be a union discriminated on `kind` with
+        // the payload beside it. Pinned because the mirror is written by
+        // hand: a nested `change` object would typecheck on both sides and
+        // draw nothing.
+        let said = system(&changed("m.room.name", json!({ "name": "tech" })))
+            .expect("a rename is drawn");
+
+        assert_eq!(
+            serde_json::to_value(&said).expect("a system message serialises"),
+            json!({
+                "id": "$changed:example.org",
+                "at": 1_700_000_000_000u64,
+                "actor": "@ada:example.org",
+                "kind": "renamed",
+                "name": "tech",
+            })
+        );
+    }
+
+    #[test]
+    fn a_membership_change_still_carries_a_subject_on_the_wire() {
+        let said = system(&membership(
+            "@ada:example.org",
+            "@bragoodle:example.org",
+            "invite",
+            None,
+        ))
+        .expect("an invite is drawn");
+
+        assert_eq!(
+            serde_json::to_value(&said).expect("a system message serialises"),
+            json!({
+                "id": "$member:example.org",
+                "at": 1_700_000_000_000u64,
+                "actor": "@ada:example.org",
+                "kind": "invited",
+                "subject": "@bragoodle:example.org",
+            })
+        );
+    }
+
+    #[test]
+    fn a_state_event_with_no_sentence_yet_is_still_nothing() {
+        // The set #84's "or otherwise" gestures at and this change does not
+        // build: a canonical alias, a join rule, a history visibility, power
+        // levels. Undrawn on purpose, and this pins that they stay that way
+        // rather than arriving as a half-written line.
+        for (kind, content) in [
+            (
+                "m.room.canonical_alias",
+                json!({ "alias": "#tech:example.org" }),
+            ),
+            ("m.room.join_rules", json!({ "join_rule": "public" })),
+            (
+                "m.room.history_visibility",
+                json!({ "history_visibility": "shared" }),
+            ),
+            ("m.room.power_levels", json!({ "users_default": 0 })),
+        ] {
+            assert!(
+                system(&changed(kind, content)).is_none(),
+                "{kind} should still be undrawn"
+            );
+        }
     }
 }
