@@ -1955,7 +1955,12 @@ describe("copying a message address", () => {
         vi.advanceTimersByTime(COPIED_FOR);
       });
 
-      expect(screen.getByRole("button", { name: "Copy link" })).toBeVisible();
+      // Polled rather than demanded. The assertion is about the tick coming
+      // off, not about which tick of the clock React commits it on, and a
+      // loaded CI machine is where those two come apart.
+      expect(
+        await screen.findByRole("button", { name: "Copy link" }),
+      ).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
