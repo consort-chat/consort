@@ -1439,6 +1439,40 @@ export interface ThreadSummary {
 }
 
 /**
+ * One membership change in a room: a join, an invite, a leave, a kick or a
+ * ban. Mirrors `consort_matrix::SystemMessage`.
+ *
+ * Carries `actor` and `subject` as bare Matrix user IDs rather than a
+ * composed sentence, on the same terms as `Message.sender`: the interface
+ * already resolves IDs to display names for the voice roster and for
+ * replies, and writing the English here would mean writing it again for
+ * every locale Consort ever gains.
+ */
+export interface SystemMessage {
+  /** The event ID. The React key, on the same terms as `Message.id`. */
+  id: string;
+  /**
+   * `origin_server_ts`, in milliseconds.
+   *
+   * Used only to place this line among `messages` when the room draws the
+   * two lists together, which is an approximation: see the Rust field this
+   * mirrors for what that costs.
+   */
+  at: number;
+  /**
+   * Who made the change: the sender of the `m.room.member` event.
+   *
+   * For a join this is also `subject`; for an invite, a kick or a ban it is
+   * whoever sent the invitation, or made the removal.
+   */
+  actor: string;
+  /** Who the change is about: the event's state key. */
+  subject: string;
+  /** What changed. */
+  kind: "joined" | "invited" | "left" | "kicked" | "banned";
+}
+
+/**
  * Everything currently loaded for one room. Mirrors `consort_matrix::Timeline`.
  *
  * One value describes the whole of what is loaded, on the same terms as the
@@ -1507,6 +1541,15 @@ export interface Timeline {
    * Absent when there are none, which is most rooms most of the time.
    */
   answered?: Message[];
+  /**
+   * Membership changes (joins, invites, leaves, kicks, bans), drawn as
+   * system lines rather than as messages.
+   *
+   * Oldest first, on the same terms as `messages`. Absent when there are
+   * none, which is most rooms most of the time; drawing code treats a
+   * missing list the same as an empty one.
+   */
+  system?: SystemMessage[];
   /** Whether there is more history to ask for. */
   moreBefore: boolean;
   /**

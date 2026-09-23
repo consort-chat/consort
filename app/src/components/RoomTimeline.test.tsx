@@ -297,6 +297,68 @@ describe("RoomTimeline", () => {
     expect(bodies.map((one) => one.textContent)).toEqual(["first", "second"]);
   });
 
+  it("draws a membership change as a line among the messages", async () => {
+    await pane();
+
+    await arrive(
+      timeline([said("$1", ADA, "hello")], {
+        system: [
+          { id: "$2", at: NOON + 1_000, actor: BOB, subject: BOB, kind: "joined" },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText("Bob joined the room")).toBeVisible();
+  });
+
+  it("resolves names for whoever a membership change is about", async () => {
+    // `memberNames` is asked for message senders; a join or a leave names
+    // somebody who may never have sent a message, and the room has to ask
+    // for that name too or the line falls back to a bare Matrix ID.
+    await pane();
+
+    await arrive(
+      timeline([], {
+        system: [
+          { id: "$1", at: NOON, actor: ADA, subject: BOB, kind: "invited" },
+        ],
+      }),
+    );
+
+    await waitFor(() =>
+      expect(memberNames).toHaveBeenCalledWith(
+        GENERAL,
+        expect.arrayContaining([ADA, BOB]),
+      ),
+    );
+    expect(await screen.findByText("Ada invited Bob")).toBeVisible();
+  });
+
+  it("does not say the room is empty when it only has membership changes", async () => {
+    await pane();
+
+    await arrive(
+      timeline([], {
+        system: [
+          { id: "$1", at: NOON, actor: ADA, subject: ADA, kind: "joined" },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText("Ada joined the room")).toBeVisible();
+    expect(screen.queryByText("Nothing has been said here yet.")).toBeNull();
+  });
+
+  it("still says an empty room is empty", async () => {
+    await pane();
+
+    await arrive(timeline([]));
+
+    expect(
+      await screen.findByText("Nothing has been said here yet."),
+    ).toBeVisible();
+  });
+
   it("draws the formatting a message was sent with", async () => {
     // What was wrong before markdown: somebody typing a heading was shown
     // their own hashes back.

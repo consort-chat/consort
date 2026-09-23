@@ -16,12 +16,13 @@ import {
   firstOfEachDay,
   firstUnread,
   group,
+  systemMessageText,
   timeOf,
 } from "./MessageGroups";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
-import type { Message } from "../lib/api";
+import type { Message, SystemMessage } from "../lib/api";
 
 beforeEach(() => {
   // Both caches are module-level, so one test's answers would otherwise be
@@ -175,6 +176,94 @@ describe("grouping", () => {
 
   it("groups nothing out of nothing", () => {
     expect(group([])).toEqual([]);
+  });
+});
+
+describe("membership changes", () => {
+  function membership(
+    id: string,
+    kind: SystemMessage["kind"],
+    actor: string,
+    subject: string,
+    at = NOON,
+  ): SystemMessage {
+    return { id, at, actor, subject, kind };
+  }
+
+  /** Draw a room with only membership changes in it, no messages. */
+  function drawSystem(system: SystemMessage[]) {
+    return render(
+      <MessageGroups
+        groups={[]}
+        system={system}
+        names={{ [ADA]: "Ada", [BOB]: "Bob" }}
+        roomId={GENERAL}
+        selfId={BOB}
+        onAbout={vi.fn()}
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+  }
+
+  it.each([
+    ["joined", "Bob joined the room"],
+    ["invited", "Ada invited Bob"],
+    ["left", "Bob left the room"],
+    ["kicked", "Ada removed Bob from the room"],
+    ["banned", "Ada banned Bob"],
+  ] as const)("says what happened for a %s change", (kind, sentence) => {
+    expect(systemMessageText(kind, "Ada", "Bob")).toBe(sentence);
+  });
+
+  it("draws a membership change as its own line", () => {
+    drawSystem([membership("$1", "joined", ADA, ADA)]);
+
+    expect(screen.getByText("Ada joined the room")).toBeVisible();
+  });
+
+  it("falls back to the Matrix ID for somebody the room has no name for", () => {
+    const stranger = "@stranger:example.org";
+    drawSystem([membership("$1", "joined", stranger, stranger)]);
+
+    expect(screen.getByText(`${stranger} joined the room`)).toBeVisible();
+  });
+
+  it("places a membership change among the messages by when it happened", () => {
+    // Different senders, so `before` and `after` are two groups rather than
+    // one: a membership change can only land between groups, not inside one,
+    // so two messages close enough to be the same burst would keep the join
+    // on whichever side the burst starts, which is not what this is testing.
+    const minute = 60 * 1000;
+    render(
+      <MessageGroups
+        groups={group([
+          said("$1", ADA, "before", NOON),
+          said("$3", BOB, "after", NOON + 2 * minute),
+        ])}
+        system={[membership("$2", "joined", BOB, BOB, NOON + minute)]}
+        names={{ [ADA]: "Ada", [BOB]: "Bob" }}
+        roomId={GENERAL}
+        selfId={BOB}
+        onAbout={vi.fn()}
+        onOpenThread={vi.fn()}
+        onReact={vi.fn()}
+      />,
+    );
+
+    const order = document.body.textContent ?? "";
+    expect(order.indexOf("before")).toBeLessThan(
+      order.indexOf("Bob joined the room"),
+    );
+    expect(order.indexOf("Bob joined the room")).toBeLessThan(
+      order.indexOf("after"),
+    );
+  });
+
+  it("draws nothing extra when there are no membership changes", () => {
+    drawSystem([]);
+
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 });
 

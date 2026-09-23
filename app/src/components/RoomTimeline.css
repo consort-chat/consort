@@ -1512,3 +1512,19 @@
 .timeline__day-said {
   flex: none;
 }
+
+/*
+  One membership change: a join, an invite, a leave, a kick or a ban.
+
+  Quieter than either separator above, on purpose: a day divider and the
+  unread line are both about the reader's own place in the room, and this is
+  a fact about the room itself, closer in weight to a timestamp than to a
+  heading. No rule either side, so it reads as one small sentence among the
+  messages rather than as a break in them.
+*/
+.timeline__system {
+  margin: var(--space-1) 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: center;
+}
