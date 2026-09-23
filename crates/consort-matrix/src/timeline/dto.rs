@@ -277,6 +277,19 @@ pub struct Message {
     /// costs nothing on the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub edited: bool,
+    /// Who redacted it, for a [`MessageKind::Deleted`] and nothing else.
+    ///
+    /// Carried so that a tombstone can avoid saying something untrue about
+    /// who did it. A moderator removing somebody's message and that person
+    /// removing their own are the same event type with a different sender,
+    /// and a mark that read "deleted" with the author's name above it would
+    /// put the second story on the first.
+    ///
+    /// Equal to `sender` for the ordinary case. `None` where the redaction
+    /// carried no sender this build could read, and the mark then names
+    /// nobody rather than guessing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_by: Option<String>,
     pub kind: MessageKind,
 }
 
@@ -366,7 +379,7 @@ pub struct Media {
 /// What sort of message this is.
 ///
 /// The three `m.room.message` types that are text, the two that carry
-/// something to look at, the two that carry something to save, and the two
+/// something to look at, the two that carry something to save, and the three
 /// ways a message can exist with nothing to draw at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,4 +422,18 @@ pub enum MessageKind {
     /// Also drawn rather than skipped, and for the same reason. Somebody whose
     /// message silently vanished has no way to know it was ever sent.
     Unsupported,
+    /// Redacted. The homeserver has emptied it and there is nothing to draw.
+    ///
+    /// A mark where it was rather than a gap, which is the third time this
+    /// enum makes the same argument and the one with the most behind it. A
+    /// reply sitting under a message that vanished answers nothing and reads
+    /// as a non-sequitur, and every other client in the room draws a mark for
+    /// the same redaction, so closing over the gap would make one room look
+    /// like two depending on what it was opened in.
+    ///
+    /// Redacted is not erased, and nothing here should be written as though it
+    /// were. The event survives with its sender and its timestamp, which is
+    /// what this is built from; what federation already handed to other
+    /// servers is not recalled by any of it.
+    Deleted,
 }

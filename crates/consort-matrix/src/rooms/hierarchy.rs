@@ -217,6 +217,7 @@ mod tests {
                 None
             },
             topic: None,
+            alias: None,
             kind: ChannelKind::Text,
             avatar: None,
             joined,

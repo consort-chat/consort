@@ -18,6 +18,7 @@ import {
   group,
   timeOf,
 } from "./MessageGroups";
+import { ConfirmDelete } from "./ConfirmDelete";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type { Message } from "../lib/api";
@@ -89,6 +90,7 @@ function drawWithActions(
   props: {
     onReply?: (message: Message) => void;
     onEdit?: (message: Message) => void;
+    onDelete?: (message: Message) => void;
     onCopyLink?: (eventId: string) => void;
     copiedId?: string | null;
   },
@@ -1180,5 +1182,185 @@ describe("correcting a message", () => {
     await userEvent.click(screen.getByRole("button", { name: "Edit" }));
 
     expect(onEdit).toHaveBeenCalledWith(message);
+  });
+});
+describe("deleting a message", () => {
+  /** The message as Rust draws one the homeserver has emptied. */
+  function emptied(sender: string, extra: Partial<Message> = {}): Message {
+    return said("$gone", sender, "", NOON, { kind: "deleted", ...extra });
+  }
+
+  it("offers the control on this account's own message", () => {
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete: vi.fn() });
+
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("offers nothing on somebody else's", () => {
+    // A moderator removing one is a power level read and a different
+    // question, so there is nothing here to press either way.
+    drawWithActions([said("$1", ADA, "what they said")], { onDelete: vi.fn() });
+
+    expect(
+      screen.queryByRole("button", { name: "Delete" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers the control on an attachment, where correcting one is refused", () => {
+    // The case this rule exists for. An edit carries replacement text and
+    // cannot replace a picture, where a redaction removes an event whatever
+    // was inside it, and a file nobody meant to send is the thing people most
+    // want this for.
+    drawWithActions(
+      [
+        said("$1", BOB, "", NOON, {
+          kind: "image",
+          media: { source: "{}", name: "shot.png" },
+        }),
+      ],
+      { onDelete: vi.fn(), onEdit: vi.fn() },
+    );
+
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not delete on the first press", async () => {
+    // The rule this whole control is shaped by. A redaction cannot be taken
+    // back, and the control sits one button away from Edit in a row that
+    // appears on hover.
+    const onDelete = vi.fn();
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("dialog", { name: "Delete this message?" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says what deleting actually does before it is done", () => {
+    // Redacting is not erasing, and a sentence promising otherwise would be a
+    // promise Consort cannot keep across federation.
+    render(
+      <ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+
+    expect(
+      screen.getByText(/Servers and clients that already have a copy may keep it/),
+    ).toBeInTheDocument();
+  });
+
+  it("puts the focus on the half that does nothing", () => {
+    // The first press rule, one layer down: the key somebody hits without
+    // reading is Enter, and it must not land on the irreversible answer to a
+    // question they have not read.
+    render(<ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+  });
+
+  it("deletes on the second press, and hands over the whole message", async () => {
+    const onDelete = vi.fn();
+    const message = said("$1", BOB, "wrong number");
+    drawWithActions([message], { onDelete });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(onDelete).toHaveBeenCalledWith(message);
+  });
+
+  it("deletes nothing when the question is answered no", async () => {
+    const onDelete = vi.fn();
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("deletes nothing when the question is dismissed with Escape", async () => {
+    const onDelete = vi.fn();
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.keyboard("{Escape}");
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("draws a mark where a deleted message was", () => {
+    // The gap is the thing being avoided. A reply under a message that
+    // vanished answers nothing, and every other client draws a mark here.
+    draw([said("$1", ADA, "morning all"), emptied(ADA)]);
+
+    expect(screen.getByText("Message deleted")).toBeInTheDocument();
+    expect(screen.getByText("morning all")).toBeInTheDocument();
+  });
+
+  it("names whoever deleted it when it was not the author", () => {
+    // A moderator removing somebody's message and that person removing their
+    // own are one event with a different sender on it, and the mark sits
+    // under the author's name either way.
+    draw([emptied(ADA, { deletedBy: BOB })]);
+
+    expect(
+      screen.getByText(`Message deleted by ${BOB}`),
+    ).toBeInTheDocument();
+  });
+
+  it("names nobody when the author deleted their own", () => {
+    draw([emptied(ADA, { deletedBy: ADA })]);
+
+    expect(screen.getByText("Message deleted")).toBeInTheDocument();
+  });
+
+  it("names nobody when the redaction said nothing about who sent it", () => {
+    // Unknown is drawn as unknown rather than as the author, because of the
+    // two readings only one can say something untrue.
+    draw([emptied(ADA)]);
+
+    expect(screen.getByText("Message deleted")).toBeInTheDocument();
+  });
+
+  it("offers nothing to do to a message that is gone", () => {
+    // Not even deleting it again: there is nothing left to remove, and the
+    // homeserver would refuse a second redaction of one event.
+    drawWithActions([emptied(BOB)], {
+      onDelete: vi.fn(),
+      onEdit: vi.fn(),
+      onReply: vi.fn(),
+      onCopyLink: vi.fn(),
+    });
+
+    expect(
+      screen.queryByRole("button", { name: "Delete" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reply" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says so in the row above a reply naming a deleted message", () => {
+    // Without this the row falls through to the attachment fallback and tells
+    // somebody a file was sent.
+    draw([
+      emptied(ADA),
+      said("$reply", BOB, "quite", NOON, { replyTo: "$gone" }),
+    ]);
+
+    expect(screen.getAllByText("Message deleted").length).toBeGreaterThan(1);
   });
 });

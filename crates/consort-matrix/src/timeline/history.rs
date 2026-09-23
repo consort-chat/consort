@@ -28,7 +28,7 @@
 
 use std::collections::HashSet;
 
-use crate::timeline::dto::Message;
+use crate::timeline::dto::{Message, MessageKind};
 
 /// The messages loaded for one room.
 #[derive(Debug, Default)]
@@ -117,6 +117,34 @@ impl History {
         true
     }
 
+    /// Empty a message the homeserver has redacted, leaving the mark.
+    ///
+    /// In place and not removed, which is the whole point: a message that
+    /// vanished leaves the reply under it answering nothing, and every other
+    /// client in the room draws a mark here. The envelope stays, because a
+    /// redaction leaves it alone. Everything the content carried goes.
+    ///
+    /// `thread` goes with it, and that is the one field where this is a
+    /// decision rather than a consequence. A bundled summary lives in
+    /// `unsigned`, and a redacted event's `unsigned` carries only
+    /// `redacted_because`, so the same message paged back in after a reload
+    /// has no count to draw. Keeping one here would mean a thread reachable
+    /// from the room until somebody reloaded and gone afterwards, which is a
+    /// worse answer than consistently not.
+    ///
+    /// `by` is whoever sent the redaction, which is not always whoever wrote
+    /// the message. `None` where it could not be read.
+    ///
+    /// Reports whether anything changed. A redaction naming something not
+    /// loaded is the ordinary case rather than a failure: it names an event
+    /// anywhere in the room, and one window of it is open.
+    pub fn redacted(&mut self, event_id: &str, by: Option<&str>) -> bool {
+        let Some(held) = self.messages.iter_mut().find(|held| held.id == event_id) else {
+            return false;
+        };
+        redact(held, by)
+    }
+
     /// Stop drawing an event, without forgetting that it was seen.
     ///
     /// The other half of [`replace`](Self::replace). An event this session
@@ -124,6 +152,11 @@ impl History {
     /// them turn out to be reactions or thread replies, which are not drawn at
     /// all. Leaving the wait there would keep a placeholder for something that
     /// was never a message.
+    ///
+    /// Not what a redaction does any more: that is [`redacted`](Self::redacted),
+    /// which leaves a mark where this leaves nothing. What is left here is the
+    /// case with nothing to mark, where the event turned out never to have
+    /// been a message at all.
     ///
     /// The ID stays in `seen`, so a backfill that carries the event again does
     /// not draw it a second time.
@@ -134,10 +167,36 @@ impl History {
     }
 }
 
+/// Empty one message in place, leaving the mark.
+///
+/// Free rather than a method, because the thread panel holds its root as one
+/// `Message` beside a `History` of replies, and both are marked by the same
+/// redaction. Two copies of this rule would be two answers free to drift.
+///
+/// Reports whether anything changed. A second redaction of the same event is
+/// not news: a backfill page overlapping the live edge carries one that has
+/// already been swept.
+pub fn redact(message: &mut Message, by: Option<&str>) -> bool {
+    if message.kind == MessageKind::Deleted {
+        return false;
+    }
+
+    message.body = String::new();
+    message.html = None;
+    message.media = None;
+    message.thread = None;
+    message.reply_to = None;
+    message.mentions = Vec::new();
+    message.edited = false;
+    message.deleted_by = by.map(str::to_owned);
+    message.kind = MessageKind::Deleted;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timeline::dto::MessageKind;
+    use crate::timeline::dto::ThreadSummary;
 
     fn said(id: &str, body: &str) -> Message {
         Message {
@@ -152,6 +211,7 @@ mod tests {
             reply_to: None,
             mentions: Vec::new(),
             edited: false,
+            deleted_by: None,
             kind: MessageKind::Text,
         }
     }
@@ -162,6 +222,98 @@ mod tests {
             .iter()
             .map(|message| message.body.as_str())
             .collect()
+    }
+
+    #[test]
+    fn a_redaction_empties_a_message_where_it_stands() {
+        // In place and not removed. The conversation keeps its shape, and the
+        // reply under it is still answering something.
+        let mut history = History::new();
+        history.arrived(vec![
+            said("$1", "one"),
+            said("$2", "wrong number"),
+            said("$3", "three"),
+        ]);
+
+        assert!(history.redacted("$2", Some("@ada:example.org")));
+
+        assert_eq!(bodies(&history), ["one", "", "three"]);
+        let gone = &history.messages()[1];
+        assert_eq!(gone.kind, MessageKind::Deleted);
+        assert_eq!(gone.deleted_by.as_deref(), Some("@ada:example.org"));
+        // The envelope stays, because a redaction leaves it alone and the mark
+        // is drawn under the name and the time it already had.
+        assert_eq!(gone.sender, "@ada:example.org");
+        assert_eq!(gone.at, 1_000);
+    }
+
+    #[test]
+    fn a_redaction_takes_everything_the_content_carried() {
+        // Each of these is a way the words could come back. A caption is a
+        // body, an attachment is a picture still fetchable by its handle, and
+        // a mention is a line in somebody's notifications.
+        let mut history = History::new();
+        let mut rich = said("$1", "look at this");
+        rich.html = Some("<b>look at this</b>".to_owned());
+        rich.mentions = vec!["@bob:example.org".to_owned()];
+        rich.reply_to = Some("$0".to_owned());
+        rich.edited = true;
+        history.arrived(vec![rich]);
+
+        assert!(history.redacted("$1", None));
+
+        let gone = &history.messages()[0];
+        assert_eq!(gone.body, "");
+        assert_eq!(gone.html, None);
+        assert_eq!(gone.media, None);
+        assert_eq!(gone.mentions, Vec::<String>::new());
+        assert_eq!(gone.reply_to, None);
+        assert!(!gone.edited);
+    }
+
+    #[test]
+    fn a_redaction_takes_the_thread_summary_with_it() {
+        // The one field where this is a decision rather than a consequence,
+        // and the reason is consistency: a redacted event's `unsigned` carries
+        // `redacted_because` and nothing else, so the same message paged back
+        // in after a reload has no count to draw. A thread reachable until
+        // somebody reloads and gone afterwards is the worse answer.
+        let mut history = History::new();
+        let mut root = said("$1", "the question");
+        root.thread = Some(ThreadSummary {
+            count: 3,
+            participated: true,
+        });
+        history.arrived(vec![root]);
+
+        assert!(history.redacted("$1", None));
+
+        assert_eq!(history.messages()[0].thread, None);
+    }
+
+    #[test]
+    fn redacting_the_same_event_twice_is_only_news_once() {
+        // A backfill page overlapping the live edge carries a redaction that
+        // has already been swept, which is the ordinary case rather than an
+        // edge one.
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+        history.redacted("$1", None);
+
+        assert!(!history.redacted("$1", None));
+    }
+
+    #[test]
+    fn redacting_something_not_loaded_is_not_news() {
+        // A redaction names an event anywhere in the room and one window of it
+        // is open, so this is ordinary rather than a failure. The message
+        // arrives already emptied when somebody scrolls back to it.
+        let mut history = History::new();
+        history.arrived(vec![said("$1", "one")]);
+
+        assert!(!history.redacted("$2", None));
+
+        assert_eq!(bodies(&history), ["one"]);
     }
 
     #[test]

@@ -8,7 +8,7 @@ import {
 } from "react";
 
 import { flashMessage } from "../lib/flash";
-import { channelLabel, typingLabel } from "../lib/labels";
+import { channelHeading, channelLabel, typingLabel } from "../lib/labels";
 import {
   asCommandError,
   attachFile,
@@ -32,6 +32,7 @@ import {
   timelineReact,
   timelineReply,
   timelineEdit,
+  timelineDelete,
   timelineSend,
   timelineTyping,
   timelineUnreact,
@@ -183,6 +184,8 @@ export function RoomTimeline({
   focus,
   onOpenRoom,
   onUnfold,
+  infoOpen,
+  onToggleInfo,
 }: {
   channel: Channel;
   /** Whoever is signed in, so a person's card can tell when it is about them. */
@@ -205,6 +208,10 @@ export function RoomTimeline({
    * its own header and two of them would be one job with two answers.
    */
   onUnfold?: () => void;
+  /** Whether the room's details are on screen, for the heading's control. */
+  infoOpen: boolean;
+  /** Show the room's details, or put them away when they are already up. */
+  onToggleInfo: () => void;
 }) {
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const [names, setNames] = useState<Record<string, string>>({});
@@ -914,6 +921,31 @@ export function RoomTimeline({
   }
 
   /**
+   * Delete a message this account sent.
+   *
+   * Reached once the question hanging off the control has been answered, so
+   * this sends the redaction rather than asking again.
+   *
+   * The composer is put back first when it was pointed at this message.
+   * Pressing Edit and then Delete is two presses apart, and what it would
+   * otherwise leave behind is a correction addressed to an event with nothing
+   * left to correct.
+   *
+   * Nothing is echoed, on the same terms as every other send: the words stay
+   * on screen until the sync brings the redaction back.
+   */
+  function remove(message: Message) {
+    if (editingNow.current?.id === message.id) stopEditing();
+    // The box is left alone here, unlike the line above. What is in it while
+    // answering is something somebody typed rather than a copy of the old
+    // message, and it is still worth sending somewhere else.
+    if (answering?.id === message.id) setAnswering(null);
+    void timelineDelete(channel.id, message.id).catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }
+
+  /**
    * Correct the last thing this account said in what is loaded.
    *
    * What the up arrow does in an empty box. Newest first, and past anything an
@@ -1083,14 +1115,32 @@ export function RoomTimeline({
           <SidebarToggle folded onToggle={onUnfold} />
         )}
         <div className="timeline__titles">
+        {/*
+          The control is inside the heading rather than around it, which is the
+          shape a disclosure takes everywhere it is done properly: a heading
+          with a button inside stays a heading, and a heading inside a button
+          is content a screen reader is entitled to flatten away.
+
+          On the name rather than on the name and the topic together. The two
+          would be one target, and its accessible name would then be the room
+          followed by whatever the room wrote about itself, which is a heading
+          that reads as a sentence.
+        */}
         <h1 className="timeline__name">
-          {channel.kind === "voice" ? name : `#${name}`}
+          <button
+            type="button"
+            className="timeline__about"
+            aria-expanded={infoOpen}
+            onClick={onToggleInfo}
+          >
+            {channelHeading(channel)}
+          </button>
         </h1>
         {/*
           One line, whatever the room wrote. A topic is free text and some are
           paragraphs, and a heading that grows to four lines pushes the
           conversation off the bottom of the window. The whole of it is on the
-          pointer.
+          pointer, and the whole of it is in the panel the name above opens.
         */}
         {channel.topic !== undefined && (
           <p className="timeline__topic" title={channel.topic}>
@@ -1178,6 +1228,7 @@ export function RoomTimeline({
           copiedId={copied}
           onReply={reply}
           onEdit={edit}
+          onDelete={remove}
           onCopyLink={copyLink}
           newFrom={newFrom}
           newDay={newDay}

@@ -201,6 +201,15 @@ export interface Channel {
    * and for a room this account has not joined, whose state it cannot read.
    */
   topic?: string;
+  /**
+   * The address the room publishes, when it has one.
+   *
+   * Its canonical alias only, so this is the one name the room calls itself
+   * rather than every name it answers to. Absent for a room that publishes
+   * none, which is most private rooms, and absent for a room this account has
+   * not joined.
+   */
+  alias?: string;
   kind: ChannelKind;
   /** An `mxc://` URI. Pass it nowhere; call `roomAvatar(id)` for the image. */
   avatar: string | null;
@@ -1203,8 +1212,8 @@ export function memberNames(
  *
  * Mirrors `consort_matrix::MessageKind`. The three `m.room.message` types that
  * are text, the two that carry something to look at, the two that carry
- * something to save, and the two ways a message can exist with nothing to draw
- * at all.
+ * something to save, and the three ways a message can exist with nothing to
+ * draw at all.
  */
 export type MessageKind =
   | "text"
@@ -1215,7 +1224,8 @@ export type MessageKind =
   | "file"
   | "audio"
   | "undecryptable"
-  | "unsupported";
+  | "unsupported"
+  | "deleted";
 
 /**
  * Where an attachment's bytes are, and what shape they will be drawn at.
@@ -1357,6 +1367,19 @@ export interface Message {
    * all of them.
    */
   edited?: boolean;
+  /**
+   * Who redacted it, for a `"deleted"` message and nothing else.
+   *
+   * Carried so the mark can avoid saying something untrue about who did it. A
+   * moderator removing somebody's message and that person removing their own
+   * are one event with a different sender on it, and a mark reading "deleted"
+   * under the author's name would tell the second story about the first.
+   *
+   * Equal to `sender` for the ordinary case. Absent where the redaction
+   * carried no sender Rust could read, and the mark then names nobody rather
+   * than guessing.
+   */
+  deletedBy?: string;
   kind: MessageKind;
 }
 
@@ -1987,6 +2010,17 @@ export function timelineCopyLink(
 }
 
 /**
+ * Put one room's `matrix.to` address on the clipboard.
+ *
+ * The room's own address rather than any message in it, so what comes back is
+ * the published alias where there is one and the room ID with routing servers
+ * where there is not. A command for the reason the one above is.
+ */
+export function roomCopyLink(roomId: string): Promise<void> {
+  return invoke<void>("room_copy_link", { roomId });
+}
+
+/**
  * The joined room one `matrix.to` address points at.
  *
  * A room ID answers immediately and an alias costs a directory lookup, which
@@ -2000,6 +2034,29 @@ export function timelineCopyLink(
  */
 export function roomAt(address: string): Promise<string> {
   return invoke<string>("room_at", { address });
+}
+
+/**
+ * Delete a message this account sent.
+ *
+ * A redaction, which is what deleting is in Matrix and is worth being exact
+ * about. The homeserver empties the event and serves the emptied version from
+ * then on; what federation has already handed to other servers is not
+ * recalled, so nothing here should be drawn as though the words had been
+ * taken off every machine that has them.
+ *
+ * No sender rides along, on the same terms as an edit: who may remove what is
+ * the homeserver's to decide, and taking this side's word for it would be
+ * taking the webview's word for who is allowed to delete whom.
+ *
+ * Nothing is echoed. The message empties when the sync brings the redaction
+ * back, so it is on screen for the round trip.
+ */
+export function timelineDelete(
+  roomId: string,
+  eventId: string,
+): Promise<void> {
+  return invoke<void>("timeline_delete", { roomId, eventId });
 }
 
 /**

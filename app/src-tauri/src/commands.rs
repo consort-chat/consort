@@ -481,6 +481,27 @@ pub async fn timeline_edit_for(
     Ok(())
 }
 
+/// Delete a message this account sent.
+///
+/// The event ID alone, on the same terms as an edit and for the same reason:
+/// who may remove what is the homeserver's to decide, and taking the webview's
+/// word for it would be taking it for who is allowed to delete whom. The
+/// control is only drawn on this account's own messages, which keeps somebody
+/// from pressing something that cannot work rather than being what enforces it.
+///
+/// A redaction, which is not an erasure. The homeserver empties the event and
+/// serves the emptied version from then on, and what federation has already
+/// handed to other servers is not recalled.
+pub async fn timeline_delete_for(
+    state: &AppState,
+    room_id: String,
+    event_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    timeline::delete(&client, &room_id, &event_id).await?;
+    Ok(())
+}
+
 /// Say something in a thread.
 ///
 /// The same as saying something in the room, with the relation that puts it in
@@ -621,6 +642,18 @@ pub async fn timeline_permalink_for(
 ) -> Result<String, CommandError> {
     let client = signed_in_client(state).await?;
     Ok(timeline::permalink(&client, &room_id, &event_id).await?)
+}
+
+/// A `matrix.to` address for one room, to give to somebody else.
+///
+/// Split from its copy for the reason the message address above is. Separate
+/// from that one because the two are not addressed the same way: an event is
+/// named by room ID, because an alias can be moved to a different room and the
+/// link would follow it, while a room is best named by the alias it published,
+/// because that is the half of the address a person can read.
+pub async fn room_permalink_for(state: &AppState, room_id: String) -> Result<String, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::permalink(&client, &room_id).await?)
 }
 
 /// The joined room one `matrix.to` address points at.
@@ -1502,6 +1535,16 @@ pub async fn timeline_edit(
     timeline_edit_for(&state, room_id, event_id, body).await
 }
 
+/// See `timeline_delete_for`.
+#[tauri::command]
+pub async fn timeline_delete(
+    state: State<'_, AppState>,
+    room_id: String,
+    event_id: String,
+) -> Result<(), CommandError> {
+    timeline_delete_for(&state, room_id, event_id).await
+}
+
 /// See `timeline_react_for`.
 #[tauri::command]
 pub async fn timeline_react(
@@ -1811,6 +1854,26 @@ pub async fn timeline_copy_link(
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
     let address = timeline_permalink_for(&state, room_id, event_id).await?;
+
+    app.clipboard()
+        .write_text(address)
+        .map_err(|error| CommandError {
+            message: "Consort could not reach this desktop's clipboard.".to_owned(),
+            detail: format!("writing to the clipboard: {error}"),
+        })
+}
+
+/// Put one room's address on the clipboard. See `timeline_copy_link`, which
+/// this is the room-sized half of and follows exactly.
+#[tauri::command]
+pub async fn room_copy_link(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<(), CommandError> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let address = room_permalink_for(&state, room_id).await?;
 
     app.clipboard()
         .write_text(address)
@@ -4266,6 +4329,23 @@ mod against_a_mock_homeserver {
         }
 
         #[tokio::test]
+        async fn deleting_a_message_while_signed_out_is_refused_first() {
+            // Before the room and before the event ID, so that a session that
+            // has gone says so rather than answering about the message.
+            let (_dir, state, _sink) = state();
+
+            let refused =
+                timeline_delete_for(&state, GENERAL.to_owned(), "$said:example.org".to_owned())
+                    .await
+                    .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
         async fn asking_for_a_message_address_while_signed_out_says_so() {
             let (_dir, state, _sink) = state();
 
@@ -4273,6 +4353,20 @@ mod against_a_mock_homeserver {
                 timeline_permalink_for(&state, GENERAL.to_owned(), "$said:example.org".to_owned())
                     .await
                     .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_for_a_room_address_while_signed_out_says_so() {
+            let (_dir, state, _sink) = state();
+
+            let refused = room_permalink_for(&state, GENERAL.to_owned())
+                .await
+                .unwrap_err();
 
             assert_eq!(
                 refused.message,

@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +16,7 @@ const resendState = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const timelineCopyLink = vi.hoisted(() => vi.fn());
 const timelineEdit = vi.hoisted(() => vi.fn());
+const timelineDelete = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
@@ -24,6 +32,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberAvatar,
   timelineCopyLink,
   timelineEdit,
+  timelineDelete,
   memberProfile,
   audioSettings,
   setPersonVolume,
@@ -78,6 +87,7 @@ beforeEach(() => {
   memberNames.mockReset().mockResolvedValue({ [ADA]: "Ada" });
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
   timelineEdit.mockReset().mockResolvedValue(undefined);
+  timelineDelete.mockReset().mockResolvedValue(undefined);
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
@@ -97,6 +107,7 @@ function draw() {
     <ThreadPanel
       selfId={ADA}
       onOpenRoom={vi.fn()}
+      onOpen={vi.fn()}
       width={400}
       onResize={resized}
     />,
@@ -470,6 +481,58 @@ describe("ThreadPanel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("Consort!");
   });
 
+  it("deletes a reply once the question hanging off the control is answered", async () => {
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() =>
+      expect(timelineDelete).toHaveBeenCalledWith(GENERAL, "$a:example.org"),
+    );
+  });
+
+  it("sends nothing on the first press of Delete", async () => {
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+
+    expect(timelineDelete).not.toHaveBeenCalled();
+  });
+
+  it("deletes the message the thread hangs from as readily as a reply", async () => {
+    // Drawn above the rule rather than in the list, and still a message this
+    // account sent. What it leaves behind is a thread with no way into it
+    // from the room, which is recorded on the pull request rather than
+    // guarded against here.
+    await opened();
+
+    await userEvent.click(action("Delete", 0));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    await waitFor(() =>
+      expect(timelineDelete).toHaveBeenCalledWith(GENERAL, "$root:example.org"),
+    );
+  });
+
+  it("says so when the homeserver refuses the deletion", async () => {
+    timelineDelete.mockRejectedValue({ message: "The homeserver refused that." });
+    await opened();
+
+    await userEvent.click(action("Delete", 1));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Delete" }),
+    );
+
+    expect(
+      await screen.findByText("The homeserver refused that."),
+    ).toBeVisible();
+  });
+
   it("puts the box back to an ordinary reply once the correction lands", async () => {
     await opened();
 
@@ -651,6 +714,7 @@ describe("the panel's width", () => {
       <ThreadPanel
         selfId={ADA}
         onOpenRoom={vi.fn()}
+      onOpen={vi.fn()}
         width={480}
         onResize={vi.fn()}
       />,

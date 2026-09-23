@@ -8,6 +8,7 @@ import { FormattedBody } from "./FormattedBody";
 import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
+import { ConfirmDelete } from "./ConfirmDelete";
 import { ReactionPicker } from "./ReactionPicker";
 import { RoomAvatar } from "./RoomAvatar";
 
@@ -258,6 +259,10 @@ export function previewOf(
     a custom emoji is an `img` with no words in it, and the shortcode in the
     body is what a person would read out.
   */
+  // Before the body, which a deleted message has none of. Without this the
+  // fallback below reads it as an attachment and the row above the reply says
+  // somebody sent a file.
+  if (message.kind === "deleted") return "Message deleted";
   const said = wordsOf(message.html) || message.body;
   if (said !== "") return withAddressesNamed(said, nameOf);
   return message.media?.name ?? "an attachment";
@@ -450,6 +455,27 @@ export function correctable(message: Message, selfId: string): boolean {
 }
 
 /**
+ * Whether the reader could delete this message, if a caller offers the way.
+ *
+ * Their own, and that is the whole of it. Deliberately not [`correctable`],
+ * which also asks what kind the message is: an edit carries replacement text
+ * and there are three kinds it can replace, where a redaction removes an event
+ * whatever was inside it. An attachment nobody meant to send is what the
+ * narrower rule would miss, and it is the case people want this for most.
+ *
+ * Somebody else's is not offered here at all. A moderator removing one is a
+ * power level read, a different question, and a different sentence to put in
+ * front of whoever is about to do it.
+ *
+ * Says nothing about a message already deleted, which has no action row at
+ * all: there is nothing left to answer, correct or remove on one, and the row
+ * is skipped wholesale rather than each control in it refusing separately.
+ */
+function deletable(message: Message, selfId: string): boolean {
+  return message.sender === selfId;
+}
+
+/**
  * The mark on a message its author has since corrected.
  *
  * Inside the body and at the end of the words rather than on a line of its
@@ -467,6 +493,57 @@ function EditedMark() {
     <span className="timeline__edited" title="This message was edited">
       (edited)
     </span>
+  );
+}
+
+/**
+ * A wastebasket, for the control that deletes a message.
+ */
+function TrashIcon() {
+  return (
+    <svg
+      className="timeline__action-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+/**
+ * The mark left where a message was.
+ *
+ * Drawn rather than closing the conversation over the gap, which is the same
+ * argument the undecryptable and unsupported kinds make and the one with the
+ * most behind it: a reply sitting under a message that vanished answers
+ * nothing and reads as a non-sequitur, and every other client in the room
+ * draws a mark for the same redaction.
+ *
+ * "Message deleted" and not "deleted by" whoever wrote it, because the words
+ * have to hold for both stories this can be. Only a redaction sent by somebody
+ * other than the author names anybody, which is the one case where saying
+ * nothing would leave the mark under a name that did not do it.
+ *
+ * What it said before is not here and is nowhere on this side. The homeserver
+ * emptied the event, and the interface has no copy to draw even if it wanted
+ * one.
+ */
+function DeletedBody({ by }: { by: string | null }) {
+  return (
+    <p className="timeline__deleted">
+      <TrashIcon />
+      <span>{by === null ? "Message deleted" : `Message deleted by ${by}`}</span>
+    </p>
   );
 }
 
@@ -495,6 +572,7 @@ export function MessageGroups({
   onOpenThread,
   onReply,
   onEdit,
+  onDelete,
   onReact,
   onCopyLink,
   onGoTo,
@@ -585,6 +663,18 @@ export function MessageGroups({
    */
   onEdit?: (message: Message) => void;
   /**
+   * Delete a message this account sent.
+   *
+   * Called only once the question hanging off the control has been answered,
+   * so a caller may send the redaction on being called rather than asking
+   * again. The whole message rather than its ID, on the same terms as the two
+   * above, and because a caller that wants to say what it removed has it.
+   *
+   * The control is drawn only where [`deletable`] says it can be, which is the
+   * reader's own messages of every kind.
+   */
+  onDelete?: (message: Message) => void;
+  /**
    * React to a message, or take a reaction back.
    *
    * `mine` is this session's own annotation on that key, when there is one, so
@@ -635,6 +725,13 @@ export function MessageGroups({
   const [picking, setPicking] = useState<{ id: string; at: Anchor } | null>(
     null,
   );
+  /*
+    Which message has been asked about but not yet deleted, or none. One at a
+    time for the reason the picker has that rule, and held here for the same
+    one: it is chrome rather than content, nothing outside can act on it, and a
+    caller learns about it only when the question has been answered.
+  */
+  const [confirming, setConfirming] = useState<string | null>(null);
   // For the quoted line above a reply, which cannot hold a badge and so says
   // what the badge would have said.
   const { nameOf } = useRoomLinks();
@@ -865,7 +962,21 @@ export function MessageGroups({
                               </span>
                             </button>
                           ))}
-                        {message.media !== undefined ? (
+                        {message.kind === "deleted" ? (
+                          /*
+                            The mark, in place of everything below. A deleted
+                            message has no body, no attachment and no caption,
+                            so neither branch under this has anything to draw.
+                          */
+                          <DeletedBody
+                            by={
+                              message.deletedBy === undefined ||
+                              message.deletedBy === message.sender
+                                ? null
+                                : (names[message.deletedBy] ?? message.deletedBy)
+                            }
+                          />
+                        ) : message.media !== undefined ? (
                           /*
                             The attachment, and under it whatever words were sent
                             with it. The filename is on the card rather than above
@@ -1004,93 +1115,138 @@ export function MessageGroups({
                           words are read before the things that can be done to
                           them, and quiet until the message is hovered or something
                           in it takes focus.
+
+                          Not drawn at all on a message that has been deleted.
+                          There is nothing left to answer, react to or correct,
+                          and the only control that would still mean anything is
+                          the one that has already been used.
                         */}
-                        <div className="timeline__actions">
-                          {onEdit !== undefined &&
-                            correctable(message, selfId) && (
-                              <button
-                                type="button"
-                                className="timeline__action"
-                                aria-label="Edit"
-                                title="Edit"
-                                onClick={() => onEdit(message)}
-                              >
-                                <EditIcon />
-                              </button>
-                            )}
-                          {onReply !== undefined && (
-                            <button
-                              type="button"
-                              className="timeline__action"
-                              aria-label="Reply"
-                              title="Reply"
-                              onClick={() => onReply(message)}
-                            >
-                              <ReplyIcon className="timeline__action-glyph" />
-                            </button>
-                          )}
-                          {onReact !== undefined && (
-                            <button
-                              type="button"
-                              className="timeline__action"
-                              aria-label="React"
-                              title="React"
-                              aria-expanded={
-                                picking?.id === message.id &&
-                                picking.at === "toolbar"
-                              }
-                              onClick={() => toggle(message.id, "toolbar")}
-                            >
-                              <ReactIcon />
-                            </button>
-                          )}
-                          {/*
-                            Only on a message with no thread yet: the count above
-                            already opens the ones that have one.
-                          */}
-                          {message.thread === undefined &&
-                            onOpenThread !== undefined && (
-                              <button
-                                type="button"
-                                className="timeline__action"
-                                aria-label="Reply in thread"
-                                title="Reply in thread"
-                                disabled={openingId === message.id}
-                                onClick={() => onOpenThread(message.id)}
-                              >
-                                <ThreadIcon />
-                              </button>
-                            )}
-                          {onCopyLink !== undefined && (
-                            /*
-                              The address, on the clipboard, rather than a panel
-                              offering five services to post it to. Pasting it
-                              somewhere is what almost everybody wanted, and the
-                              glyph turning into a tick is how they are told it
-                              worked: a copy is silent otherwise, and a silent
-                              control invites a second press.
-                            */
-                            <button
-                              type="button"
-                              className="timeline__action"
-                              data-done={String(copiedId === message.id)}
-                              aria-label={
-                                copiedId === message.id ? "Link copied" : "Copy link"
-                              }
-                              title={
-                                copiedId === message.id ? "Link copied" : "Copy link"
-                              }
-                              onClick={() => onCopyLink(message.id)}
-                            >
-                              {copiedId === message.id ? (
-                                <CopiedIcon />
-                              ) : (
-                                <LinkIcon />
+                        {message.kind !== "deleted" && (
+                          <div
+                            className="timeline__actions"
+                            data-asking={String(confirming === message.id)}
+                          >
+                            {onEdit !== undefined &&
+                              correctable(message, selfId) && (
+                                <button
+                                  type="button"
+                                  className="timeline__action"
+                                  aria-label="Edit"
+                                  title="Edit"
+                                  onClick={() => onEdit(message)}
+                                >
+                                  <EditIcon />
+                                </button>
                               )}
-                            </button>
-                          )}
-                          {pickerFor(message, "toolbar")}
-                        </div>
+                            {onDelete !== undefined &&
+                              deletable(message, selfId) && (
+                                /*
+                                  A span, because the question hangs off this
+                                  control the way the picker hangs off the one
+                                  below and needs something positioned to hang
+                                  from.
+                                */
+                                <span className="timeline__remove">
+                                  <button
+                                    type="button"
+                                    className="timeline__action"
+                                    aria-label="Delete"
+                                    title="Delete"
+                                    aria-haspopup="dialog"
+                                    aria-expanded={confirming === message.id}
+                                    onClick={() =>
+                                      setConfirming((open) =>
+                                        open === message.id ? null : message.id,
+                                      )
+                                    }
+                                  >
+                                    <TrashIcon />
+                                  </button>
+                                  {confirming === message.id && (
+                                    <ConfirmDelete
+                                      onConfirm={() => {
+                                        setConfirming(null);
+                                        onDelete(message);
+                                      }}
+                                      onCancel={() => setConfirming(null)}
+                                    />
+                                  )}
+                                </span>
+                              )}
+                            {onReply !== undefined && (
+                              <button
+                                type="button"
+                                className="timeline__action"
+                                aria-label="Reply"
+                                title="Reply"
+                                onClick={() => onReply(message)}
+                              >
+                                <ReplyIcon className="timeline__action-glyph" />
+                              </button>
+                            )}
+                            {onReact !== undefined && (
+                              <button
+                                type="button"
+                                className="timeline__action"
+                                aria-label="React"
+                                title="React"
+                                aria-expanded={
+                                  picking?.id === message.id &&
+                                  picking.at === "toolbar"
+                                }
+                                onClick={() => toggle(message.id, "toolbar")}
+                              >
+                                <ReactIcon />
+                              </button>
+                            )}
+                            {/*
+                              Only on a message with no thread yet: the count above
+                              already opens the ones that have one.
+                            */}
+                            {message.thread === undefined &&
+                              onOpenThread !== undefined && (
+                                <button
+                                  type="button"
+                                  className="timeline__action"
+                                  aria-label="Reply in thread"
+                                  title="Reply in thread"
+                                  disabled={openingId === message.id}
+                                  onClick={() => onOpenThread(message.id)}
+                                >
+                                  <ThreadIcon />
+                                </button>
+                              )}
+                            {onCopyLink !== undefined && (
+                              /*
+                                The address, on the clipboard, rather than a panel
+                                offering five services to post it to. Pasting it
+                                somewhere is what almost everybody wanted, and the
+                                glyph turning into a tick is how they are told it
+                                worked: a copy is silent otherwise, and a silent
+                                control invites a second press.
+                              */
+                              <button
+                                type="button"
+                                className="timeline__action"
+                                data-done={String(copiedId === message.id)}
+                                aria-label={
+                                  copiedId === message.id ? "Link copied" : "Copy link"
+                                }
+                                title={
+                                  copiedId === message.id ? "Link copied" : "Copy link"
+                                }
+                                onClick={() => onCopyLink(message.id)}
+                              >
+                                {copiedId === message.id ? (
+                                  <CopiedIcon />
+                                ) : (
+                                  <LinkIcon />
+                                )}
+                              </button>
+                            )}
+                            {pickerFor(message, "toolbar")}
+                          </div>
+                        )}
                       </div>
                     </Fragment>
                   );

@@ -240,41 +240,129 @@ jobs:
         # container only escaped it because Arch points /bin/sh at bash.
         shell: bash
     steps:
+      # Before the checkout, not after it, and that ordering is the only
+      # reason anything below this line can see a file.
+      #
+      # actions/checkout looks for a git binary, does not find one in this
+      # image, and falls back to downloading the repository as a tarball over
+      # the REST API. A tarball has no `.git` in it. Every gate here reads the
+      # tree through git, so with the install below the checkout each one
+      # opened with `fatal: not a git repository` and matched nothing at all.
+      # Installing git first means checkout clones instead, and `.git` is
+      # there to read.
+      #
+      # ca-certificates comes along because this image has no root store at
+      # all. With git present and no certificates, checkout stops using the
+      # tarball and tries a real clone, which then dies on "server certificate
+      # verification failed. CAfile: none". Installing git alone turns a silent
+      # wrong answer into a failed checkout, which is better but is not the
+      # job working.
+      #
+      # ripgrep used to be installed here too. Nothing needs it now: git grep
+      # searches tracked files without a pipe, which is the point.
+      - name: Install git, before the checkout needs it
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends git ca-certificates
+
       - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: apt-get update && apt-get install --yes --no-install-recommends git ripgrep
+      # The workspace belongs to the runner's own uid on the host and these
+      # steps are root inside the container. git calls that dubious ownership
+      # and refuses to read the repository at all. actions/checkout grants
+      # itself the same exception, but it does so under a temporary HOME that
+      # it puts back when it finishes, so nothing below inherits it.
+      #
+      # Worth knowing that the gates caught this themselves: the em dash step
+      # reported "git grep could not read the tree (status 128)" and failed,
+      # where the old pipeline would have printed "None found." and passed.
+      - name: Trust the checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: No em dashes or en dashes
         # House style. They are banned in source, comments, commit messages and
         # docs; a plain hyphen is fine.
+        #
+        # `git grep` rather than `git ls-files | xargs rg`, because that pipe
+        # is what left this gate unable to fail for as long as it existed. git
+        # had no repository to read and exited 128, `pipefail` made 128 the
+        # status of the pipeline, a non-zero condition sent the `if` down its
+        # false branch, and the step printed "None found." and passed. Ripgrep
+        # had meanwhile found the violations anyway, by falling back to a
+        # recursive search of the working directory when it was handed no
+        # filenames, and printed them into the log of a job that was green.
+        #
+        # git grep needs no pipe and says exactly one of three things: 0 it
+        # found something, 1 the tree is clean, anything else it could not
+        # look. Only the middle one is a pass. A check with no way to say "I
+        # could not run" reports success when it breaks, which is worse than
+        # not having it, because CONTRIBUTING.md tells contributors it is here.
+        #
+        # The two characters are written as their UTF-8 bytes rather than as
+        # \x{2014} and \x{2013}, because Debian builds git against a PCRE2
+        # without UTF mode, where a code point above 0xFF is a fatal "value in
+        # \x{} is too large" instead of a match. Bytes work in either build.
+        # Writing the characters themselves is not an option: this file is one
+        # of the files the gate reads.
         run: |
-          if git ls-files -z -- ':!:.claude/**' | xargs -0 rg --no-messages --line-number '[\x{2014}\x{2013}]'; then
-            echo
-            echo "Found an em dash or en dash. Use a comma, a colon, parentheses, or two sentences."
-            exit 1
-          fi
-          echo "None found."
+          status=0
+          git grep --line-number --perl-regexp '\xe2\x80[\x93\x94]' \
+            -- ':!:.claude/**' || status=$?
+          case "$status" in
+            0)
+              echo
+              echo "Found an em dash or en dash. Use a comma, a colon, parentheses, or two sentences."
+              exit 1
+              ;;
+            1) echo "None found." ;;
+            *)
+              echo
+              echo "git grep could not read the tree (status $status), so nothing was checked."
+              exit 1
+              ;;
+          esac
 
       - name: No private homeserver names
         # The maintainer's own homeserver has leaked into examples before. The
         # placeholder everywhere is example.org.
+        #
+        # Three-way status, for the reason given on the em dash gate above.
         run: |
-          if git ls-files -z | xargs -0 rg --no-messages --line-number 'lamp\.stream'; then
-            echo
-            echo "Use example.org in documentation and tests."
-            exit 1
-          fi
-          echo "None found."
+          status=0
+          git grep --line-number --perl-regexp 'lamp\.stream' || status=$?
+          case "$status" in
+            0)
+              echo
+              echo "Use example.org in documentation and tests."
+              exit 1
+              ;;
+            1) echo "None found." ;;
+            *)
+              echo
+              echo "git grep could not read the tree (status $status), so nothing was checked."
+              exit 1
+              ;;
+          esac
 
       - name: No stray debugging
+        # Three-way status, for the reason given on the em dash gate above.
         run: |
-          if git ls-files -z -- '*.rs' | xargs -0 rg --no-messages --line-number '\bdbg!\(|\bprintln!\("DEBUG'; then
-            echo
-            echo "Remove the debugging statements."
-            exit 1
-          fi
-          echo "None found."
+          status=0
+          git grep --line-number --perl-regexp '\bdbg!\(|\bprintln!\("DEBUG' \
+            -- '*.rs' || status=$?
+          case "$status" in
+            0)
+              echo
+              echo "Remove the debugging statements."
+              exit 1
+              ;;
+            1) echo "None found." ;;
+            *)
+              echo
+              echo "git grep could not read the tree (status $status), so nothing was checked."
+              exit 1
+              ;;
+          esac
 
       # The release runs unattended now, so the one part of it that can fail
       # quietly is checked here instead of by whoever was watching.

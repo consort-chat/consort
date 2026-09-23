@@ -367,8 +367,13 @@ where
                             None => loaded.read(&joined.timeline.events),
                         };
                         let counted = loaded.count_replies(&joined.timeline.events);
-                        let annotated = loaded.annotations(&joined.timeline.events);
                         let added = loaded.history.arrived(arrived);
+                        // After the history and not before it. Somebody who
+                        // deletes what they just said sends the message and
+                        // the redaction inside one sync, and a sweep that ran
+                        // first would find nothing to mark and then watch the
+                        // line below draw the words it was sent to remove.
+                        let annotated = loaded.annotations(&joined.timeline.events);
                         if added {
                             // A message can arrive answering something older
                             // than what is loaded, and the row above it has
@@ -655,17 +660,20 @@ impl Loaded {
         };
 
         let arrived = self.read(&chunk);
-        // A page carries every kind of event, reactions among them, which is
-        // how a message scrolled back to arrives with what is already on it.
-        // The thread panel has no equivalent: `/relations` is asked for thread
-        // replies only, so a reply's reactions appear when one arrives live
-        // rather than when the panel opens.
-        self.annotations(&chunk);
         let drawable = !arrived.is_empty();
         match towards {
             Direction::Backward => self.history.backfilled(arrived),
             Direction::Forward => self.history.arrived(arrived),
         };
+        // A page carries every kind of event, reactions among them, which is
+        // how a message scrolled back to arrives with what is already on it.
+        // The thread panel has no equivalent: `/relations` is asked for thread
+        // replies only, so a reply's reactions appear when one arrives live
+        // rather than when the panel opens.
+        //
+        // After the history, for the reason the sync has it in that order: a
+        // page regularly holds a message and the redaction that emptied it.
+        self.annotations(&chunk);
 
         !drawable && self.has_more(towards)
     }
@@ -842,13 +850,26 @@ impl Loaded {
                 continue;
             }
             if let Some(gone) = facts::redaction(event) {
-                // Whichever it was. A redacted message stops being a message
-                // and is dropped from the history; a redacted annotation is
-                // somebody taking a reaction back, and a redacted edit is
-                // somebody taking a correction back.
-                changed |= self.reactions.redacted(&gone);
-                changed |= self.edits.redacted(&gone);
-                changed |= self.history.forget(&gone);
+                // Whichever it was. A redacted annotation is somebody taking a
+                // reaction back and a redacted edit is somebody taking a
+                // correction back, both of which leave nothing behind. A
+                // redacted message is emptied where it stands instead of being
+                // dropped, so that the reply underneath is not left answering
+                // a gap.
+                let by = Some(gone.sender.as_str());
+                changed |= self.reactions.redacted(&gone.event_id);
+                changed |= self.edits.redacted(&gone.event_id);
+                changed |= self.history.redacted(&gone.event_id, by);
+                // The panel draws out of its own history and its own root,
+                // neither of which is the room's. Without this, deleting a
+                // message while its thread is open empties it in the room and
+                // leaves the words in the panel, on one screen at once.
+                if let Some(open) = self.open.as_mut() {
+                    changed |= open.history.redacted(&gone.event_id, by);
+                    if let Some(root) = open.root.as_mut().filter(|root| root.id == gone.event_id) {
+                        changed |= history::redact(root, by);
+                    }
+                }
             }
         }
         changed
@@ -1042,6 +1063,13 @@ impl Loaded {
         messages
             .iter()
             .map(|message| {
+                // Nothing folds onto a mark. A pill on a message that has
+                // been emptied counts agreement with nothing, and
+                // [`Self::corrected`] refuses the edits for a stronger reason
+                // than that.
+                if message.kind == MessageKind::Deleted {
+                    return message.clone();
+                }
                 let reactions = self.reactions.on(&message.id, me);
                 if reactions.is_empty() {
                     return self.corrected(message);
@@ -1060,6 +1088,17 @@ impl Loaded {
     /// the edit arrived because here is the first place the original is in
     /// hand to compare against.
     fn corrected(&self, message: &Message) -> Message {
+        // An edit outlives the message it corrects: a redaction names one
+        // event, and the corrections held against it are not that event.
+        // Folding one onto a mark would put back the sentence the redaction
+        // was sent to remove, which is the whole of what deleting is for.
+        //
+        // Guarded here and not only in [`Self::drawn`], because the quoted row
+        // above a reply is built in [`Self::answers`] without passing through
+        // it.
+        if message.kind == MessageKind::Deleted {
+            return message.clone();
+        }
         let Some(edit) = self.edits.latest_on(&message.id, &message.sender) else {
             return message.clone();
         };
@@ -1193,6 +1232,42 @@ pub async fn unreact(client: &Client, room_id: &str, reaction_id: &str) -> Resul
     // variant of its own: a redaction that failed is an SDK call that failed,
     // and `user_message` already has words for that.
     room.redact(&event_id_of(reaction_id)?, None, None)
+        .await
+        .map_err(matrix_sdk::Error::from)?;
+    Ok(())
+}
+
+/// Delete a message.
+///
+/// A redaction, which is what deleting is in Matrix and is worth being exact
+/// about rather than promising more than happens. The homeserver empties the
+/// event and serves the emptied version from then on; the event itself
+/// survives, keeping its sender and its timestamp, which is what the mark left
+/// in the room is drawn from. What federation has already handed to other
+/// servers is not recalled by any of this.
+///
+/// No reason is sent. `Room::redact` takes an optional one and there is
+/// nowhere in the interface that asks for it, so `None` is the honest
+/// argument: a reason invented here would be a sentence nobody wrote, filed
+/// against somebody's account.
+///
+/// Whose message it is stays the homeserver's to enforce. The interface offers
+/// the control on this account's own messages only, which is what keeps
+/// somebody from being handed a control that cannot work, and a redaction of
+/// anybody else's comes back as an error from the one place the power levels
+/// actually live.
+///
+/// Nothing is returned and nothing is echoed, on the same terms as every other
+/// send here: the message empties when the sync brings the redaction back.
+pub async fn delete(client: &Client, room_id: &str, event_id: &str) -> Result<()> {
+    // Before the room, so that something which is not an event ID is answered
+    // as that rather than as whatever the room lookup happens to say first.
+    let target = event_id_of(event_id)?;
+    // Lifted the way `unreact` lifts it, and for the reason written there:
+    // these two are the calls in this module that answer with the SDK's HTTP
+    // error rather than with one of ours.
+    room_of(client, room_id)?
+        .redact(&target, None, None)
         .await
         .map_err(matrix_sdk::Error::from)?;
     Ok(())

@@ -25,6 +25,9 @@ const timelineEarlier = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const roomAt = vi.hoisted(() => vi.fn());
+// The right of the window holds one panel at a time, so asking for a room's
+// details shuts whatever thread was there.
+const threadOpen = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   audioDevices,
@@ -45,9 +48,11 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberNames,
   roomAt,
   roomAvatar,
+  threadOpen,
 }));
 
 import { AppShell } from "./AppShell";
+import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
 import { HEARING } from "../lib/api";
 import type {
@@ -59,6 +64,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  Thread,
   Timeline,
 } from "../lib/api";
 
@@ -191,6 +197,7 @@ describe("AppShell", () => {
     timelineSend.mockReset().mockResolvedValue(undefined);
     memberNames.mockReset().mockResolvedValue({});
     roomAt.mockReset().mockResolvedValue("!tech:example.org");
+    threadOpen.mockReset().mockResolvedValue(undefined);
   });
 
   it("shows the room a notification was clicked to get to", async () => {
@@ -400,6 +407,127 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
 
     await waitFor(() => expect(document.activeElement).toBe(gear));
+  });
+
+  describe("a room's details", () => {
+    const GENERAL = "!general:example.org";
+
+    const withRoom: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel(GENERAL, "general")],
+        },
+      ],
+    };
+
+    /** Select the room, and hand back its heading, which opens the details. */
+    async function heading() {
+      shell({ rooms: withRoom });
+      await userEvent.click(
+        within(screen.getByRole("region", { name: "Text" })).getByRole(
+          "button",
+          { name: /general/ },
+        ),
+      );
+      // Scoped to the pane, because the row in the list beside it is called
+      // the same thing.
+      return within(screen.getByRole("main")).getByRole("button", {
+        name: "#general",
+      });
+    }
+
+    /** Hand a thread to everybody watching that channel, as Rust would. */
+    function arriveThread() {
+      const thread: Thread = {
+        roomId: GENERAL,
+        rootId: "$root",
+        messages: [],
+        moreBefore: false,
+      };
+      act(() => {
+        for (const [handler] of onThread.mock.calls) {
+          (handler as (value: Thread | null) => void)(thread);
+        }
+      });
+    }
+
+    it("opens them from the room's own heading", async () => {
+      // Issue #85. The heading drew the name and the topic and did nothing
+      // when it was pressed.
+      await userEvent.click(await heading());
+
+      expect(screen.getByRole("heading", { name: "Room info" })).toBeVisible();
+    });
+
+    it("puts them away when the heading is pressed again", async () => {
+      const name = await heading();
+      await userEvent.click(name);
+
+      await userEvent.click(name);
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+
+    it("puts them away from their own close control", async () => {
+      await userEvent.click(await heading());
+
+      await userEvent.click(
+        screen.getByRole("button", { name: "Close room info" }),
+      );
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+
+    it("shuts any open thread on the way up", async () => {
+      // One column, one panel. Both at once leaves the conversation a strip.
+      await userEvent.click(await heading());
+
+      expect(threadOpen).toHaveBeenCalledWith(null);
+    });
+
+    it("gives the column back when a thread arrives", async () => {
+      // The other direction, and the shell cannot ask for it: which thread is
+      // open is Rust's answer, so the panel is what reports one.
+      await userEvent.click(await heading());
+
+      arriveThread();
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+
+    it("puts them away on Escape", async () => {
+      await userEvent.click(await heading());
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+
+    it("leaves them open when a dialog over them takes the Escape", async () => {
+      // One press, one thing. The dialog is on top, so it is what closes, and
+      // details that went with it would be a second thing nobody asked for.
+      await userEvent.click(await heading());
+      await userEvent.click(
+        screen.getByRole("button", { name: /user settings/i }),
+      );
+      expect(await screen.findByRole("dialog")).toBeVisible();
+
+      await userEvent.keyboard("{Escape}");
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.getByRole("heading", { name: "Room info" })).toBeVisible();
+    });
+
+    it("draws nothing before a room is picked", async () => {
+      // There is no heading to press in the empty pane, and nothing for a
+      // panel about a room to describe.
+      shell({ rooms: withRoom });
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
   });
 
   describe("voice channels", () => {
@@ -655,6 +783,132 @@ describe("AppShell", () => {
         within(complaint).getByRole("button", { name: "Dismiss" }),
       );
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  describe("back and forward", () => {
+    const GENERAL = "!general:example.org";
+    const TECH = "!tech:example.org";
+
+    const twoRooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel(GENERAL, "general"), textChannel(TECH, "tech")],
+        },
+      ],
+    };
+
+    it("comes back to the room you were reading", async () => {
+      shell({ rooms: twoRooms });
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+      await userEvent.click(screen.getByRole("button", { name: /tech/ }));
+
+      await goBack();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#general",
+      );
+    });
+
+    it("goes forward again to the room you came back from", async () => {
+      shell({ rooms: twoRooms });
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+      await userEvent.click(screen.getByRole("button", { name: /tech/ }));
+      await goBack();
+
+      await goForward();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#tech",
+      );
+    });
+
+    it("comes back past the first room to the empty pane", async () => {
+      // Where the shell opens is somewhere it was, so the room picked first
+      // has something behind it rather than being the end of the line.
+      shell({ rooms: twoRooms });
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+
+      await goBack();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Nothing here yet",
+      );
+    });
+
+    it("comes back to the space you were in", async () => {
+      const twoSpaces: Rooms = {
+        spaces: [
+          {
+            id: "home",
+            name: "Home",
+            avatar: null,
+            channels: [textChannel(GENERAL, "general")],
+          },
+          {
+            id: "!hq:example.org",
+            name: "Kahu HQ",
+            avatar: null,
+            channels: [textChannel(TECH, "tech")],
+          },
+        ],
+      };
+      shell({ rooms: twoSpaces });
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
+
+      await goBack();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#general",
+      );
+    });
+
+    it("comes back one room when the mouse's back button is pressed", async () => {
+      // The whole of issue 60, end to end: the button on the side of a mouse
+      // and the room it lands on. A press that moves twice lands on the empty
+      // pane instead, which is what this looked like when it was wrong.
+      shell({ rooms: twoRooms });
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+      await userEvent.click(screen.getByRole("button", { name: /tech/ }));
+
+      await pressBack();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#general",
+      );
+    });
+
+    it("does not join a voice channel on the way back to it", async () => {
+      // Going back is looking at where you were, not clicking it again. A
+      // traversal that reconnected would drag somebody into a call they left.
+      const withVoice: Rooms = {
+        spaces: [
+          {
+            id: "home",
+            name: "Home",
+            avatar: null,
+            channels: [
+              textChannel(GENERAL, "general"),
+              voice("!lounge:example.org", "Lounge"),
+            ],
+          },
+        ],
+      };
+      const { onJoinVoice } = shell({ rooms: withVoice });
+      await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+      await userEvent.click(screen.getByRole("button", { name: /general/ }));
+      onJoinVoice.mockClear();
+
+      await goBack();
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Lounge",
+      );
+      expect(onJoinVoice).not.toHaveBeenCalled();
     });
   });
 });

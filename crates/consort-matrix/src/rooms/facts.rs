@@ -69,6 +69,8 @@ pub(crate) struct RoomFacts {
     pub(crate) name: String,
     /// The room's own `m.room.topic`, blank-filtered, or `None`.
     pub(crate) topic: Option<String>,
+    /// The room's canonical alias, or `None` for a room that publishes none.
+    pub(crate) alias: Option<String>,
     pub(crate) avatar: Option<String>,
     pub(crate) kind: RoomKind,
     /// Empty unless this is a space.
@@ -124,6 +126,10 @@ pub(crate) async fn extract(room: &Room) -> RoomFacts {
         // Local: read out of the room's own state, like the avatar URI beside
         // it, so a text room still costs nothing on every sync.
         topic: room.topic().filter(|topic| !topic.trim().is_empty()),
+        // Local as well, and the canonical one only: ruma has already
+        // validated the grammar, so nothing here has to decide what counts as
+        // an alias.
+        alias: room.canonical_alias().map(|alias| alias.to_string()),
         avatar: room.avatar_url().map(|uri| uri.to_string()),
         kind,
         children: match kind {

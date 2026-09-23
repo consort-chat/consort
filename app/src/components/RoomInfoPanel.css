@@ -1,0 +1,200 @@
+/*
+  What a room is, in a column of its own beside it.
+
+  A fixed width rather than the thread panel's draggable one, and the two are
+  different for a reason. A thread is a conversation, and how much of the
+  window a conversation deserves is a judgement only the person reading it can
+  make. This is a card: a name, an address and a paragraph, all of which have a
+  comfortable measure and none of which get better with more room. 320px is
+  that measure, and it is narrow enough that reading the room's details does
+  not squeeze the room.
+*/
+.info {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  min-height: 0;
+  background: var(--surface-base);
+  border-left: 1px solid var(--line-subtle);
+}
+
+/* The room's own header height, so the two line up across the rule. */
+.info__head {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+/*
+  What the panel is, not which room it is about. The room is named in the block
+  below at a size worth reading, and saying it twice would make the heading the
+  loudest thing in a panel whose whole job is the quieter facts under it.
+*/
+.info__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+/* The thread panel's close control, on the same terms. */
+.info__close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.info__close:hover {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.info__close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.info__scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-height: 0;
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+
+/*
+  The room as itself: its picture, its name, its address, centred and given
+  the top of the panel. Everything below is a fact about the room and reads as
+  one; this is the room, and the scale contrast is what says so.
+*/
+.info__identity {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  text-align: center;
+}
+
+/* Large enough to be a portrait of the room rather than a list bullet. */
+.info__avatar {
+  --avatar-size: 80px;
+
+  margin-bottom: var(--space-1);
+}
+
+.info__name {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  /* A room name is free text and some are long. Breaking beats overflowing. */
+  overflow-wrap: anywhere;
+}
+
+/*
+  The published address. Monospace because it is a thing to be copied and
+  compared character by character, which is the same reason a room ID would
+  be, and muted because the name above is what the room is called.
+*/
+.info__alias {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.info__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.info__heading {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+  The whole topic, which is the thing the one line in the header cannot show.
+  `pre-wrap` because the line breaks somebody put in a topic are part of what
+  they wrote, and `anywhere` because plenty of topics are a bare URL.
+*/
+.info__topic {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Said rather than left blank, so an empty section does not read as a bug. */
+.info__none {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+/*
+  The one thing this panel does. Full width and quiet: it is an offer rather
+  than the point of the panel, and a violet button here would pull the eye off
+  the room it is about.
+*/
+.info__copy {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.info__copy:hover {
+  background: var(--surface-overlay);
+  border-color: var(--line-strong);
+  color: var(--text-primary);
+}
+
+.info__copy:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.info__problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}

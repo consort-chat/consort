@@ -4136,6 +4136,72 @@ mod timeline {
     }
 
     #[tokio::test]
+    async fn deleting_a_message_redacts_it() {
+        // Deleting is redacting, and the whole send path is that one call. The
+        // event ID names the message rather than an annotation, which is the
+        // one way this and taking a reaction back could be got the wrong way
+        // round.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_redact()
+            .expect_any_access_token()
+            .ok(ruma::event_id!("$redaction:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::delete(&client, ROOM, "$said:example.org")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn deleting_something_that_is_not_an_event_never_reaches_the_homeserver() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        // Joined, so that what refuses this is the event ID and not the room
+        // lookup standing in front of it.
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_redact()
+            .expect_any_access_token()
+            .ok(ruma::event_id!("$never:example.org"))
+            .expect(0)
+            .mount()
+            .await;
+
+        let refused = timeline::delete(&client, ROOM, "not an event")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(refused, consort_matrix::Error::NoSuchEvent { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_delete_the_homeserver_refuses_says_so_in_words_for_a_person() {
+        // Nothing mounted, so the redaction is a 404. What a moderated room
+        // answers when somebody tries to remove a message they may not, and
+        // the SDK's HTTP error is not a sentence to put on a screen.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        let refused = timeline::delete(&client, ROOM, "$said:example.org")
+            .await
+            .unwrap_err();
+
+        assert!(!refused.user_message().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_message_address_names_the_room_and_the_event() {
         // What goes on the clipboard. The room ID rather than an alias, because
         // an event belongs to a room and an alias can be moved to another one.
@@ -5935,6 +6001,477 @@ mod timeline {
             assert_eq!(root.body, "corrected");
             assert!(root.edited);
             assert_eq!(bodies(settled(&rooms).unwrap()), vec!["corrected"]);
+        }
+    }
+
+    /// Deleting a message, which in Matrix is redacting one.
+    ///
+    /// What is being pinned throughout is that the message keeps its place.
+    /// A room that closed over the gap would leave the reply underneath
+    /// answering nothing, and would look unlike the same room open in any
+    /// other client.
+    mod deletions {
+        use super::*;
+        use matrix_sdk::test_utils::mocks::RoomRelationsResponseTemplate;
+
+        const GONE: &str = "$wrong-number:example.org";
+        const MODERATOR: &str = "@mod:example.org";
+        const ROOT: &str = "$root:example.org";
+
+        /// Answer `/event` with one message, for the thread panel's root.
+        async fn mount_event(server: &MatrixMockServer, value: serde_json::Value) {
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(value).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+        }
+
+        /// Answer `/relations` with `chunk`, for the thread panel.
+        async fn mount_relations(server: &MatrixMockServer, chunk: Vec<serde_json::Value>) {
+            server
+                .mock_room_relations()
+                .expect_any_access_token()
+                .ok(RoomRelationsResponseTemplate::default()
+                    .events(chunk.into_iter().map(raw).collect::<Vec<_>>()))
+                .mount()
+                .await;
+        }
+
+        /// One reply in the thread hanging from [`ROOT`].
+        fn in_thread(id: &str, body: &str, at: u64) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.message",
+                "event_id": id,
+                "room_id": ROOM,
+                "sender": OTHER,
+                "origin_server_ts": at,
+                "content": {
+                    "msgtype": "m.text",
+                    "body": body,
+                    "m.relates_to": { "rel_type": "m.thread", "event_id": ROOT },
+                },
+            })
+        }
+
+        /// A redaction of `target` sent by `by`, as a sync delivers one.
+        fn redacting(id: &str, target: &str, by: &str) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.redaction",
+                "event_id": id,
+                "sender": by,
+                "origin_server_ts": 9_700,
+                "redacts": target,
+                "content": {},
+            })
+        }
+
+        /// The message as `/messages` hands it back once it has been emptied.
+        fn emptied(id: &str, at: u64, by: &str) -> serde_json::Value {
+            serde_json::json!({
+                "type": "m.room.message",
+                "event_id": id,
+                "room_id": ROOM,
+                "sender": OTHER,
+                "origin_server_ts": at,
+                "content": {},
+                "unsigned": {
+                    "redacted_because": {
+                        "type": "m.room.redaction",
+                        "event_id": "$r:example.org",
+                        "sender": by,
+                        "origin_server_ts": at + 1,
+                        "content": {},
+                    },
+                },
+            })
+        }
+
+        /// The one message in `page` that has been emptied.
+        fn mark(room: &Timeline) -> &consort_matrix::timeline::Message {
+            room.messages
+                .iter()
+                .find(|message| message.kind == MessageKind::Deleted)
+                .expect("the deleted message is still drawn")
+        }
+
+        #[tokio::test]
+        async fn a_deleted_message_leaves_a_mark_where_it_was() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            syncing(&server, vec![redacting("$r:example.org", GONE, OTHER)]).await;
+            // Newest first, which is what a backwards page answers with.
+            paginating(
+                &server,
+                vec![
+                    said("$after:example.org", "no worries", 9_000),
+                    said(GONE, "wrong number", 1_000),
+                    said("$before:example.org", "morning all", 500),
+                ],
+                None,
+            )
+            .await;
+
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| report.messages.len() == 3)
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| {
+                    report
+                        .messages
+                        .iter()
+                        .any(|message| message.kind == MessageKind::Deleted)
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let room = settled(&reports).unwrap();
+            // Three, still, and in the order they were said. The conversation
+            // does not close up, which is the whole of what was chosen.
+            assert_eq!(room.messages.len(), 3);
+            assert_eq!(room.messages[1].id, GONE);
+            assert_eq!(bodies(room), vec!["morning all", "", "no worries"]);
+            // The envelope survives the redaction, so the mark is drawn under
+            // the name and the time the message already had.
+            assert_eq!(mark(room).sender, OTHER);
+            assert_eq!(mark(room).at, 1_000);
+        }
+
+        #[tokio::test]
+        async fn a_message_already_deleted_when_it_arrives_is_drawn_as_a_mark_too() {
+            // The reload. Without this the marks exist only for the deletions
+            // this session watched happen, and the room would look one way
+            // now and another way after a restart, which is the inconsistency
+            // the whole decision was made to avoid.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![
+                    said("$after:example.org", "no worries", 9_000),
+                    emptied(GONE, 1_000, OTHER),
+                ],
+                None,
+            )
+            .await;
+
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| report.messages.len() == 2)
+            })
+            .await;
+            drop(watch);
+
+            let room = settled(&reports).unwrap();
+            assert_eq!(mark(room).id, GONE);
+            assert_eq!(mark(room).body, "");
+            assert_eq!(bodies(room), vec!["", "no worries"]);
+        }
+
+        #[tokio::test]
+        async fn a_mark_says_who_deleted_it_when_it_was_not_the_author() {
+            // A moderator removing somebody's message and that person removing
+            // their own are one event type with a different sender on it, and
+            // a mark under somebody's name that did not carry this would tell
+            // the second story about the first.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            syncing(&server, vec![redacting("$r:example.org", GONE, MODERATOR)]).await;
+            paginating(&server, vec![said(GONE, "wrong number", 1_000)], None).await;
+
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| !report.messages.is_empty())
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| {
+                    report
+                        .messages
+                        .iter()
+                        .any(|message| message.kind == MessageKind::Deleted)
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let room = settled(&reports).unwrap();
+            assert_eq!(mark(room).deleted_by.as_deref(), Some(MODERATOR));
+            assert_eq!(
+                mark(room).sender,
+                OTHER,
+                "who wrote it is not who removed it"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_row_above_a_reply_does_not_put_back_a_deleted_message_s_edit() {
+            // The quoted row is built in `answers`, which does not pass
+            // through `drawn`, so it needs the guard of its own that it has.
+            // The shape is reachable: scroll to a reply naming something older
+            // than the window, where that something was corrected and then
+            // deleted. Without the guard the row draws the correction, under
+            // the author's name, for a message that is gone.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            paginating(
+                &server,
+                vec![
+                    serde_json::json!({
+                        "type": "m.room.message",
+                        "event_id": "$reply:example.org",
+                        "room_id": ROOM,
+                        "sender": OTHER,
+                        "origin_server_ts": 9_000,
+                        "content": {
+                            "msgtype": "m.text",
+                            "body": "quite",
+                            "m.relates_to": { "m.in_reply_to": { "event_id": GONE } },
+                        },
+                    }),
+                    serde_json::json!({
+                        "type": "m.room.message",
+                        "event_id": "$edit:example.org",
+                        "room_id": ROOM,
+                        "sender": OTHER,
+                        "origin_server_ts": 5_000,
+                        "content": {
+                            "msgtype": "m.text",
+                            "body": "* still the wrong number",
+                            "m.new_content": {
+                                "msgtype": "m.text",
+                                "body": "still the wrong number",
+                            },
+                            "m.relates_to": { "rel_type": "m.replace", "event_id": GONE },
+                        },
+                    }),
+                ],
+                None,
+            )
+            .await;
+            // Not in the page, so the row is built from a lookup, and what the
+            // lookup answers with is the emptied event.
+            mount_event(&server, emptied(GONE, 1_000, OTHER)).await;
+
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| !report.answered.is_empty())
+            })
+            .await;
+            drop(watch);
+
+            let answered = &settled(&reports).unwrap().answered[0];
+            assert_eq!(answered.id, GONE);
+            assert_eq!(answered.kind, MessageKind::Deleted);
+            assert_eq!(answered.body, "", "the correction is not the message");
+            assert!(!answered.edited);
+        }
+
+        #[tokio::test]
+        async fn a_message_deleted_while_its_thread_is_open_empties_in_the_panel_too() {
+            // The panel draws out of its own history, which is not the room's.
+            // Without the sweep reaching it, one screen would show the words
+            // gone in the room and still there in the thread beside it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            syncing(&server, vec![redacting("$r:example.org", GONE, OTHER)]).await;
+            paginating(&server, vec![said(ROOT, "the question", 1_000)], None).await;
+            mount_event(&server, said(ROOT, "the question", 1_000)).await;
+            mount_relations(&server, vec![in_thread(GONE, "wrong number", 3_000)]).await;
+
+            let (rooms_seen, rooms_sink) = recorder::<Timeline>();
+            let (panels_seen, panels_sink) = recorder::<Option<timeline::Thread>>();
+            let watch = timeline::watch(client.clone(), ROOM, rooms_sink, panels_sink, |_| {});
+            wait_until(&rooms_seen, |reports| {
+                settled(reports).is_some_and(|report| !report.messages.is_empty())
+            })
+            .await;
+            watch.open_thread(Some(ROOT.to_owned()));
+            wait_until(&panels_seen, |reports| {
+                reports.iter().any(|report| {
+                    report
+                        .as_ref()
+                        .is_some_and(|open| !open.messages.is_empty())
+                })
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let panels = wait_until(&panels_seen, |reports| {
+                reports.iter().any(|report| {
+                    report.as_ref().is_some_and(|open| {
+                        open.messages
+                            .iter()
+                            .any(|message| message.kind == MessageKind::Deleted)
+                    })
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let open = panels
+                .iter()
+                .rev()
+                .find_map(|report| report.as_ref())
+                .expect("the panel is open");
+            assert_eq!(open.messages.len(), 1, "the reply keeps its place");
+            assert_eq!(open.messages[0].body, "");
+            assert_eq!(open.messages[0].kind, MessageKind::Deleted);
+        }
+
+        #[tokio::test]
+        async fn deleting_the_message_a_thread_hangs_from_empties_the_root_it_draws() {
+            // The panel holds its root as one message beside its replies, so
+            // it is swept separately or not at all. What this leaves is a
+            // thread with no way into it from the room, which is recorded on
+            // the pull request rather than solved here.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            syncing(&server, vec![redacting("$r:example.org", ROOT, OTHER)]).await;
+            paginating(&server, vec![said(ROOT, "the question", 1_000)], None).await;
+            mount_event(&server, said(ROOT, "the question", 1_000)).await;
+            mount_relations(
+                &server,
+                vec![in_thread("$a:example.org", "an answer", 3_000)],
+            )
+            .await;
+
+            let (rooms_seen, rooms_sink) = recorder::<Timeline>();
+            let (panels_seen, panels_sink) = recorder::<Option<timeline::Thread>>();
+            let watch = timeline::watch(client.clone(), ROOM, rooms_sink, panels_sink, |_| {});
+            wait_until(&rooms_seen, |reports| {
+                settled(reports).is_some_and(|report| !report.messages.is_empty())
+            })
+            .await;
+            watch.open_thread(Some(ROOT.to_owned()));
+            wait_until(&panels_seen, |reports| {
+                reports
+                    .iter()
+                    .any(|report| report.as_ref().is_some_and(|open| open.root.is_some()))
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let panels = wait_until(&panels_seen, |reports| {
+                reports.iter().any(|report| {
+                    report.as_ref().is_some_and(|open| {
+                        open.root
+                            .as_ref()
+                            .is_some_and(|root| root.kind == MessageKind::Deleted)
+                    })
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let root = panels
+                .iter()
+                .rev()
+                .find_map(|report| report.as_ref()?.root.as_ref())
+                .expect("the panel still draws something where its root was");
+            assert_eq!(root.body, "");
+            assert_eq!(root.kind, MessageKind::Deleted);
+        }
+
+        #[tokio::test]
+        async fn deleting_a_message_that_was_edited_does_not_put_the_edit_back() {
+            // The one that would be a real leak. An edit is its own event and
+            // a redaction names one event, so the correction outlives the
+            // message it corrects; folding it onto the mark would put back the
+            // sentence the redaction was sent to remove.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            syncing(&server, vec![redacting("$r:example.org", GONE, OTHER)]).await;
+            paginating(
+                &server,
+                vec![
+                    serde_json::json!({
+                        "type": "m.room.message",
+                        "event_id": "$edit:example.org",
+                        "room_id": ROOM,
+                        "sender": OTHER,
+                        "origin_server_ts": 5_000,
+                        "content": {
+                            "msgtype": "m.text",
+                            "body": "* still the wrong number",
+                            "m.new_content": {
+                                "msgtype": "m.text",
+                                "body": "still the wrong number",
+                            },
+                            "m.relates_to": { "rel_type": "m.replace", "event_id": GONE },
+                        },
+                    }),
+                    said(GONE, "wrong number", 1_000),
+                ],
+                None,
+            )
+            .await;
+
+            let (seen, sink) = recorder::<Timeline>();
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            wait_until(&seen, |reports| {
+                settled(reports)
+                    .is_some_and(|report| bodies(report) == vec!["still the wrong number"])
+            })
+            .await;
+
+            let pump = sync::start(client, |_| {});
+            let reports = wait_until(&seen, |reports| {
+                settled(reports).is_some_and(|report| {
+                    report
+                        .messages
+                        .iter()
+                        .any(|message| message.kind == MessageKind::Deleted)
+                })
+            })
+            .await;
+            pump.abort();
+            drop(watch);
+
+            let room = settled(&reports).unwrap();
+            assert_eq!(bodies(room), vec![""], "the correction is not the message");
+            assert!(!mark(room).edited);
         }
     }
 }
