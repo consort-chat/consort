@@ -143,14 +143,9 @@ export function onZoomed(handler: () => void): () => void {
   };
 }
 
-/**
- * Say so.
- *
- * Over a copy of the set, so that a listener which stops listening from inside
- * its own handler does not change what is still being walked.
- */
+/** Say so. */
 export function zoomed(): void {
-  for (const handler of [...watching]) handler();
+  for (const handler of watching) handler();
 }
 
 /** A multiplier, as whole percent, for a readout beside a slider. */
