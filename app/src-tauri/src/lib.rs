@@ -97,8 +97,7 @@ async fn serve(
     )
 }
 
-/// Leave the voice channel on the way out, and take the window off the screen
-/// first.
+/// Leave the voice channel on the way out.
 ///
 /// The one place every quit passes through: Ctrl+Q by way of
 /// [`commands::quit`], the window's close button, and a window manager closing
@@ -116,12 +115,10 @@ async fn serve(
 /// relaunch can do is hand its arguments to a process on its way out and appear
 /// to do nothing.
 ///
-/// The windows are hidden before the wait rather than left to the process exit.
-/// On the close-button path they have gone already, but Ctrl+Q arrives here with
-/// the window still up, and a window that sits there for a second not drawing is
-/// indistinguishable from one that has hung. Hiding takes effect immediately:
-/// this runs on the thread that owns the event loop, which is where Tauri
-/// applies a window message rather than posting it.
+/// This blocks the thread that owns the event loop, which is the thread that
+/// draws. Nothing should be on screen by the time it runs: the close button has
+/// already destroyed the window, and [`commands::quit`] hides it before asking
+/// to exit for exactly this reason.
 ///
 /// One thing this asks of whatever comes next: nothing prevents the exit today,
 /// and something that did (a tray icon, a "keep running in the background") would
@@ -129,10 +126,6 @@ async fn serve(
 /// cancelled, and a session left in a channel it is still connected to would
 /// show as connected to nobody but itself.
 fn on_the_way_out<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    for window in app.webview_windows().values() {
-        let _ = window.hide();
-    }
-
     app.state::<AppState>().leave_call_on_quit(LEAVE_ON_QUIT);
 }
 

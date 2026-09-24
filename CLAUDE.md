@@ -164,10 +164,11 @@ bounded twice over: `consort_call::SHUTDOWN_LEAVE_TIMEOUT` bounds the request,
 deliberately the longer of the two so it is a backstop rather than a competitor.
 A homeserver that has stopped answering costs a few seconds of an invisible
 process and nothing else. It cannot leave somebody unable to close the
-application, which would be a worse bug than the one this fixes. The windows go
-first for the same reason: Ctrl+Q reaches `RunEvent::Exit` with the window still
-on screen, and a window that sits there not drawing is indistinguishable from
-one that has hung.
+application, which would be a worse bug than the one this fixes. The window is
+taken off screen before any of it: the wait is on the thread that draws, so the
+`quit` command hides the window before it asks to exit, which is early enough
+that the event loop gets an iteration to act on the hide. The close button needs
+no such help, having destroyed the window already.
 
 What is still not covered, and cannot be from here: `SIGKILL`, `SIGTERM`, a
 panic, a machine losing power, and a quit during a slow join, where the call

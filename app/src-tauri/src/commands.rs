@@ -1833,10 +1833,26 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// event loop exits the process from inside its own `run`, so nothing managed
 /// here is ever dropped. What has to happen before that goes in `lib.rs` on
 /// `RunEvent::ExitRequested`, which is where this path and the close button
-/// meet, rather than here where only one of them would be covered. Leaving the voice channel
-/// is the thing that needs it; see `CLAUDE.md` for what it costs not to.
+/// meet, rather than here where only one of them would be covered. Leaving the
+/// voice channel is the thing that needs it; see `CLAUDE.md` for what it costs
+/// not to.
+///
+/// The window is hidden here, though, and that is not cosmetic. Leaving the call
+/// takes a moment and the wait for it is on the thread that draws, so a window
+/// still on screen would sit there not drawing, which reads as a hang rather
+/// than as a quit. The close button has no such problem: it destroys the window
+/// before the exit is requested. Hiding from here rather than from the exit
+/// itself is what makes it take effect, because the request below is posted to
+/// the event loop rather than applied in place, so the loop gets an iteration to
+/// act on the hide before it ever sees the exit.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
     app.exit(0);
 }
 
