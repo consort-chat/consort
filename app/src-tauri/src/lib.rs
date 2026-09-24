@@ -16,6 +16,7 @@ mod ears;
 mod events;
 mod media;
 mod notify;
+mod recent;
 mod renderer;
 mod settings;
 mod sound;
@@ -215,6 +216,7 @@ pub fn run() {
             commands::member_names,
             commands::timeline_open,
             commands::timeline_close,
+            commands::recent_rooms,
             commands::timeline_earlier,
             commands::timeline_later,
             commands::timeline_go_to,
