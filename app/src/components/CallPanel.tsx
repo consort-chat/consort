@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+
 import { microphoneOff, type Call, type SelfAudio } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
@@ -118,6 +120,380 @@ function ClockIcon({ on }: { on: boolean }) {
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7v5l3 2" stroke={on ? "var(--surface)" : "currentColor"} />
     </svg>
+  );
+}
+
+/**
+ * A chevron, pointing where the panel comes out.
+ *
+ * Right while the quieter actions are put away, which is the arrow the issue
+ * asked for, and up once they are out, because up is where they go: this strip
+ * is the bottom of the sidebar and there is nowhere below it. An arrow still
+ * aiming right with the panel open would be pointing at the edge of the
+ * window.
+ */
+function ChevronIcon() {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+/**
+ * How long a pointer has to mean it before the panel comes out.
+ *
+ * The chevron is between the microphone and the way out, so a pointer on its
+ * way to either crosses it, and a panel that sprang open on every crossing
+ * would be covering the channel list several times a minute.
+ */
+const HOVER_OPEN = 150;
+
+/**
+ * How long the panel stays behind once the pointer has gone.
+ *
+ * Ten times the wait to open, and lopsided on purpose. Opening early puts a
+ * panel over the channel list nobody asked for, which costs a glance. Closing
+ * early takes the panel out from under the hand reaching for it, which costs
+ * the whole errand, and the reach is the longer of the two movements: the
+ * panel floats a gap clear of the control, and that gap belongs to neither of
+ * them, so travelling from one to the other is a leave and an enter with
+ * nothing in between.
+ *
+ * Long enough that cancelling it stopped being optional. A wait this size is
+ * still running when the next thing happens, so every way in has to take the
+ * pending close with it. Otherwise the panel somebody just asked for puts
+ * itself away a second and a half later, which looks like the control failing
+ * rather than like a timer nobody can see.
+ */
+const HOVER_LINGER = 1500;
+
+/**
+ * Deafen and away, behind one control.
+ *
+ * Four buttons and a label do not fit a 240px column, and the label is what
+ * lost: "Voice connected" was arriving as a word and a half. These two are the
+ * pair that goes, because they are the two nobody reaches for in a hurry.
+ * Muting and hanging up stay where a hand finds them without reading anything.
+ *
+ * Above the control rather than below it, and floating rather than a second
+ * row. A row that appeared inside the strip would push the channel list up
+ * every time somebody looked at it, and there is no room under the strip to
+ * push into.
+ *
+ * Two ways in, and a hover is the second of them rather than the only one. A
+ * menu that answers nothing but a pointer is a menu a keyboard cannot reach
+ * and a touchscreen cannot open, and these two are a microphone and a status,
+ * not decoration. So the press stays exactly as it was, Enter and Space with
+ * it, and the hover is added beside them.
+ *
+ * The two are not the same ask, which is why the panel keeps two facts rather
+ * than one. A hover is not a request for anything: it opens the panel, it
+ * leaves the focus where it was, and the pointer going away again is the whole
+ * of the request to close. A press is a request, so it survives the pointer
+ * wandering off the control, and from a keyboard it takes the focus with it.
+ *
+ * What neither of them may be is the other one's opposite. One boolean written
+ * by both put them a step out of phase: the pointer arrives, the panel opens
+ * under it, and the press meant to open it reads that as open and closes it,
+ * so the control needs pressing twice and the first press looks like it did
+ * nothing. A press now names the state it wants instead of inverting one the
+ * hover is also writing.
+ *
+ * Its own component, and not because it is reused. `CallPanel` returns null
+ * before it does anything when there is no call, so state belonging to the row
+ * cannot be held above that line without the hooks moving with it.
+ */
+function MoreActions({
+  deafened,
+  away,
+  onSetDeafened,
+  onSetAway,
+}: {
+  deafened: boolean;
+  away: boolean;
+  onSetDeafened: (deafened: boolean) => void;
+  onSetAway: (away: boolean) => void;
+}) {
+  /*
+    Where the pointer is, and what was asked for. Either one shows the panel.
+
+    `hovered` is self-clearing and belongs to the pointer alone: true a moment
+    after it arrives, false a while after it goes. `asked` is somebody having
+    pressed the control, and it outlives the pointer drifting off the chevron,
+    which is what lets a press hold the panel still while a hover cannot.
+
+    Two of them rather than one because a press and a hover are not each
+    other's opposite, and a single flag makes them so.
+  */
+  const [hovered, setHovered] = useState(false);
+  const [asked, setAsked] = useState(false);
+  const shown = hovered || asked;
+
+  const wrap = useRef<HTMLSpanElement | null>(null);
+  const toggle = useRef<HTMLButtonElement | null>(null);
+  const actions = useRef<HTMLDivElement | null>(null);
+  const first = useRef<HTMLButtonElement | null>(null);
+  /*
+    Whether a mouse is on the control as the press lands, which is how a press
+    from a hand is told from a press from a key. The pointer handlers below are
+    the only thing that knows, and they know it before the click they precede.
+  */
+  const pointerHere = useRef(false);
+  /*
+    Whether the focus in here was put there by a hand or by a key.
+
+    The close below leaves the panel alone while the keyboard is inside it, and
+    where the focus sits cannot answer that on its own: a mouse pressing Deafen
+    focuses Deafen exactly as Tab does, so a close reading only the focus finds
+    the panel occupied and never fires. That is the stuck panel #109 was filed
+    about, one control further in.
+
+    So the question is answered where the difference is still visible. A press
+    from a mouse claims the focus, and the next key pressed in here hands it
+    back, which covers pressing the chevron with the mouse and then Tabbing on.
+  */
+  const focusByPointer = useRef(false);
+  const settle = useRef<number | undefined>(undefined);
+
+  /*
+    Focus follows the panel out, but only for the press that has no pointer
+    behind it.
+
+    Without it a keyboard has the actions on screen and its next Tab somewhere
+    else entirely, which is the same as the control having done nothing. A
+    mouse needs none of that: the panel is the next thing in the row already,
+    so Tab reaches it from the chevron without being carried there.
+
+    It would also cost the mouse the close below. Focus inside the panel is
+    what tells that close to hold, so a press that puts it there on the way in
+    is a press that pins the panel open against the pointer leaving, which is
+    the whole of what #109 asked to stop.
+  */
+  useEffect(() => {
+    if (asked && !pointerHere.current) first.current?.focus();
+  }, [asked]);
+
+  /* A call ends while a hover is settling, and the strip goes with it. */
+  useEffect(() => () => window.clearTimeout(settle.current), []);
+
+  useEffect(() => {
+    if (!shown) return;
+
+    function hide() {
+      /*
+        The focus goes back to the control that opened this, but only when the
+        panel still has it. A press somewhere else has already chosen where
+        focus is going, and pulling it back here would take it from them.
+      */
+      if (wrap.current?.contains(document.activeElement) === true) {
+        toggle.current?.focus();
+      }
+      // Both, and the pending one with them. Escape and a press elsewhere are
+      // decisions, and leaving a hover behind to reopen what they just shut
+      // would make them suggestions.
+      window.clearTimeout(settle.current);
+      setHovered(false);
+      setAsked(false);
+    }
+
+    function onEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      // Stopped here, so one press shuts this rather than also reaching
+      // whatever else on the window is listening for it.
+      event.stopPropagation();
+      hide();
+    }
+
+    /*
+      `mousedown` rather than `click`, on the same terms as every other
+      dismissable thing here: a drag that starts inside and ends outside is not
+      somebody asking for this to close. Measured against the wrapper rather
+      than the panel, so that a press on the control itself closes it once
+      instead of closing it and letting the click open it again.
+    */
+    function elsewhere(event: MouseEvent) {
+      if (event.target instanceof Node && wrap.current?.contains(event.target)) {
+        return;
+      }
+      hide();
+    }
+
+    document.addEventListener("keydown", onEscape);
+    document.addEventListener("mousedown", elsewhere);
+    return () => {
+      document.removeEventListener("keydown", onEscape);
+      document.removeEventListener("mousedown", elsewhere);
+    };
+  }, [shown]);
+
+  /*
+    Mouse only, on both of these. A tap fires a pointer event too, and a panel
+    that opened on the way to the press would be opening and closing under the
+    finger that is trying to use it. Touch gets the press, which is the way in
+    that was always here.
+  */
+  function enter(event: PointerEvent<HTMLSpanElement>) {
+    if (event.pointerType !== "mouse") return;
+    pointerHere.current = true;
+    window.clearTimeout(settle.current);
+    // Already counted as here, so this is the pointer coming back across the
+    // gap below the panel, and the clear above is the whole of the answer.
+    if (hovered) return;
+    settle.current = window.setTimeout(() => setHovered(true), HOVER_OPEN);
+  }
+
+  /*
+    A press from a hand is about to move the focus, wherever in here it lands.
+    Mouse only, on the same terms as the two above: a finger has no hover to
+    be told apart from, so nothing it does needs this.
+  */
+  function press(event: PointerEvent<HTMLSpanElement>) {
+    if (event.pointerType !== "mouse") return;
+    focusByPointer.current = true;
+  }
+
+  /* And a key pressed anywhere in here says the keyboard has it back. */
+  function key() {
+    focusByPointer.current = false;
+  }
+
+  function leave(event: PointerEvent<HTMLSpanElement>) {
+    if (event.pointerType !== "mouse") return;
+    pointerHere.current = false;
+    /*
+      Cancels a pending open as well as arming the close. The chevron sits
+      between the microphone and the way out, so a pointer crosses it to reach
+      either of them, and crossing is not asking.
+    */
+    window.clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => {
+      /*
+        The keyboard is in the panel: somebody opened this without a pointer,
+        or hovered it open and then Tabbed in. Closing now would take their
+        focus with it and put them somewhere they did not choose.
+
+        Both halves are load bearing. Measured against the panel rather than
+        the wrapper, because a mouse pressing the chevron leaves the focus on
+        the chevron and a wrapper would read that as the keyboard being here.
+        And only when a key put the focus there, because a mouse pressing
+        Deafen leaves it inside the panel, which the panel alone would read the
+        same way. Either one on its own is a panel that never closes.
+      */
+      if (
+        !focusByPointer.current &&
+        actions.current?.contains(document.activeElement) === true
+      ) {
+        return;
+      }
+      // Both. A press that opened this is a request, and the pointer leaving
+      // is what takes the request back.
+      setHovered(false);
+      setAsked(false);
+    }, HOVER_LINGER);
+  }
+
+  return (
+    <span
+      className="call-panel__more"
+      ref={wrap}
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+      onPointerDown={press}
+      onKeyDown={key}
+    >
+      {/*
+        `aria-expanded` and a name that stays put, the way the state line above
+        does it and for the same reason: a button renamed under the cursor is
+        announced as a different button each press. The tooltip is where the
+        wording is allowed to follow the state.
+      */}
+      <button
+        type="button"
+        className="call-panel__control call-panel__more-toggle"
+        ref={toggle}
+        aria-expanded={shown}
+        aria-label="More voice actions"
+        title={shown ? "Hide the other actions" : "More voice actions"}
+        onClick={() => {
+          /*
+            A press settles it now, and takes the pending hover with it either
+            way. This is what a linger of a second and a half asks for: press
+            the chevron while a close is counting down, and the close goes,
+            rather than arriving later to put away the panel the press had
+            just asked for.
+
+            The close below would in fact spare it anyway, since every press
+            that can land inside that window is a pointerless one and those
+            carry the focus into the panel, which is the one thing that close
+            refuses to override. That is a second mechanism agreeing by
+            accident, though, and about the keyboard rather than about this.
+            Saying it here is what makes it true on purpose.
+          */
+          window.clearTimeout(settle.current);
+          /*
+            Read against `asked` rather than against what is on screen, which
+            is the phase fix. A pointer resting here has the panel open
+            already, and a press that inverted that would close the thing it
+            was reaching for and need pressing again. So the first press asks,
+            whether or not a hover got there first, and the second takes it
+            back and the hover with it.
+          */
+          if (asked) {
+            setAsked(false);
+            setHovered(false);
+            return;
+          }
+          setAsked(true);
+        }}
+      >
+        <ChevronIcon />
+      </button>
+      {shown && (
+        /*
+          Written out rather than drawn, which is the one thing this panel has
+          that the row did not have room for. The words are the accessible name
+          as well, so they hold still across a press while `aria-pressed`
+          carries which way the switch is set.
+
+          Nothing closes on a press. These are toggles, not commands, and
+          shutting the panel would hide the one piece of feedback saying the
+          press took, as well as taking the focus with it.
+        */
+        <div className="call-panel__more-actions" ref={actions}>
+          <button
+            type="button"
+            className="call-panel__more-action"
+            ref={first}
+            onClick={() => onSetDeafened(!deafened)}
+            aria-pressed={deafened}
+            title={deafened ? "Undeafen" : "Deafen"}
+          >
+            <HeadphonesIcon off={deafened} />
+            Deafen
+          </button>
+          <button
+            type="button"
+            className="call-panel__more-action"
+            onClick={() => onSetAway(!away)}
+            aria-pressed={away}
+            title={away ? "You are away" : "Mark yourself away"}
+          >
+            <ClockIcon on={away} />
+            Away
+          </button>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -261,11 +637,14 @@ export function CallPanel({
         because none of these has its purpose written beside it and one of them
         ends a conversation.
 
-        `aria-pressed` on the two that toggle, and not on the one that does not.
+        `aria-pressed` on the one that toggles, and not on the two that do not.
         A screen reader then says "mute, pressed" rather than leaving somebody
         to work out from a label whether the thing they just did took. The
         labels stay put across the press for the same reason: a button whose
         name changes under the cursor is announced as a new button.
+
+        Three of them, still in severity order: what this session says, then
+        the quieter pair behind the chevron, then the way out.
       */}
       <div className="call-panel__controls">
         <button
@@ -279,32 +658,12 @@ export function CallPanel({
           <MicrophoneIcon off={off} />
         </button>
 
-        <button
-          type="button"
-          className="call-panel__control"
-          onClick={() => onSetDeafened(!deafened)}
-          aria-pressed={deafened}
-          aria-label="Deafen"
-          title={deafened ? "Undeafen" : "Deafen"}
-        >
-          <HeadphonesIcon off={deafened} />
-        </button>
-
-        {/*
-          Between deafen and hang up, which is where it belongs by severity:
-          the two to its left change what this session hears and says, this one
-          says where the person is, and the one to its right ends the call.
-        */}
-        <button
-          type="button"
-          className="call-panel__control"
-          onClick={() => onSetAway(!away)}
-          aria-pressed={away}
-          aria-label="Mark yourself away"
-          title={away ? "You are away" : "Mark yourself away"}
-        >
-          <ClockIcon on={away} />
-        </button>
+        <MoreActions
+          deafened={deafened}
+          away={away}
+          onSetDeafened={onSetDeafened}
+          onSetAway={onSetAway}
+        />
 
         <button
           type="button"
