@@ -16,12 +16,14 @@ mod ears;
 mod events;
 mod media;
 mod notify;
+mod recent;
 mod renderer;
 mod settings;
 mod sound;
 mod state;
 #[cfg(test)]
 mod testing;
+mod tray;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -195,6 +197,18 @@ pub fn run() {
         .setup(|app| {
             let data_dir = resolve_data_dir(app.handle())?;
             let store = SessionStore::new(&data_dir);
+            let settings = crate::settings::SettingsStore::at(&data_dir);
+
+            // Here rather than from the page, and before anything is managed,
+            // because this is the one half of the chosen size that can be in
+            // place before the first paint. A window from the config exists by
+            // the time setup runs, and nothing has been drawn in it yet.
+            //
+            // The text scale cannot be done here: it is a root font size, so
+            // only the page can set one, and the page has to ask for it. That
+            // settles during the splash, which is the screen Consort opens on
+            // regardless.
+            commands::zoom(app.handle(), settings.load().appearance.application_scale);
 
             tracing::info!(
                 path = %data_dir.display(),
@@ -207,7 +221,7 @@ pub fn run() {
             // emits through.
             app.manage(AppState::new(
                 store,
-                crate::settings::SettingsStore::at(&data_dir),
+                settings,
                 std::sync::Arc::new(app.handle().clone()),
             ));
 
@@ -219,6 +233,11 @@ pub fn run() {
             // test could build.
             app.state::<AppState>()
                 .draw_notifications_with(std::sync::Arc::new(app.handle().clone()));
+
+            // Here rather than anywhere later, because this is the main thread
+            // and `tray::install` needs to be on it to survive a machine with
+            // no appindicator library. See the comment there.
+            tray::install(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -260,6 +279,7 @@ pub fn run() {
             commands::room_members,
             commands::timeline_open,
             commands::timeline_close,
+            commands::recent_rooms,
             commands::timeline_earlier,
             commands::timeline_later,
             commands::timeline_go_to,
@@ -298,6 +318,9 @@ pub fn run() {
             commands::emoji_settings,
             commands::emoji_used,
             commands::set_emoji_tone,
+            commands::appearance_settings,
+            commands::set_appearance_settings,
+            commands::preview_application_scale,
             commands::set_person_volume,
             commands::audio_test_start,
             commands::audio_test_stop,

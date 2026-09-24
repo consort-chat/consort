@@ -1443,6 +1443,66 @@ export interface Message {
 }
 
 /**
+ * Who has read one message, as far as this account can see.
+ *
+ * Mirrors `consort_matrix::ReadOn`. "As far as this account can see" is not a
+ * hedge: a person sending `m.read.private` is visible to nobody, so they are
+ * absent from every one of these and there is no way to tell them apart from
+ * somebody who simply has not read it. `ReadBy` says so in words, always,
+ * which is the only honest thing a row of faces can do about it.
+ */
+export interface ReadOn {
+  /** The message they have read up to. */
+  eventId: string;
+  /**
+   * Up to five of them, by Matrix user ID, in a stable order.
+   *
+   * This session's own is never here. Rust takes it out, on the same terms as
+   * `Typing.users`: nobody needs telling that they have read their own room.
+   */
+  readers: string[];
+  /**
+   * How many more there are than the ones named.
+   *
+   * Absent for a row that fits, which is almost every row. A room with fifty
+   * people in it puts fifty receipts on its newest message, and this is how
+   * that stays a row rather than a wall.
+   */
+  more?: number;
+}
+
+/** One thread's readers, named by the thread they are in. */
+export interface ThreadReaders {
+  /** The message the thread hangs from. */
+  rootId: string;
+  /** Who has read how far inside it. */
+  on: ReadOn[];
+}
+
+/**
+ * Who has read how far in one room, and in the thread open beside it.
+ *
+ * Mirrors `consort_matrix::Readers`. Its own channel rather than a field on
+ * `Timeline`, and the reason is measured: a busy room produces about as many
+ * receipts as messages, and redrawing fifty of them costs 6.3ms against 0.14ms
+ * for the rows that actually moved. See `lib/readers`, which is what keeps the
+ * 0.14ms rather than merely making it possible.
+ */
+export interface Readers {
+  /** The room this is about, on the same terms as `Timeline.roomId`. */
+  roomId: string;
+  /** Who has read how far in the room's own timeline. */
+  main: ReadOn[];
+  /**
+   * The same for the thread somebody has open, when one is.
+   *
+   * Absent with no thread open. A thread keeps receipts of its own and a
+   * receipt in the room does not answer for it.
+   */
+  thread?: ThreadReaders;
+}
+
+/**
  * Who is typing in one room.
  *
  * Mirrors `consort_matrix::Typing`.
@@ -1731,6 +1791,23 @@ export function timelineClose(): Promise<void> {
 }
 
 /**
+ * The rooms this account has opened, most recently first.
+ *
+ * Room IDs and nothing else. What each of them is called, what it looks like
+ * and which rail entry it hangs under are all in the room list already, and a
+ * second copy here would be a second thing to go stale.
+ *
+ * Asked for rather than pushed, and answered out of a file rather than from
+ * the homeserver: this is what the screen the application opens on draws, and
+ * that screen is drawn before the first sync response has landed.
+ *
+ * Empty while signed out, and empty for rooms opened under another account.
+ */
+export function recentRooms(): Promise<string[]> {
+  return invoke<string[]>("recent_rooms");
+}
+
+/**
  * Ask the open room for a page of older messages.
  *
  * Answers nothing: the page arrives on the `timeline` channel as a longer
@@ -1808,6 +1885,23 @@ export function onThread(
  */
 export function onTyping(handler: (typing: Typing) => void): Promise<UnlistenFn> {
   return listen<Typing>("typing", (event) => handler(event.payload));
+}
+
+/**
+ * Be told who has read how far in the room currently open.
+ *
+ * Carries the room it is about, on the same terms as `onTyping`, so a reader
+ * can tell an answer about the last room from an answer about this one.
+ *
+ * Nothing that draws a message subscribes to this. `lib/readers` does, and a
+ * row of faces then asks it about one message: that is the difference between
+ * a receipt costing 0.14ms and costing 6.3ms, and the whole reason the channel
+ * is separate in the first place.
+ */
+export function onReaders(
+  handler: (readers: Readers) => void,
+): Promise<UnlistenFn> {
+  return listen<Readers>("readers", (event) => handler(event.payload));
 }
 
 /**
@@ -1970,6 +2064,72 @@ export function emojiUsed(key: string): Promise<EmojiSettings> {
 /** Choose the skin tone the picker applies, 1 to 5, or 0 for none. */
 export function setEmojiTone(tone: number): Promise<void> {
   return invoke<void>("set_emoji_tone", { tone });
+}
+
+/**
+ * How big the application is drawn.
+ *
+ * Two numbers because these are two knobs. `applicationScale` is the webview's
+ * own zoom, which moves everything a page has: words, pictures, avatars,
+ * borders. `textScale` is a multiplier on the root font size, which moves only
+ * what is measured in `rem`, so the words and the spacing around them grow and
+ * a picture somebody sent stays the size they sent it.
+ *
+ * Both are multipliers of the size Consort has always drawn at, and 1 is that
+ * size. The ranges, and the arithmetic of moving inside them, are in
+ * `lib/scale.ts`.
+ */
+export interface AppearanceSettings {
+  /** The webview zoom. Applied by Rust, because only Rust can. */
+  applicationScale: number;
+  /** The root font size, on top of the zoom. Applied by the page. */
+  textScale: number;
+}
+
+/**
+ * What is currently chosen.
+ *
+ * Always in range: Rust clamps what comes out of the file as well as what goes
+ * in, so a hand-edited `settings.json` cannot produce a window nobody can
+ * read their way out of.
+ */
+export function appearanceSettings(): Promise<AppearanceSettings> {
+  return invoke<AppearanceSettings>("appearance_settings");
+}
+
+/**
+ * Replace them.
+ *
+ * Rust zooms the window as part of this, so the application scale is applied
+ * and saved together and cannot end up meaning two things. The text scale is
+ * only saved: a root font size is the page's to set, and `applyTextScale` in
+ * `lib/scale.ts` is what sets it.
+ *
+ * A size outside the range is stored at the nearest end rather than refused.
+ * Both sliders apply as they are dragged, so the window has already moved by
+ * the time this is called.
+ */
+export function setAppearanceSettings(
+  appearance: AppearanceSettings,
+): Promise<void> {
+  return invoke<void>("set_appearance_settings", { appearance });
+}
+
+/**
+ * Draw the window at `scale` without remembering it.
+ *
+ * What the application scale slider calls on every move. Drawing has to be
+ * immediate, because watching the size change is the whole value of a slider;
+ * writing has to not be, because a drag produces an event per pixel and each
+ * one would be the settings file rewritten. `setAppearanceSettings` is what
+ * writes, once the pointer has stopped.
+ *
+ * Separate from `applyTextScale` in `lib/scale.ts`, which is the same idea for
+ * the other knob and needs no command at all: a root font size is the page's
+ * own to set.
+ */
+export function previewApplicationScale(scale: number): Promise<void> {
+  return invoke<void>("preview_application_scale", { scale });
 }
 
 /**

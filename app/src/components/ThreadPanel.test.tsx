@@ -48,6 +48,7 @@ import { ThreadPanel } from "./ThreadPanel";
 import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
+import { publishedReaders, resetReaders } from "../lib/readers";
 import type { Message, Thread } from "../lib/api";
 
 const GENERAL = "!general:example.org";
@@ -919,5 +920,59 @@ describe("copying a reply's address", () => {
     await userEvent.click(first!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("no clipboard");
+  });
+});
+
+describe("who has read a reply", () => {
+  const CLEO = "@cleo:example.org";
+  const DOT = "@dot:example.org";
+
+  beforeEach(() => {
+    resetReaders();
+  });
+
+  /** The faces drawn anywhere in the panel, by the name on each. */
+  function faces(): string[] {
+    return Array.from(document.querySelectorAll(".read-by__face")).map(
+      (face) => face.getAttribute("title") ?? "",
+    );
+  }
+
+  it("draws the thread's readers under a reply, not the room's", async () => {
+    /*
+      Trap two, where a person sees it. A thread keeps receipts of its own, so
+      a panel that read the room's answer would put the room's readers under
+      every reply in every thread hanging off it. Cleo has read the room up to
+      this event; Dot has read the thread.
+    */
+    await opened();
+
+    await act(async () => {
+      publishedReaders({
+        roomId: GENERAL,
+        main: [{ eventId: "$a:example.org", readers: [CLEO] }],
+        thread: {
+          rootId: "$root:example.org",
+          on: [{ eventId: "$a:example.org", readers: [DOT] }],
+        },
+      });
+    });
+
+    expect(faces()).toEqual([DOT]);
+  });
+
+  it("draws the room's readers under the root, which is a message in the room", async () => {
+    // The root is drawn above the rule and is an ordinary message in the
+    // conversation the thread hangs off, so its faces are the room's.
+    await opened();
+
+    await act(async () => {
+      publishedReaders({
+        roomId: GENERAL,
+        main: [{ eventId: "$root:example.org", readers: [CLEO] }],
+      });
+    });
+
+    expect(faces()).toEqual([CLEO]);
   });
 });

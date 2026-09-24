@@ -19,14 +19,22 @@ import { asCommandError, openLink } from "../lib/api";
  */
 export function ExternalLink({
   href,
+  className = "body__link",
   children,
 }: {
   href: string | undefined;
+  /**
+   * What to style it as. A link in a message by default, which is every one
+   * of these but the one on the opening screen: that one is furniture rather
+   * than something somebody wrote, and styling it as a message would make it
+   * the brightest thing on an otherwise quiet pane.
+   */
+  className?: string;
   children: ReactNode;
 }) {
   return (
     <a
-      className="body__link"
+      className={className}
       href={href}
       onClick={(event) => {
         event.preventDefault();

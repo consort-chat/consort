@@ -598,6 +598,13 @@ export function ThreadPanel({
           groups={replies}
           names={names}
           roomId={thread.roomId}
+          /*
+            A thread keeps receipts of its own, so the faces under a reply are
+            the thread's readers rather than the room's. The root above is not
+            given this: it is a message in the room, and the receipts on it are
+            the room's own.
+          */
+          threadRoot={thread.rootId}
           selfId={selfId}
           known={known}
           container={scroller}

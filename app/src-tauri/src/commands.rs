@@ -23,7 +23,7 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::{EmojiSettings, PrivacySettings};
+use crate::settings::{AppearanceSettings, EmojiSettings, PrivacySettings};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -438,7 +438,52 @@ pub async fn member_names_for(
 /// carrying an ordinary timeline, and the only thing that makes it a voice
 /// channel is one field of its `m.room.create`.
 pub async fn timeline_open_for(state: &AppState, room_id: String) {
+    remember_visit(state, &room_id).await;
     state.open_room(room_id).await;
+}
+
+/// Whose session this is, while there is one.
+async fn account_of(state: &AppState) -> Option<String> {
+    Some(state.client().await?.user_id()?.to_string())
+}
+
+/// Write down that this account has opened `room_id`.
+///
+/// Before the watch starts rather than after it, because the watch is a task
+/// and this is the only part of opening a room that has to have happened by
+/// the time the application is shut.
+///
+/// A save that fails is logged and nothing else. Which rooms somebody looked
+/// at last is not worth refusing to open a room over, and the caller has no
+/// way to report it that would not be a dialog about a preferences file.
+async fn remember_visit(state: &AppState, room_id: &str) {
+    let Some(account) = account_of(state).await else {
+        return;
+    };
+
+    // Read, change, write, like every other section of this file, and safe
+    // here for the reason set out on `set_person_volume_for`: everything that
+    // touches the file goes through `SettingsStore`, one command at a time.
+    let mut settings = state.settings().load();
+    settings.recent.opened(&account, room_id);
+    if let Err(error) = state.settings().save(&settings) {
+        tracing::warn!(%error, "could not write down which room was opened");
+    }
+}
+
+/// The rooms this account has opened, most recently first.
+///
+/// Read from the settings file, which is the requirement rather than a saving:
+/// this is what the screen the application opens on draws, and that screen is
+/// drawn before the first sync response has landed.
+///
+/// Empty while signed out, rather than whatever the file holds. There is no
+/// account for those rooms to belong to at that moment.
+async fn recent_rooms_for(state: &AppState) -> Vec<String> {
+    let Some(account) = account_of(state).await else {
+        return Vec::new();
+    };
+    state.settings().load().recent.of(&account).to_vec()
 }
 
 /// Stop watching whatever room was open.
@@ -717,6 +762,36 @@ fn set_emoji_tone_for(state: &AppState, tone: u8) -> Result<(), crate::settings:
     let mut settings = state.settings().load();
     settings.emoji.tone = tone;
     state.settings().save(&settings)
+}
+
+/// How big the application is drawn.
+///
+/// Already in range: the store clamps on the way in, so a hand-edited file
+/// cannot hand a window a size it has no answer for.
+fn appearance_settings_for(state: &AppState) -> AppearanceSettings {
+    state.settings().load().appearance
+}
+
+/// Replace them, and say what was stored.
+///
+/// The answer is the clamped value rather than the argument, because the
+/// caller zooms the window to it. Returning what it was handed would leave the
+/// window at a size the file does not hold, and a restart would then move it
+/// with nothing on screen to explain why.
+///
+/// Out of range is brought into range rather than refused. The slider applies
+/// as it is dragged, so the window has already moved by the time this is
+/// called, and an error here would only make the file disagree with what
+/// somebody is looking at.
+fn set_appearance_settings_for(
+    state: &AppState,
+    appearance: AppearanceSettings,
+) -> Result<AppearanceSettings, crate::settings::SettingsError> {
+    let appearance = appearance.within_range();
+    let mut settings = state.settings().load();
+    settings.appearance = appearance;
+    state.settings().save(&settings)?;
+    Ok(appearance)
 }
 
 /// When to interrupt somebody, and how loudly.
@@ -1568,6 +1643,16 @@ pub fn timeline_close(state: State<'_, AppState>) {
     timeline_close_for(&state);
 }
 
+/// The rooms this account has opened, most recently first.
+///
+/// See `recent_rooms_for`. A command rather than a channel because the one
+/// screen that draws it asks as it is drawn, and because a room list that
+/// carried this would re-send everybody's recency on every rename.
+#[tauri::command]
+pub async fn recent_rooms(state: State<'_, AppState>) -> Result<Vec<String>, CommandError> {
+    Ok(recent_rooms_for(&state).await)
+}
+
 /// Ask the open room for a page of older messages.
 #[tauri::command]
 pub fn timeline_earlier(state: State<'_, AppState>) {
@@ -1714,6 +1799,69 @@ pub fn emoji_used(state: State<'_, AppState>, key: String) -> Result<EmojiSettin
 pub fn set_emoji_tone(state: State<'_, AppState>, tone: u8) -> Result<(), CommandError> {
     set_emoji_tone_for(&state, tone)?;
     Ok(())
+}
+
+/// See `appearance_settings_for`.
+#[tauri::command]
+pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
+    appearance_settings_for(&state)
+}
+
+/// See `set_appearance_settings_for`, and `zoom` for the half of this that
+/// only a running window can do.
+///
+/// The text scale is the page's own to apply, because it is a root font size
+/// and nothing in Rust can set one. This deliberately does not try: the two
+/// knobs stay separate all the way down.
+#[tauri::command]
+pub fn set_appearance_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    appearance: AppearanceSettings,
+) -> Result<(), CommandError> {
+    let stored = set_appearance_settings_for(&state, appearance)?;
+    zoom(&app, stored.application_scale);
+    Ok(())
+}
+
+/// Draw the window at `scale` without remembering it.
+///
+/// What the application scale slider calls while it is being dragged. The two
+/// halves of a slider cannot share one command: drawing has to be immediate,
+/// because watching the size change is the whole value of dragging rather than
+/// typing a number, and writing has to not be, because a pointer move produces
+/// an event per pixel and each one would be the settings file rewritten. So
+/// this draws, and `set_appearance_settings` writes once the pointer stops,
+/// recording the size the window is already at.
+///
+/// Nothing to test here that a test can reach. The clamp is
+/// `settings::application_scale_within_range`, which is checked there, and the
+/// rest needs a window.
+#[tauri::command]
+pub fn preview_application_scale(app: tauri::AppHandle, scale: f64) {
+    zoom(&app, crate::settings::application_scale_within_range(scale));
+}
+
+/// Draw the main window at `scale`.
+///
+/// Not a `Result`. A zoom that the platform refused has left the window at
+/// whatever it was, which is a size somebody can still read and still change,
+/// and an error dialog over a window that is merely the wrong size would be
+/// the louder failure. It goes to the log, where the other window-shaped
+/// problems go.
+///
+/// Called from the command above and from `lib::run`'s setup, which is what
+/// makes a chosen size survive a restart.
+pub fn zoom(app: &tauri::AppHandle, scale: f64) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("no main window to scale");
+        return;
+    };
+    if let Err(error) = window.set_zoom(scale) {
+        tracing::warn!(%scale, %error, "could not scale the window");
+    }
 }
 
 /// See `notification_settings_for`.
@@ -2227,9 +2375,46 @@ mod tests {
         }
     }
 
+    /// What the screen the application opens on is drawn from.
+    mod recent {
+        use super::*;
+
+        #[tokio::test]
+        async fn nothing_is_recent_while_signed_out() {
+            // Not the list the file holds. Whoever signs in next is not
+            // necessarily whoever signed out, and a screen that offered them
+            // the previous account's rooms would be offering rooms they
+            // cannot open.
+            let (_dir, state, _) = state();
+            let mut settings = state.settings().load();
+            settings
+                .recent
+                .opened("@ada:example.org", "!lounge:example.org");
+            state.settings().save(&settings).expect("save");
+
+            assert!(recent_rooms_for(&state).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_while_signed_out_writes_nothing_down() {
+            // A stale click, the same way `timeline_open_for` treats one.
+            // There is no account to file the room under.
+            let (_dir, state, _) = state();
+
+            timeline_open_for(&state, "!lounge:example.org".to_owned()).await;
+
+            assert_eq!(
+                state.settings().load().recent,
+                crate::recent::RecentRooms::default()
+            );
+        }
+    }
+
     mod audio {
         use super::*;
         use consort_audio::{Device, Direction, GateConfig};
+
+        use crate::settings::{MAX_APPLICATION_SCALE, MIN_TEXT_SCALE};
 
         /// A machine with one microphone and one pair of speakers.
         struct Fake;
@@ -2552,6 +2737,124 @@ mod tests {
         }
 
         #[test]
+        fn the_application_is_drawn_at_its_own_size_until_somebody_says_otherwise() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                crate::settings::AppearanceSettings::default()
+            );
+        }
+
+        #[test]
+        fn a_chosen_size_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                }
+            );
+        }
+
+        #[test]
+        fn a_size_out_of_range_reaches_the_file_in_range_rather_than_being_refused() {
+            // The window has already moved by the time this is called: the
+            // slider applies as it is dragged. So the answer to a number
+            // outside the range is the nearest one inside it, which is what
+            // the window is showing, rather than an error that would leave the
+            // file and the window disagreeing.
+            //
+            // Asserted against the bytes on disk rather than against a load,
+            // because a load clamps too and would pass this whether or not the
+            // write did. What is being checked is that nothing out of range is
+            // ever written down, so that a settings file Consort produced is
+            // one another reader can trust.
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 0.0,
+                },
+            )
+            .expect("save");
+
+            let raw = std::fs::read_to_string(state.settings().path()).expect("read");
+            let written: serde_json::Value = serde_json::from_str(&raw).expect("json");
+            assert_eq!(
+                written["appearance"]["applicationScale"],
+                serde_json::json!(MAX_APPLICATION_SCALE),
+                "{raw}"
+            );
+            assert_eq!(
+                written["appearance"]["textScale"],
+                serde_json::json!(MIN_TEXT_SCALE),
+                "{raw}"
+            );
+        }
+
+        #[test]
+        fn setting_a_size_answers_with_the_size_that_was_stored() {
+            // What the caller zooms the window to. Returning the argument
+            // instead would zoom to a number the file does not hold, so a
+            // restart would move the window and nothing would say why.
+            let (_dir, state, _) = state();
+
+            let stored = set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 1.0,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(stored.application_scale, MAX_APPLICATION_SCALE);
+            assert_eq!(stored, appearance_settings_for(&state));
+        }
+
+        #[test]
+        fn saving_a_size_leaves_the_audio_section_alone() {
+            // The same promise the privacy screen above gets, and it matters
+            // more here: this screen is dragged rather than clicked, so a
+            // write that took the whole file would undo the rest of it
+            // repeatedly and fast.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.5,
+                    text_scale: 1.0,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+        }
+
+        #[test]
         fn notifications_are_on_until_somebody_says_otherwise() {
             let (_dir, state, _) = state();
 
@@ -2628,6 +2931,8 @@ mod tests {
                 privacy: crate::settings::PrivacySettings::default(),
                 notifications: NotificationSettings::default(),
                 emoji: crate::settings::EmojiSettings::default(),
+                appearance: crate::settings::AppearanceSettings::default(),
+                recent: crate::recent::RecentRooms::default(),
             };
             state.settings().save(&stored).expect("save");
 
@@ -4386,6 +4691,30 @@ mod against_a_mock_homeserver {
                 seen.iter().any(|timeline| timeline.room_id == GENERAL)
             })
             .await;
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_is_what_makes_it_recent() {
+            // Nothing else records a visit. The opening screen is drawn from
+            // this, so a room opened and not written down is a room that
+            // screen will never offer.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = in_two_rooms(&server).await;
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+
+            assert_eq!(recent_rooms_for(&state).await, [GENERAL]);
+        }
+
+        #[tokio::test]
+        async fn the_room_opened_last_is_the_first_one_offered() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = in_two_rooms(&server).await;
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            timeline_open_for(&state, LOUNGE.to_owned()).await;
+
+            assert_eq!(recent_rooms_for(&state).await, [LOUNGE, GENERAL]);
         }
 
         #[tokio::test]

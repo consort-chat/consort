@@ -62,6 +62,12 @@ at whatever homeserver you already run.
   you come back to opens where you left off with a line across it. Read
   receipts go out publicly by default, the way every other Matrix client sends
   them; Settings has a switch that keeps them to your own account instead.
+- **Who has read what.** Small faces under the last message in a group, showing
+  who has read up to it, and a count when more have read it than the row can
+  hold. Only people who share read receipts can appear there, so the row says
+  so: somebody who has turned the switch above off is invisible to everybody,
+  and fewer faces than there are people in the room is that setting working
+  rather than this feature failing.
 - **Leaving a room, and asking somebody into one.** Both live under the room's
   own details, beside its name and topic. Leaving asks first, because it does
   not come back: an invite-only room left by mistake needs somebody still in it
@@ -75,6 +81,18 @@ at whatever homeserver you already run.
   rules, so a room you muted in another client is muted here; Settings adds
   only what is true of this machine, and nothing is drawn about what happened
   while Consort was closed.
+- **An icon in the system tray.** With Show Consort and Quit Consort in its
+  menu, so a client left running is still one click away on a desktop that
+  hides minimised windows. Closing the window still closes Consort; the tray is
+  for getting back to a window that is out of sight, not yet for keeping one
+  alive behind a close button. On Linux the tray needs
+  `libayatana-appindicator`, which the packages ask for; a machine without it
+  runs Consort with no tray icon and says so in the log.
+- **Where it opens.** With no channel selected, the pane offers the rooms you
+  were last in and any voice channel somebody is sitting in right now, across
+  every space rather than the one on screen. What was opened last is written
+  down locally, per account, so it survives a restart and costs the homeserver
+  nothing.
 
 ---
 
@@ -197,7 +215,7 @@ resource here. The full standard, and what gets a change sent back, is in
 | Voice over MatrixRTC and LiveKit, with device settings | working |
 | Text, attachments, threads, replies, reactions, mentions | working |
 | Sending attachments, by picker, drag or paste | working |
-| Read receipts, unread channels, where reading stopped | working |
+| Read receipts sent and drawn, unread channels, where reading stopped | working |
 | Desktop notifications, honouring your push rules | working |
 | Leaving a room, and inviting somebody to one | working |
 | Editing, upload progress, video thumbnails | planned |

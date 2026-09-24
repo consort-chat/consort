@@ -52,18 +52,20 @@ mod history;
 mod media;
 mod permalink;
 mod reactions;
+mod read_by;
 mod sending;
 mod thread;
 
 pub use dto::{
-    Media, Message, MessageKind, Reaction, SystemChange, SystemMessage, Thread, ThreadSummary,
-    Timeline, Typing,
+    Media, Message, MessageKind, Reaction, ReadOn, Readers, SystemChange, SystemMessage, Thread,
+    ThreadReaders, ThreadSummary, Timeline, Typing,
 };
 pub use edits::Edits;
 pub use history::{History, SystemHistory};
 pub use media::{Attachment, MAX_BYTES, bytes, media};
 pub use permalink::permalink;
 pub use reactions::Reactions;
+pub use read_by::{About, ReadBy, SHOWN};
 pub use sending::{Attaching, send_attachment};
 pub use thread::thread;
 
@@ -75,6 +77,7 @@ use matrix_sdk::room::MessagesOptions;
 use matrix_sdk::room::edit::{EditError, EditedContent};
 use matrix_sdk::ruma::api::Direction;
 use matrix_sdk::ruma::events::reaction::ReactionEventContent;
+use matrix_sdk::ruma::events::receipt::{ReceiptThread, ReceiptType};
 use matrix_sdk::ruma::events::relation::Annotation;
 use matrix_sdk::ruma::events::relation::Thread as ThreadRelation;
 use matrix_sdk::ruma::events::room::message::{
@@ -245,17 +248,19 @@ impl Drop for Watch {
 ///
 /// Unlike [`crate::rooms::watch`], this one is per room and is meant to be
 /// replaced. Dropping the [`Watch`] ends it.
-pub fn watch<F, G, H>(
+pub fn watch<F, G, H, I>(
     client: Client,
     room_id: &str,
     on_change: F,
     on_thread: G,
     on_typing: H,
+    on_readers: I,
 ) -> Watch
 where
     F: Fn(Timeline) + Send + Sync + 'static,
     G: Fn(Option<Thread>) + Send + Sync + 'static,
     H: Fn(Typing) + Send + Sync + 'static,
+    I: Fn(Readers) + Send + Sync + 'static,
 {
     let (asking, mut asked) = unbounded_channel();
     let room_id = room_id.to_owned();
@@ -277,6 +282,10 @@ where
 
         let Ok(parsed) = RoomId::parse(&watching) else {
             tracing::warn!(room_id = %watching, "asked to watch something that is not a room");
+            on_readers(Readers {
+                room_id: watching.clone(),
+                ..Readers::default()
+            });
             on_change(Timeline {
                 room_id: watching,
                 ..Timeline::default()
@@ -289,6 +298,10 @@ where
             // Reported as an empty room rather than as an error: the shell has
             // a room list arriving that will take the channel away anyway.
             tracing::info!(room_id = %watching, "asked to watch a room this account is not in");
+            on_readers(Readers {
+                room_id: watching.clone(),
+                ..Readers::default()
+            });
             on_change(Timeline {
                 room_id: watching,
                 ..Timeline::default()
@@ -312,6 +325,8 @@ where
             users: Vec::new(),
         });
         loaded.page(&room, &on_change, Direction::Backward).await;
+        loaded.catch_up_on_readers(&room).await;
+        loaded.publish_readers(&on_readers);
 
         loop {
             tokio::select! {
@@ -320,18 +335,26 @@ where
                         None => break,
                         Some(Ask::Earlier) => {
                             loaded.page(&room, &on_change, Direction::Backward).await;
+                            loaded.catch_up_on_readers(&room).await;
+                            loaded.publish_readers(&on_readers);
                         }
                         Some(Ask::Later) => {
                             loaded.page(&room, &on_change, Direction::Forward).await;
+                            loaded.catch_up_on_readers(&room).await;
+                            loaded.publish_readers(&on_readers);
                         }
                         // Boxed for the reason the thread arm below is: the
                         // compiler otherwise gives up computing the layout of
                         // this task.
                         Some(Ask::Around(event_id)) => {
                             Box::pin(loaded.go_to(&room, &on_change, event_id)).await;
+                            loaded.catch_up_on_readers(&room).await;
+                            loaded.publish_readers(&on_readers);
                         }
                         Some(Ask::Present) => {
                             Box::pin(loaded.present(&room, &on_change)).await;
+                            loaded.catch_up_on_readers(&room).await;
+                            loaded.publish_readers(&on_readers);
                         }
                         Some(Ask::Thread(root_id)) => {
                             // Boxed because the compiler otherwise gives up
@@ -340,6 +363,12 @@ where
                             // of them deep, inside a `select!` inside a spawn.
                             Box::pin(loaded.open(&client, root_id)).await;
                             loaded.publish_thread(&on_thread);
+                            // A thread keeps receipts of its own, so opening
+                            // one is a question this watcher has not asked
+                            // before and shutting one is an answer to stop
+                            // carrying.
+                            loaded.catch_up_on_readers(&room).await;
+                            loaded.publish_readers(&on_readers);
                         }
                         // Boxed for the reason the two above are.
                         Some(Ask::Read(event_id, public)) => {
@@ -397,6 +426,13 @@ where
                         }
                         if let Some(typing) = loaded.typing(&joined.ephemeral) {
                             on_typing(typing);
+                        }
+                        // Read straight off the batch rather than out of the
+                        // store. An `m.receipt` carries everything that moved,
+                        // which is the whole of what a steady room needs, and
+                        // this is the path a receipt actually arrives by.
+                        if loaded.receipts(&joined.ephemeral) {
+                            loaded.publish_readers(&on_readers);
                         }
                     }
                     // Too many syncs while this task was busy decrypting a
@@ -532,6 +568,21 @@ struct Loaded {
     /// Read once and then left alone. See [`Timeline::read_up_to`] for why it
     /// must not follow the marker it came from.
     read_up_to: Option<String>,
+    /// Where everybody else in the room has read up to.
+    ///
+    /// Beside the history rather than inside it, for the reason the reactions
+    /// are and for one measured one. See [`Readers`]: a receipt arriving is
+    /// frequent enough in a busy room to be a message's worth of work, and
+    /// putting it on a message would redraw the conversation every time
+    /// somebody else looked at it.
+    read_by: ReadBy,
+    /// What was last said about that, so an unchanged answer is not
+    /// republished.
+    ///
+    /// Held rather than derived from a dirty flag because what is drawn
+    /// depends on which thread is open as well as on what has arrived, and a
+    /// flag would have to be set in both places and would eventually not be.
+    published: Readers,
     /// The message this watcher last sent a receipt for.
     ///
     /// The whole of the throttling. A reader sitting at the bottom of a room
@@ -555,6 +606,7 @@ struct OpenThread {
 
 impl Loaded {
     fn new(room_id: String, me: Option<String>) -> Self {
+        let me_again = me.clone();
         Self {
             room_id,
             me,
@@ -577,6 +629,8 @@ impl Loaded {
             loading_after: false,
             typing: Vec::new(),
             read_up_to: None,
+            read_by: ReadBy::new(me_again),
+            published: Readers::default(),
             marked: None,
         }
     }
@@ -1219,6 +1273,113 @@ impl Loaded {
                 more_before: open.more_before,
             }
         }));
+    }
+
+    /// Read what the store already knows about who has read what.
+    ///
+    /// Needed because the receipts a sync carries are a delta. A restored
+    /// session resumes from its own token and is told only what has moved
+    /// since, so everything anybody read before this launch is in the store
+    /// and nowhere else.
+    ///
+    /// One lookup per loaded message, and two of them, because a client that
+    /// predates threads and a current one spell the same claim differently:
+    /// `m.read` with no `thread_id` and `m.read` with `main`. Asking for only
+    /// one of the two draws an empty room for half the people in it.
+    ///
+    /// The cost was measured rather than assumed. Against the real encrypted
+    /// store, fifty messages cost under four milliseconds, and this runs on a
+    /// page rather than on a receipt: the path a receipt actually arrives by
+    /// is [`Self::receipts`], which touches no store at all.
+    async fn catch_up_on_readers(&mut self, room: &Room) {
+        let wanted: Vec<(String, About)> = self
+            .history
+            .messages()
+            .iter()
+            .map(|message| (message.id.clone(), About::Room))
+            .chain(self.open.iter().flat_map(|open| {
+                open.history
+                    .messages()
+                    .iter()
+                    .map(|reply| (reply.id.clone(), About::Thread(open.root_id.clone())))
+            }))
+            .collect();
+
+        for (id, about) in wanted {
+            let Ok(event_id) = EventId::parse(&id) else {
+                continue;
+            };
+            let asked = match &about {
+                About::Room => vec![ReceiptThread::Unthreaded, ReceiptThread::Main],
+                About::Thread(root) => match EventId::parse(root) {
+                    Ok(root) => vec![ReceiptThread::Thread(root)],
+                    Err(_) => continue,
+                },
+            };
+            for thread in asked {
+                let found = room
+                    .load_event_receipts(ReceiptType::Read, thread, &event_id)
+                    .await;
+                let found = match found {
+                    Ok(found) => found,
+                    Err(error) => {
+                        // Logged rather than raised, on the same terms as a
+                        // page of history that would not come back. A row of
+                        // faces is not worth a dialog.
+                        tracing::warn!(%error, room_id = %self.room_id, "could not read the receipts on a message");
+                        continue;
+                    }
+                };
+                for (user, _) in found {
+                    self.read_by.noted(user.as_str(), &id, about.clone());
+                }
+            }
+        }
+    }
+
+    /// Take note of the receipts one sync batch carried.
+    ///
+    /// Reports whether anything drawn changed. No store lookup: an
+    /// `m.receipt` names everybody who has moved and where they moved to,
+    /// which is the whole of what a room that is already open needs.
+    fn receipts(&mut self, ephemeral: &[Raw<AnySyncEphemeralRoomEvent>]) -> bool {
+        let mut changed = false;
+        for event in ephemeral {
+            let Some(said) = facts::receipts(event) else {
+                continue;
+            };
+            for one in said {
+                changed |= self.read_by.noted(&one.user, &one.event_id, one.about);
+            }
+        }
+        changed
+    }
+
+    /// Say who has read what, unless it is what was said last time.
+    ///
+    /// The suppression is the point rather than an optimisation. This channel
+    /// keeps its latest value for a late subscriber, and a room where
+    /// everybody has already caught up receives an unchanged `m.receipt` on
+    /// every sync; republishing it would be a wake-up per sync for every face
+    /// on screen, for ever, in a room where nothing is happening.
+    fn publish_readers<I>(&mut self, on_readers: &I)
+    where
+        I: Fn(Readers),
+    {
+        let now = Readers {
+            room_id: self.room_id.clone(),
+            main: self.read_by.on(&About::Room),
+            thread: self.open.as_ref().map(|open| ThreadReaders {
+                root_id: open.root_id.clone(),
+                on: self.read_by.on(&About::Thread(open.root_id.clone())),
+            }),
+        };
+
+        if now == self.published {
+            return;
+        }
+        self.published = now.clone();
+        on_readers(now);
     }
 
     fn publish<F>(&self, on_change: &F)

@@ -22,12 +22,38 @@ use consort_matrix::atomic;
 use serde::{Deserialize, Serialize};
 
 use crate::notify::NotificationSettings;
+use crate::recent::RecentRooms;
 
 /// The name of the file inside the application data directory.
 const FILE: &str = "settings.json";
 
 /// Distinguishes this writer's temporary file from any other in the directory.
 const UNIQUE: &str = "settings";
+
+/// The smallest the application is allowed to be drawn.
+///
+/// Our own range rather than a browser's. Tauri's `zoomHotkeysEnabled` offers
+/// 20% to 1000%, which is right for a page and wrong for this: nothing about
+/// Consort is usable at either end of it, and most of a slider that wide is
+/// somewhere nobody wants to be.
+pub(crate) const MIN_APPLICATION_SCALE: f64 = 0.8;
+
+/// The largest. 200% is roughly what a 4K display asks for, which is the
+/// display this exists for.
+pub(crate) const MAX_APPLICATION_SCALE: f64 = 2.0;
+
+/// The smallest the words are allowed to be, on top of whatever the
+/// application scale already is.
+///
+/// A narrower range than the one above on purpose. This multiplier moves the
+/// type and the spacing that follows it while the pictures, the avatars and
+/// the fixed column widths stay where they are, so the far ends of it are a
+/// layout arguing with itself rather than a smaller or larger Consort. Past
+/// about 150% the answer somebody wants is the application scale.
+pub(crate) const MIN_TEXT_SCALE: f64 = 0.9;
+
+/// The largest. See [`MIN_TEXT_SCALE`] for why it is not 200%.
+pub(crate) const MAX_TEXT_SCALE: f64 = 1.5;
 
 /// Everything the application remembers between runs that is not a session.
 ///
@@ -42,6 +68,14 @@ pub struct Settings {
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
     pub emoji: EmojiSettings,
+    pub appearance: AppearanceSettings,
+    /// The rooms this account has opened, most recently first.
+    ///
+    /// Here rather than in a file of its own because it is the same kind of
+    /// thing as the per-person volumes above: a by-product of using the
+    /// application, not worth a second writer, and written through the one
+    /// that already fsyncs before it renames.
+    pub recent: RecentRooms,
 }
 
 /// How many keys the recently used row remembers.
@@ -99,6 +133,40 @@ impl Default for EmojiSettings {
     }
 }
 
+/// How big the application is drawn.
+///
+/// Two numbers because these are two knobs and not one. Somebody who says
+/// "bigger" may mean either, and a single control would be choosing for them.
+///
+/// [`Self::application_scale`] is the webview's own zoom, so it moves
+/// everything a page has: words, pictures, avatars, borders, the lot. It is
+/// what `Ctrl` and `+` do in every browser and it is bound to that here.
+///
+/// [`Self::text_scale`] is a multiplier on the root font size, so it moves only
+/// what is measured in `rem`, which here is the type scale and the spacing
+/// built on it. Words get bigger and the pictures people sent stay the size
+/// they were sent at.
+///
+/// Both are held, both apply, and neither reads the other.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppearanceSettings {
+    /// The webview zoom, as a multiplier. 1.0 is the size every build before
+    /// this one drew at.
+    pub application_scale: f64,
+    /// The root font size, as a multiplier on top of the zoom above.
+    pub text_scale: f64,
+}
+
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            application_scale: 1.0,
+            text_scale: 1.0,
+        }
+    }
+}
+
 impl EmojiSettings {
     /// Record that `key` was just used.
     ///
@@ -110,6 +178,39 @@ impl EmojiSettings {
         self.recent.insert(0, key.to_owned());
         self.recent.truncate(REMEMBERED);
     }
+}
+
+impl AppearanceSettings {
+    /// The same sizes, brought into a range a person can work in.
+    ///
+    /// Applied on the way in as well as on the way out, which is the whole
+    /// reason it is a method rather than a line in the setter. This file is
+    /// meant to be hand-edited, and unlike every other setting here these two
+    /// numbers reach the window: an `applicationScale` of 0 is nothing on
+    /// screen to click, 40 is one glyph filling it, and in both cases the
+    /// settings screen that would put it back is inside the window that has
+    /// gone.
+    ///
+    /// Out of range is brought to the nearest end rather than reset to 1.0.
+    /// Somebody who typed 3 wanted it large, and the largest this offers is a
+    /// closer answer to that than the default is.
+    pub fn within_range(self) -> Self {
+        Self {
+            application_scale: application_scale_within_range(self.application_scale),
+            text_scale: self.text_scale.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE),
+        }
+    }
+}
+
+/// One application scale, brought into range.
+///
+/// Its own function because one of the two callers has only the one number: the
+/// slider draws the window as it is dragged without writing anything down, and
+/// the size it draws at has to be guarded on the way through just as the size
+/// in the file is. See [`AppearanceSettings::within_range`] for why either is
+/// guarded at all.
+pub(crate) fn application_scale_within_range(scale: f64) -> f64 {
+    scale.clamp(MIN_APPLICATION_SCALE, MAX_APPLICATION_SCALE)
 }
 
 /// What this account tells other people about itself.
@@ -223,8 +324,16 @@ impl SettingsStore {
             }
         };
 
-        match serde_json::from_slice(&raw) {
-            Ok(settings) => settings,
+        match serde_json::from_slice::<Settings>(&raw) {
+            Ok(mut settings) => {
+                // In range on the way in, not only on the way out. See
+                // `AppearanceSettings::within_range`: the file is hand-editable
+                // and these are the two numbers in it that can produce a window
+                // nobody can recover from by clicking. Nothing is written back,
+                // so what somebody typed is still there to be corrected.
+                settings.appearance = settings.appearance.within_range();
+                settings
+            }
             Err(error) => {
                 tracing::warn!(path = %self.path.display(), %error,
                     "the settings file is not readable JSON; starting from the \
@@ -307,7 +416,49 @@ mod tests {
             privacy: PrivacySettings::default(),
             notifications: NotificationSettings::default(),
             emoji: EmojiSettings::default(),
+            appearance: AppearanceSettings::default(),
+            recent: RecentRooms::default(),
         }
+    }
+
+    #[test]
+    fn the_rooms_an_account_opened_survive_a_restart() {
+        // The whole reason this is in the file rather than in memory. A list
+        // that started empty every launch would be empty on the one screen
+        // that reads it, which is the screen the application opens on.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings
+            .recent
+            .opened("@ada:example.org", "!lounge:example.org");
+        store.save(&settings).expect("save");
+
+        // A second store over the same directory, which is all the next launch
+        // builds.
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(
+            next_launch.load().recent.of("@ada:example.org"),
+            ["!lounge:example.org"]
+        );
+    }
+
+    #[test]
+    fn a_settings_file_written_before_recent_rooms_existed_still_loads() {
+        // Every settings file on disk today was written before this section,
+        // and a load that failed on its absence would take somebody's audio
+        // thresholds with it.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"audio":{"input":"Yeti","output":null,"gate":{}}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert!(loaded.recent.of("@ada:example.org").is_empty());
     }
 
     #[test]
@@ -374,6 +525,158 @@ mod tests {
 
         assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
         assert!(loaded.privacy.public_read_receipts);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_appearance_existed_still_loads() {
+        // And loads at the size every build before this one drew, which is the
+        // only answer an upgrade can be: somebody who never asked for a
+        // different size must not get one.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"audio":{"input":"Yeti"}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert_eq!(loaded.appearance, AppearanceSettings::default());
+        assert_eq!(loaded.appearance.application_scale, 1.0);
+        assert_eq!(loaded.appearance.text_scale, 1.0);
+    }
+
+    #[test]
+    fn a_chosen_size_survives_a_round_trip() {
+        let (_dir, store) = store();
+        let chosen = Settings {
+            appearance: AppearanceSettings {
+                application_scale: 1.3,
+                text_scale: 1.2,
+            },
+            ..Settings::default()
+        };
+
+        store.save(&chosen).expect("save");
+
+        assert_eq!(store.load().appearance, chosen.appearance);
+    }
+
+    #[test]
+    fn a_hand_written_scale_of_zero_still_gives_a_window_somebody_can_see() {
+        // The reason the clamp is on the way in and not only on the way out.
+        // This file is meant to be hand-editable, and these two numbers reach
+        // a window: at zero there is nothing on screen to click, and the
+        // settings screen that would put it back is inside it.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"appearance":{"applicationScale":0,"textScale":0}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.appearance.application_scale, MIN_APPLICATION_SCALE);
+        assert_eq!(loaded.appearance.text_scale, MIN_TEXT_SCALE);
+    }
+
+    #[test]
+    fn a_hand_written_scale_of_forty_still_gives_a_window_somebody_can_use() {
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"appearance":{"applicationScale":40,"textScale":40}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.appearance.application_scale, MAX_APPLICATION_SCALE);
+        assert_eq!(loaded.appearance.text_scale, MAX_TEXT_SCALE);
+    }
+
+    #[test]
+    fn a_negative_hand_written_scale_is_brought_up_rather_than_kept() {
+        // Distinct from zero because a negative zoom is not a smaller window,
+        // it is an argument WebKit has no answer for.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"appearance":{"applicationScale":-3,"textScale":-3}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.appearance.application_scale, MIN_APPLICATION_SCALE);
+        assert_eq!(loaded.appearance.text_scale, MIN_TEXT_SCALE);
+    }
+
+    #[test]
+    fn clamping_on_read_leaves_the_file_alone() {
+        // The same promise the corrupt file above gets. A number somebody
+        // typed is theirs, and a load that quietly rewrote it to the nearest
+        // legal one would destroy the only record of what they meant.
+        let (_dir, store) = store();
+        let hand_written = br#"{"appearance":{"applicationScale":40}}"#;
+        std::fs::write(store.path(), hand_written).expect("write");
+
+        store.load();
+
+        assert_eq!(
+            std::fs::read(store.path()).expect("read"),
+            hand_written,
+            "reading must not rewrite what it brought into range"
+        );
+    }
+
+    #[test]
+    fn a_scale_already_in_range_is_left_exactly_where_it_was() {
+        // What stops the clamp from being a rounding step nobody asked for.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"appearance":{"applicationScale":1.1,"textScale":1.05}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.appearance.application_scale, 1.1);
+        assert_eq!(loaded.appearance.text_scale, 1.05);
+    }
+
+    #[test]
+    fn half_an_appearance_section_keeps_the_default_for_the_other_half() {
+        // The two are separate knobs, and a file naming one must not move the
+        // other.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"appearance":{"textScale":1.25}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.appearance.text_scale, 1.25);
+        assert_eq!(loaded.appearance.application_scale, 1.0);
+    }
+
+    #[test]
+    fn a_scale_on_its_own_is_brought_into_the_same_range() {
+        // What the slider draws with while it is being dragged, which never
+        // goes near the file. A size the window can be left at is as much a
+        // guard as a size the file can be left with.
+        assert_eq!(application_scale_within_range(0.0), MIN_APPLICATION_SCALE);
+        assert_eq!(application_scale_within_range(40.0), MAX_APPLICATION_SCALE);
+        assert_eq!(application_scale_within_range(1.3), 1.3);
+    }
+
+    #[test]
+    fn the_range_has_the_default_inside_it() {
+        // Otherwise the clamp would move a fresh install, and every window
+        // would open at a size nobody chose.
+        let default = AppearanceSettings::default();
+
+        assert!(
+            (MIN_APPLICATION_SCALE..=MAX_APPLICATION_SCALE).contains(&default.application_scale)
+        );
+        assert!((MIN_TEXT_SCALE..=MAX_TEXT_SCALE).contains(&default.text_scale));
     }
 
     #[test]

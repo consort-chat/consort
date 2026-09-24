@@ -12,6 +12,8 @@ const privacySettings = vi.hoisted(() => vi.fn());
 const setPrivacySettings = vi.hoisted(() => vi.fn());
 const notificationSettings = vi.hoisted(() => vi.fn());
 const setNotificationSettings = vi.hoisted(() => vi.fn());
+const appearanceSettings = vi.hoisted(() => vi.fn());
+const setAppearanceSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -25,6 +27,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPrivacySettings,
   notificationSettings,
   setNotificationSettings,
+  appearanceSettings,
+  setAppearanceSettings,
 }));
 
 import { SettingsModal } from "./SettingsModal";
@@ -85,6 +89,10 @@ describe("SettingsModal", () => {
     logout.mockReset().mockResolvedValue(undefined);
     privacySettings.mockReset().mockResolvedValue({ publicReadReceipts: true });
     setPrivacySettings.mockReset().mockResolvedValue(undefined);
+    appearanceSettings
+      .mockReset()
+      .mockResolvedValue({ applicationScale: 1, textScale: 1 });
+    setAppearanceSettings.mockReset().mockResolvedValue(undefined);
     notificationSettings.mockReset().mockResolvedValue({
       enabled: true,
       mentionsOnly: false,
@@ -225,6 +233,18 @@ describe("SettingsModal", () => {
       await screen.findByRole("switch", {
         name: "Let people see when you have read their messages",
       }),
+    ).toBeVisible();
+  });
+
+  it("goes to Accessibility when asked", async () => {
+    open();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /accessibility/i }),
+    );
+
+    expect(
+      await screen.findByRole("slider", { name: /application scale/i }),
     ).toBeVisible();
   });
 
