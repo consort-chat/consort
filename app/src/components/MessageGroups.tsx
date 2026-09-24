@@ -14,7 +14,7 @@ import { FormattedBody } from "./FormattedBody";
 import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
-import { ConfirmDelete } from "./ConfirmDelete";
+import { Confirm } from "./Confirm";
 import { ReactionPicker } from "./ReactionPicker";
 import { RoomAvatar } from "./RoomAvatar";
 
@@ -1297,7 +1297,21 @@ export function MessageGroups({
                                     <TrashIcon />
                                   </button>
                                   {confirming === message.id && (
-                                    <ConfirmDelete
+                                    <Confirm
+                                      question="Delete this message?"
+                                      /*
+                                        What actually happens, because
+                                        redacting is not erasing and a sentence
+                                        promising otherwise would be a promise
+                                        Consort cannot keep. The homeserver
+                                        empties the event and serves the
+                                        emptied version from then on; a server
+                                        that already replicated the room keeps
+                                        whatever it has, and no client can
+                                        reach across federation to change that.
+                                      */
+                                      detail="The words are removed from the room for everyone. Servers and clients that already have a copy may keep it."
+                                      go="Delete"
                                       onConfirm={() => {
                                         setConfirming(null);
                                         onDelete(message);

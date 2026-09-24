@@ -665,7 +665,12 @@ export function AppShell({
         room: the empty pane has nothing for it to describe.
       */}
       {infoOpen && channel !== null && (
-        <RoomInfoPanel channel={channel} onClose={hideInfo} />
+        <RoomInfoPanel
+          channel={channel}
+          selfId={profile.user_id}
+          onClose={hideInfo}
+          onOpenRoom={openRoom}
+        />
       )}
       </div>
 

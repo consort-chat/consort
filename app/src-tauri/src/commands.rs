@@ -324,6 +324,87 @@ pub async fn member_profile_for(
     Ok(rooms::member_profile(&client, &user_id).await)
 }
 
+/// Leave `room_id`.
+///
+/// The call goes first, and only if it is a call in this room. A voice channel
+/// is an ordinary Matrix room, so the room being left can be the room being
+/// talked in, and a call left running would go on publishing a membership to a
+/// room this account is not in. What everybody else would see is a name in a
+/// channel until that membership times out.
+///
+/// Before the leave rather than after it, though the leave is the half that
+/// can fail. The call thread unwinds its membership on its own runtime, so
+/// putting the leave first would guarantee that unwind arrives at a room this
+/// account has already left and is refused. Doing it this way gives it a
+/// chance, and what it costs is a failed leave having dropped a call for
+/// nothing, which is one rejoin against four hours of looking like somebody
+/// sitting in a channel they walked out of.
+///
+/// Nothing is done about what is selected afterwards. The shell derives its
+/// selection from the room list every render, so the room going out of the
+/// list is what deselects it, and a command reaching back into the interface
+/// would be a second opinion about a question already answered.
+pub async fn room_leave_for(state: &AppState, room_id: String) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+
+    if state.disconnect_call_from(&room_id) {
+        tracing::info!(%room_id, "leaving the room this session was talking in");
+    }
+
+    rooms::leave(&client, &room_id).await?;
+    Ok(())
+}
+
+/// Ask `user_id` into `room_id`.
+///
+/// Every reason this refuses is a sentence written for a person, including the
+/// three a homeserver answers with one indistinguishable `M_FORBIDDEN`. See
+/// `consort_matrix::rooms::membership` for why they are worked out before the
+/// request rather than read off the refusal.
+pub async fn room_invite_for(
+    state: &AppState,
+    room_id: String,
+    user_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::invite(&client, &room_id, &user_id).await?)
+}
+
+/// Whether this account may invite anybody into `room_id`.
+///
+/// Asked once per room the panel is pointed at, so the invite control can be
+/// drawn disabled with a reason rather than left out. A control that is absent
+/// reads as something Consort cannot do; this is something the room will not
+/// let this account do, and those are different answers to different
+/// questions.
+pub async fn room_can_invite_for(state: &AppState, room_id: String) -> Result<bool, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::can_invite(&client, &room_id).await?)
+}
+
+/// Who is in one room, the joined and the invited kept apart.
+///
+/// A command rather than a field on the room list, for the reason
+/// [`room_avatar_for`] is one and more so: the list is re-sent in full
+/// whenever anything in it changes, and a member list per room would multiply
+/// a payload that is a few kilobytes today by every room on the account.
+///
+/// Asked for when somebody opens a room's details, and the answer is a
+/// snapshot of that moment rather than something that keeps itself up to date.
+/// See `consort_matrix::rooms::people` for what one ask costs and why the list
+/// is capped while the count is not.
+///
+/// An error rather than an empty room when this account is not in the room or
+/// is not signed in. Both would otherwise be drawn as a room nobody is in,
+/// which is a different and much more alarming thing to be told.
+pub async fn room_members_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::members(&client, &room_id).await?)
+}
+
 /// What to call each of `user_ids` in `room_id`.
 ///
 /// A batch rather than one at a time, because a screen of messages is a
@@ -1885,11 +1966,29 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// reach every window from JavaScript.
 ///
 /// As abrupt as the window's own close button, which is to say completely: the
-/// event loop exits the process, so nothing managed here is dropped and a call
-/// in progress is left for the SFU and the homeserver to time out. That is not
-/// new and not this command's to fix.
+/// event loop exits the process from inside its own `run`, so nothing managed
+/// here is ever dropped. What has to happen before that goes in `lib.rs` on
+/// `RunEvent::ExitRequested`, which is where this path and the close button
+/// meet, rather than here where only one of them would be covered. Leaving the
+/// voice channel is the thing that needs it; see `CLAUDE.md` for what it costs
+/// not to.
+///
+/// The window is hidden here, though, and that is not cosmetic. Leaving the call
+/// takes a moment and the wait for it is on the thread that draws, so a window
+/// still on screen would sit there not drawing, which reads as a hang rather
+/// than as a quit. The close button has no such problem: it destroys the window
+/// before the exit is requested. Hiding from here rather than from the exit
+/// itself is what makes it take effect, because the request below is posted to
+/// the event loop rather than applied in place, so the loop gets an iteration to
+/// act on the hide before it ever sees the exit.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
     app.exit(0);
 }
 
@@ -1944,6 +2043,32 @@ pub async fn room_at(state: State<'_, AppState>, address: String) -> Result<Stri
     room_at_for(&state, address).await
 }
 
+/// Leave one room. See `room_leave_for`.
+#[tauri::command]
+pub async fn room_leave(state: State<'_, AppState>, room_id: String) -> Result<(), CommandError> {
+    room_leave_for(&state, room_id).await
+}
+
+/// Ask somebody into one room. See `room_invite_for`.
+#[tauri::command]
+pub async fn room_invite(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_id: String,
+) -> Result<(), CommandError> {
+    room_invite_for(&state, room_id, user_id).await
+}
+
+/// Whether this account may invite anybody into one room. See
+/// `room_can_invite_for`.
+#[tauri::command]
+pub async fn room_can_invite(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<bool, CommandError> {
+    room_can_invite_for(&state, room_id).await
+}
+
 /// The room to say something to one person in. See `direct_room_for`.
 #[tauri::command]
 pub async fn direct_room(
@@ -1977,6 +2102,18 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// Who is in one room.
+///
+/// Asked for when somebody opens a room's details, and never on the way to
+/// drawing the room list. See `room_members_for`.
+#[tauri::command]
+pub async fn room_members(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    room_members_for(&state, room_id).await
 }
 
 /// What can be said about one person beyond their name.
@@ -3966,6 +4103,35 @@ mod against_a_mock_homeserver {
     }
 
     #[tokio::test]
+    async fn asking_who_is_in_a_room_while_signed_out_says_so() {
+        // Unlike the avatar beside a name, an empty answer here would be drawn
+        // as a room with nobody in it, so there is nothing to degrade to.
+        let (_dir, state, _sink) = state();
+
+        let error = room_members_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = room_members_for(&state, "!gone:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
     async fn asking_for_the_avatar_of_somebody_the_room_never_heard_of_is_not_an_error() {
         // A participant can arrive before the `m.room.member` that explains
         // them. The list still draws them, by initial, and asking about their
@@ -4802,6 +4968,213 @@ mod against_a_mock_homeserver {
             assert_eq!(
                 refused.message,
                 consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+    }
+    /// Leaving a room, and asking somebody into one.
+    ///
+    /// What is worth testing here rather than in `consort_matrix` is the one
+    /// thing only this layer can see: a voice channel is a room, so leaving
+    /// one can be leaving the room a call is in.
+    mod leaving_and_inviting {
+        use super::*;
+        use crate::state::CallAudio;
+        use crate::testing::FakeCallTransport;
+        use consort_audio::GateConfig;
+
+        const ROOM: &str = "!general:example.org";
+        const LOUNGE: &str = "!lounge:example.org";
+        const ADA: &str = "@ada:example.org";
+
+        /// A signed-in account in `!general:example.org`, with a homeserver
+        /// that will take a leave and an invitation.
+        async fn ready(
+            server: &MatrixMockServer,
+        ) -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            mount_login(server).await;
+            let (dir, state, sink) = state();
+            login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+                .await
+                .unwrap();
+            let client = state.client().await.unwrap();
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            server
+                .mock_room_leave()
+                .expect_any_access_token()
+                .ok(ruma::room_id!("!general:example.org"))
+                .mount()
+                .await;
+            server
+                .mock_invite_user_by_id()
+                .expect_any_access_token()
+                .ok()
+                .mount()
+                .await;
+            server
+                .mock_get_members()
+                .expect_any_access_token()
+                .ok(vec![])
+                .mount()
+                .await;
+            (dir, state, sink)
+        }
+
+        /// Put this session in a call in `room_id`, over a transport that
+        /// works and a sound card that is not there.
+        fn talking_in(state: &AppState, room_id: &str) {
+            state.connect_call(
+                room_id.to_owned(),
+                FakeCallTransport::joining,
+                CallAudio {
+                    device: None,
+                    output: None,
+                    gate: GateConfig::default(),
+                    backends: Box::new(crate::testing::fake_backends),
+                    us: "@bob:example.org".to_owned(),
+                },
+            );
+        }
+
+        /// The most recent thing said on the call channel, by its wire tag.
+        fn last_call_state(sink: &Arc<RecordingSink>) -> Option<String> {
+            sink.events().iter().rev().find_map(|event| match event {
+                AppEvent::Call(call) => Some(
+                    serde_json::to_value(call).ok()?["state"]
+                        .as_str()?
+                        .to_owned(),
+                ),
+                _ => None,
+            })
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_this_session_is_talking_in_ends_the_call_too() {
+            // The sharp edge. A voice channel is an ordinary Matrix room, so
+            // the room being left can be the room being talked in, and a call
+            // left running would go on publishing a membership to a room this
+            // account is no longer in.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = ready(&server).await;
+            talking_in(&state, ROOM);
+            crate::testing::wait_for(
+                "the call to connect",
+                || last_call_state(&sink).as_deref() == Some("connected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+
+            room_leave_for(&state, ROOM.to_owned()).await.unwrap();
+
+            crate::testing::wait_for(
+                "the call to end with the room",
+                || last_call_state(&sink).as_deref() == Some("disconnected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_while_talking_in_another_leaves_the_call_alone() {
+            // The half that makes the other half safe. Most leaves happen
+            // while a call is going on somewhere else, and dropping that call
+            // would be a worse surprise than the one being prevented.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = ready(&server).await;
+            talking_in(&state, LOUNGE);
+            crate::testing::wait_for(
+                "the call to connect",
+                || last_call_state(&sink).as_deref() == Some("connected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+
+            room_leave_for(&state, ROOM.to_owned()).await.unwrap();
+
+            assert_eq!(last_call_state(&sink).as_deref(), Some("connected"));
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_this_account_is_not_in_says_so_rather_than_failing_silently() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_leave_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchRoom {
+                    room_id: "!gone:example.org".to_owned()
+                }
+                .user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_while_signed_out_is_an_error_and_not_a_panic() {
+            let (_dir, state, _sink) = state();
+
+            let refused = room_leave_for(&state, ROOM.to_owned()).await.unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn inviting_somebody_reaches_the_homeserver() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            room_invite_for(&state, ROOM.to_owned(), ADA.to_owned())
+                .await
+                .expect("an invitation goes out");
+        }
+
+        #[tokio::test]
+        async fn a_refused_invitation_arrives_as_a_sentence_for_a_person() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_invite_for(&state, ROOM.to_owned(), "not a user".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchUser {
+                    user_id: "not a user".to_owned()
+                }
+                .user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_room_with_no_power_levels_written_down_can_be_invited_into() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            assert!(room_can_invite_for(&state, ROOM.to_owned()).await.unwrap());
+        }
+
+        #[tokio::test]
+        async fn asking_about_a_room_this_account_is_not_in_is_an_error_rather_than_a_no() {
+            // The panel draws `false` as a permission, so a room that has gone
+            // has to be told apart from a room that says no.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_can_invite_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchRoom {
+                    room_id: "!gone:example.org".to_owned()
+                }
+                .user_message()
             );
         }
     }
