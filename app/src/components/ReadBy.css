@@ -4,9 +4,16 @@
   Drawn at the end of a group rather than against every message, which is what
   other clients do and what keeps a quiet room from becoming a column of faces.
 */
+
+/*
+  Packed against the end of the line, which is where the rest of the client
+  fleet puts them. Packed rather than spread, so the overflow count stays
+  beside the faces instead of being stranded at the edge on its own.
+*/
 .read-by {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-1);
   margin-top: var(--space-1);
 }
