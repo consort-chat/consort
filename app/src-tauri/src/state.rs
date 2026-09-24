@@ -310,6 +310,18 @@ pub struct AppState {
     /// A `std::sync::Mutex` rather than tokio's. Nothing here awaits while
     /// holding it, and the commands that reach it are synchronous.
     call: std::sync::Mutex<Option<CallBridge>>,
+    /// Which room the call above is in, while it is in one.
+    ///
+    /// Kept here rather than asked of the call thread, which is behind a
+    /// command channel and could only answer asynchronously. The one caller is
+    /// [`Self::disconnect_call_from`], which runs while somebody is leaving a
+    /// room and has to decide before the leave goes out.
+    ///
+    /// An `Arc` because [`Self::call_reporter`]'s closure is what clears it.
+    /// The room belongs to the call rather than to the thread, so it has to be
+    /// put back by whatever ends the call, and the click is not always what
+    /// ends one.
+    called: Arc<std::sync::Mutex<Option<String>>>,
     /// What the notification watcher reads to decide whether to interrupt.
     ///
     /// Shared rather than read back off this struct, because the watcher's
@@ -450,6 +462,7 @@ impl AppState {
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             timeline: std::sync::Mutex::new(None),
             call: std::sync::Mutex::new(None),
+            called: Arc::new(std::sync::Mutex::new(None)),
             notification_task: Mutex::new(None),
             attention: Attention::default(),
             notifier: Arc::new(std::sync::Mutex::new(None)),
@@ -532,6 +545,11 @@ impl AppState {
         audio: CallAudio,
     ) {
         *self.locked_call_audio() = Some(audio);
+        // Before the join rather than after it, because what this answers is
+        // "which room would leaving end this call", and that is true from the
+        // moment a membership starts going out rather than from the moment one
+        // is acknowledged.
+        *self.locked_called() = Some(room_id.clone());
 
         let mut slot = self.locked_call();
         let bridge = slot.get_or_insert_with(|| {
@@ -600,6 +618,35 @@ impl AppState {
         }
     }
 
+    /// Leave the voice channel if it is the one in `room_id`, and say whether
+    /// it was.
+    ///
+    /// What leaving a room calls before it leaves it. A voice channel is an
+    /// ordinary Matrix room, so a room somebody leaves can be the room their
+    /// call is in, and a call left running against it would go on publishing a
+    /// membership to a room this account is no longer a member of. What
+    /// everybody else would see is a name sitting in a channel until the
+    /// membership times out, which is the case `rooms::OCCUPIED_POLL` exists
+    /// for and not one to create on purpose.
+    ///
+    /// Keyed on the room rather than unconditional, because the common leave
+    /// is of a text room while a call is going on elsewhere, and dropping that
+    /// call would be a far worse surprise than the one this prevents.
+    ///
+    /// Not awaited, and it cannot be: the call thread is reached over a
+    /// command channel and unwinds its membership on its own runtime. So the
+    /// leave that follows may well reach the homeserver first, in which case
+    /// the membership is left to expire rather than withdrawn. The thing that
+    /// matters either way is that this session stops sending audio to a room
+    /// it has left, and that is done by the time this returns.
+    pub fn disconnect_call_from(&self, room_id: &str) -> bool {
+        if self.locked_called().as_deref() != Some(room_id) {
+            return false;
+        }
+        self.disconnect_call();
+        true
+    }
+
     /// Mute or unmute this session's microphone.
     ///
     /// A no-op before the first call of the session, when there is no thread to
@@ -647,6 +694,7 @@ impl AppState {
         let microphone = self.microphone.clone();
         let voices = self.voices.clone();
         let call_audio = self.call_audio.clone();
+        let called = self.called.clone();
         let talking = self.talking.clone();
 
         move |event| {
@@ -670,6 +718,13 @@ impl AppState {
                 }
                 CallEvent::Connected { .. } => {}
                 CallEvent::Disconnected | CallEvent::Failed { .. } => {
+                    // Put back here rather than where the disconnect was asked
+                    // for, on the same terms as the microphone below it: the
+                    // call ends for reasons that are not a click, and the room
+                    // has to stop being the answer for every one of them.
+                    *called
+                        .lock()
+                        .expect("the called-room mutex is never poisoned") = None;
                     sound.stop_call();
                     // The tally is ticked by the microphone, and the line
                     // above is what stops it. Without this whoever was talking
@@ -896,6 +951,12 @@ impl AppState {
         self.call_audio
             .lock()
             .expect("the call audio mutex is never poisoned")
+    }
+
+    fn locked_called(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.called
+            .lock()
+            .expect("the called-room mutex is never poisoned")
     }
 
     /// Send the current state of every push channel again.
@@ -1133,6 +1194,9 @@ impl AppState {
             self.events.emit(AppEvent::Call(CallEvent::Disconnected));
         }
         *self.locked_call_audio() = None;
+        // The pump has been joined by now, so nothing is going to arrive and
+        // clear this on its own. See the reporter, which is the other half.
+        *self.locked_called() = None;
 
         stop_task(&self.refresh_task).await;
 
@@ -2077,6 +2141,74 @@ mod tests {
 
             assert!(!state.has_call_thread());
             assert_eq!(last_call_state(&sink), None);
+        }
+
+        #[test]
+        fn leaving_the_room_a_call_is_in_ends_the_call() {
+            // The edge that makes leaving a room more than one request. A
+            // voice channel is a room, and a session that left the room while
+            // still publishing a membership to it is a name sitting in a
+            // channel nobody can remove it from.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(state.disconnect_call_from(GENERAL));
+
+            until_call(&sink, "disconnected");
+        }
+
+        #[test]
+        fn leaving_a_different_room_leaves_the_call_alone() {
+            // The half that has to hold for the other half to be worth having.
+            // Somebody in a call in one channel who leaves a text room is
+            // still in the call, and a disconnect keyed on nothing would drop
+            // it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(!state.disconnect_call_from("!other:example.org"));
+
+            assert_eq!(last_call_state(&sink).as_deref(), Some("connected"));
+        }
+
+        #[test]
+        fn leaving_a_room_while_in_no_call_at_all_does_nothing() {
+            let (_dir, state, sink) = state();
+
+            assert!(!state.disconnect_call_from(GENERAL));
+
+            assert_eq!(last_call_state(&sink), None);
+        }
+
+        #[test]
+        fn a_call_that_has_ended_is_no_longer_in_any_room() {
+            // Without this the room is remembered past the call, and leaving
+            // that room an hour later would disconnect whatever call this
+            // session had moved on to.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            state.disconnect_call();
+            until_call(&sink, "disconnected");
+
+            assert!(!state.disconnect_call_from(GENERAL));
+        }
+
+        #[test]
+        fn moving_to_another_channel_moves_which_room_a_leave_would_end() {
+            // One thread, several calls. The room is a property of the call
+            // rather than of the thread, so joining a second channel has to
+            // replace it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            join(&state, "!lounge:example.org", true);
+            until_call(&sink, "connected");
+
+            assert!(!state.disconnect_call_from(GENERAL));
+            assert!(state.disconnect_call_from("!lounge:example.org"));
         }
     }
 }
