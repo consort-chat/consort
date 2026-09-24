@@ -16,6 +16,7 @@ import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
 import { ConfirmDelete } from "./ConfirmDelete";
 import { ReactionPicker } from "./ReactionPicker";
+import { ReadBy } from "./ReadBy";
 import { RoomAvatar } from "./RoomAvatar";
 
 /**
@@ -657,6 +658,11 @@ function DeletedBody({ by }: { by: string | null }) {
   );
 }
 
+/** The last message in a group, which is where the faces go. */
+function last(one: Group): Message | undefined {
+  return one.messages[one.messages.length - 1];
+}
+
 /**
  * A run of grouped messages, drawn.
  *
@@ -674,6 +680,7 @@ export function MessageGroups({
   system,
   names,
   roomId,
+  threadRoot,
   selfId,
   known,
   container,
@@ -702,6 +709,16 @@ export function MessageGroups({
   /** Display names by user ID, for whoever the room has told us about. */
   names: Record<string, string>;
   roomId: string;
+  /**
+   * The thread these messages are replies in, when they are.
+   *
+   * Absent in the room's own timeline, and absent for the root message the
+   * panel draws above the replies: a root is a message in the room, and the
+   * receipts on it are the room's. A thread keeps receipts of its own, so a
+   * panel that read the room's answer would draw the room's readers against
+   * every reply in it.
+   */
+  threadRoot?: string | undefined;
   /**
    * Whoever is signed in, so a message naming them can be marked.
    *
@@ -932,6 +949,8 @@ export function MessageGroups({
         }
 
         const one = row.group;
+        // Where the row of faces goes. See below.
+        const newest = last(one);
         // Their display name if the room has told us one, and their user ID if
         // it has not. Whichever it is, it is what the byline draws, what the
         // group announces itself as, and what the card is about.
@@ -1385,6 +1404,23 @@ export function MessageGroups({
                     </Fragment>
                   );
                 })}
+                {/*
+                  Who has read this far, against the last message in the group
+                  rather than every one of them. That is what other clients do
+                  and what keeps a quiet room from becoming a column of faces.
+
+                  Nothing here is handed the receipts: the row subscribes for
+                  itself, which is what stops a receipt arriving from redrawing
+                  the conversation. See `ReadBy`.
+                */}
+                {newest !== undefined && (
+                  <ReadBy
+                    roomId={roomId}
+                    threadRoot={threadRoot}
+                    eventId={newest.id}
+                    names={names}
+                  />
+                )}
               </div>
             </article>
           </Fragment>

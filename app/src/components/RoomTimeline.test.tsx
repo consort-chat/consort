@@ -17,6 +17,7 @@ const timelineLater = vi.hoisted(() => vi.fn());
 const timelineGoTo = vi.hoisted(() => vi.fn());
 const timelinePresent = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
+const onReaders = vi.hoisted(() => vi.fn());
 // The three ways an attachment reaches the composer, and the two ways one
 // leaves it.
 const onDropped = vi.hoisted(() => vi.fn());
@@ -61,6 +62,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineGoTo,
   timelinePresent,
   onTyping,
+  onReaders,
   onDropped,
   pickAttachment,
   attachFile,
@@ -91,6 +93,7 @@ import type {
   Channel,
   Message,
   Reaction,
+  Readers,
   Thread,
   Timeline,
   Typing,
@@ -167,6 +170,7 @@ let publish: (timeline: Timeline) => void;
 let publishThread: (thread: Thread | null) => void;
 /** And for the typing channel. */
 let publishTyping: (typing: Typing) => void;
+let publishReaders: (readers: Readers) => void;
 let publishDrop: (files: { path: string; name: string; size: number }[]) => void;
 
 beforeEach(() => {
@@ -198,6 +202,10 @@ beforeEach(() => {
   timelineTyping.mockReset().mockResolvedValue(undefined);
   onTyping.mockReset().mockImplementation((handler: (t: Typing) => void) => {
     publishTyping = handler;
+    return Promise.resolve(() => {});
+  });
+  onReaders.mockReset().mockImplementation((handler: (r: Readers) => void) => {
+    publishReaders = handler;
     return Promise.resolve(() => {});
   });
   onThread.mockReset().mockImplementation((handler: (t: Thread | null) => void) => {
@@ -2748,5 +2756,140 @@ describe("reacting to a message", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The homeserver would not remove it.",
     );
+  });
+});
+
+describe("who has read a message", () => {
+  /** One answer about the room's own timeline, through the channel. */
+  async function readArrives(readers: Readers) {
+    await act(async () => {
+      publishReaders(readers);
+    });
+  }
+
+  /** The faces drawn anywhere in the pane, by the name on each. */
+  function faces(): string[] {
+    return Array.from(document.querySelectorAll(".read-by__face")).map(
+      (face) => face.getAttribute("title") ?? "",
+    );
+  }
+
+  it("draws nobody before any receipt has arrived", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    expect(faces()).toEqual([]);
+  });
+
+  it("draws a face when a receipt arrives", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  it("ignores an answer about the room somebody has just left", async () => {
+    // One channel serves whichever room is open, and somebody who changes room
+    // twice quickly has two answers in flight. The published value is the whole
+    // truth about the room it names, so taking one about the wrong room does
+    // not merely add nothing: it takes this room's faces away.
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual(["@cleo:example.org"]);
+
+    await readArrives({
+      roomId: "!elsewhere:example.org",
+      main: [{ eventId: "$one", readers: ["@dot:example.org"] }],
+    });
+
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  it("draws the faces under the last message in a group, not every one", async () => {
+    // What other clients do, and what keeps a quiet room from becoming a
+    // column of faces. The receipt names the newest message somebody has read,
+    // so a row under each of six messages from one person would be five rows
+    // saying nothing.
+    await pane();
+    await arrive(
+      timeline([
+        said("$one", ADA, "first"),
+        said("$two", ADA, "second"),
+        said("$three", ADA, "third"),
+      ]),
+    );
+
+    // Somebody has read the middle one, which is not where the row goes.
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$two", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual([]);
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$three", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  /** Which messages have a row of faces under them, oldest first. */
+  function facesUnder(): string[] {
+    return Array.from(document.querySelectorAll(".read-by"))
+      .map((row) => {
+        const said = row.parentElement?.querySelectorAll(".timeline__message");
+        return said?.[said.length - 1]?.getAttribute("data-message-id");
+      })
+      .filter((id): id is string => id !== undefined && id !== null);
+  }
+
+  it("moves the face rather than adding one when somebody reads on", async () => {
+    // Two people talking, so the page is two groups and the face has somewhere
+    // to move from. Rust does the collapsing and its tests pin it; what this
+    // pins is that the row follows, rather than the pane keeping the old one
+    // beside the new.
+    await pane();
+    await arrive(
+      timeline([
+        said("$one", ADA, "first"),
+        said("$two", "@dot:example.org", "second"),
+      ]),
+    );
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+    expect(facesUnder()).toEqual(["$one"]);
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$two", readers: ["@cleo:example.org"] }],
+    });
+
+    expect(facesUnder()).toEqual(["$two"]);
+  });
+
+  it("says how many more read it than the row could hold", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [
+        { eventId: "$one", readers: ["@cleo:example.org"], more: 45 },
+      ],
+    });
+
+    expect(screen.getByText("+45")).toBeTruthy();
   });
 });
