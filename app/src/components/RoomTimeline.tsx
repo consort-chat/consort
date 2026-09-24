@@ -182,6 +182,7 @@ export function RoomTimeline({
   channel,
   selfId,
   focus,
+  onFocusTaken,
   onOpenRoom,
   onUnfold,
   infoOpen,
@@ -199,6 +200,17 @@ export function RoomTimeline({
    * and stops there.
    */
   focus?: { eventId: string } | null;
+  /**
+   * Say that the ask above has been taken, so it is not handed over again.
+   *
+   * This pane is keyed on the room, so leaving a room and coming back mounts a
+   * fresh one, and a fresh one reads its initial `focus` as a new press. It
+   * cannot tell that from the real thing: a link to a message in another room
+   * legitimately mounts a pane whose first ask is a press. Only whoever holds
+   * the ask knows whether one has happened since, so this end only says when
+   * it has taken one (#105).
+   */
+  onFocusTaken?: () => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
   /**
@@ -579,11 +591,13 @@ export function RoomTimeline({
       [
         ...new Set([
           ...timeline.messages.map((message) => message.sender),
-          // The actors and subjects of membership changes too, which are
-          // drawn by name on the same terms as a message's byline.
+          // The actors and subjects of room changes too, which are drawn by
+          // name on the same terms as a message's byline. Only a membership
+          // change has a subject: a rename is about a name, which is already
+          // the text it reads as and not an ID to look up.
           ...(timeline.system ?? []).flatMap((system) => [
             system.actor,
-            system.subject,
+            ...("subject" in system ? [system.subject] : []),
           ]),
           // The typists too. Somebody can be typing without having said
           // anything yet, and their user ID is not a name to put in front of
@@ -833,12 +847,21 @@ export function RoomTimeline({
     });
   }, [mine, atTheBottom, timeline.focus, timeline.messages]);
 
-  // Recorded rather than acted on, so that a press arriving before the room has
-  // any messages is not lost. The effect below is what spends it.
+  /*
+    Recorded rather than acted on, so that a press arriving before the room has
+    any messages is not lost. The effect below is what spends it.
+
+    Taking it is also where the ask is handed back, rather than where it lands:
+    a link naming a message this account cannot read never lands, and an ask
+    waiting for that would be handed back never rather than late. Once it is in
+    the ref it no longer needs the prop, so clearing it changes nothing here.
+  */
   useEffect(() => {
     const eventId = focus?.eventId;
-    if (eventId !== undefined) wanted.current = eventId;
-  }, [focus]);
+    if (eventId === undefined) return;
+    wanted.current = eventId;
+    onFocusTaken?.();
+  }, [focus, onFocusTaken]);
 
   /*
     Go to a message somebody followed a link to, once it is drawn.

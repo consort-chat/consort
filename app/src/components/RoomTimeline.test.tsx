@@ -2302,7 +2302,10 @@ describe("copying a message address", () => {
 
 describe("going to a message somebody linked", () => {
   /** Render the pane with a message asked for, and hand back a way to change it. */
-  async function focused(focus: { eventId: string } | null) {
+  async function focused(
+    focus: { eventId: string } | null,
+    onFocusTaken = vi.fn(),
+  ) {
     const view = render(
       <RoomTimeline
         selfId="@bob:example.org"
@@ -2311,11 +2314,39 @@ describe("going to a message somebody linked", () => {
         onToggleInfo={vi.fn()}
         channel={general}
         focus={focus}
+        onFocusTaken={onFocusTaken}
       />,
     );
     await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
-    return view;
+    return { ...view, onFocusTaken };
   }
+
+  it("says it has taken the ask, so nobody hands it back later", async () => {
+    /*
+      #105. The pane is keyed on the room, so changing room and coming back
+      mounts a fresh one that reads the same ask as though it were a new press
+      and jumps into the window again. The pane cannot tell the two apart and
+      should not have to: a link to a message in another room legitimately
+      mounts a pane whose initial ask *is* a press. Only whoever held the ask
+      knows whether one has happened since, so all this end owes is saying
+      when it has taken one.
+
+      Said on taking rather than on landing, because a message this account
+      cannot read never lands and an ask that waited for that would never be
+      given back at all.
+    */
+    const { onFocusTaken } = await focused({ eventId: "$1" });
+
+    expect(onFocusTaken).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing when it is handed no ask at all", async () => {
+    // Which is every ordinary room change. Spending something nobody asked
+    // for would be a render loop in whoever is holding it.
+    const { onFocusTaken } = await focused(null);
+
+    expect(onFocusTaken).not.toHaveBeenCalled();
+  });
 
   it("scrolls to it and lights it up once it is drawn", async () => {
     // The link is pressed before the room has any messages in it, so the ask

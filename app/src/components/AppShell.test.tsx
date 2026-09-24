@@ -22,6 +22,10 @@ const onThread = vi.hoisted(() => vi.fn());
 const timelineOpen = vi.hoisted(() => vi.fn());
 const timelineClose = vi.hoisted(() => vi.fn());
 const timelineEarlier = vi.hoisted(() => vi.fn());
+// A window around an older message, and the way back out of one. Both are
+// needed to tell a room that is following the present from one that is not.
+const timelineGoTo = vi.hoisted(() => vi.fn());
+const timelinePresent = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const roomAt = vi.hoisted(() => vi.fn());
@@ -44,6 +48,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineOpen,
   timelineClose,
   timelineEarlier,
+  timelineGoTo,
+  timelinePresent,
   timelineSend,
   memberNames,
   roomAt,
@@ -61,6 +67,7 @@ import type {
   Call,
   CallRefused,
   Channel,
+  Message,
   Profile,
   Rooms,
   SelfAudio,
@@ -135,6 +142,7 @@ function shell({
   callRefused = null,
   onDismissRefusal = vi.fn(),
   showRoom = null,
+  onRoomShown = vi.fn(),
 }: {
   rooms?: Rooms;
   call?: Call;
@@ -148,11 +156,16 @@ function shell({
   callRefused?: CallRefused | null;
   onDismissRefusal?: Mock<() => void>;
   showRoom?: { roomId: string } | null;
+  onRoomShown?: Mock<() => void>;
 } = {}) {
-  const draw = (nextCall: Call = call) => (
+  const draw = (
+    nextRooms: Rooms,
+    nextShowRoom: { roomId: string } | null,
+    nextCall: Call,
+  ) => (
     <AppShell
       profile={profile}
-      rooms={rooms}
+      rooms={nextRooms}
       connection={{ state: "live" }}
       call={nextCall}
       selfAudio={selfAudio}
@@ -169,17 +182,32 @@ function shell({
       onSetAway={onSetAway}
       callRefused={callRefused}
       onDismissRefusal={onDismissRefusal}
-      showRoom={showRoom}
+      showRoom={nextShowRoom}
+      onRoomShown={onRoomShown}
       onSignedOut={onSignedOut}
     />
   );
-  const { container, rerender } = render(draw());
+  const { container, rerender } = render(draw(rooms, showRoom, call));
+  /*
+    Hand the same shell a new tree rather than rendering a second one, which
+    would be a second shell. A room list arriving again is what every sync
+    that touches anything does, and the shell holds state the call moves
+    through, so some of what it does is only visible across a change rather
+    than in one render.
+  */
+  const again = (next: {
+    rooms?: Rooms;
+    showRoom?: { roomId: string } | null;
+    call?: Call;
+  }) =>
+    rerender(
+      draw(next.rooms ?? rooms, next.showRoom ?? showRoom, next.call ?? call),
+    );
   return {
     container,
     rerender,
-    // The shell holds state the call moves through, so some of what it does
-    // is only visible across a change of call rather than in one render.
-    again: (nextCall: Call) => rerender(draw(nextCall)),
+    again,
+    onRoomShown,
     onSignedOut,
     onJoinVoice,
     onLeaveVoice,
@@ -189,6 +217,8 @@ function shell({
 describe("AppShell", () => {
   beforeEach(() => {
     resetAvatarCache();
+    // jsdom has none, and a link followed to a message lands by calling it.
+    Element.prototype.scrollIntoView = vi.fn();
     audioDevices.mockReset().mockResolvedValue(report);
     audioSettings.mockReset().mockResolvedValue(settings);
     audioTestStart.mockReset().mockResolvedValue(undefined);
@@ -204,10 +234,67 @@ describe("AppShell", () => {
     timelineOpen.mockReset().mockResolvedValue(undefined);
     timelineClose.mockReset().mockResolvedValue(undefined);
     timelineEarlier.mockReset().mockResolvedValue(undefined);
+    timelineGoTo.mockReset().mockResolvedValue(undefined);
+    timelinePresent.mockReset().mockResolvedValue(undefined);
     timelineSend.mockReset().mockResolvedValue(undefined);
     memberNames.mockReset().mockResolvedValue({});
     roomAt.mockReset().mockResolvedValue("!tech:example.org");
     threadOpen.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("says so once the room a notification asked for is shown", async () => {
+    /*
+      The whole of #103. `showRoom` is an ask, and an ask that is never taken
+      back is read again by an effect that re-runs on every room list, which
+      drags the selection back to that room on every sync. Only the shell knows
+      whether it landed, so saying so is the shell's job, and spending it is
+      the caller's.
+    */
+    const rooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!tech:example.org", "tech")],
+        },
+      ],
+    };
+
+    const { onRoomShown } = shell({
+      rooms,
+      showRoom: { roomId: "!tech:example.org" },
+    });
+
+    await screen.findByRole("heading", { level: 1, name: "#tech" });
+    expect(onRoomShown).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing while the rail still does not have the room", async () => {
+    // The retry above is the reason the effect watches the room list at all,
+    // and a retry that reported success would spend an ask it never took.
+    const empty: Rooms = {
+      spaces: [{ id: "home", name: "Home", avatar: null, channels: [] }],
+    };
+    const arrived: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!tech:example.org", "tech")],
+        },
+      ],
+    };
+    const asked = { roomId: "!tech:example.org" };
+
+    const { again, onRoomShown } = shell({ rooms: empty, showRoom: asked });
+    expect(onRoomShown).not.toHaveBeenCalled();
+
+    again({ rooms: arrived });
+
+    await screen.findByRole("heading", { level: 1, name: "#tech" });
+    expect(onRoomShown).toHaveBeenCalledTimes(1);
   });
 
   it("shows the room a notification was clicked to get to", async () => {
@@ -777,8 +864,8 @@ describe("AppShell", () => {
         );
         expect(card()).toBeNull();
 
-        again({ state: "disconnected" });
-        again({ state: "connecting", roomId: LOUNGE });
+        again({ call: { state: "disconnected" } });
+        again({ call: { state: "connecting", roomId: LOUNGE } });
 
         expect(card()).toBeVisible();
       });
@@ -815,6 +902,7 @@ describe("AppShell", () => {
 
   describe("a link to a room inside a message", () => {
     const TECH = "!tech:example.org";
+    const GENERAL = "!general:example.org";
     const twoRooms: Rooms = {
       spaces: [
         {
@@ -866,6 +954,83 @@ describe("AppShell", () => {
       return within(screen.getByRole("log"));
     }
 
+    /*
+      The room's end of the IPC, with the one rule that makes #105 cost
+      something rather than merely look wrong.
+
+      `consort_matrix::timeline` drops a sync that arrives while a window
+      somebody jumped into is being drawn, because what was just said does not
+      belong under a message from last March (`timeline/mod.rs`, and
+      `what_is_said_while_reading_older_messages_does_not_land_under_them`
+      covers it). So a room left in a window is a room that has silently
+      stopped receiving, and a stale ask that puts every re-entry back into one
+      is a person who is not being told they are missing messages.
+
+      Watching a room reads it afresh, `Loaded::new` starting with no focus, so
+      opening is what comes back out of a window.
+    */
+    function theRoom(roomId: string) {
+      let publish: (timeline: Timeline) => void = () => {};
+      let focused: string | null = null;
+      let live: Message[] = [];
+      let drawn: Message[] = [];
+
+      const report = () => {
+        publish({
+          roomId,
+          messages: [...drawn],
+          moreBefore: false,
+          moreAfter: false,
+          loading: false,
+          loadingAfter: false,
+          ...(focused === null ? {} : { focus: focused }),
+        });
+      };
+
+      onTimeline.mockImplementation((handler: (t: Timeline) => void) => {
+        publish = handler;
+        return Promise.resolve(() => {});
+      });
+      timelineOpen.mockImplementation((asked: string) => {
+        if (asked === roomId) {
+          focused = null;
+          drawn = [...live];
+          report();
+        }
+        return Promise.resolve(undefined);
+      });
+      timelineGoTo.mockImplementation((eventId: string) => {
+        focused = eventId;
+        drawn = [said(eventId, "last March")];
+        report();
+        return Promise.resolve(undefined);
+      });
+
+      return {
+        /** Whatever was in the room before anybody opened it. */
+        already(messages: Message[]) {
+          live = [...messages];
+        },
+        /** A message arriving on a sync, dropped while a window is drawn. */
+        arrives(message: Message) {
+          live = [...live, message];
+          if (focused !== null) return;
+          drawn = [...live];
+          report();
+        },
+      };
+    }
+
+    function said(id: string, body: string): Message {
+      return {
+        id,
+        sender: "@ada:example.org",
+        at: Date.UTC(2026, 0, 1),
+        body,
+        kind: "text",
+      };
+    }
+
     it("names the room the way the rest of the shell names it", async () => {
       // The hash included. A badge saying `tech` beside a heading saying
       // `#tech` reads as two different rooms.
@@ -883,6 +1048,68 @@ describe("AppShell", () => {
       expect(
         await screen.findByRole("heading", { level: 1, name: "#tech" }),
       ).toBeVisible();
+    });
+
+    /**
+     * Follow a link to `$old`, from a message in general, and land in a window.
+     *
+     * Returns the room, so the test can go on saying things in it.
+     */
+    async function followedIntoAWindow() {
+      const room = theRoom(GENERAL);
+      room.already([said("$1", `look at https://matrix.to/#/${GENERAL}/$old`)]);
+      shell({ rooms: twoRooms });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /general/i }),
+      );
+      await screen.findByRole("heading", { level: 1, name: "#general" });
+      roomAt.mockResolvedValue(GENERAL);
+
+      const said1 = within(screen.getByRole("log"));
+      await userEvent.click(said1.getByRole("button", { name: /message in/i }));
+      await waitFor(() => expect(timelineGoTo).toHaveBeenCalledWith("$old"));
+      await screen.findByText(/showing older messages/i);
+      timelineGoTo.mockClear();
+      return room;
+    }
+
+    /** Away to the other room and back, which unmounts and remounts the pane. */
+    async function awayAndBack() {
+      await userEvent.click(screen.getByRole("button", { name: /tech/i }));
+      await screen.findByRole("heading", { level: 1, name: "#tech" });
+      await userEvent.click(screen.getByRole("button", { name: /general/i }));
+      await screen.findByRole("heading", { level: 1, name: "#general" });
+    }
+
+    it("does not go back into the window when the room is reopened", async () => {
+      // #105. The pane is keyed on the room, so coming back mounts a fresh one
+      // that reads the same ask as though it were a new press.
+      await followedIntoAWindow();
+
+      await awayAndBack();
+
+      expect(timelineGoTo).not.toHaveBeenCalled();
+    });
+
+    it("goes on delivering messages after a link has been followed", async () => {
+      /*
+        What #105 actually costs. A room held in a window drops every sync, so
+        somebody who followed one link is silently not receiving anything in
+        that room for the rest of the session, and the only sign is a banner
+        they have already read once and dismissed as expected.
+      */
+      const room = await followedIntoAWindow();
+
+      await awayAndBack();
+      await act(async () => {
+        room.arrives(said("$2", "the thing they needed to hear"));
+      });
+
+      expect(
+        await screen.findByText("the thing they needed to hear"),
+      ).toBeVisible();
+      expect(screen.queryByText(/showing older messages/i)).toBeNull();
     });
 
     it("says why a link went nowhere, rather than doing nothing", async () => {

@@ -1289,6 +1289,35 @@ describe("SignedIn the room list", () => {
     );
   });
 
+  it("does not go back to the notified room when a later room list arrives", async () => {
+    /*
+      #103, end to end, because the two halves live in different components:
+      the ask is held here and the shell is what shows the room. The effect
+      that reads it re-runs whenever the room list changes, which is every sync
+      that touches anything, so an ask nobody takes back drags the selection
+      home again and again. Since #94 that is a history entry each time too.
+    */
+    await showing();
+    await screen.findByRole("button", { name: "Kahu HQ" });
+    act(() => showRoomHandler()("!general:example.org"));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "#general",
+    );
+
+    // Away from it, under their own steam.
+    await userEvent.click(screen.getByRole("button", { name: "Home" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+
+    // A sync. The tree is new, which is the whole of what it takes.
+    act(() => roomsHandler()({ spaces: [homeSpace, kahuHq] }));
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      "Nothing here yet",
+    );
+  });
+
   it("shows a space's channels when its rail icon is clicked", async () => {
     await showing();
     await screen.findByRole("button", { name: "Kahu HQ" });
@@ -1612,6 +1641,32 @@ describe("SignedIn voice calls", () => {
     );
   }
 
+  /**
+   * Open the chevron, which is the only way to the two quieter controls.
+   *
+   * Part of the path rather than test scaffolding: Deafen and Away are not in
+   * the tree until this is pressed, so a query that reached them without it
+   * would be asserting against a control nobody on screen can press.
+   */
+  async function openMore() {
+    await userEvent.click(
+      screen.getByRole("button", { name: /more voice actions/i }),
+    );
+  }
+
+  /**
+   * The away control, named by the word it writes out.
+   *
+   * "Away", not the fuller "Mark yourself away" that is now only its tooltip.
+   * The control behind the chevron writes its word out, and an `aria-label`
+   * that overrides visible text is what breaks speech input: "click Away" has
+   * to reach the thing that says Away. The tooltip is where the wording is
+   * free to follow the state, which is why the two differ.
+   */
+  function awayControl() {
+    return screen.getByRole("button", { name: /^away$/i });
+  }
+
   it("asks to mute from the connection panel", async () => {
     await inACall();
 
@@ -1623,9 +1678,12 @@ describe("SignedIn voice calls", () => {
   });
 
   it("asks to deafen from the connection panel", async () => {
+    // Behind the chevron since #104, so the press that reaches the call
+    // thread is the second one.
     await inACall();
 
-    await userEvent.click(screen.getByRole("button", { name: /deafen/i }));
+    await openMore();
+    await userEvent.click(screen.getByRole("button", { name: /^deafen$/i }));
 
     expect(callSetDeafened).toHaveBeenCalledWith(true);
   });
@@ -1812,9 +1870,8 @@ describe("SignedIn voice calls", () => {
   it("asks to be marked away from the connection panel", async () => {
     await inACall();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /mark yourself away/i }),
-    );
+    await openMore();
+    await userEvent.click(awayControl());
 
     expect(callSetAway).toHaveBeenCalledWith(true);
   });
@@ -1822,13 +1879,13 @@ describe("SignedIn voice calls", () => {
   it("shows nothing about being away until the channel says so", async () => {
     await inACall();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /mark yourself away/i }),
-    );
+    await openMore();
+    await userEvent.click(awayControl());
 
-    expect(
-      screen.getByRole("button", { name: /mark yourself away/i }),
-    ).toHaveAttribute("aria-pressed", "false");
+    // Read back through the same panel the press happened in. A press does not
+    // close it, which is the whole reason this can be asserted at all: a
+    // disclosure that shut on the press would take its own feedback with it.
+    expect(awayControl()).toHaveAttribute("aria-pressed", "false");
   });
 
   it("draws being away once the channel reports it", async () => {
@@ -1838,9 +1895,11 @@ describe("SignedIn voice calls", () => {
       selfAudioHandler()({ muted: false, deafened: false, away: true }),
     );
 
-    expect(
-      screen.getByRole("button", { name: /mark yourself away/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+    // Opened after the channel spoke, not before, so this is the panel reading
+    // state it was not on screen to receive. A control that only knew what it
+    // had been told while open would draw the wrong switch here.
+    await openMore();
+    expect(awayControl()).toHaveAttribute("aria-pressed", "true");
   });
 
   /*
@@ -1848,24 +1907,36 @@ describe("SignedIn voice calls", () => {
     the control reflects what the call thread did, so an ask that never got
     there leaves the control alone. Three controls and one rule, so one table
     rather than three copies free to drift apart.
+
+    The third column is how the control is reached rather than anything about
+    the control, because two of the three are behind the chevron and one is
+    not. Written down here so the difference is data the table states out loud,
+    which is also what makes it fail if a control moves between the two.
   */
   it.each([
-    ["Mute microphone", callSetMuted],
-    ["Deafen", callSetDeafened],
-    ["Mark yourself away", callSetAway],
-  ])("leaves %s alone when the ask never reached the call", async (name, ask) => {
-    const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
-    ask.mockRejectedValue({ message: "not in a call", detail: "not in a call" });
-    await inACall();
+    ["Mute microphone", callSetMuted, false],
+    ["Deafen", callSetDeafened, true],
+    ["Away", callSetAway, true],
+  ])(
+    "leaves %s alone when the ask never reached the call",
+    async (name, ask, behindTheChevron) => {
+      const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
+      ask.mockRejectedValue({
+        message: "not in a call",
+        detail: "not in a call",
+      });
+      await inACall();
+      if (behindTheChevron) await openMore();
 
-    await userEvent.click(screen.getByRole("button", { name }));
+      await userEvent.click(screen.getByRole("button", { name }));
 
-    await waitFor(() => expect(complaints).toHaveBeenCalled());
-    expect(screen.getByRole("button", { name })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-  });
+      await waitFor(() => expect(complaints).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    },
+  );
 
   it("stays in the call when leaving it never reached the call thread", async () => {
     // Nothing is set on the way out either. A panel that closed on a request
