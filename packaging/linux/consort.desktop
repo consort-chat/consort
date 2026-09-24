@@ -1,3 +1,23 @@
+# The desktop entry every Linux package installs.
+#
+# The Arch recipes copy it into /usr/share/applications; the .deb and the .rpm
+# are built from it because tauri.conf.json names it as their desktopTemplate.
+# Without that the bundler writes its own from a template with an empty
+# Categories and no Keywords, and Debian and Arch then describe the same
+# application differently. The bundler reads it as a Handlebars template, so a
+# doubled curly brace anywhere in this file, comments included, would be read as
+# the start of a substitution and fail the build. Nothing here needs one: the
+# values it would offer are all written out below.
+#
+# The bundler names the file it writes after productName, so the .deb installs
+# Consort.desktop where the recipes install consort.desktop. Same name, two
+# spellings, which is as close as the two paths get; what matches a window to
+# this entry is StartupWMClass, and that is the same either way.
+#
+# app/src-tauri/tests/the_launcher_icon_names_agree.rs checks the names below
+# against the binary and against both recipes, because every way of getting one
+# wrong is silent.
+
 [Desktop Entry]
 Type=Application
 Name=Consort
