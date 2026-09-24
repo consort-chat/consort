@@ -16,11 +16,27 @@ is a rustup mechanism: a distro toolchain ignores it, and the AUR PKGBUILD
 deletes it during `prepare()` so that a builder who does have rustup is not
 sent to the network mid-build.
 
-**Node and pnpm.** Node 20 or newer, and pnpm:
+**Node and pnpm.** Node 24 or newer, and pnpm:
 
 ```sh
 corepack enable pnpm
 ```
+
+24 is what CI builds and tests on, and `.nvmrc` carries it, so `nvm use` in the
+checkout gets the same one without having to look it up, and `nvm install`
+fetches it. `app/package.json` names the same floor in `engines`, which pnpm
+warns about rather than enforces; it is left as a warning on purpose, and
+`app/pnpm-workspace.yaml` says why.
+
+Below 24 nothing subtle happens: pnpm 11 has its own floor of Node 22.13 and
+refuses to start under anything older, so on Node 20 the failure is pnpm
+itself, before any of this is consulted.
+
+Newer is fine. 25 is what this is developed on day to day and Arch builds the
+package on 26; the suite passes on all three. The one thing to know about going
+newer is that Node stopped shipping corepack after 24, so on 25 and up the line
+above only works if the distribution packages corepack separately, and
+otherwise pnpm is installed on its own.
 
 **System libraries.** Tauri needs a webview. On Linux:
 

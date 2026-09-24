@@ -109,7 +109,7 @@ jobs:
             echo "ref=main" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ steps.mode.outputs.ref }}
           # git-cliff reads the whole history and every tag, both to work out
@@ -274,11 +274,11 @@ jobs:
     runs-on: windows-latest
     needs: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.release.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 

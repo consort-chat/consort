@@ -39,7 +39,7 @@ depends=(
   'glibc'
   'hicolor-icon-theme'
 )
-makedepends=('cargo' 'git' 'nodejs' 'pnpm')
+makedepends=('cargo' 'git' 'nodejs>=24' 'pnpm')
 
 options=('!lto' '!debug')
 

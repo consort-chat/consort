@@ -60,7 +60,7 @@ depends=(
   'glibc'
   'hicolor-icon-theme'
 )
-makedepends=('cargo' 'git' 'nodejs' 'pnpm')
+makedepends=('cargo' 'git' 'nodejs>=24' 'pnpm')
 
 provides=("$_pkgname")
 conflicts=("$_pkgname")

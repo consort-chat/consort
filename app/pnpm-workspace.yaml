@@ -5,3 +5,14 @@
 # before it starts with an error that reads like a corrupt node_modules.
 allowBuilds:
   esbuild: true
+
+# `engineStrict: true` belongs here and is deliberately not set. It reads as
+# the way to make the `engines` field in package.json mean something, because
+# on its own that field only warns. What it actually does is apply every
+# dependency's `engines` to the running Node as well, and one of them is
+# narrower than this project is: jsdom 30 asks for
+# `^22.22.2 || ^24.15.0 || >=26.0.0`, which has no 25 in it at all and no 24
+# before 24.15. Turning it on refuses to install on the 25 line and on an
+# older 24, neither of which this project has any reason to refuse.
+#
+# So `engines` stays a warning, and .nvmrc is what says which Node to use.
