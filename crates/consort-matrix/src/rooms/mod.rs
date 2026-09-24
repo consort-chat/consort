@@ -14,9 +14,9 @@
 //! `facts` pulls what is needed out of a `matrix_sdk::Room`, which is the only
 //! part that needs a live client. `snapshot` does the grouping, the ordering
 //! and the orphan detection over plain data, which is where the rules live and
-//! where all of them are tested. [`avatar`] stands apart from all three: it is
-//! the one thing here that fetches, and it is asked for a room at a time
-//! rather than carried in the snapshot.
+//! where all of them are tested. [`avatar`] and [`people`] stand apart from
+//! all three: they are the things here that fetch, and each is asked for a
+//! room at a time rather than carried in the snapshot.
 //!
 //! ## The one request
 //!
@@ -37,6 +37,7 @@ pub mod dto;
 pub(crate) mod facts;
 mod hierarchy;
 mod link;
+pub mod people;
 pub mod profile;
 mod snapshot;
 
@@ -44,6 +45,7 @@ pub use avatar::{avatar, member_avatar};
 pub use direct::direct;
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
 pub use link::{permalink, room_at};
+pub use people::{Member, Members, Naming, Roster, members};
 pub use profile::{MemberProfile, Presence, member_profile};
 
 use std::collections::BTreeMap;

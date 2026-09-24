@@ -213,6 +213,7 @@ pub fn run() {
             commands::member_avatar,
             commands::member_profile,
             commands::member_names,
+            commands::room_members,
             commands::timeline_open,
             commands::timeline_close,
             commands::timeline_earlier,
