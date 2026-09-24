@@ -23,7 +23,7 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::PrivacySettings;
+use crate::settings::{AppearanceSettings, PrivacySettings};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -608,6 +608,36 @@ fn set_privacy_settings_for(
     let mut settings = state.settings().load();
     settings.privacy = privacy;
     state.settings().save(&settings)
+}
+
+/// How big the application is drawn.
+///
+/// Already in range: the store clamps on the way in, so a hand-edited file
+/// cannot hand a window a size it has no answer for.
+fn appearance_settings_for(state: &AppState) -> AppearanceSettings {
+    state.settings().load().appearance
+}
+
+/// Replace them, and say what was stored.
+///
+/// The answer is the clamped value rather than the argument, because the
+/// caller zooms the window to it. Returning what it was handed would leave the
+/// window at a size the file does not hold, and a restart would then move it
+/// with nothing on screen to explain why.
+///
+/// Out of range is brought into range rather than refused. The slider applies
+/// as it is dragged, so the window has already moved by the time this is
+/// called, and an error here would only make the file disagree with what
+/// somebody is looking at.
+fn set_appearance_settings_for(
+    state: &AppState,
+    appearance: AppearanceSettings,
+) -> Result<AppearanceSettings, crate::settings::SettingsError> {
+    let appearance = appearance.within_range();
+    let mut settings = state.settings().load();
+    settings.appearance = appearance;
+    state.settings().save(&settings)?;
+    Ok(appearance)
 }
 
 /// When to interrupt somebody, and how loudly.
@@ -1588,6 +1618,69 @@ pub fn set_privacy_settings(
     Ok(())
 }
 
+/// See `appearance_settings_for`.
+#[tauri::command]
+pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
+    appearance_settings_for(&state)
+}
+
+/// See `set_appearance_settings_for`, and `zoom` for the half of this that
+/// only a running window can do.
+///
+/// The text scale is the page's own to apply, because it is a root font size
+/// and nothing in Rust can set one. This deliberately does not try: the two
+/// knobs stay separate all the way down.
+#[tauri::command]
+pub fn set_appearance_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    appearance: AppearanceSettings,
+) -> Result<(), CommandError> {
+    let stored = set_appearance_settings_for(&state, appearance)?;
+    zoom(&app, stored.application_scale);
+    Ok(())
+}
+
+/// Draw the window at `scale` without remembering it.
+///
+/// What the application scale slider calls while it is being dragged. The two
+/// halves of a slider cannot share one command: drawing has to be immediate,
+/// because watching the size change is the whole value of dragging rather than
+/// typing a number, and writing has to not be, because a pointer move produces
+/// an event per pixel and each one would be the settings file rewritten. So
+/// this draws, and `set_appearance_settings` writes once the pointer stops,
+/// recording the size the window is already at.
+///
+/// Nothing to test here that a test can reach. The clamp is
+/// `settings::application_scale_within_range`, which is checked there, and the
+/// rest needs a window.
+#[tauri::command]
+pub fn preview_application_scale(app: tauri::AppHandle, scale: f64) {
+    zoom(&app, crate::settings::application_scale_within_range(scale));
+}
+
+/// Draw the main window at `scale`.
+///
+/// Not a `Result`. A zoom that the platform refused has left the window at
+/// whatever it was, which is a size somebody can still read and still change,
+/// and an error dialog over a window that is merely the wrong size would be
+/// the louder failure. It goes to the log, where the other window-shaped
+/// problems go.
+///
+/// Called from the command above and from `lib::run`'s setup, which is what
+/// makes a chosen size survive a restart.
+pub fn zoom(app: &tauri::AppHandle, scale: f64) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("no main window to scale");
+        return;
+    };
+    if let Err(error) = window.set_zoom(scale) {
+        tracing::warn!(%scale, %error, "could not scale the window");
+    }
+}
+
 /// See `notification_settings_for`.
 #[tauri::command]
 pub fn notification_settings(state: State<'_, AppState>) -> NotificationSettings {
@@ -2047,6 +2140,8 @@ mod tests {
         use super::*;
         use consort_audio::{Device, Direction, GateConfig};
 
+        use crate::settings::{MAX_APPLICATION_SCALE, MIN_TEXT_SCALE};
+
         /// A machine with one microphone and one pair of speakers.
         struct Fake;
 
@@ -2311,6 +2406,124 @@ mod tests {
         }
 
         #[test]
+        fn the_application_is_drawn_at_its_own_size_until_somebody_says_otherwise() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                crate::settings::AppearanceSettings::default()
+            );
+        }
+
+        #[test]
+        fn a_chosen_size_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                }
+            );
+        }
+
+        #[test]
+        fn a_size_out_of_range_reaches_the_file_in_range_rather_than_being_refused() {
+            // The window has already moved by the time this is called: the
+            // slider applies as it is dragged. So the answer to a number
+            // outside the range is the nearest one inside it, which is what
+            // the window is showing, rather than an error that would leave the
+            // file and the window disagreeing.
+            //
+            // Asserted against the bytes on disk rather than against a load,
+            // because a load clamps too and would pass this whether or not the
+            // write did. What is being checked is that nothing out of range is
+            // ever written down, so that a settings file Consort produced is
+            // one another reader can trust.
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 0.0,
+                },
+            )
+            .expect("save");
+
+            let raw = std::fs::read_to_string(state.settings().path()).expect("read");
+            let written: serde_json::Value = serde_json::from_str(&raw).expect("json");
+            assert_eq!(
+                written["appearance"]["applicationScale"],
+                serde_json::json!(MAX_APPLICATION_SCALE),
+                "{raw}"
+            );
+            assert_eq!(
+                written["appearance"]["textScale"],
+                serde_json::json!(MIN_TEXT_SCALE),
+                "{raw}"
+            );
+        }
+
+        #[test]
+        fn setting_a_size_answers_with_the_size_that_was_stored() {
+            // What the caller zooms the window to. Returning the argument
+            // instead would zoom to a number the file does not hold, so a
+            // restart would move the window and nothing would say why.
+            let (_dir, state, _) = state();
+
+            let stored = set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 1.0,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(stored.application_scale, MAX_APPLICATION_SCALE);
+            assert_eq!(stored, appearance_settings_for(&state));
+        }
+
+        #[test]
+        fn saving_a_size_leaves_the_audio_section_alone() {
+            // The same promise the privacy screen above gets, and it matters
+            // more here: this screen is dragged rather than clicked, so a
+            // write that took the whole file would undo the rest of it
+            // repeatedly and fast.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.5,
+                    text_scale: 1.0,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+        }
+
+        #[test]
         fn notifications_are_on_until_somebody_says_otherwise() {
             let (_dir, state, _) = state();
 
@@ -2386,6 +2599,7 @@ mod tests {
                 },
                 privacy: crate::settings::PrivacySettings::default(),
                 notifications: NotificationSettings::default(),
+                appearance: crate::settings::AppearanceSettings::default(),
             };
             state.settings().save(&stored).expect("save");
 
