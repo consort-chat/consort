@@ -4,6 +4,7 @@
 //! Application state shared by every Tauri command.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
@@ -644,6 +645,56 @@ impl AppState {
             return false;
         }
         self.disconnect_call();
+        true
+    }
+
+    /// Leave the voice channel on the way out of the process, waiting at most
+    /// `budget` for it.
+    ///
+    /// Asked for rather than got for free, because a quit drops nothing. Tauri's
+    /// event loop exits the process from inside `run`, so the state it manages
+    /// is never dropped and the [`CallBridge`] teardown that a sign-out relies
+    /// on never runs. Without this, Ctrl+Q while in a call publishes no leave at
+    /// all and everybody else in the channel watches a phantom of this device
+    /// until the homeserver clears it. `CLAUDE.md` says how long that is.
+    ///
+    /// Returns whether the leave finished inside `budget`. `false` is not a
+    /// failure, it is the bound doing its job: the membership then lapses the
+    /// way it did before any of this existed.
+    ///
+    /// The drop happens on a thread of its own, and that is the whole reason
+    /// this is not one line. Dropping the bridge here would be a wait with no
+    /// bound on it: the call thread takes its shutdown message only once
+    /// whatever it is already doing has finished, so a quit during a slow join
+    /// would sit through the join first. Somebody who cannot close the
+    /// application is a worse outcome than a ghost in a channel.
+    ///
+    /// Nothing is announced and the microphone is not given back, unlike
+    /// [`Self::clear_client`]. Both exist to correct what the interface shows,
+    /// and there is no interface left to correct: the window has gone and the
+    /// process is going with it.
+    pub fn leave_call_on_quit(&self, budget: Duration) -> bool {
+        let Some(bridge) = self.locked_call().take() else {
+            return true;
+        };
+
+        let (left, wait) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("consort-call-farewell".to_owned())
+            .spawn(move || {
+                drop(bridge);
+                let _ = left.send(());
+            })
+            .expect("the operating system refused a thread");
+
+        if wait.recv_timeout(budget).is_err() {
+            tracing::warn!(
+                ?budget,
+                "quitting gave up on leaving the call; the membership will expire on its own"
+            );
+            return false;
+        }
+
         true
     }
 
@@ -1349,7 +1400,7 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::events::RecordingSink;
-    use crate::testing::{FakeCallTransport, fake_backends, wait_for};
+    use crate::testing::{FakeCallTransport, PATIENCE, fake_backends, wait_for};
     use consort_matrix::StopReason;
     use consort_matrix::secrets::MemoryBackend;
     use std::sync::Arc;
@@ -1920,6 +1971,65 @@ mod tests {
                 || !state.microphone_open(),
                 || "still open".to_owned(),
             );
+        }
+
+        #[test]
+        fn quitting_leaves_the_call_rather_than_letting_the_membership_lapse() {
+            // Issue #110. Tauri's event loop exits the process from inside
+            // `run`, so nothing it manages is ever dropped and the teardown a
+            // sign-out relies on never happens. A quit that publishes no leave
+            // leaves everybody else in the channel watching a phantom of this
+            // device until the homeserver fires the dead man's switch.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::joining();
+            let leaves = transport.leaves();
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+            until_call(&sink, "connected");
+
+            let left = state.leave_call_on_quit(PATIENCE);
+
+            assert!(left, "the leave did not finish inside the budget");
+            assert_eq!(leaves.count(), 1, "nothing left the call");
+            assert!(
+                !state.has_call_thread(),
+                "the call thread outlived the leave"
+            );
+        }
+
+        #[test]
+        fn a_leave_that_never_answers_still_lets_the_process_go() {
+            // The constraint that keeps this from being one line. Somebody
+            // whose homeserver has stopped answering must still be able to
+            // close the application, so the wait is bounded and a leave that
+            // outlasts the bound is abandoned rather than waited on.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::whose_leave_never_answers();
+            let leaves = transport.leaves();
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+            until_call(&sink, "connected");
+
+            let started = std::time::Instant::now();
+            let left = state.leave_call_on_quit(Duration::from_millis(50));
+
+            assert!(!left, "a leave that never answered was reported as done");
+            assert_eq!(leaves.count(), 0, "a leave that hangs cannot have landed");
+            // Generous against a loaded machine and still nowhere near the
+            // budget the call thread gives the request itself, which is what
+            // an unbounded wait here would sit through.
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "quitting waited {:?} on a leave that was never going to answer",
+                started.elapsed()
+            );
+        }
+
+        #[test]
+        fn quitting_without_a_call_waits_for_nothing() {
+            // The common case, and the one a budget must not charge for: most
+            // sessions never join a voice channel at all.
+            let (_dir, state, _sink) = state();
+
+            assert!(state.leave_call_on_quit(Duration::ZERO));
         }
 
         #[test]

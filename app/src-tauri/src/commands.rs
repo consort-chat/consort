@@ -382,6 +382,29 @@ pub async fn room_can_invite_for(state: &AppState, room_id: String) -> Result<bo
     Ok(rooms::can_invite(&client, &room_id).await?)
 }
 
+/// Who is in one room, the joined and the invited kept apart.
+///
+/// A command rather than a field on the room list, for the reason
+/// [`room_avatar_for`] is one and more so: the list is re-sent in full
+/// whenever anything in it changes, and a member list per room would multiply
+/// a payload that is a few kilobytes today by every room on the account.
+///
+/// Asked for when somebody opens a room's details, and the answer is a
+/// snapshot of that moment rather than something that keeps itself up to date.
+/// See `consort_matrix::rooms::people` for what one ask costs and why the list
+/// is capped while the count is not.
+///
+/// An error rather than an empty room when this account is not in the room or
+/// is not signed in. Both would otherwise be drawn as a room nobody is in,
+/// which is a different and much more alarming thing to be told.
+pub async fn room_members_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::members(&client, &room_id).await?)
+}
+
 /// What to call each of `user_ids` in `room_id`.
 ///
 /// A batch rather than one at a time, because a screen of messages is a
@@ -1888,11 +1911,29 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// reach every window from JavaScript.
 ///
 /// As abrupt as the window's own close button, which is to say completely: the
-/// event loop exits the process, so nothing managed here is dropped and a call
-/// in progress is left for the SFU and the homeserver to time out. That is not
-/// new and not this command's to fix.
+/// event loop exits the process from inside its own `run`, so nothing managed
+/// here is ever dropped. What has to happen before that goes in `lib.rs` on
+/// `RunEvent::ExitRequested`, which is where this path and the close button
+/// meet, rather than here where only one of them would be covered. Leaving the
+/// voice channel is the thing that needs it; see `CLAUDE.md` for what it costs
+/// not to.
+///
+/// The window is hidden here, though, and that is not cosmetic. Leaving the call
+/// takes a moment and the wait for it is on the thread that draws, so a window
+/// still on screen would sit there not drawing, which reads as a hang rather
+/// than as a quit. The close button has no such problem: it destroys the window
+/// before the exit is requested. Hiding from here rather than from the exit
+/// itself is what makes it take effect, because the request below is posted to
+/// the event loop rather than applied in place, so the loop gets an iteration to
+/// act on the hide before it ever sees the exit.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
     app.exit(0);
 }
 
@@ -2006,6 +2047,18 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// Who is in one room.
+///
+/// Asked for when somebody opens a room's details, and never on the way to
+/// drawing the room list. See `room_members_for`.
+#[tauri::command]
+pub async fn room_members(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    room_members_for(&state, room_id).await
 }
 
 /// What can be said about one person beyond their name.
@@ -3954,6 +4007,35 @@ mod against_a_mock_homeserver {
         )
         .await
         .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_while_signed_out_says_so() {
+        // Unlike the avatar beside a name, an empty answer here would be drawn
+        // as a room with nobody in it, so there is nothing to degrade to.
+        let (_dir, state, _sink) = state();
+
+        let error = room_members_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = room_members_for(&state, "!gone:example.org".to_owned())
+            .await
+            .unwrap_err();
 
         assert!(!error.message().is_empty());
     }

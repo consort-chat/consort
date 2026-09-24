@@ -1498,6 +1498,40 @@ describe("deleting a message", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps the way into the thread hanging from it", () => {
+    // The exception to the rule above, and the line between them is what the
+    // control is about. An action row acts on the message: answer it, correct
+    // it, remove it. All three need the message, and it is gone. The replies
+    // are not an action on it and were not deleted, and this is the only
+    // thing in the room that opens them.
+    draw([emptied(ADA, { thread: { count: 3, participated: false } })]);
+
+    expect(screen.getByRole("button", { name: /3 replies/i })).toBeVisible();
+    expect(screen.getByText("Message deleted")).toBeInTheDocument();
+  });
+
+  it("opens that thread when the way in is pressed", async () => {
+    const onOpenThread = vi.fn();
+    draw(
+      [emptied(ADA, { thread: { count: 3, participated: false } })],
+      onOpenThread,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /3 replies/i }));
+
+    expect(onOpenThread).toHaveBeenCalledWith("$gone");
+  });
+
+  it("offers no way to start one on a message that is gone", () => {
+    // The other half of the line. Opening replies that exist is a door;
+    // starting a conversation by answering a message nobody can read is not.
+    draw([emptied(ADA)]);
+
+    expect(
+      screen.queryByRole("button", { name: "Reply in thread" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("says so in the row above a reply naming a deleted message", () => {
     // Without this the row falls through to the attachment fallback and tells
     // somebody a file was sent.

@@ -64,6 +64,7 @@ import {
   roomLeave,
   directRoom,
   memberNames,
+  roomMembers,
   onTimeline,
   timelineOpen,
   timelineClose,
@@ -666,6 +667,19 @@ describe("the timeline commands", () => {
     expect(invoke).toHaveBeenCalledWith("direct_room", {
       userId: "@bob:example.org",
     });
+  });
+
+  it("asks who is in a room under the name the Rust command expects", async () => {
+    // A room at a time, never in the room list, because the list is re-sent
+    // in full whenever anything in it changes.
+    const who = {
+      joined: { count: 1, shown: [{ person: { id: "@bob:example.org", name: "Bob" } }] },
+      invited: { count: 0, shown: [] },
+    };
+    invoke.mockResolvedValue(who);
+
+    await expect(roomMembers(GENERAL)).resolves.toEqual(who);
+    expect(invoke).toHaveBeenCalledWith("room_members", { roomId: GENERAL });
   });
 });
 

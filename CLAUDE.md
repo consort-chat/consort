@@ -110,6 +110,73 @@ written down in `app/src-tauri/src/state.rs`.
 
 Do not try to solve this with `block_on` inside a command. It deadlocks.
 
+### Quitting has to leave the call, because nothing here is dropped
+
+Ctrl+Q is a `keydown` handler on the window in `app/src/App.tsx`. It invokes the
+`quit` command, which calls `AppHandle::exit`, and that is where the interesting
+part is: tao's event loop calls `process::exit` from inside its own `run`, so
+`run` never returns, nothing Tauri manages is ever dropped, and the `Drop` on
+`CallBridge` that a sign-out relies on never runs. The window's close button
+ends up in the same place. So a quit while connected used to publish no leave at
+all. The process vanished and left the membership standing, which is issue #110:
+a phantom of the machine that quit, sitting in the voice channel for everybody
+else to look at.
+
+How long they look at it is a number, and it is not ours. Consort joins with
+`ElementCallCompat::StateEvents` (`consort_call::Dialect::State`, still the only
+dialect this build can read a membership back out of), so the membership is an
+`org.matrix.msc3401.call.member` **room state** event, and `Call::join` arms an
+MSC4140 delayed leave against it: a delayed *state* event with `{}` content,
+which genuinely empties the membership when it fires. The timings are upstream's
+defaults, because `livekit.rs` passes `..CallOptions::default()`, and they are a
+30 second delay restarted by a heartbeat every 15 seconds. A client that dies is
+therefore cleared 15 to 30 seconds later, by the homeserver, firing the switch
+that client armed on its way in. Somebody watching a clone of themselves vanish
+"after a few seconds" is watching exactly that.
+
+Which answers the question that came with the report, because it was the first
+guess: this is not a setting on anybody's homeserver, and nobody configured a
+cleanup. The only server-side variable is whether MSC4140 delayed events are
+available at all. Where they are refused (Synapse without `msc4140`, or
+matrix.org, which has them switched off and says so) there is no dead man's
+switch, and the bound becomes the deadline written into the content instead:
+`created_ts + expires`, which the core degrades to five minutes for precisely
+this reason. The ghost then lasts up to five minutes rather than thirty seconds.
+
+Worth knowing before the dialect moves: this is the *good* case. In the sticky
+dialects a delayed leave is a plain delayed event, which clears nothing from the
+homeserver's sticky map, so a client that dies lingers for the whole sticky
+duration, an hour by default. matrix-rust-rtc's `crates/matrix-rtc-bridge/src/sdk.rs`
+carries the note and the reason. A move to `Dialect::Sticky` or `Dialect::Current`
+makes a quit that fails to leave cost an hour rather than half a minute.
+
+What Consort does now is leave, in the one place every exit converges:
+`RunEvent::ExitRequested` in `app/src-tauri/src/lib.rs` hands off to
+`on_the_way_out`, which hides the windows and then calls
+`AppState::leave_call_on_quit`. Not in the `quit` command, because the close
+button and a window manager closing the window never go through it. Not on
+`RunEvent::Exit` either, though that is the more obvious hook: plugin hooks run
+before the application's, `tauri-plugin-single-instance` releases its D-Bus name
+on `Exit`, and waiting there would hold the SQLite crypto store open with the
+guard already down. A relaunch during the wait would then be the two-Consorts
+case the guard exists to prevent. The wait is
+bounded twice over: `consort_call::SHUTDOWN_LEAVE_TIMEOUT` bounds the request,
+`LEAVE_ON_QUIT` bounds the wait for the thread making it, and the outer one is
+deliberately the longer of the two so it is a backstop rather than a competitor.
+A homeserver that has stopped answering costs a few seconds of an invisible
+process and nothing else. It cannot leave somebody unable to close the
+application, which would be a worse bug than the one this fixes. The window is
+taken off screen before any of it: the wait is on the thread that draws, so the
+`quit` command hides the window before it asks to exit, which is early enough
+that the event loop gets an iteration to act on the hide. The close button needs
+no such help, having destroyed the window already.
+
+What is still not covered, and cannot be from here: `SIGKILL`, `SIGTERM`, a
+panic, a machine losing power, and a quit during a slow join, where the call
+thread cannot read its shutdown message until the join it is inside has finished
+and the wait is abandoned at the bound. Every one of those is what the dead
+man's switch is for, and the numbers above are what they cost.
+
 ### rustls needs an explicit crypto provider
 
 `consort_matrix::install_crypto_provider()` runs once in `run()` before any TLS.
@@ -266,7 +333,7 @@ Coverage must stay above 90% on both halves; CI fails below it. See
 
 New behaviour needs a test. Test behaviour, not implementation.
 
-Three patterns this codebase relies on, worth following rather than
+Five patterns this codebase relies on, worth following rather than
 rediscovering:
 
 - **Homeserver code is testable.** `MatrixMockServer`, from matrix-sdk's
@@ -298,6 +365,17 @@ rediscovering:
 - **Secrets go through a trait.** `secrets::Backend` has a `MemoryBackend`
   implementation, and `SessionStore::with_backend` takes one. No test should
   ever touch the developer's real keyring.
+- **A rejected `vi.fn()` is not an unhandled rejection.** Vitest attaches its
+  own handler to the promise a mock returns, so it can record the settled
+  result, and `process.on("unhandledRejection")` never sees it. A `.catch`
+  whose whole body is swallowing the error is therefore unpinnable: the line
+  counts as covered and no assertion can say it caught anything. A plain
+  `() => Promise.reject(x)` mock does leak and is the way to pin one, at the
+  cost of the call assertions a `vi.fn` would give.
+  [COVERAGE.md](COVERAGE.md) has the measurements, the eighteen catches this
+  applies to, and the same problem in its other shape: a state update after an
+  unmount is silent, so an `if (!cancelled)` in front of one is a branch no
+  test can distinguish from its own absence.
 
 ## AI-assisted contribution policy
 
