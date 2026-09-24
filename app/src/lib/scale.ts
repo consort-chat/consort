@@ -40,8 +40,8 @@ export const APPLICATION_SCALE: Range = { min: 0.8, max: 2, step: 0.1 };
  * Narrower than the range above, and `settings.rs` says why: this multiplier
  * moves the words while the pictures and the fixed column widths stay put, so
  * its far end is a layout in tension rather than a larger Consort. A twentieth
- * per press, because the useful range is small enough that a tenth would be
- * four stops from end to end.
+ * per step, because a tenth would put only six stops between the ends of a
+ * range this narrow.
  */
 export const TEXT_SCALE: Range = { min: 0.9, max: 1.5, step: 0.05 };
 
