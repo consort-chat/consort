@@ -61,13 +61,23 @@
   font-size: var(--text-2xs);
 }
 
+/*
+  Scrolls sideways and draws no bar doing it. WebKit puts the bar inside the
+  box, across the bottom of the tabs, so a press near the foot of a category
+  lands on the bar instead (#125). `EmojiGrid.tsx` scrolls the current one in.
+*/
 .emoji__tabs {
   display: flex;
   gap: var(--space-1);
   overflow-x: auto;
   padding-bottom: var(--space-1);
   border-bottom: 1px solid var(--line-subtle);
-  scrollbar-width: thin;
+  scrollbar-width: none;
+}
+
+/* The one WebKitGTK reads. It asked for `thin` above and #125 arrived fat. */
+.emoji__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .emoji__tab {

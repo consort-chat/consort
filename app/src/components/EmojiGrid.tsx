@@ -94,6 +94,9 @@ export function EmojiGrid({
   const [at, setAt] = useState<number | null>(null);
   const box = useRef<HTMLInputElement | null>(null);
   const grid = useRef<HTMLDivElement | null>(null);
+  // The tab of the category on show, or none while a search has the strip
+  // unmounted.
+  const tab = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     box.current?.focus();
@@ -126,6 +129,15 @@ export function EmojiGrid({
     const keys = grid.current?.querySelectorAll("button");
     (keys?.item(at) as HTMLElement | undefined)?.focus();
   }, [at]);
+
+  /*
+    The category on show, kept in view. The strip draws no scrollbar (#125),
+    and a search unmounts it and hands it back scrolled to the left, so this
+    is all that says where among nineteen categories somebody is.
+  */
+  useEffect(() => {
+    tab.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [shown?.slug, searching]);
 
   function moveTo(next: number) {
     setAt(Math.max(0, Math.min(showing.length - 1, next)));
@@ -228,6 +240,7 @@ export function EmojiGrid({
           {categories.map((group) => (
             <button
               key={group.slug}
+              ref={group.slug === shown?.slug ? tab : null}
               type="button"
               className="emoji__tab"
               aria-current={group.slug === shown?.slug ? "true" : undefined}

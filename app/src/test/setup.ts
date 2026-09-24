@@ -31,6 +31,13 @@ afterEach(() => {
   cleanup();
 });
 
+// jsdom does not implement this either, and it does no layout to implement it
+// against, so a component that scrolls one of its own children into view dies
+// on the call. `mock.contexts` is what a test reads to see which child.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = vi.fn();
+}
+
 // jsdom does not implement this, and React logs a warning without it.
 if (!window.matchMedia) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => ({

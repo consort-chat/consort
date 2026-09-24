@@ -73,6 +73,10 @@ const searchBox = () => screen.getByRole("searchbox", { name: /search/i });
 /** What the live region is currently saying. */
 const announcement = () => screen.getByRole("status").textContent;
 
+/** What has been scrolled into view, in order. Stubbed in `test/setup.ts`. */
+const scrolledIntoView = () =>
+  vi.mocked(Element.prototype.scrollIntoView).mock.contexts;
+
 describe("finding an emoji without a mouse", () => {
   it("opens with the search box focused, which is where typing goes", () => {
     draw();
@@ -304,6 +308,55 @@ describe("the categories", () => {
     await user.keyboard("thumb");
 
     expect(screen.getByRole("group", { name: /matches/i })).toBeVisible();
+  });
+});
+
+/*
+  The strip of categories scrolls sideways and draws no scrollbar (#125), so
+  these are what is left of knowing where in it you are. Both were the bar's
+  job.
+*/
+describe("getting around the categories without a scrollbar", () => {
+  it("scrolls the one on show into view", async () => {
+    const { user } = draw();
+
+    await user.click(screen.getByRole("button", { name: "People & Body" }));
+
+    expect(scrolledIntoView()).toContain(
+      screen.getByRole("button", { name: "People & Body" }),
+    );
+  });
+
+  it("scrolls it back when a search has been and gone", async () => {
+    /*
+      Searching unmounts the strip, so it comes back at the left with the
+      category somebody chose possibly off the end of it.
+    */
+    const { user } = draw();
+    await user.click(screen.getByRole("button", { name: "People & Body" }));
+    await user.type(searchBox(), "thumb");
+    const before = scrolledIntoView().length;
+
+    await user.clear(searchBox());
+
+    expect(scrolledIntoView().slice(before)).toContain(
+      screen.getByRole("button", { name: "People & Body" }),
+    );
+  });
+
+  it("walks the strip on Tab and opens a category from the keyboard", async () => {
+    const { user } = draw();
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Smileys & Emotion" }))
+      .toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "People & Body" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.getByRole("button", { name: "React with thumbs up" }))
+      .toBeVisible();
   });
 });
 

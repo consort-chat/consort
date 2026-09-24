@@ -1,7 +1,7 @@
 /*
   What the emoji grid measures, read off the stylesheet that draws it.
 
-  Two things, and neither is visible from the component on its own.
+  Three things, and none is visible from the component on its own.
 
   The first is the column count. The arrow keys move down by `ACROSS`, and the
   stylesheet draws that many columns off a custom property. Nothing at runtime
@@ -14,6 +14,10 @@
   text size on a slider of its own, so the root font size is something somebody
   can set to 150%, and a grid measured in pixels would keep its old size while
   the words beside it grew.
+
+  The third is that the category strip draws no scrollbar. WebKit puts one
+  inside the box, across the bottom of the tabs, and a press near the foot of a
+  category then lands on the bar rather than the category (#125).
 
   A file of its own, because it is the only kind of test that wants CSS. See
   `vitest.config.ts` for why `.css.test.tsx` is the name that gets one.
@@ -94,5 +98,51 @@ describe("the shape of the grid", () => {
 
     expect(getComputedStyle(key).minHeight).toBe("var(--emoji-key)");
     expect(getComputedStyle(key).minWidth).toBe("var(--emoji-key)");
+  });
+});
+
+/** The strip of categories, which is the one thing here that scrolls sideways. */
+const strip = () => screen.getByRole("group", { name: /categor/i });
+
+/** Every rule jsdom parsed. A pseudo-element is reachable no other way. */
+function everyRule(): readonly string[] {
+  return Array.from(document.styleSheets).flatMap((sheet) =>
+    Array.from(sheet.cssRules).map((rule) => rule.cssText),
+  );
+}
+
+describe("the category strip", () => {
+  it("asks for no scrollbar", () => {
+    drawTheGrid();
+
+    expect(
+      getComputedStyle(strip()).getPropertyValue("scrollbar-width").trim(),
+    ).toBe("none");
+  });
+
+  it("hides the one WebKit draws anyway", () => {
+    /*
+      The rule that does the work on the engine Consort ships against. The
+      strip asked for `thin` and #125 arrived with a picture of a fat bar, so
+      `scrollbar-width` is not what WebKitGTK is reading.
+    */
+    drawTheGrid();
+
+    const webkit = everyRule().filter((rule) =>
+      rule.startsWith(".emoji__tabs::-webkit-scrollbar"),
+    );
+
+    expect(webkit).toHaveLength(1);
+    expect(webkit[0]).toContain("display: none");
+  });
+
+  it("still scrolls, because there are more categories than fit", () => {
+    // Hiding the bar by taking the overflow away would pass both of the above
+    // and lose every category past the fold.
+    drawTheGrid();
+
+    expect(getComputedStyle(strip()).getPropertyValue("overflow-x")).toBe(
+      "auto",
+    );
   });
 });
