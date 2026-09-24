@@ -1832,8 +1832,8 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// As abrupt as the window's own close button, which is to say completely: the
 /// event loop exits the process from inside its own `run`, so nothing managed
 /// here is ever dropped. What has to happen before that goes in `lib.rs` on
-/// `RunEvent::Exit`, which is where this path and the close button meet, rather
-/// than here where only one of them would be covered. Leaving the voice channel
+/// `RunEvent::ExitRequested`, which is where this path and the close button
+/// meet, rather than here where only one of them would be covered. Leaving the voice channel
 /// is the thing that needs it; see `CLAUDE.md` for what it costs not to.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {

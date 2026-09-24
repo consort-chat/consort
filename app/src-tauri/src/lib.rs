@@ -39,7 +39,7 @@ use crate::state::AppState;
 /// abandon leaves that were about to land. See
 /// [`consort_call::SHUTDOWN_LEAVE_TIMEOUT`].
 ///
-/// Nobody is looking at a window while it runs. See [`on_exit`].
+/// Nobody is looking at a window while it runs. See [`on_the_way_out`].
 const LEAVE_ON_QUIT: Duration = Duration::from_secs(6);
 
 /// Answer one request on the attachment scheme.
@@ -102,18 +102,33 @@ async fn serve(
 ///
 /// The one place every quit passes through: Ctrl+Q by way of
 /// [`commands::quit`], the window's close button, and a window manager closing
-/// the window. It is also the last chance anything has to run,
-/// because the event loop exits the process from inside `run` rather than
-/// returning, so nothing Tauri manages is ever dropped and the call teardown a
-/// sign-out gets from [`Drop`] has to be asked for here.
+/// the window. It has to exist at all because the event loop exits the process
+/// from inside `run` rather than returning, so nothing Tauri manages is ever
+/// dropped and the call teardown a sign-out gets from [`Drop`] never happens.
 ///
-/// The windows are hidden before the wait rather than left to the process
-/// exit. On the close-button path they have gone already, but Ctrl+Q arrives
-/// here with the window still up, and a window that sits there for a second
-/// not drawing is indistinguishable from one that has hung. Hiding takes
-/// effect immediately: this runs on the thread that owns the event loop, which
-/// is where Tauri applies a window message rather than posting it.
-fn on_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+/// On `ExitRequested` rather than `Exit`, which is later and reads like the
+/// more obvious last chance. The difference is the single-instance guard:
+/// plugin hooks run before this one and `tauri-plugin-single-instance` releases
+/// its D-Bus name on `Exit`, so a wait there would hold the SQLite crypto store
+/// open with the guard already down. A relaunch inside the wait would then be a
+/// second Consort fighting the first for that store, which is the one thing the
+/// guard exists to prevent. Here the guard is still up, and the worst a
+/// relaunch can do is hand its arguments to a process on its way out and appear
+/// to do nothing.
+///
+/// The windows are hidden before the wait rather than left to the process exit.
+/// On the close-button path they have gone already, but Ctrl+Q arrives here with
+/// the window still up, and a window that sits there for a second not drawing is
+/// indistinguishable from one that has hung. Hiding takes effect immediately:
+/// this runs on the thread that owns the event loop, which is where Tauri
+/// applies a window message rather than posting it.
+///
+/// One thing this asks of whatever comes next: nothing prevents the exit today,
+/// and something that did (a tray icon, a "keep running in the background") would
+/// have to move this. The leave has already gone out by the time an exit is
+/// cancelled, and a session left in a channel it is still connected to would
+/// show as connected to nobody but itself.
+fn on_the_way_out<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     for window in app.webview_windows().values() {
         let _ = window.hide();
     }
@@ -308,10 +323,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to start Consort")
         .run(|app, event| {
-            // Which event it is, and nothing else. What happens on the way out
-            // is `on_exit`, where a test can reach it.
-            if matches!(event, RunEvent::Exit) {
-                on_exit(app);
+            // Which event it is, and nothing else. What happens then is
+            // `on_the_way_out`, where a test can reach it, including why this
+            // is the requested exit rather than the exit itself.
+            if matches!(event, RunEvent::ExitRequested { .. }) {
+                on_the_way_out(app);
             }
         });
 }
@@ -531,14 +547,14 @@ mod tests {
         );
     }
 
-    /// The exit hook, on Tauri's headless mock runtime.
+    /// The quit hook, on Tauri's headless mock runtime.
     ///
     /// What the leave itself does is covered in `state.rs`, where it needs no
     /// app at all. This is the only test that shows the thing issue #110 was
     /// about: that the path out of the process reaches the call before the
     /// process is gone.
     #[test]
-    fn exiting_leaves_the_call_this_session_is_in() {
+    fn quitting_leaves_the_call_this_session_is_in() {
         use crate::events::{AppEvent, RecordingSink};
         use crate::testing::{FakeCallTransport, fake_backends, wait_for};
 
@@ -582,7 +598,7 @@ mod tests {
             || format!("{:?}", sink.events()),
         );
 
-        on_exit(app.handle());
+        on_the_way_out(app.handle());
 
         assert_eq!(leaves.count(), 1, "quitting did not leave the call");
     }

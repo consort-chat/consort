@@ -150,10 +150,15 @@ carries the note and the reason. A move to `Dialect::Sticky` or `Dialect::Curren
 makes a quit that fails to leave cost an hour rather than half a minute.
 
 What Consort does now is leave, in the one place every exit converges:
-`RunEvent::Exit` in `app/src-tauri/src/lib.rs` hands off to `on_exit`, which
-hides the windows and then calls `AppState::leave_call_on_quit`. Not in the
-`quit` command, because the close button and a window manager closing the window
-never go through it. The wait is
+`RunEvent::ExitRequested` in `app/src-tauri/src/lib.rs` hands off to
+`on_the_way_out`, which hides the windows and then calls
+`AppState::leave_call_on_quit`. Not in the `quit` command, because the close
+button and a window manager closing the window never go through it. Not on
+`RunEvent::Exit` either, though that is the more obvious hook: plugin hooks run
+before the application's, `tauri-plugin-single-instance` releases its D-Bus name
+on `Exit`, and waiting there would hold the SQLite crypto store open with the
+guard already down. A relaunch during the wait would then be the two-Consorts
+case the guard exists to prevent. The wait is
 bounded twice over: `consort_call::SHUTDOWN_LEAVE_TIMEOUT` bounds the request,
 `LEAVE_ON_QUIT` bounds the wait for the thread making it, and the outer one is
 deliberately the longer of the two so it is a backstop rather than a competitor.
