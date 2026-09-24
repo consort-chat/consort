@@ -20,6 +20,25 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.\
 """
+# Each change line ends with the handle of whoever wrote it, and a release that
+# somebody contributed to for the first time says so under its own heading.
+# `[remote.github]` at the foot of this file is where both come from and what
+# it costs.
+#
+# The first-time list is built by hand rather than with `filter`, because two
+# things have to be decided before the heading is written. Bots are not
+# contributors: the `chore(release):` commit the release pushes is made by
+# github-actions[bot], and git-cliff builds its contributor list before the
+# commit parsers below skip anything, so the account that automates the release
+# would otherwise be welcomed to the project by the release it made. And the
+# heading itself has to be skipped when the list comes back empty, which a
+# `filter` result cannot tell you until after it has been emitted.
+#
+# No pull request number on that line, which is what GitHub's own generator
+# puts there. git-cliff can only match a pull request to the commit that closed
+# it, and that commit is attributed to whoever pressed Merge, so the number
+# lands on the maintainer's name and never on the contributor's. An absent link
+# is better than one pointing at the wrong person.
 body = """
 
 {% if version %}\
@@ -31,10 +50,35 @@ body = """
 ### {{ group }}
 
 {% for commit in commits %}\
-- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}{% if commit.remote.username %} (@{{ commit.remote.username }}){% endif %}
 {% endfor %}\
 {% endfor %}\
+{% set_global newcomers = [] %}\
+{% for contributor in github.contributors %}\
+{% if contributor.is_first_time and not contributor.username is ending_with("[bot]") %}\
+{% set_global newcomers = newcomers | concat(with=contributor.username) %}\
+{% endif %}\
+{% endfor %}\
+{% if newcomers | length > 0 %}
+### New contributors
+
+{% for username in newcomers %}\
+- @{{ username }} made their first contribution
+{% endfor %}\
+{% endif %}\
 """
+# Empty, and the list above is the reason it has to stay that way. The notes
+# and the tag message are both made with `git cliff --strip all`, which keeps
+# the body and deletes the header and the footer, so anything moved down here
+# stops reaching the release page while CHANGELOG.md still looks right.
+#
+# The list above in particular cannot move: a footer is rendered once for the
+# whole file rather than once per release, and `github.contributors` is a
+# release's own, so git-cliff fails with "Variable `github.contributors` not
+# found in context while rendering 'footer'". It fails on the plain render and
+# not on the stripped one, which means a backfill, where only the stripped
+# renders run, would publish with nobody credited and exit 0.
+# scripts/release-notes.test.sh counts the section with and without the strip.
 footer = ""
 # Off, because the blank line before each version heading is part of the
 # template rather than an accident of it.
@@ -68,3 +112,39 @@ commit_parsers = [
 
 # Every tag this project has made. Nothing else is a version.
 tag_pattern = "v[0-9]*"
+
+# Which repository the handles are read from.
+#
+# Not a switch. git-cliff works the repository out from the git remote on its
+# own, and the template above renders the same handles with this block deleted,
+# so what it buys is that the answer does not depend on what a given clone
+# calls origin. The reason nothing was credited before was the template, which
+# asked for none of this.
+#
+# ## A handle is the commit's author, not the pull request's
+#
+# `commit.remote.username` is GitHub's `author.login` for that commit's SHA.
+# git-cliff also knows `commit.remote.pr_author`, which is the account that
+# opened the pull request, but it only fills that in on the commit whose SHA is
+# the pull request's `merge_commit_sha`. This repository merges rather than
+# squashes, so that is always the merge commit, which is not a conventional
+# commit and is dropped by `filter_unconventional` above. Every line that
+# survives to be rendered therefore has a username and no pr_author.
+#
+# The two are the same person on every commit this repository has, so nothing
+# is currently credited wrongly. They would differ if somebody pushed a commit
+# into another person's pull request: the line for that commit would name who
+# wrote it rather than who opened the request. Squash merging would close the
+# gap, because the squashed commit is the merge commit and carries pr_author.
+#
+# ## This is a network dependency in the release
+#
+# GitHub answers unauthenticated for a public repository, so this works with no
+# token at 60 requests an hour per address. The release workflow passes one
+# anyway. A token that is present and wrong makes git-cliff exit non-zero, and
+# so does an unreachable API, but `--offline` and GIT_CLIFF_OFFLINE both exit 0
+# with nothing filled in. release.yml runs scripts/release-notes.test.sh before
+# it writes anything, which is what turns that into a failed release.
+[remote.github]
+owner = "consort-chat"
+repo = "consort"

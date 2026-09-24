@@ -98,7 +98,7 @@
 
 /* Whichever of the two is drawn takes the rest of the height. */
 .shell__main > .timeline,
-.shell__main > .shell__empty {
+.shell__main > .opening {
   flex: 1;
   min-height: 0;
 }
@@ -114,47 +114,6 @@
   gap: var(--space-4);
   justify-items: start;
   padding: var(--space-4) var(--space-6) 0;
-}
-
-/*
-  The honest empty state. Quiet, centred, and one sentence: a pane dressed up
-  with placeholder chrome would imply that messages are nearly here.
-*/
-.shell__empty {
-  display: grid;
-  place-content: center;
-  gap: var(--space-1);
-  padding: var(--space-6);
-  text-align: center;
-}
-
-/*
-  Pinned to the corner rather than centred with the words, because it is
-  furniture and they are the message. `place-content: center` above is what
-  puts the pane's contents in the middle, and this steps out of that.
-*/
-.shell__unfold {
-  position: absolute;
-  top: var(--space-4);
-  left: var(--space-4);
-}
-
-/*
-  An `h1` that is deliberately not sized like one. It is the heading of an
-  empty pane, and shouting it would give the emptiest part of the screen the
-  loudest voice on it.
-*/
-.shell__empty-headline {
-  margin: 0;
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.shell__empty-detail {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
 }
 
 /*

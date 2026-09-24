@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, type RefObject } from "react";
 
+import { mxcUrl } from "../lib/api";
 import type {
   Message,
   MessageKind,
@@ -14,8 +15,9 @@ import { FormattedBody } from "./FormattedBody";
 import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
-import { ConfirmDelete } from "./ConfirmDelete";
-import { ReactionPicker } from "./ReactionPicker";
+import { Confirm } from "./Confirm";
+import { EmojiPicker, OPENS_A_PICKER } from "./EmojiPicker";
+import { ReadBy } from "./ReadBy";
 import { RoomAvatar } from "./RoomAvatar";
 
 /**
@@ -607,6 +609,45 @@ function EditedMark() {
 }
 
 /**
+ * What a reaction pill shows.
+ *
+ * Almost always the key itself, drawn as the text it is. Nothing downstream
+ * restricts what a reaction may be: `consort_matrix::timeline::reactions`
+ * counts an opaque string, and a client with a wider set than this one is the
+ * ordinary case rather than the exception.
+ *
+ * The exception is a custom emoji. MSC2545 keys one by the image's own
+ * `mxc://` URI, which Element and Cinny both send and both draw as a picture,
+ * so drawing the key as text here would put a raw URI in the pill. It goes
+ * through `consortmedia` like every other picture: an `mxc://` handed to the
+ * webview as a URL it could fetch itself is a read receipt nobody asked for
+ * and an IP address nobody gave.
+ *
+ * `alt` is empty because the button around it is already labelled. See
+ * [`nameOfKey`] for what that label says and why it is not the shortcode.
+ */
+function ReactionKey({ code }: { code: string }) {
+  const source = mxcUrl(code);
+  if (source === undefined) {
+    return <span aria-hidden="true">{code}</span>;
+  }
+  return <img className="timeline__reaction-image" src={source} alt="" />;
+}
+
+/**
+ * What to call one key when reading the pill out.
+ *
+ * MSC2545 carries the shortcode alongside the key on the reaction event, and
+ * that is the name this should say. Nothing surfaces it yet: the aggregation
+ * in `consort-matrix` keeps the key and the count, and reading the packs is
+ * #20. Until then the honest answer is what kind of thing it is, rather than
+ * a URI read out character by character.
+ */
+function nameOfKey(code: string): string {
+  return mxcUrl(code) === undefined ? code : "Custom reaction";
+}
+
+/**
  * A wastebasket, for the control that deletes a message.
  */
 function TrashIcon() {
@@ -657,6 +698,11 @@ function DeletedBody({ by }: { by: string | null }) {
   );
 }
 
+/** The last message in a group, which is where the faces go. */
+function last(one: Group): Message | undefined {
+  return one.messages[one.messages.length - 1];
+}
+
 /**
  * A run of grouped messages, drawn.
  *
@@ -674,6 +720,7 @@ export function MessageGroups({
   system,
   names,
   roomId,
+  threadRoot,
   selfId,
   known,
   container,
@@ -702,6 +749,16 @@ export function MessageGroups({
   /** Display names by user ID, for whoever the room has told us about. */
   names: Record<string, string>;
   roomId: string;
+  /**
+   * The thread these messages are replies in, when they are.
+   *
+   * Absent in the room's own timeline, and absent for the root message the
+   * panel draws above the replies: a root is a message in the room, and the
+   * receipts on it are the room's. A thread keeps receipts of its own, so a
+   * panel that read the room's answer would draw the room's readers against
+   * every reply in it.
+   */
+  threadRoot?: string | undefined;
   /**
    * Whoever is signed in, so a message naming them can be marked.
    *
@@ -883,7 +940,8 @@ export function MessageGroups({
     }
 
     return (
-      <ReactionPicker
+      <EmojiPicker
+        action="React with"
         align={at === "row" ? "left" : "right"}
         chosen={
           new Set(
@@ -892,7 +950,7 @@ export function MessageGroups({
               .map((one) => one.key),
           )
         }
-        onChoose={(key) => {
+        onPick={(key) => {
           const already = message.reactions?.find((one) => one.key === key);
           onReact(message.id, key, already?.mine);
           setPicking(null);
@@ -932,6 +990,8 @@ export function MessageGroups({
         }
 
         const one = row.group;
+        // Where the row of faces goes. See below.
+        const newest = last(one);
         // Their display name if the room has told us one, and their user ID if
         // it has not. Whichever it is, it is what the byline draws, what the
         // group announces itself as, and what the card is about.
@@ -1202,13 +1262,13 @@ export function MessageGroups({
                                   type="button"
                                   className="timeline__reaction"
                                   aria-pressed={one.mine !== undefined}
-                                  aria-label={`${one.key}, ${one.count}`}
+                                  aria-label={`${nameOfKey(one.key)}, ${one.count}`}
                                   disabled={onReact === undefined}
                                   onClick={() =>
                                     onReact?.(message.id, one.key, one.mine)
                                   }
                                 >
-                                  <span aria-hidden="true">{one.key}</span>
+                                  <ReactionKey code={one.key} />
                                   <span
                                     className="timeline__reaction-count"
                                     aria-hidden="true"
@@ -1231,6 +1291,7 @@ export function MessageGroups({
                                     className="timeline__add-key"
                                     aria-label="Add a reaction"
                                     title="Add a reaction"
+                                    {...{ [OPENS_A_PICKER]: "" }}
                                     aria-expanded={
                                       picking?.id === message.id &&
                                       picking.at === "row"
@@ -1297,7 +1358,21 @@ export function MessageGroups({
                                     <TrashIcon />
                                   </button>
                                   {confirming === message.id && (
-                                    <ConfirmDelete
+                                    <Confirm
+                                      question="Delete this message?"
+                                      /*
+                                        What actually happens, because
+                                        redacting is not erasing and a sentence
+                                        promising otherwise would be a promise
+                                        Consort cannot keep. The homeserver
+                                        empties the event and serves the
+                                        emptied version from then on; a server
+                                        that already replicated the room keeps
+                                        whatever it has, and no client can
+                                        reach across federation to change that.
+                                      */
+                                      detail="The words are removed from the room for everyone. Servers and clients that already have a copy may keep it."
+                                      go="Delete"
                                       onConfirm={() => {
                                         setConfirming(null);
                                         onDelete(message);
@@ -1324,6 +1399,7 @@ export function MessageGroups({
                                 className="timeline__action"
                                 aria-label="React"
                                 title="React"
+                                {...{ [OPENS_A_PICKER]: "" }}
                                 aria-expanded={
                                   picking?.id === message.id &&
                                   picking.at === "toolbar"
@@ -1385,6 +1461,23 @@ export function MessageGroups({
                     </Fragment>
                   );
                 })}
+                {/*
+                  Who has read this far, against the last message in the group
+                  rather than every one of them. That is what other clients do
+                  and what keeps a quiet room from becoming a column of faces.
+
+                  Nothing here is handed the receipts: the row subscribes for
+                  itself, which is what stops a receipt arriving from redrawing
+                  the conversation. See `ReadBy`.
+                */}
+                {newest !== undefined && (
+                  <ReadBy
+                    roomId={roomId}
+                    threadRoot={threadRoot}
+                    eventId={newest.id}
+                    names={names}
+                  />
+                )}
               </div>
             </article>
           </Fragment>

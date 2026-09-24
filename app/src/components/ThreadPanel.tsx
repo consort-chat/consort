@@ -26,6 +26,7 @@ import {
   type Thread,
 } from "../lib/api";
 import { useRoomLinks } from "../lib/roomLinks";
+import { ComposerEmoji } from "./ComposerEmoji";
 import { ComposerTarget } from "./ComposerTarget";
 import { MessageGroups, group, previewOf } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
@@ -597,6 +598,13 @@ export function ThreadPanel({
           groups={replies}
           names={names}
           roomId={thread.roomId}
+          /*
+            A thread keeps receipts of its own, so the faces under a reply are
+            the thread's readers rather than the room's. The root above is not
+            given this: it is a message in the room, and the receipts on it are
+            the room's own.
+          */
+          threadRoot={thread.rootId}
           selfId={selfId}
           known={known}
           container={scroller}
@@ -645,6 +653,13 @@ export function ThreadPanel({
         <label className="thread__label" htmlFor="thread-draft">
           Reply in this thread
         </label>
+        {/* The same control the room's composer has, doing the same thing. */}
+        <ComposerEmoji
+          box={draftBox}
+          draft={draft}
+          disabled={sending}
+          onChanged={setDraft}
+        />
         <textarea
           id="thread-draft"
           className="thread__draft"

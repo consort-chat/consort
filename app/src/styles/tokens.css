@@ -71,12 +71,36 @@
   --space-8: 2rem;
   --space-12: 3rem;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  /*
+    In `rem`, like everything above, so the text size in Accessibility settings
+    carries them. A corner radius belongs to the box it rounds: at 150% text the
+    boxes are half again as large, and a radius left at 16px would read as a
+    noticeably sharper corner than the same token does at 100%.
+  */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
 
-  --shadow-raised: 0 1px 2px oklch(0% 0 0 / 0.4), 0 8px 24px oklch(0% 0 0 / 0.28);
-  --shadow-focus: 0 0 0 3px var(--violet-glow);
+  /*
+    Two shadows, and only one of them scales.
+
+    The near one is the contact shadow, a hairline that says the surface is off
+    the one behind it. Hairlines stay in `px` deliberately, here and in the 1px
+    borders across the component stylesheets: a hairline that grew would stop
+    being a hairline and start being a line.
+
+    The far one is the ambient shadow, which is the depth of the box itself, so
+    it goes with the box. Left at 24px it would tighten visibly against a card
+    half again as large.
+  */
+  --shadow-raised: 0 1px 2px oklch(0% 0 0 / 0.4),
+    0 0.5rem 1.5rem oklch(0% 0 0 / 0.28);
+  /*
+    Also `rem`, and this one is the point of the exercise: a focus ring is a
+    proportion of the control it surrounds, and somebody who turned the text up
+    to read it is somebody who wants the ring easier to see too.
+  */
+  --shadow-focus: 0 0 0 0.1875rem var(--violet-glow);
 
   --duration-fast: 120ms;
   --duration-normal: 220ms;

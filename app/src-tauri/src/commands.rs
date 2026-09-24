@@ -23,7 +23,7 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::PrivacySettings;
+use crate::settings::{AppearanceSettings, EmojiSettings, PrivacySettings};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -324,6 +324,87 @@ pub async fn member_profile_for(
     Ok(rooms::member_profile(&client, &user_id).await)
 }
 
+/// Leave `room_id`.
+///
+/// The call goes first, and only if it is a call in this room. A voice channel
+/// is an ordinary Matrix room, so the room being left can be the room being
+/// talked in, and a call left running would go on publishing a membership to a
+/// room this account is not in. What everybody else would see is a name in a
+/// channel until that membership times out.
+///
+/// Before the leave rather than after it, though the leave is the half that
+/// can fail. The call thread unwinds its membership on its own runtime, so
+/// putting the leave first would guarantee that unwind arrives at a room this
+/// account has already left and is refused. Doing it this way gives it a
+/// chance, and what it costs is a failed leave having dropped a call for
+/// nothing, which is one rejoin against four hours of looking like somebody
+/// sitting in a channel they walked out of.
+///
+/// Nothing is done about what is selected afterwards. The shell derives its
+/// selection from the room list every render, so the room going out of the
+/// list is what deselects it, and a command reaching back into the interface
+/// would be a second opinion about a question already answered.
+pub async fn room_leave_for(state: &AppState, room_id: String) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+
+    if state.disconnect_call_from(&room_id) {
+        tracing::info!(%room_id, "leaving the room this session was talking in");
+    }
+
+    rooms::leave(&client, &room_id).await?;
+    Ok(())
+}
+
+/// Ask `user_id` into `room_id`.
+///
+/// Every reason this refuses is a sentence written for a person, including the
+/// three a homeserver answers with one indistinguishable `M_FORBIDDEN`. See
+/// `consort_matrix::rooms::membership` for why they are worked out before the
+/// request rather than read off the refusal.
+pub async fn room_invite_for(
+    state: &AppState,
+    room_id: String,
+    user_id: String,
+) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::invite(&client, &room_id, &user_id).await?)
+}
+
+/// Whether this account may invite anybody into `room_id`.
+///
+/// Asked once per room the panel is pointed at, so the invite control can be
+/// drawn disabled with a reason rather than left out. A control that is absent
+/// reads as something Consort cannot do; this is something the room will not
+/// let this account do, and those are different answers to different
+/// questions.
+pub async fn room_can_invite_for(state: &AppState, room_id: String) -> Result<bool, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::can_invite(&client, &room_id).await?)
+}
+
+/// Who is in one room, the joined and the invited kept apart.
+///
+/// A command rather than a field on the room list, for the reason
+/// [`room_avatar_for`] is one and more so: the list is re-sent in full
+/// whenever anything in it changes, and a member list per room would multiply
+/// a payload that is a few kilobytes today by every room on the account.
+///
+/// Asked for when somebody opens a room's details, and the answer is a
+/// snapshot of that moment rather than something that keeps itself up to date.
+/// See `consort_matrix::rooms::people` for what one ask costs and why the list
+/// is capped while the count is not.
+///
+/// An error rather than an empty room when this account is not in the room or
+/// is not signed in. Both would otherwise be drawn as a room nobody is in,
+/// which is a different and much more alarming thing to be told.
+pub async fn room_members_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::members(&client, &room_id).await?)
+}
+
 /// What to call each of `user_ids` in `room_id`.
 ///
 /// A batch rather than one at a time, because a screen of messages is a
@@ -357,7 +438,52 @@ pub async fn member_names_for(
 /// carrying an ordinary timeline, and the only thing that makes it a voice
 /// channel is one field of its `m.room.create`.
 pub async fn timeline_open_for(state: &AppState, room_id: String) {
+    remember_visit(state, &room_id).await;
     state.open_room(room_id).await;
+}
+
+/// Whose session this is, while there is one.
+async fn account_of(state: &AppState) -> Option<String> {
+    Some(state.client().await?.user_id()?.to_string())
+}
+
+/// Write down that this account has opened `room_id`.
+///
+/// Before the watch starts rather than after it, because the watch is a task
+/// and this is the only part of opening a room that has to have happened by
+/// the time the application is shut.
+///
+/// A save that fails is logged and nothing else. Which rooms somebody looked
+/// at last is not worth refusing to open a room over, and the caller has no
+/// way to report it that would not be a dialog about a preferences file.
+async fn remember_visit(state: &AppState, room_id: &str) {
+    let Some(account) = account_of(state).await else {
+        return;
+    };
+
+    // Read, change, write, like every other section of this file, and safe
+    // here for the reason set out on `set_person_volume_for`: everything that
+    // touches the file goes through `SettingsStore`, one command at a time.
+    let mut settings = state.settings().load();
+    settings.recent.opened(&account, room_id);
+    if let Err(error) = state.settings().save(&settings) {
+        tracing::warn!(%error, "could not write down which room was opened");
+    }
+}
+
+/// The rooms this account has opened, most recently first.
+///
+/// Read from the settings file, which is the requirement rather than a saving:
+/// this is what the screen the application opens on draws, and that screen is
+/// drawn before the first sync response has landed.
+///
+/// Empty while signed out, rather than whatever the file holds. There is no
+/// account for those rooms to belong to at that moment.
+async fn recent_rooms_for(state: &AppState) -> Vec<String> {
+    let Some(account) = account_of(state).await else {
+        return Vec::new();
+    };
+    state.settings().load().recent.of(&account).to_vec()
 }
 
 /// Stop watching whatever room was open.
@@ -608,6 +734,64 @@ fn set_privacy_settings_for(
     let mut settings = state.settings().load();
     settings.privacy = privacy;
     state.settings().save(&settings)
+}
+
+/// What the emoji picker remembers: the recently used row and the skin tone.
+fn emoji_settings_for(state: &AppState) -> EmojiSettings {
+    state.settings().load().emoji
+}
+
+/// Record that `key` was used, and hand back the row it made.
+///
+/// Returns rather than only writing, so that the picker draws the row from the
+/// rule that persisted it. The alternative is the same bumping written twice,
+/// once here and once in the frontend, which is two answers to the question of
+/// what the row holds.
+fn emoji_used_for(
+    state: &AppState,
+    key: &str,
+) -> Result<EmojiSettings, crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.emoji.used(key);
+    state.settings().save(&settings)?;
+    Ok(settings.emoji)
+}
+
+/// Choose the skin tone the picker applies, 1 to 5, or 0 for none.
+fn set_emoji_tone_for(state: &AppState, tone: u8) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.emoji.tone = tone;
+    state.settings().save(&settings)
+}
+
+/// How big the application is drawn.
+///
+/// Already in range: the store clamps on the way in, so a hand-edited file
+/// cannot hand a window a size it has no answer for.
+fn appearance_settings_for(state: &AppState) -> AppearanceSettings {
+    state.settings().load().appearance
+}
+
+/// Replace them, and say what was stored.
+///
+/// The answer is the clamped value rather than the argument, because the
+/// caller zooms the window to it. Returning what it was handed would leave the
+/// window at a size the file does not hold, and a restart would then move it
+/// with nothing on screen to explain why.
+///
+/// Out of range is brought into range rather than refused. The slider applies
+/// as it is dragged, so the window has already moved by the time this is
+/// called, and an error here would only make the file disagree with what
+/// somebody is looking at.
+fn set_appearance_settings_for(
+    state: &AppState,
+    appearance: AppearanceSettings,
+) -> Result<AppearanceSettings, crate::settings::SettingsError> {
+    let appearance = appearance.within_range();
+    let mut settings = state.settings().load();
+    settings.appearance = appearance;
+    state.settings().save(&settings)?;
+    Ok(appearance)
 }
 
 /// When to interrupt somebody, and how loudly.
@@ -1459,6 +1643,16 @@ pub fn timeline_close(state: State<'_, AppState>) {
     timeline_close_for(&state);
 }
 
+/// The rooms this account has opened, most recently first.
+///
+/// See `recent_rooms_for`. A command rather than a channel because the one
+/// screen that draws it asks as it is drawn, and because a room list that
+/// carried this would re-send everybody's recency on every rename.
+#[tauri::command]
+pub async fn recent_rooms(state: State<'_, AppState>) -> Result<Vec<String>, CommandError> {
+    Ok(recent_rooms_for(&state).await)
+}
+
 /// Ask the open room for a page of older messages.
 #[tauri::command]
 pub fn timeline_earlier(state: State<'_, AppState>) {
@@ -1586,6 +1780,88 @@ pub fn set_privacy_settings(
 ) -> Result<(), CommandError> {
     set_privacy_settings_for(&state, privacy)?;
     Ok(())
+}
+
+/// See `emoji_settings_for`.
+#[tauri::command]
+pub fn emoji_settings(state: State<'_, AppState>) -> EmojiSettings {
+    emoji_settings_for(&state)
+}
+
+/// See `emoji_used_for`.
+#[tauri::command]
+pub fn emoji_used(state: State<'_, AppState>, key: String) -> Result<EmojiSettings, CommandError> {
+    Ok(emoji_used_for(&state, &key)?)
+}
+
+/// See `set_emoji_tone_for`.
+#[tauri::command]
+pub fn set_emoji_tone(state: State<'_, AppState>, tone: u8) -> Result<(), CommandError> {
+    set_emoji_tone_for(&state, tone)?;
+    Ok(())
+}
+
+/// See `appearance_settings_for`.
+#[tauri::command]
+pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
+    appearance_settings_for(&state)
+}
+
+/// See `set_appearance_settings_for`, and `zoom` for the half of this that
+/// only a running window can do.
+///
+/// The text scale is the page's own to apply, because it is a root font size
+/// and nothing in Rust can set one. This deliberately does not try: the two
+/// knobs stay separate all the way down.
+#[tauri::command]
+pub fn set_appearance_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    appearance: AppearanceSettings,
+) -> Result<(), CommandError> {
+    let stored = set_appearance_settings_for(&state, appearance)?;
+    zoom(&app, stored.application_scale);
+    Ok(())
+}
+
+/// Draw the window at `scale` without remembering it.
+///
+/// What the application scale slider calls while it is being dragged. The two
+/// halves of a slider cannot share one command: drawing has to be immediate,
+/// because watching the size change is the whole value of dragging rather than
+/// typing a number, and writing has to not be, because a pointer move produces
+/// an event per pixel and each one would be the settings file rewritten. So
+/// this draws, and `set_appearance_settings` writes once the pointer stops,
+/// recording the size the window is already at.
+///
+/// Nothing to test here that a test can reach. The clamp is
+/// `settings::application_scale_within_range`, which is checked there, and the
+/// rest needs a window.
+#[tauri::command]
+pub fn preview_application_scale(app: tauri::AppHandle, scale: f64) {
+    zoom(&app, crate::settings::application_scale_within_range(scale));
+}
+
+/// Draw the main window at `scale`.
+///
+/// Not a `Result`. A zoom that the platform refused has left the window at
+/// whatever it was, which is a size somebody can still read and still change,
+/// and an error dialog over a window that is merely the wrong size would be
+/// the louder failure. It goes to the log, where the other window-shaped
+/// problems go.
+///
+/// Called from the command above and from `lib::run`'s setup, which is what
+/// makes a chosen size survive a restart.
+pub fn zoom(app: &tauri::AppHandle, scale: f64) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("no main window to scale");
+        return;
+    };
+    if let Err(error) = window.set_zoom(scale) {
+        tracing::warn!(%scale, %error, "could not scale the window");
+    }
 }
 
 /// See `notification_settings_for`.
@@ -1830,11 +2106,29 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// reach every window from JavaScript.
 ///
 /// As abrupt as the window's own close button, which is to say completely: the
-/// event loop exits the process, so nothing managed here is dropped and a call
-/// in progress is left for the SFU and the homeserver to time out. That is not
-/// new and not this command's to fix.
+/// event loop exits the process from inside its own `run`, so nothing managed
+/// here is ever dropped. What has to happen before that goes in `lib.rs` on
+/// `RunEvent::ExitRequested`, which is where this path and the close button
+/// meet, rather than here where only one of them would be covered. Leaving the
+/// voice channel is the thing that needs it; see `CLAUDE.md` for what it costs
+/// not to.
+///
+/// The window is hidden here, though, and that is not cosmetic. Leaving the call
+/// takes a moment and the wait for it is on the thread that draws, so a window
+/// still on screen would sit there not drawing, which reads as a hang rather
+/// than as a quit. The close button has no such problem: it destroys the window
+/// before the exit is requested. Hiding from here rather than from the exit
+/// itself is what makes it take effect, because the request below is posted to
+/// the event loop rather than applied in place, so the loop gets an iteration to
+/// act on the hide before it ever sees the exit.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
     app.exit(0);
 }
 
@@ -1889,6 +2183,32 @@ pub async fn room_at(state: State<'_, AppState>, address: String) -> Result<Stri
     room_at_for(&state, address).await
 }
 
+/// Leave one room. See `room_leave_for`.
+#[tauri::command]
+pub async fn room_leave(state: State<'_, AppState>, room_id: String) -> Result<(), CommandError> {
+    room_leave_for(&state, room_id).await
+}
+
+/// Ask somebody into one room. See `room_invite_for`.
+#[tauri::command]
+pub async fn room_invite(
+    state: State<'_, AppState>,
+    room_id: String,
+    user_id: String,
+) -> Result<(), CommandError> {
+    room_invite_for(&state, room_id, user_id).await
+}
+
+/// Whether this account may invite anybody into one room. See
+/// `room_can_invite_for`.
+#[tauri::command]
+pub async fn room_can_invite(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<bool, CommandError> {
+    room_can_invite_for(&state, room_id).await
+}
+
 /// The room to say something to one person in. See `direct_room_for`.
 #[tauri::command]
 pub async fn direct_room(
@@ -1922,6 +2242,18 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// Who is in one room.
+///
+/// Asked for when somebody opens a room's details, and never on the way to
+/// drawing the room list. See `room_members_for`.
+#[tauri::command]
+pub async fn room_members(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    room_members_for(&state, room_id).await
 }
 
 /// What can be said about one person beyond their name.
@@ -2043,9 +2375,46 @@ mod tests {
         }
     }
 
+    /// What the screen the application opens on is drawn from.
+    mod recent {
+        use super::*;
+
+        #[tokio::test]
+        async fn nothing_is_recent_while_signed_out() {
+            // Not the list the file holds. Whoever signs in next is not
+            // necessarily whoever signed out, and a screen that offered them
+            // the previous account's rooms would be offering rooms they
+            // cannot open.
+            let (_dir, state, _) = state();
+            let mut settings = state.settings().load();
+            settings
+                .recent
+                .opened("@ada:example.org", "!lounge:example.org");
+            state.settings().save(&settings).expect("save");
+
+            assert!(recent_rooms_for(&state).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_while_signed_out_writes_nothing_down() {
+            // A stale click, the same way `timeline_open_for` treats one.
+            // There is no account to file the room under.
+            let (_dir, state, _) = state();
+
+            timeline_open_for(&state, "!lounge:example.org".to_owned()).await;
+
+            assert_eq!(
+                state.settings().load().recent,
+                crate::recent::RecentRooms::default()
+            );
+        }
+    }
+
     mod audio {
         use super::*;
         use consort_audio::{Device, Direction, GateConfig};
+
+        use crate::settings::{MAX_APPLICATION_SCALE, MIN_TEXT_SCALE};
 
         /// A machine with one microphone and one pair of speakers.
         struct Fake;
@@ -2260,6 +2629,63 @@ mod tests {
         }
 
         #[test]
+        fn a_fresh_picker_offers_what_the_quick_panel_offered() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(emoji_settings_for(&state), EmojiSettings::default());
+        }
+
+        #[test]
+        fn using_a_key_is_remembered_and_handed_straight_back() {
+            // Handed back rather than only written, so the row the picker is
+            // drawing redraws from the same rule that persisted it instead of
+            // keeping a second copy of the bumping in the frontend.
+            let (_dir, state, _) = state();
+
+            let after = emoji_used_for(&state, "\u{1F984}").expect("save");
+
+            assert_eq!(after.recent.first().map(String::as_str), Some("\u{1F984}"));
+            assert_eq!(emoji_settings_for(&state), after);
+        }
+
+        #[test]
+        fn a_chosen_skin_tone_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_emoji_tone_for(&state, 4).expect("save");
+
+            assert_eq!(emoji_settings_for(&state).tone, 4);
+        }
+
+        #[test]
+        fn saving_the_picker_leaves_the_audio_section_alone() {
+            // One file, several screens. A write from the picker that took the
+            // whole file with it would undo somebody's microphone.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            emoji_used_for(&state, "\u{1F984}").expect("save");
+            set_emoji_tone_for(&state, 2).expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+            assert_eq!(emoji_settings_for(&state).tone, 2);
+            assert_eq!(
+                emoji_settings_for(&state)
+                    .recent
+                    .first()
+                    .map(String::as_str),
+                Some("\u{1F984}")
+            );
+        }
+
+        #[test]
         fn receipts_are_public_until_somebody_says_otherwise() {
             // The default the room is entitled to. A client that quietly told
             // nobody it had read anything would make every other person in
@@ -2303,6 +2729,124 @@ mod tests {
                 &state,
                 PrivacySettings {
                     public_read_receipts: false,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+        }
+
+        #[test]
+        fn the_application_is_drawn_at_its_own_size_until_somebody_says_otherwise() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                crate::settings::AppearanceSettings::default()
+            );
+        }
+
+        #[test]
+        fn a_chosen_size_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(
+                appearance_settings_for(&state),
+                AppearanceSettings {
+                    application_scale: 1.25,
+                    text_scale: 1.1,
+                }
+            );
+        }
+
+        #[test]
+        fn a_size_out_of_range_reaches_the_file_in_range_rather_than_being_refused() {
+            // The window has already moved by the time this is called: the
+            // slider applies as it is dragged. So the answer to a number
+            // outside the range is the nearest one inside it, which is what
+            // the window is showing, rather than an error that would leave the
+            // file and the window disagreeing.
+            //
+            // Asserted against the bytes on disk rather than against a load,
+            // because a load clamps too and would pass this whether or not the
+            // write did. What is being checked is that nothing out of range is
+            // ever written down, so that a settings file Consort produced is
+            // one another reader can trust.
+            let (_dir, state, _) = state();
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 0.0,
+                },
+            )
+            .expect("save");
+
+            let raw = std::fs::read_to_string(state.settings().path()).expect("read");
+            let written: serde_json::Value = serde_json::from_str(&raw).expect("json");
+            assert_eq!(
+                written["appearance"]["applicationScale"],
+                serde_json::json!(MAX_APPLICATION_SCALE),
+                "{raw}"
+            );
+            assert_eq!(
+                written["appearance"]["textScale"],
+                serde_json::json!(MIN_TEXT_SCALE),
+                "{raw}"
+            );
+        }
+
+        #[test]
+        fn setting_a_size_answers_with_the_size_that_was_stored() {
+            // What the caller zooms the window to. Returning the argument
+            // instead would zoom to a number the file does not hold, so a
+            // restart would move the window and nothing would say why.
+            let (_dir, state, _) = state();
+
+            let stored = set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 40.0,
+                    text_scale: 1.0,
+                },
+            )
+            .expect("save");
+
+            assert_eq!(stored.application_scale, MAX_APPLICATION_SCALE);
+            assert_eq!(stored, appearance_settings_for(&state));
+        }
+
+        #[test]
+        fn saving_a_size_leaves_the_audio_section_alone() {
+            // The same promise the privacy screen above gets, and it matters
+            // more here: this screen is dragged rather than clicked, so a
+            // write that took the whole file would undo the rest of it
+            // repeatedly and fast.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            set_appearance_settings_for(
+                &state,
+                AppearanceSettings {
+                    application_scale: 1.5,
+                    text_scale: 1.0,
                 },
             )
             .expect("save");
@@ -2386,6 +2930,9 @@ mod tests {
                 },
                 privacy: crate::settings::PrivacySettings::default(),
                 notifications: NotificationSettings::default(),
+                emoji: crate::settings::EmojiSettings::default(),
+                appearance: crate::settings::AppearanceSettings::default(),
+                recent: crate::recent::RecentRooms::default(),
             };
             state.settings().save(&stored).expect("save");
 
@@ -3875,6 +4422,35 @@ mod against_a_mock_homeserver {
     }
 
     #[tokio::test]
+    async fn asking_who_is_in_a_room_while_signed_out_says_so() {
+        // Unlike the avatar beside a name, an empty answer here would be drawn
+        // as a room with nobody in it, so there is nothing to degrade to.
+        let (_dir, state, _sink) = state();
+
+        let error = room_members_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = room_members_for(&state, "!gone:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
     async fn asking_for_the_avatar_of_somebody_the_room_never_heard_of_is_not_an_error() {
         // A participant can arrive before the `m.room.member` that explains
         // them. The list still draws them, by initial, and asking about their
@@ -4115,6 +4691,30 @@ mod against_a_mock_homeserver {
                 seen.iter().any(|timeline| timeline.room_id == GENERAL)
             })
             .await;
+        }
+
+        #[tokio::test]
+        async fn opening_a_room_is_what_makes_it_recent() {
+            // Nothing else records a visit. The opening screen is drawn from
+            // this, so a room opened and not written down is a room that
+            // screen will never offer.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = in_two_rooms(&server).await;
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+
+            assert_eq!(recent_rooms_for(&state).await, [GENERAL]);
+        }
+
+        #[tokio::test]
+        async fn the_room_opened_last_is_the_first_one_offered() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = in_two_rooms(&server).await;
+
+            timeline_open_for(&state, GENERAL.to_owned()).await;
+            timeline_open_for(&state, LOUNGE.to_owned()).await;
+
+            assert_eq!(recent_rooms_for(&state).await, [LOUNGE, GENERAL]);
         }
 
         #[tokio::test]
@@ -4687,6 +5287,213 @@ mod against_a_mock_homeserver {
             assert_eq!(
                 refused.message,
                 consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+    }
+    /// Leaving a room, and asking somebody into one.
+    ///
+    /// What is worth testing here rather than in `consort_matrix` is the one
+    /// thing only this layer can see: a voice channel is a room, so leaving
+    /// one can be leaving the room a call is in.
+    mod leaving_and_inviting {
+        use super::*;
+        use crate::state::CallAudio;
+        use crate::testing::FakeCallTransport;
+        use consort_audio::GateConfig;
+
+        const ROOM: &str = "!general:example.org";
+        const LOUNGE: &str = "!lounge:example.org";
+        const ADA: &str = "@ada:example.org";
+
+        /// A signed-in account in `!general:example.org`, with a homeserver
+        /// that will take a leave and an invitation.
+        async fn ready(
+            server: &MatrixMockServer,
+        ) -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            mount_login(server).await;
+            let (dir, state, sink) = state();
+            login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+                .await
+                .unwrap();
+            let client = state.client().await.unwrap();
+            server
+                .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+                .await;
+            server
+                .mock_room_leave()
+                .expect_any_access_token()
+                .ok(ruma::room_id!("!general:example.org"))
+                .mount()
+                .await;
+            server
+                .mock_invite_user_by_id()
+                .expect_any_access_token()
+                .ok()
+                .mount()
+                .await;
+            server
+                .mock_get_members()
+                .expect_any_access_token()
+                .ok(vec![])
+                .mount()
+                .await;
+            (dir, state, sink)
+        }
+
+        /// Put this session in a call in `room_id`, over a transport that
+        /// works and a sound card that is not there.
+        fn talking_in(state: &AppState, room_id: &str) {
+            state.connect_call(
+                room_id.to_owned(),
+                FakeCallTransport::joining,
+                CallAudio {
+                    device: None,
+                    output: None,
+                    gate: GateConfig::default(),
+                    backends: Box::new(crate::testing::fake_backends),
+                    us: "@bob:example.org".to_owned(),
+                },
+            );
+        }
+
+        /// The most recent thing said on the call channel, by its wire tag.
+        fn last_call_state(sink: &Arc<RecordingSink>) -> Option<String> {
+            sink.events().iter().rev().find_map(|event| match event {
+                AppEvent::Call(call) => Some(
+                    serde_json::to_value(call).ok()?["state"]
+                        .as_str()?
+                        .to_owned(),
+                ),
+                _ => None,
+            })
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_this_session_is_talking_in_ends_the_call_too() {
+            // The sharp edge. A voice channel is an ordinary Matrix room, so
+            // the room being left can be the room being talked in, and a call
+            // left running would go on publishing a membership to a room this
+            // account is no longer in.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = ready(&server).await;
+            talking_in(&state, ROOM);
+            crate::testing::wait_for(
+                "the call to connect",
+                || last_call_state(&sink).as_deref() == Some("connected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+
+            room_leave_for(&state, ROOM.to_owned()).await.unwrap();
+
+            crate::testing::wait_for(
+                "the call to end with the room",
+                || last_call_state(&sink).as_deref() == Some("disconnected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_while_talking_in_another_leaves_the_call_alone() {
+            // The half that makes the other half safe. Most leaves happen
+            // while a call is going on somewhere else, and dropping that call
+            // would be a worse surprise than the one being prevented.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sink) = ready(&server).await;
+            talking_in(&state, LOUNGE);
+            crate::testing::wait_for(
+                "the call to connect",
+                || last_call_state(&sink).as_deref() == Some("connected"),
+                || format!("{:?}", last_call_state(&sink)),
+            );
+
+            room_leave_for(&state, ROOM.to_owned()).await.unwrap();
+
+            assert_eq!(last_call_state(&sink).as_deref(), Some("connected"));
+        }
+
+        #[tokio::test]
+        async fn leaving_a_room_this_account_is_not_in_says_so_rather_than_failing_silently() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_leave_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchRoom {
+                    room_id: "!gone:example.org".to_owned()
+                }
+                .user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_while_signed_out_is_an_error_and_not_a_panic() {
+            let (_dir, state, _sink) = state();
+
+            let refused = room_leave_for(&state, ROOM.to_owned()).await.unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn inviting_somebody_reaches_the_homeserver() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            room_invite_for(&state, ROOM.to_owned(), ADA.to_owned())
+                .await
+                .expect("an invitation goes out");
+        }
+
+        #[tokio::test]
+        async fn a_refused_invitation_arrives_as_a_sentence_for_a_person() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_invite_for(&state, ROOM.to_owned(), "not a user".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchUser {
+                    user_id: "not a user".to_owned()
+                }
+                .user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_room_with_no_power_levels_written_down_can_be_invited_into() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            assert!(room_can_invite_for(&state, ROOM.to_owned()).await.unwrap());
+        }
+
+        #[tokio::test]
+        async fn asking_about_a_room_this_account_is_not_in_is_an_error_rather_than_a_no() {
+            // The panel draws `false` as a permission, so a room that has gone
+            // has to be told apart from a room that says no.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+
+            let refused = room_can_invite_for(&state, "!gone:example.org".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchRoom {
+                    room_id: "!gone:example.org".to_owned()
+                }
+                .user_message()
             );
         }
     }

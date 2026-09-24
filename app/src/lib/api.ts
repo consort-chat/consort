@@ -621,6 +621,65 @@ export function directRoom(userId: string): Promise<string> {
 }
 
 /**
+ * Why somebody's name carries their user ID.
+ *
+ * Two different facts that arrive as the same shape of string, and the list
+ * draws them differently. `"absent"` is somebody who has set no display name
+ * in this room, so the ID is standing in for one. `"shared"` is somebody whose
+ * display name is also somebody else's in the same room, which is the shape
+ * every impersonation in Matrix takes.
+ */
+export type Naming = "absent" | "shared";
+
+/** One person in a room. */
+export interface Member {
+  /**
+   * Who they are, in the shape a person's card takes, so that pressing a row
+   * can hand the card what it needs without asking for it again.
+   */
+  person: Participant;
+  /** Why their name has their user ID in it. Absent for most people. */
+  naming?: Naming;
+}
+
+/**
+ * One membership's worth of people.
+ *
+ * `count` is how many there are and `shown` is how many fitted. The two
+ * disagree in a big room on purpose: the question a heading answers is how
+ * many people are here, not how many of them the panel could list.
+ */
+export interface Roster {
+  count: number;
+  shown: Member[];
+}
+
+/** Who is in one room, the joined and the invited kept apart. */
+export interface Members {
+  joined: Roster;
+  invited: Roster;
+}
+
+/**
+ * Who is in one room.
+ *
+ * A command rather than a field on the room list, because the list is re-sent
+ * in full whenever anything in it changes and a member list per room would
+ * multiply a payload that is a few kilobytes today by every room on the
+ * account.
+ *
+ * A snapshot of the moment it is asked for, not something that keeps itself up
+ * to date. Ask again to see the room as it is now.
+ *
+ * Rejects rather than answering an empty room when this account is not in the
+ * room or is not signed in, because "nobody is here" is a different and much
+ * more alarming thing to draw.
+ */
+export function roomMembers(roomId: string): Promise<Members> {
+  return invoke<Members>("room_members", { roomId });
+}
+
+/**
  * The five things a person can do to a verification flow.
  *
  * All of them take the same pair of identifiers, straight off the event that
@@ -1384,6 +1443,66 @@ export interface Message {
 }
 
 /**
+ * Who has read one message, as far as this account can see.
+ *
+ * Mirrors `consort_matrix::ReadOn`. "As far as this account can see" is not a
+ * hedge: a person sending `m.read.private` is visible to nobody, so they are
+ * absent from every one of these and there is no way to tell them apart from
+ * somebody who simply has not read it. `ReadBy` says so in words, always,
+ * which is the only honest thing a row of faces can do about it.
+ */
+export interface ReadOn {
+  /** The message they have read up to. */
+  eventId: string;
+  /**
+   * Up to five of them, by Matrix user ID, in a stable order.
+   *
+   * This session's own is never here. Rust takes it out, on the same terms as
+   * `Typing.users`: nobody needs telling that they have read their own room.
+   */
+  readers: string[];
+  /**
+   * How many more there are than the ones named.
+   *
+   * Absent for a row that fits, which is almost every row. A room with fifty
+   * people in it puts fifty receipts on its newest message, and this is how
+   * that stays a row rather than a wall.
+   */
+  more?: number;
+}
+
+/** One thread's readers, named by the thread they are in. */
+export interface ThreadReaders {
+  /** The message the thread hangs from. */
+  rootId: string;
+  /** Who has read how far inside it. */
+  on: ReadOn[];
+}
+
+/**
+ * Who has read how far in one room, and in the thread open beside it.
+ *
+ * Mirrors `consort_matrix::Readers`. Its own channel rather than a field on
+ * `Timeline`, and the reason is measured: a busy room produces about as many
+ * receipts as messages, and redrawing fifty of them costs 6.3ms against 0.14ms
+ * for the rows that actually moved. See `lib/readers`, which is what keeps the
+ * 0.14ms rather than merely making it possible.
+ */
+export interface Readers {
+  /** The room this is about, on the same terms as `Timeline.roomId`. */
+  roomId: string;
+  /** Who has read how far in the room's own timeline. */
+  main: ReadOn[];
+  /**
+   * The same for the thread somebody has open, when one is.
+   *
+   * Absent with no thread open. A thread keeps receipts of its own and a
+   * receipt in the room does not answer for it.
+   */
+  thread?: ThreadReaders;
+}
+
+/**
  * Who is typing in one room.
  *
  * Mirrors `consort_matrix::Typing`.
@@ -1672,6 +1791,23 @@ export function timelineClose(): Promise<void> {
 }
 
 /**
+ * The rooms this account has opened, most recently first.
+ *
+ * Room IDs and nothing else. What each of them is called, what it looks like
+ * and which rail entry it hangs under are all in the room list already, and a
+ * second copy here would be a second thing to go stale.
+ *
+ * Asked for rather than pushed, and answered out of a file rather than from
+ * the homeserver: this is what the screen the application opens on draws, and
+ * that screen is drawn before the first sync response has landed.
+ *
+ * Empty while signed out, and empty for rooms opened under another account.
+ */
+export function recentRooms(): Promise<string[]> {
+  return invoke<string[]>("recent_rooms");
+}
+
+/**
  * Ask the open room for a page of older messages.
  *
  * Answers nothing: the page arrives on the `timeline` channel as a longer
@@ -1749,6 +1885,23 @@ export function onThread(
  */
 export function onTyping(handler: (typing: Typing) => void): Promise<UnlistenFn> {
   return listen<Typing>("typing", (event) => handler(event.payload));
+}
+
+/**
+ * Be told who has read how far in the room currently open.
+ *
+ * Carries the room it is about, on the same terms as `onTyping`, so a reader
+ * can tell an answer about the last room from an answer about this one.
+ *
+ * Nothing that draws a message subscribes to this. `lib/readers` does, and a
+ * row of faces then asks it about one message: that is the difference between
+ * a receipt costing 0.14ms and costing 6.3ms, and the whole reason the channel
+ * is separate in the first place.
+ */
+export function onReaders(
+  handler: (readers: Readers) => void,
+): Promise<UnlistenFn> {
+  return listen<Readers>("readers", (event) => handler(event.payload));
 }
 
 /**
@@ -1866,6 +2019,117 @@ export function setNotificationSettings(
   notifications: NotificationSettings,
 ): Promise<void> {
   return invoke<void>("set_notification_settings", { notifications });
+}
+
+/**
+ * What the emoji picker remembers between opens.
+ *
+ * Mirrors `crate::settings::EmojiSettings`. In the settings file rather than
+ * the webview's own storage: it is a preference like any other, it belongs
+ * beside the rest of them, and a webview that gets cleared should not silently
+ * forget it.
+ */
+export interface EmojiSettings {
+  /**
+   * The keys used here, most recent first.
+   *
+   * Free strings rather than anything this build can draw. Nothing downstream
+   * restricts what a reaction may be, so a key that arrived from a client with
+   * a wider set is still a key somebody chose and may want again.
+   *
+   * Starts as the twelve the quick panel offered, so a fresh account still
+   * finds a thumb without searching for one.
+   */
+  recent: string[];
+  /** Which skin tone to apply, 1 to 5, or 0 for none. */
+  tone: number;
+}
+
+/** What the picker currently remembers. */
+export function emojiSettings(): Promise<EmojiSettings> {
+  return invoke<EmojiSettings>("emoji_settings");
+}
+
+/**
+ * Record that a key was used, and take back the row it made.
+ *
+ * Answers with the new settings rather than nothing, so the row redraws from
+ * the rule that persisted it. Working out the new order here as well would be
+ * two answers to the question of what the row holds.
+ */
+export function emojiUsed(key: string): Promise<EmojiSettings> {
+  return invoke<EmojiSettings>("emoji_used", { key });
+}
+
+/** Choose the skin tone the picker applies, 1 to 5, or 0 for none. */
+export function setEmojiTone(tone: number): Promise<void> {
+  return invoke<void>("set_emoji_tone", { tone });
+}
+
+/**
+ * How big the application is drawn.
+ *
+ * Two numbers because these are two knobs. `applicationScale` is the webview's
+ * own zoom, which moves everything a page has: words, pictures, avatars,
+ * borders. `textScale` is a multiplier on the root font size, which moves only
+ * what is measured in `rem`, so the words and the spacing around them grow and
+ * a picture somebody sent stays the size they sent it.
+ *
+ * Both are multipliers of the size Consort has always drawn at, and 1 is that
+ * size. The ranges, and the arithmetic of moving inside them, are in
+ * `lib/scale.ts`.
+ */
+export interface AppearanceSettings {
+  /** The webview zoom. Applied by Rust, because only Rust can. */
+  applicationScale: number;
+  /** The root font size, on top of the zoom. Applied by the page. */
+  textScale: number;
+}
+
+/**
+ * What is currently chosen.
+ *
+ * Always in range: Rust clamps what comes out of the file as well as what goes
+ * in, so a hand-edited `settings.json` cannot produce a window nobody can
+ * read their way out of.
+ */
+export function appearanceSettings(): Promise<AppearanceSettings> {
+  return invoke<AppearanceSettings>("appearance_settings");
+}
+
+/**
+ * Replace them.
+ *
+ * Rust zooms the window as part of this, so the application scale is applied
+ * and saved together and cannot end up meaning two things. The text scale is
+ * only saved: a root font size is the page's to set, and `applyTextScale` in
+ * `lib/scale.ts` is what sets it.
+ *
+ * A size outside the range is stored at the nearest end rather than refused.
+ * Both sliders apply as they are dragged, so the window has already moved by
+ * the time this is called.
+ */
+export function setAppearanceSettings(
+  appearance: AppearanceSettings,
+): Promise<void> {
+  return invoke<void>("set_appearance_settings", { appearance });
+}
+
+/**
+ * Draw the window at `scale` without remembering it.
+ *
+ * What the application scale slider calls on every move. Drawing has to be
+ * immediate, because watching the size change is the whole value of a slider;
+ * writing has to not be, because a drag produces an event per pixel and each
+ * one would be the settings file rewritten. `setAppearanceSettings` is what
+ * writes, once the pointer has stopped.
+ *
+ * Separate from `applyTextScale` in `lib/scale.ts`, which is the same idea for
+ * the other knob and needs no command at all: a root font size is the page's
+ * own to set.
+ */
+export function previewApplicationScale(scale: number): Promise<void> {
+  return invoke<void>("preview_application_scale", { scale });
 }
 
 /**
@@ -2092,6 +2356,47 @@ export function timelineCopyLink(
  */
 export function roomCopyLink(roomId: string): Promise<void> {
   return invoke<void>("room_copy_link", { roomId });
+}
+
+/**
+ * Leave one room.
+ *
+ * Nothing comes back but the fact that it worked. What the room list says a
+ * moment later is the answer somebody sees: the room goes out of it, the
+ * shell's selection stops resolving to anything, and the pane falls back to
+ * the empty state. A command that also told the interface what to select would
+ * be a second opinion about a question the room list already answers.
+ *
+ * Rejects with a sentence for a person. The only thing that reaches it in
+ * practice is the network, because any member of a room may leave one.
+ */
+export function roomLeave(roomId: string): Promise<void> {
+  return invoke<void>("room_leave", { roomId });
+}
+
+/**
+ * Ask somebody into one room, by user ID.
+ *
+ * Rejects with one of five sentences, each of which says something different
+ * and useful: they are already here, they have been asked and have not
+ * answered, they are banned, this account may not invite, or the homeserver
+ * refused. Three of those are one indistinguishable `M_FORBIDDEN` on the wire,
+ * so the telling apart happens in Rust before the request goes out.
+ */
+export function roomInvite(roomId: string, userId: string): Promise<void> {
+  return invoke<void>("room_invite", { roomId, userId });
+}
+
+/**
+ * Whether this account may invite anybody into one room.
+ *
+ * Asked once per room the details panel is pointed at, so the control can be
+ * drawn disabled with a reason rather than left out. Rejects for a room this
+ * account is not in, which is a different answer from `false` and has to stay
+ * one: `false` is drawn as a permission.
+ */
+export function roomCanInvite(roomId: string): Promise<boolean> {
+  return invoke<boolean>("room_can_invite", { roomId });
 }
 
 /**

@@ -56,7 +56,7 @@ jobs:
         shell: bash
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Enable pnpm
         # `corepack enable pnpm`, not `corepack prepare --activate`: that reads
@@ -100,7 +100,7 @@ jobs:
         # container only escaped it because Arch points /bin/sh at bash.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: System dependencies
         # webkit2gtk and friends are needed to compile the Tauri crate at all,
@@ -127,7 +127,7 @@ jobs:
         run: rustup component add rustfmt clippy llvm-tools-preview
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
@@ -178,7 +178,7 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rust-coverage
           path: lcov.info
@@ -196,14 +196,14 @@ jobs:
         # container only escaped it because Arch points /bin/sh at bash.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Its own job rather than a step in the Rust one, because it needs no
       # system libraries and no compiled workspace: it reads Cargo.lock. Run
       # alongside the build rather than after it, so an advisory is reported on
       # a pull request whose tests are still going.
       - name: Cache cargo-audit
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin
           key: cargo-audit-${{ runner.os }}
@@ -265,7 +265,7 @@ jobs:
           apt-get update
           apt-get install --yes --no-install-recommends git ca-certificates
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The workspace belongs to the runner's own uid on the host and these
       # steps are root inside the container. git calls that dubious ownership
@@ -368,3 +368,10 @@ jobs:
       # quietly is checked here instead of by whoever was watching.
       - name: The version can still be written
         run: scripts/set-version.test.sh
+
+      # Same reasoning. A workflow file is inert until it runs, and the ones
+      # that matter most here run only on a tag, so an action left on a
+      # deprecated runtime is found by the release it breaks rather than by
+      # anything on a pull request. This reads the files instead.
+      - name: Node is the same version everywhere
+        run: scripts/node-version.test.sh

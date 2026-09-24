@@ -24,6 +24,16 @@
 # of its own. That is not a gap: the gate below is on the commit being
 # released, which is a merge somebody's pull request already took through CI.
 #
+# ## Who gets credited
+#
+# The notes name whoever wrote each change and welcome anybody contributing for
+# the first time. Both come from git-cliff asking GitHub about the commits, not
+# from `gh release create --generate-notes`, which is GitHub's own generator and
+# never runs when notes are handed to it in a file. cliff.toml carries the
+# template and the reasoning; the two steps below that mention attribution are
+# there because a GitHub that does not answer produces notes crediting nobody
+# and exits 0.
+#
 # ## Backfilling
 #
 # Putting an existing tag in the box skips the bump and gives that tag its
@@ -109,7 +119,7 @@ jobs:
             echo "ref=main" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ steps.mode.outputs.ref }}
           # git-cliff reads the whole history and every tag, both to work out
@@ -140,6 +150,13 @@ jobs:
       - name: Which version comes next
         id: bump
         if: steps.mode.outputs.bump == 'true'
+        env:
+          # git-cliff asks GitHub who wrote each commit whenever cliff.toml
+          # names a remote, which is every invocation in this file and this one
+          # too. Unauthenticated works and is capped at 60 requests an hour for
+          # the whole runner address, so the token is here for headroom rather
+          # than for access.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag=$(git cliff --bumped-version)
@@ -186,10 +203,30 @@ jobs:
               ;;
           esac
 
+      # Attribution fails by being absent. Every handle in cliff.toml sits
+      # inside an `{% if %}`, so GitHub not answering produces notes that
+      # render cleanly, credit nobody, and exit 0, which is the one outcome
+      # this is all here to prevent. `--offline` and GIT_CLIFF_OFFLINE do it
+      # silently; a rate limit or an outage at least exits non-zero.
+      #
+      # Before anything is written, for the same reason the two gates above
+      # are: a run that is going to credit nobody should stop while main and
+      # the tags are still as they were.
+      #
+      # Only on the bump path. The assertions are about contributions in this
+      # repository's history, and a backfill checks out an older tree where
+      # they have not happened yet.
+      - name: The notes will say who wrote them
+        if: steps.mode.outputs.bump == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/release-notes.test.sh
+
       - name: Write the version into the tree
         if: steps.mode.outputs.bump == 'true'
         env:
           TAG: ${{ steps.bump.outputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           scripts/set-version.sh "${TAG#v}"
@@ -202,6 +239,7 @@ jobs:
         if: steps.mode.outputs.bump == 'true'
         env:
           TAG: ${{ steps.bump.outputs.tag }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -245,10 +283,24 @@ jobs:
       # header and footer; the sed drops the version heading the body template
       # writes, which the release page is already titled with.
       - name: Write the notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git cliff --latest --strip all | sed '0,/^## /{/^## /d}' > NOTES.md
           cat NOTES.md
+
+          # The bytes about to be published, rather than the render the step
+          # above checked. This is the only attribution gate a backfill or a
+          # pushed tag gets, and it is also the one that would notice the
+          # notes going out empty-handed while the changelog looked right.
+          if ! grep -qE '^- .*\(@[A-Za-z0-9._-]+\)$' NOTES.md; then
+            echo "Not one line of these notes says who wrote it. Publishing" >&2
+            echo "them would credit nobody, which is worse than not releasing." >&2
+            echo "cliff.toml needs a template that asks GitHub for a handle," >&2
+            echo "and this job needs GitHub to answer." >&2
+            exit 1
+          fi
 
       - name: Publish the release
         env:
@@ -274,11 +326,11 @@ jobs:
     runs-on: windows-latest
     needs: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.release.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 

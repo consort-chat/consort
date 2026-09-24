@@ -22,6 +22,10 @@ const memberProfile = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
 const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
+// The picker in this panel's own composer, whose remembered row lives in the
+// settings file.
+const emojiSettings = vi.hoisted(() => vi.fn());
+const emojiUsed = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onThread,
@@ -36,12 +40,15 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
   audioSettings,
   setPersonVolume,
+  emojiSettings,
+  emojiUsed,
 }));
 
 import { ThreadPanel } from "./ThreadPanel";
 import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
+import { publishedReaders, resetReaders } from "../lib/readers";
 import type { Message, Thread } from "../lib/api";
 
 const GENERAL = "!general:example.org";
@@ -91,6 +98,11 @@ beforeEach(() => {
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
+  emojiSettings.mockReset().mockResolvedValue({
+    recent: ["\u{1F44D}"],
+    tone: 0,
+  });
+  emojiUsed.mockReset().mockResolvedValue({ recent: ["\u{1F44D}"], tone: 0 });
   audioSettings.mockReset().mockResolvedValue({ people: {} });
   setPersonVolume.mockReset().mockResolvedValue(undefined);
   onThread.mockReset().mockImplementation((handler: typeof publish) => {
@@ -621,6 +633,25 @@ describe("ThreadPanel", () => {
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
   });
 
+  it("offers the same emoji control the room's composer has", async () => {
+    /*
+      Two boxes on one screen, and the second one is not an afterthought:
+      somebody replying in a thread reaches for the same control in the same
+      place, and a panel that offered it in one box and not the other would be
+      a difference nobody could see the reason for.
+    */
+    await opened();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+    await screen.findByRole("group", { name: "Recent" });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Insert thumbs up" }),
+    );
+
+    expect(screen.getByRole("textbox")).toHaveValue("\u{1F44D}");
+    expect(threadSend).not.toHaveBeenCalled();
+  });
+
   it("sends nothing when nothing has been typed", async () => {
     await opened();
 
@@ -889,5 +920,59 @@ describe("copying a reply's address", () => {
     await userEvent.click(first!);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("no clipboard");
+  });
+});
+
+describe("who has read a reply", () => {
+  const CLEO = "@cleo:example.org";
+  const DOT = "@dot:example.org";
+
+  beforeEach(() => {
+    resetReaders();
+  });
+
+  /** The faces drawn anywhere in the panel, by the name on each. */
+  function faces(): string[] {
+    return Array.from(document.querySelectorAll(".read-by__face")).map(
+      (face) => face.getAttribute("title") ?? "",
+    );
+  }
+
+  it("draws the thread's readers under a reply, not the room's", async () => {
+    /*
+      Trap two, where a person sees it. A thread keeps receipts of its own, so
+      a panel that read the room's answer would put the room's readers under
+      every reply in every thread hanging off it. Cleo has read the room up to
+      this event; Dot has read the thread.
+    */
+    await opened();
+
+    await act(async () => {
+      publishedReaders({
+        roomId: GENERAL,
+        main: [{ eventId: "$a:example.org", readers: [CLEO] }],
+        thread: {
+          rootId: "$root:example.org",
+          on: [{ eventId: "$a:example.org", readers: [DOT] }],
+        },
+      });
+    });
+
+    expect(faces()).toEqual([DOT]);
+  });
+
+  it("draws the room's readers under the root, which is a message in the room", async () => {
+    // The root is drawn above the rule and is an ordinary message in the
+    // conversation the thread hangs off, so its faces are the room's.
+    await opened();
+
+    await act(async () => {
+      publishedReaders({
+        roomId: GENERAL,
+        main: [{ eventId: "$root:example.org", readers: [CLEO] }],
+      });
+    });
+
+    expect(faces()).toEqual([CLEO]);
   });
 });

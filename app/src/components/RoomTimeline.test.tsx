@@ -17,6 +17,7 @@ const timelineLater = vi.hoisted(() => vi.fn());
 const timelineGoTo = vi.hoisted(() => vi.fn());
 const timelinePresent = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
+const onReaders = vi.hoisted(() => vi.fn());
 // The three ways an attachment reaches the composer, and the two ways one
 // leaves it.
 const onDropped = vi.hoisted(() => vi.fn());
@@ -49,6 +50,10 @@ const memberProfile = vi.hoisted(() => vi.fn());
 // can stop turning when the panel it asked for is actually there.
 const onThread = vi.hoisted(() => vi.fn());
 const threadOpen = vi.hoisted(() => vi.fn());
+// The picker in the composer row, whose remembered keys live in the settings
+// file. Two of the twelve it starts with are enough here.
+const emojiSettings = vi.hoisted(() => vi.fn());
+const emojiUsed = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
@@ -61,6 +66,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineGoTo,
   timelinePresent,
   onTyping,
+  onReaders,
   onDropped,
   pickAttachment,
   attachFile,
@@ -81,6 +87,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioSettings,
   setPersonVolume,
   memberProfile,
+  emojiSettings,
+  emojiUsed,
 }));
 
 import { COPIED_FOR, RoomTimeline } from "./RoomTimeline";
@@ -91,6 +99,7 @@ import type {
   Channel,
   Message,
   Reaction,
+  Readers,
   Thread,
   Timeline,
   Typing,
@@ -115,6 +124,20 @@ const lounge: Channel = { ...general, id: "!lounge:example.org", name: "Lounge",
 
 /** One minute past midnight, so the clock time is stable wherever this runs. */
 const NOON = Date.UTC(2026, 0, 1, 12, 0, 0);
+
+/** Two of the keys the picker's remembered row starts with. */
+const REMEMBERED = ["\u{1F44D}", "\u{1F389}"];
+
+/**
+ * Open the composer's picker and wait for it to be usable.
+ *
+ * The dataset and the remembered row arrive on their own promises. Waiting for
+ * the row waits for both, and the row is what these presses land on.
+ */
+async function openTheEmoji() {
+  await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+  await screen.findByRole("group", { name: "Recent" });
+}
 
 /** The clock time the component draws, formatted the way it formats it. */
 function timeOf(at: number): string {
@@ -167,6 +190,7 @@ let publish: (timeline: Timeline) => void;
 let publishThread: (thread: Thread | null) => void;
 /** And for the typing channel. */
 let publishTyping: (typing: Typing) => void;
+let publishReaders: (readers: Readers) => void;
 let publishDrop: (files: { path: string; name: string; size: number }[]) => void;
 
 beforeEach(() => {
@@ -191,6 +215,8 @@ beforeEach(() => {
         return Promise.resolve(() => {});
       },
     );
+  emojiSettings.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
+  emojiUsed.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
   pickAttachment.mockReset().mockResolvedValue(null);
   attachFile.mockReset().mockResolvedValue(undefined);
   attachPasted.mockReset().mockResolvedValue(undefined);
@@ -198,6 +224,10 @@ beforeEach(() => {
   timelineTyping.mockReset().mockResolvedValue(undefined);
   onTyping.mockReset().mockImplementation((handler: (t: Typing) => void) => {
     publishTyping = handler;
+    return Promise.resolve(() => {});
+  });
+  onReaders.mockReset().mockImplementation((handler: (r: Readers) => void) => {
+    publishReaders = handler;
     return Promise.resolve(() => {});
   });
   onThread.mockReset().mockImplementation((handler: (t: Thread | null) => void) => {
@@ -1209,6 +1239,105 @@ describe("RoomTimeline", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     expect(timelineSend).not.toHaveBeenCalled();
+  });
+
+  it("offers a control in the composer row for putting an emoji in the draft", async () => {
+    await pane();
+
+    expect(screen.getByRole("button", { name: "Add an emoji" })).toBeVisible();
+  });
+
+  it("types the key into the draft rather than sending anything", async () => {
+    // The whole difference between the two pickers. This one is not about any
+    // message, so nothing leaves the machine when a key is pressed.
+    await pane();
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
+
+    expect(screen.getByRole("textbox")).toHaveValue("hello\u{1F44D}");
+    expect(timelineSend).not.toHaveBeenCalled();
+    expect(timelineReact).not.toHaveBeenCalled();
+  });
+
+  it("puts it where the caret is rather than at the end", async () => {
+    await pane();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ab");
+    box.setSelectionRange(1, 1);
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
+
+    expect(box).toHaveValue("a\u{1F44D}b");
+  });
+
+  it("hands the box back, with the caret after what it just put in", async () => {
+    /*
+      Somebody picking an emoji is mid-sentence. Leaving focus in a panel that
+      has closed means the next thing they type goes nowhere, and leaving the
+      caret where the browser puts it after a value change means the rest of
+      the sentence is typed at the far end of the box.
+
+      Mid-string on purpose: with the caret already at the end, both the right
+      answer and doing nothing look the same.
+    */
+    await pane();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ab");
+    box.setSelectionRange(1, 1);
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
+
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(box.selectionStart).toBe(3);
+    expect(box.selectionEnd).toBe(3);
+  });
+
+  it("closes once a key has been chosen", async () => {
+    await pane();
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
+  it("shuts when a message's own picker is opened instead", async () => {
+    // One panel at a time, across both kinds. Two open at once is two grids
+    // with nothing saying which of them the next press belongs to.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+    await openTheEmoji();
+
+    await userEvent.click(screen.getAllByRole("button", { name: "React" })[0]!);
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
+  it("closes again when the control that opened it is pressed", async () => {
+    // It says `aria-expanded`, so it is a control that opens and shuts. The
+    // press has to reach the toggle rather than being spent on the rule that
+    // shuts the panel when something outside it is pressed.
+    await pane();
+    await openTheEmoji();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
+  it("says the draft changed, so the room still shows somebody typing", async () => {
+    // An emoji is typing. Without this the indicator stops in the middle of
+    // writing a message.
+    await pane();
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
+
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, true);
   });
 
   it("opens a card about whoever is being read when their name is pressed", async () => {
@@ -2748,5 +2877,140 @@ describe("reacting to a message", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The homeserver would not remove it.",
     );
+  });
+});
+
+describe("who has read a message", () => {
+  /** One answer about the room's own timeline, through the channel. */
+  async function readArrives(readers: Readers) {
+    await act(async () => {
+      publishReaders(readers);
+    });
+  }
+
+  /** The faces drawn anywhere in the pane, by the name on each. */
+  function faces(): string[] {
+    return Array.from(document.querySelectorAll(".read-by__face")).map(
+      (face) => face.getAttribute("title") ?? "",
+    );
+  }
+
+  it("draws nobody before any receipt has arrived", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    expect(faces()).toEqual([]);
+  });
+
+  it("draws a face when a receipt arrives", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  it("ignores an answer about the room somebody has just left", async () => {
+    // One channel serves whichever room is open, and somebody who changes room
+    // twice quickly has two answers in flight. The published value is the whole
+    // truth about the room it names, so taking one about the wrong room does
+    // not merely add nothing: it takes this room's faces away.
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual(["@cleo:example.org"]);
+
+    await readArrives({
+      roomId: "!elsewhere:example.org",
+      main: [{ eventId: "$one", readers: ["@dot:example.org"] }],
+    });
+
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  it("draws the faces under the last message in a group, not every one", async () => {
+    // What other clients do, and what keeps a quiet room from becoming a
+    // column of faces. The receipt names the newest message somebody has read,
+    // so a row under each of six messages from one person would be five rows
+    // saying nothing.
+    await pane();
+    await arrive(
+      timeline([
+        said("$one", ADA, "first"),
+        said("$two", ADA, "second"),
+        said("$three", ADA, "third"),
+      ]),
+    );
+
+    // Somebody has read the middle one, which is not where the row goes.
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$two", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual([]);
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$three", readers: ["@cleo:example.org"] }],
+    });
+    expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  /** Which messages have a row of faces under them, oldest first. */
+  function facesUnder(): string[] {
+    return Array.from(document.querySelectorAll(".read-by"))
+      .map((row) => {
+        const said = row.parentElement?.querySelectorAll(".timeline__message");
+        return said?.[said.length - 1]?.getAttribute("data-message-id");
+      })
+      .filter((id): id is string => id !== undefined && id !== null);
+  }
+
+  it("moves the face rather than adding one when somebody reads on", async () => {
+    // Two people talking, so the page is two groups and the face has somewhere
+    // to move from. Rust does the collapsing and its tests pin it; what this
+    // pins is that the row follows, rather than the pane keeping the old one
+    // beside the new.
+    await pane();
+    await arrive(
+      timeline([
+        said("$one", ADA, "first"),
+        said("$two", "@dot:example.org", "second"),
+      ]),
+    );
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+    });
+    expect(facesUnder()).toEqual(["$one"]);
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [{ eventId: "$two", readers: ["@cleo:example.org"] }],
+    });
+
+    expect(facesUnder()).toEqual(["$two"]);
+  });
+
+  it("says how many more read it than the row could hold", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+
+    await readArrives({
+      roomId: GENERAL,
+      main: [
+        { eventId: "$one", readers: ["@cleo:example.org"], more: 45 },
+      ],
+    });
+
+    expect(screen.getByText("+45")).toBeTruthy();
   });
 });

@@ -1,0 +1,180 @@
+/*
+  The search, the categories and the keys.
+
+  Everything here is sized in `rem` and nothing in `px`, which is not a style
+  preference: #122 put the text size on a slider of its own, so the root font
+  size is something somebody can set to 150%, and a grid measured in pixels
+  would keep its old size while the words beside it grew. Scaling together is
+  the only way this stays usable at both ends of that slider.
+*/
+.emoji {
+  /*
+    How many keys are in a row. Read back by `EmojiGrid.css.test.tsx` and
+    compared against `ACROSS`, because the arrow keys move by that number and
+    a grid that wrapped at a different one would send the cursor somewhere the
+    eye is not.
+  */
+  --emoji-across: 9;
+  --emoji-key: 2.125rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  /*
+    Wide enough for the row, and never wider than the window. The panel hangs
+    off a message, so at 150% text in a narrow thread panel the second term is
+    what stops it reaching off the side.
+  */
+  width: calc(var(--emoji-across) * var(--emoji-key) + var(--space-4));
+  max-width: calc(100vw - var(--space-8));
+  padding: var(--space-2);
+}
+
+.emoji__search {
+  width: 100%;
+  padding: var(--space-2);
+  background: var(--surface-base);
+  color: var(--text-primary);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.emoji__search:focus-visible {
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  The count, for anybody who cannot see the grid change under the box.
+
+  Not hidden with `display: none`, which takes a live region out of the
+  accessibility tree and stops it announcing. It is drawn, quietly, and reads
+  as a caption for the results.
+*/
+.emoji__count {
+  margin: 0;
+  min-height: 1rem;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+}
+
+.emoji__tabs {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--line-subtle);
+  scrollbar-width: thin;
+}
+
+.emoji__tab {
+  flex: none;
+  min-height: 1.5rem;
+  padding: 0 var(--space-2);
+  background: none;
+  color: var(--text-muted);
+  border: none;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.emoji__tab:hover {
+  color: var(--text-secondary);
+}
+
+.emoji__tab[aria-current="true"] {
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+}
+
+.emoji__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.emoji__grid {
+  display: grid;
+  grid-template-columns: repeat(var(--emoji-across), minmax(0, 1fr));
+  gap: 2px;
+}
+
+/*
+  Tall enough to scroll and short enough to leave the message it hangs off
+  visible. Eight rows, which is where the biggest category stops being a wall.
+*/
+.emoji__grid {
+  overflow-y: auto;
+  max-height: calc(8 * var(--emoji-key));
+  scrollbar-width: thin;
+}
+
+/*
+  WCAG 2.5.8 asks 24 by 24 CSS pixels of anything there is to press, and the
+  row under a message has been under that three times. `--emoji-key` is
+  2.125rem, which is 34px at the default root size and grows from there.
+*/
+.emoji__key {
+  display: grid;
+  place-items: center;
+  min-width: var(--emoji-key);
+  min-height: var(--emoji-key);
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.emoji__key:hover {
+  background: var(--surface-overlay);
+}
+
+.emoji__key:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* Already used by this session. Pressing it again takes it back. */
+.emoji__key[aria-pressed="true"] {
+  background: var(--violet-glow);
+}
+
+.emoji__tones {
+  display: flex;
+  gap: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-subtle);
+}
+
+.emoji__tone {
+  display: grid;
+  place-items: center;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.emoji__tone[aria-pressed="true"] {
+  background: var(--violet-glow);
+}
+
+.emoji__tone:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}

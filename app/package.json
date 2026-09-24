@@ -4,6 +4,9 @@
   "version": "0.7.0",
   "type": "module",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -17,6 +20,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "emojibase-data": "17.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -29,6 +33,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5",
     "@vitest/coverage-v8": "^4.1.11",
+    "emojibase": "17.0.0",
     "jsdom": "^30.0.1",
     "typescript": "^5.9.0",
     "vite": "^7",
