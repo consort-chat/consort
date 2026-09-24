@@ -31,7 +31,6 @@ import {
   systemMessageText,
   timeOf,
 } from "./MessageGroups";
-import { ConfirmDelete } from "./ConfirmDelete";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import { mediaUrl } from "../lib/api";
@@ -1487,23 +1486,29 @@ describe("deleting a message", () => {
     ).toBeInTheDocument();
   });
 
-  it("says what deleting actually does before it is done", () => {
+  it("says what deleting actually does before it is done", async () => {
     // Redacting is not erasing, and a sentence promising otherwise would be a
-    // promise Consort cannot keep across federation.
-    render(
-      <ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />,
-    );
+    // promise Consort cannot keep across federation. Driven through the
+    // control rather than by rendering the panel, because the words belong to
+    // this call site now: `Confirm` only knows it has a sentence to draw.
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete: vi.fn() });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(
-      screen.getByText(/Servers and clients that already have a copy may keep it/),
+      screen.getByText(
+        /Servers and clients that already have a copy may keep it/,
+      ),
     ).toBeInTheDocument();
   });
 
-  it("puts the focus on the half that does nothing", () => {
+  it("puts the focus on the half that does nothing", async () => {
     // The first press rule, one layer down: the key somebody hits without
     // reading is Enter, and it must not land on the irreversible answer to a
     // question they have not read.
-    render(<ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete: vi.fn() });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
   });
@@ -1595,6 +1600,40 @@ describe("deleting a message", () => {
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the way into the thread hanging from it", () => {
+    // The exception to the rule above, and the line between them is what the
+    // control is about. An action row acts on the message: answer it, correct
+    // it, remove it. All three need the message, and it is gone. The replies
+    // are not an action on it and were not deleted, and this is the only
+    // thing in the room that opens them.
+    draw([emptied(ADA, { thread: { count: 3, participated: false } })]);
+
+    expect(screen.getByRole("button", { name: /3 replies/i })).toBeVisible();
+    expect(screen.getByText("Message deleted")).toBeInTheDocument();
+  });
+
+  it("opens that thread when the way in is pressed", async () => {
+    const onOpenThread = vi.fn();
+    draw(
+      [emptied(ADA, { thread: { count: 3, participated: false } })],
+      onOpenThread,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /3 replies/i }));
+
+    expect(onOpenThread).toHaveBeenCalledWith("$gone");
+  });
+
+  it("offers no way to start one on a message that is gone", () => {
+    // The other half of the line. Opening replies that exist is a door;
+    // starting a conversation by answering a message nobody can read is not.
+    draw([emptied(ADA)]);
+
+    expect(
+      screen.queryByRole("button", { name: "Reply in thread" }),
     ).not.toBeInTheDocument();
   });
 

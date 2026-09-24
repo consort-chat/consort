@@ -621,6 +621,65 @@ export function directRoom(userId: string): Promise<string> {
 }
 
 /**
+ * Why somebody's name carries their user ID.
+ *
+ * Two different facts that arrive as the same shape of string, and the list
+ * draws them differently. `"absent"` is somebody who has set no display name
+ * in this room, so the ID is standing in for one. `"shared"` is somebody whose
+ * display name is also somebody else's in the same room, which is the shape
+ * every impersonation in Matrix takes.
+ */
+export type Naming = "absent" | "shared";
+
+/** One person in a room. */
+export interface Member {
+  /**
+   * Who they are, in the shape a person's card takes, so that pressing a row
+   * can hand the card what it needs without asking for it again.
+   */
+  person: Participant;
+  /** Why their name has their user ID in it. Absent for most people. */
+  naming?: Naming;
+}
+
+/**
+ * One membership's worth of people.
+ *
+ * `count` is how many there are and `shown` is how many fitted. The two
+ * disagree in a big room on purpose: the question a heading answers is how
+ * many people are here, not how many of them the panel could list.
+ */
+export interface Roster {
+  count: number;
+  shown: Member[];
+}
+
+/** Who is in one room, the joined and the invited kept apart. */
+export interface Members {
+  joined: Roster;
+  invited: Roster;
+}
+
+/**
+ * Who is in one room.
+ *
+ * A command rather than a field on the room list, because the list is re-sent
+ * in full whenever anything in it changes and a member list per room would
+ * multiply a payload that is a few kilobytes today by every room on the
+ * account.
+ *
+ * A snapshot of the moment it is asked for, not something that keeps itself up
+ * to date. Ask again to see the room as it is now.
+ *
+ * Rejects rather than answering an empty room when this account is not in the
+ * room or is not signed in, because "nobody is here" is a different and much
+ * more alarming thing to draw.
+ */
+export function roomMembers(roomId: string): Promise<Members> {
+  return invoke<Members>("room_members", { roomId });
+}
+
+/**
  * The five things a person can do to a verification flow.
  *
  * All of them take the same pair of identifiers, straight off the event that
@@ -2137,6 +2196,47 @@ export function timelineCopyLink(
  */
 export function roomCopyLink(roomId: string): Promise<void> {
   return invoke<void>("room_copy_link", { roomId });
+}
+
+/**
+ * Leave one room.
+ *
+ * Nothing comes back but the fact that it worked. What the room list says a
+ * moment later is the answer somebody sees: the room goes out of it, the
+ * shell's selection stops resolving to anything, and the pane falls back to
+ * the empty state. A command that also told the interface what to select would
+ * be a second opinion about a question the room list already answers.
+ *
+ * Rejects with a sentence for a person. The only thing that reaches it in
+ * practice is the network, because any member of a room may leave one.
+ */
+export function roomLeave(roomId: string): Promise<void> {
+  return invoke<void>("room_leave", { roomId });
+}
+
+/**
+ * Ask somebody into one room, by user ID.
+ *
+ * Rejects with one of five sentences, each of which says something different
+ * and useful: they are already here, they have been asked and have not
+ * answered, they are banned, this account may not invite, or the homeserver
+ * refused. Three of those are one indistinguishable `M_FORBIDDEN` on the wire,
+ * so the telling apart happens in Rust before the request goes out.
+ */
+export function roomInvite(roomId: string, userId: string): Promise<void> {
+  return invoke<void>("room_invite", { roomId, userId });
+}
+
+/**
+ * Whether this account may invite anybody into one room.
+ *
+ * Asked once per room the details panel is pointed at, so the control can be
+ * drawn disabled with a reason rather than left out. Rejects for a room this
+ * account is not in, which is a different answer from `false` and has to stay
+ * one: `false` is drawn as a permission.
+ */
+export function roomCanInvite(roomId: string): Promise<boolean> {
+  return invoke<boolean>("room_can_invite", { roomId });
 }
 
 /**

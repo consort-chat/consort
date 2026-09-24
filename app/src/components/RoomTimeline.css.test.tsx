@@ -59,6 +59,16 @@ const BUSY: Message = {
   thread: { count: 3, participated: false },
 };
 
+/** The answer to it, which is what draws the quoted line above a message. */
+const ANSWERING: Message = {
+  id: "$2",
+  sender: ADA,
+  at: Date.parse("2026-01-01T12:01:00Z"),
+  body: "so it does",
+  kind: "text",
+  replyTo: BUSY.id,
+};
+
 /** What SC 2.5.8 (Target Size, Minimum) asks for, in CSS pixels. */
 const FLOOR = 24;
 
@@ -75,6 +85,32 @@ function drawTheRow() {
       onReact={vi.fn()}
     />,
   );
+}
+
+function drawAnAnswer() {
+  render(
+    <MessageGroups
+      groups={group([BUSY, ANSWERING])}
+      names={{ [ADA]: "Ada" }}
+      roomId={GENERAL}
+      selfId={BOB}
+      known={
+        new Map([
+          [BUSY.id, BUSY],
+          [ANSWERING.id, ANSWERING],
+        ])
+      }
+      onAbout={vi.fn()}
+      onOpenThread={vi.fn()}
+      onReact={vi.fn()}
+      onGoTo={vi.fn()}
+    />,
+  );
+}
+
+/** The quoted line above an answer, which is what goes to the message. */
+function quotedLine() {
+  return screen.getByRole("button", { name: "Go to Ada's message" });
 }
 
 /*
@@ -118,5 +154,47 @@ describe("the size of what there is to press under a message", () => {
     drawTheRow();
 
     standsAtLeastTheFloor(screen.getByRole("button", { name: /3 replies/i }));
+  });
+});
+
+/*
+  The quoted line above an answer, which is not in the row under a message but
+  fails the same way and for the same reason (#107).
+
+  It is the one control here the inline exception does not reach. The sender's
+  name beside it sits in a line of text and has the avatar as a second way to
+  the same card, so both readings of SC 2.5.8 let it stay at the height of its
+  words. This one is a row of its own, nothing around it constrains its height,
+  and nothing else goes to the message it names.
+*/
+describe("the size of the quoted line above an answer", () => {
+  it("stands tall enough to hit", () => {
+    drawAnAnswer();
+
+    standsAtLeastTheFloor(quotedLine());
+  });
+
+  it("takes no more of the list than it did before it grew", () => {
+    /*
+      What it occupied: the 19.5px line it draws, which is `--text-sm` at the
+      inherited line-height of 1.5, and the `--space-1` gap under it. Both are
+      written out rather than read back, because jsdom does not resolve `var()`
+      and a computed `font-size` comes back as the inherited 16px.
+
+      This is the half of the change a height alone cannot hold. A timeline is
+      a dense list and every answer in it carries one of these, so a hit area
+      that reached 24px by pushing the conversation apart would have fixed the
+      target and cost the room.
+    */
+    const occupied = 19.5 + 4;
+
+    drawAnAnswer();
+
+    const seen = getComputedStyle(quotedLine());
+    expect(
+      parseFloat(seen.minHeight) +
+        parseFloat(seen.marginTop) +
+        parseFloat(seen.marginBottom),
+    ).toBeCloseTo(occupied);
   });
 });

@@ -239,17 +239,48 @@ pub(crate) async fn name_all<'a>(
 /// which is the same thing every other Matrix client does and the reason
 /// `name_ambiguous` exists. Without it, one of them is impersonating the
 /// other in the only place the interface names them.
-fn name_of_member(member: &RoomMember) -> String {
-    let name = member
-        .display_name()
-        .map(str::trim)
-        .filter(|name| !name.is_empty());
-
-    match name {
+pub(crate) fn name_of_member(member: &RoomMember) -> String {
+    match display_name_of(member) {
         Some(name) if member.name_ambiguous() => format!("{name} ({})", member.user_id()),
         Some(name) => name.to_owned(),
         None => member.user_id().to_string(),
     }
+}
+
+/// Why the name above has a user ID in it, when it has.
+///
+/// Immediately below [`name_of_member`] because it is the same two questions
+/// asked again, and the pair only stays honest while they are read together: a
+/// change to the rule up there that was not made down here would leave the
+/// member list explaining a qualification it was no longer given.
+///
+/// Worth answering at all because the two cases are not the same fact. A
+/// missing display name is an absence, and the user ID standing in for it is
+/// the best anybody can do. A shared one is a collision between two people in
+/// the same room, and it is the shape every impersonation in Matrix takes, so
+/// the list says which of the two it is looking at rather than drawing both
+/// the same.
+pub(crate) fn naming_of(member: &RoomMember) -> Option<super::people::Naming> {
+    use super::people::Naming;
+
+    match display_name_of(member) {
+        Some(_) if member.name_ambiguous() => Some(Naming::Shared),
+        Some(_) => None,
+        None => Some(Naming::Absent),
+    }
+}
+
+/// The display name this room knows somebody by, if it is worth drawing.
+///
+/// An all-whitespace display name is treated as none at all, for the reason a
+/// blank room name is: it is legal, some bridges set one, and a row whose name
+/// is an empty space reads as a rendering fault rather than as somebody who
+/// never chose a name.
+fn display_name_of(member: &RoomMember) -> Option<&str> {
+    member
+        .display_name()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
 }
 
 /// Say why a voice channel is empty.

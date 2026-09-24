@@ -146,50 +146,44 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       else stops.push(stop);
     }
 
+    /*
+      None of these check `cancelled`, and until #98 every one of them did. An
+      event can still land after the screen has gone, in the window `keep`
+      exists to close. What cannot follow from it is any harm: each of these
+      handlers does nothing but set state, and React has dropped a state
+      update aimed at a component that is no longer mounted, silently, since
+      18. Eleven checks in front of that were eleven branches no test could
+      distinguish from their own absence.
+
+      A handler that did anything else would want one back: a log, a ref the
+      unmount cleared, a navigation. The condition is the side effect, not the
+      unmount.
+    */
     const listening = Promise.all([
-      onConnection((state) => {
-        if (!cancelled) setConnection(state);
-      }).then(keep),
-      onVerification((state) => {
-        if (!cancelled) setVerification(state);
-      }).then(keep),
-      onVerificationFlow((flow) => {
-        if (!cancelled) {
-          setFlows((current) => ({ ...current, [flow.flowId]: flow }));
-        }
-      }).then(keep),
-      onKeyBackup((state) => {
-        if (!cancelled) setKeyBackup(state);
-      }).then(keep),
+      onConnection((state) => setConnection(state)).then(keep),
+      onVerification((state) => setVerification(state)).then(keep),
+      onVerificationFlow((flow) =>
+        setFlows((current) => ({ ...current, [flow.flowId]: flow })),
+      ).then(keep),
+      onKeyBackup((state) => setKeyBackup(state)).then(keep),
       onRooms((tree) => {
         // Assigned, never merged. The whole tree arrives every time any part
         // of it changes, which is what stops this copy drifting away from the
         // account it is meant to describe.
-        if (!cancelled) setRooms(tree);
+        setRooms(tree);
       }).then(keep),
-      onCall((state) => {
-        if (!cancelled) setCall(state);
-      }).then(keep),
-      onCallRefused((refusal) => {
-        if (!cancelled) setCallRefused(refusal);
-      }).then(keep),
-      onSelfAudio((audio) => {
-        if (!cancelled) setSelfAudio(audio);
-      }).then(keep),
-      onSpeaking((userIds) => {
-        if (!cancelled) setSpeaking(new Set(userIds));
-      }).then(keep),
+      onCall((state) => setCall(state)).then(keep),
+      onCallRefused((refusal) => setCallRefused(refusal)).then(keep),
+      onSelfAudio((audio) => setSelfAudio(audio)).then(keep),
+      onSpeaking((userIds) => setSpeaking(new Set(userIds))).then(keep),
       // A desktop notification somebody clicked. The window is already in
       // front by the time this arrives, because raising it is something only
       // Rust can do; what is left is showing the room it was about.
-      onShowRoom((roomId) => {
-        if (!cancelled) setAsked({ roomId });
-      }).then(keep),
+      onShowRoom((roomId) => setAsked({ roomId })).then(keep),
       // Only the call's own output, out of a channel that also carries the
       // settings screen's microphone test and its level readings. A failed
       // chime is the settings screen's business and is already drawn there.
       onAudio((activity) => {
-        if (cancelled) return;
         if (activity.state === "callAudioFailed") {
           setAudioProblem(
             `Consort cannot play this call: ${activity.error}. Nobody in it will be audible until an output device is available.`,
@@ -226,21 +220,16 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
+    // Nothing to clean up, for the reason the channel handlers above have no
+    // check either: the only thing a late answer does is set state, and that
+    // is a no-op once the screen has gone.
     tokenStorage()
-      .then((value) => {
-        if (!cancelled) setStorage(value);
-      })
+      .then(setStorage)
       .catch((raw: unknown) => {
         // Cosmetic. Not knowing where the token is kept is no reason to
         // interrupt someone who is already signed in.
         console.error("token_storage failed", asCommandError(raw).detail);
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   /**

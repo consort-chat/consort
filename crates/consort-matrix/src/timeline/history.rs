@@ -124,13 +124,12 @@ impl History {
     /// client in the room draws a mark here. The envelope stays, because a
     /// redaction leaves it alone. Everything the content carried goes.
     ///
-    /// `thread` goes with it, and that is the one field where this is a
-    /// decision rather than a consequence. A bundled summary lives in
-    /// `unsigned`, and a redacted event's `unsigned` carries only
-    /// `redacted_because`, so the same message paged back in after a reload
-    /// has no count to draw. Keeping one here would mean a thread reachable
-    /// from the room until somebody reloaded and gone afterwards, which is a
-    /// worse answer than consistently not.
+    /// `thread` stays, and that is the one field where this is a decision
+    /// rather than a consequence. The replies under a deleted root were not
+    /// redacted, and the control drawn from the summary is the only thing in
+    /// the room that opens them. It survives a reload as well as the session
+    /// it happened in: see `facts::deleted`, which reads the same tally off
+    /// the raw `unsigned` of a message paged back in already deleted.
     ///
     /// `by` is whoever sent the redaction, which is not always whoever wrote
     /// the message. `None` where it could not be read.
@@ -184,7 +183,8 @@ pub fn redact(message: &mut Message, by: Option<&str>) -> bool {
     message.body = String::new();
     message.html = None;
     message.media = None;
-    message.thread = None;
+    // `thread` is missing from this list on purpose, and the reason is on
+    // `History::redacted`. It is the one thing here a redaction does not take.
     message.reply_to = None;
     message.mentions = Vec::new();
     message.edited = false;
@@ -327,12 +327,16 @@ mod tests {
     }
 
     #[test]
-    fn a_redaction_takes_the_thread_summary_with_it() {
-        // The one field where this is a decision rather than a consequence,
-        // and the reason is consistency: a redacted event's `unsigned` carries
-        // `redacted_because` and nothing else, so the same message paged back
-        // in after a reload has no count to draw. A thread reachable until
-        // somebody reloads and gone afterwards is the worse answer.
+    fn a_redaction_leaves_the_way_into_the_thread_hanging_from_it() {
+        // The one field a redaction does not take, and the one field where
+        // that is a decision rather than a consequence. Everything else here
+        // is content and the content is gone; the replies are neither. They
+        // were not redacted, the homeserver still counts them, and this
+        // control is the only thing in the room that opens them.
+        //
+        // It is safe to keep because the count survives a reload too: see
+        // `facts::deleted`, which reads the same tally off the raw
+        // `unsigned` when the message is paged back in already deleted.
         let mut history = History::new();
         let mut root = said("$1", "the question");
         root.thread = Some(ThreadSummary {
@@ -343,7 +347,15 @@ mod tests {
 
         assert!(history.redacted("$1", None));
 
-        assert_eq!(history.messages()[0].thread, None);
+        let marked = &history.messages()[0];
+        assert_eq!(marked.kind, MessageKind::Deleted);
+        assert_eq!(
+            marked.thread,
+            Some(ThreadSummary {
+                count: 3,
+                participated: true,
+            })
+        );
     }
 
     #[test]

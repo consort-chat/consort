@@ -247,6 +247,15 @@ exist rather than under an "Unreleased" heading, and `cliff.toml` says which
 commit types are listed and which are kept out. The same notes go into the
 annotated tag, so `git show v0.2.0` says what changed.
 
+**You get your name on what you wrote.** Every line of the notes ends with the
+GitHub handle of whoever authored that commit, and the first release you land
+something in says so under a **New contributors** heading. git-cliff reads both
+from GitHub, so the release depends on GitHub answering, and
+`scripts/release-notes.test.sh` runs before the workflow writes anything so
+that a release which would credit nobody stops rather than publishes. Note that
+the handle is the commit's author rather than whoever opened the pull request,
+which only differ if somebody else pushes a commit into your branch.
+
 **What the run leaves behind.** A `chore(release):` commit on `main`, so pull
 before you carry on; an annotated tag; a release page; and three packages hung
 off it: a Windows installer, a `.deb` built on Debian 12 so it runs on more
