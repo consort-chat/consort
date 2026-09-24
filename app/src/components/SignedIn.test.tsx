@@ -1332,14 +1332,27 @@ describe("SignedIn the room list", () => {
     );
   });
 
+  /**
+   * A channel row in the column beside the pane.
+   *
+   * Named by its group, because the space's own pane lists the same channels
+   * and `getByRole` cannot tell two identical controls apart.
+   */
+  function inTheColumn(group: "Text" | "Voice", name: string) {
+    return within(screen.getByRole("region", { name: group })).getByRole(
+      "button",
+      { name },
+    );
+  }
+
   it("shows a space's channels when its rail icon is clicked", async () => {
     await showing();
     await screen.findByRole("button", { name: "Kahu HQ" });
 
     await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
 
-    expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    expect(inTheColumn("Text", "#general")).toBeVisible();
+    expect(inTheColumn("Voice", "Lounge")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "#aayejayy" }),
     ).not.toBeInTheDocument();
@@ -1349,7 +1362,7 @@ describe("SignedIn the room list", () => {
     await showing();
     await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+    await userEvent.click(inTheColumn("Text", "#general"));
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "#general",
@@ -1361,7 +1374,7 @@ describe("SignedIn the room list", () => {
     await showing();
     await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "Lounge" }));
+    await userEvent.click(inTheColumn("Voice", "Lounge"));
 
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent("Lounge");
@@ -1373,7 +1386,7 @@ describe("SignedIn the room list", () => {
     // across would highlight a channel in a list it is not in.
     await showing();
     await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
-    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+    await userEvent.click(inTheColumn("Text", "#general"));
 
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
 
@@ -1400,7 +1413,7 @@ describe("SignedIn the room list", () => {
   it("drops the selection when the selected channel is removed", async () => {
     await showing();
     await userEvent.click(await screen.findByRole("button", { name: "Kahu HQ" }));
-    await userEvent.click(screen.getByRole("button", { name: "#general" }));
+    await userEvent.click(inTheColumn("Text", "#general"));
 
     act(() =>
       roomsHandler()({
@@ -1408,8 +1421,10 @@ describe("SignedIn the room list", () => {
       }),
     );
 
+    // The space's own pane rather than the opening screen, which is what a
+    // space with no channel selected shows now.
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Consort",
+      "Kahu HQ",
     );
     expect(
       screen.queryByRole("button", { name: "#general" }),

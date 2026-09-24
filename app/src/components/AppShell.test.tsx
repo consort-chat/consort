@@ -1487,13 +1487,25 @@ describe("AppShell", () => {
       await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
     }
 
+    /**
+     * The row in the column beside the pane.
+     *
+     * Named by its group, because the space's own pane offers the same channel
+     * and `getByRole` cannot tell two identical controls apart. These cases
+     * are about the column; the pane has its own.
+     */
+    function inTheColumn(group: "Text" | "Voice") {
+      return within(screen.getByRole("region", { name: group })).getByRole(
+        "button",
+        { name: /join(ing)? announcements/i },
+      );
+    }
+
     it("asks the homeserver to let this account in", async () => {
       shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
 
       expect(roomJoin).toHaveBeenCalledWith(NEVER);
     });
@@ -1502,9 +1514,7 @@ describe("AppShell", () => {
       const { again } = shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
       again({ rooms: joined() });
 
       expect(
@@ -1524,9 +1534,7 @@ describe("AppShell", () => {
       shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
 
       expect(
         screen.queryByRole("heading", { level: 1, name: "#announcements" }),
@@ -1543,9 +1551,7 @@ describe("AppShell", () => {
       const { again, onJoinVoice } = shell({ rooms: listing("voice") });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Voice"));
       again({ rooms: joined("voice") });
 
       await screen.findByRole("heading", { level: 1, name: "announcements" });
@@ -1560,13 +1566,17 @@ describe("AppShell", () => {
       shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(
-        "The homeserver would not let you into that channel.",
-      );
+      // Twice: the column beside the pane and the pane itself both carry the
+      // row that was pressed, so both say why it did not work.
+      const alerts = await screen.findAllByRole("alert");
+      expect(alerts).toHaveLength(2);
+      for (const alert of alerts) {
+        expect(alert).toHaveTextContent(
+          "The homeserver would not let you into that channel.",
+        );
+      }
     });
 
     it("leaves the pane where it was when a join is refused", async () => {
@@ -1574,11 +1584,9 @@ describe("AppShell", () => {
       shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
 
-      await screen.findByRole("alert");
+      await screen.findAllByRole("alert");
       expect(
         screen.queryByRole("heading", { level: 1, name: "#announcements" }),
       ).toBeNull();
@@ -1598,19 +1606,146 @@ describe("AppShell", () => {
       shell({ rooms: listing() });
       await openSpace();
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
-      await screen.findByRole("alert");
+      await userEvent.click(inTheColumn("Text"));
+      await screen.findAllByRole("alert");
 
-      await userEvent.click(
-        screen.getByRole("button", { name: /join announcements/i }),
-      );
+      await userEvent.click(inTheColumn("Text"));
 
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryAllByRole("alert")).toHaveLength(0);
       await act(async () => {
         settle();
       });
+    });
+  });
+
+  describe("the pane a space shows", () => {
+    /** One space with a joined channel, a voice one, and one nobody is in. */
+    const rooms: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!dm:example.org", "ada")],
+        },
+        {
+          id: "!s:example.org",
+          name: "Kahu HQ",
+          avatar: null,
+          channels: [
+            textChannel("!general:example.org", "general"),
+            voice("!lounge:example.org", "Lounge"),
+            {
+              id: "!never:example.org",
+              name: "announcements",
+              kind: "text",
+              avatar: null,
+              joined: false,
+              participants: [],
+              unread: 0,
+              mentions: 0,
+            },
+          ],
+        },
+      ],
+    };
+
+    async function openSpace() {
+      await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
+    }
+
+    it("is the opening screen on Home, which is about everywhere", async () => {
+      shell({ rooms });
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Consort" }),
+      ).toBeInTheDocument();
+    });
+
+    it("is about the space once one is picked", async () => {
+      // The whole of the second half of #128. Clicking a space used to show
+      // the same screen as clicking Home, which said nothing about the space.
+      shell({ rooms });
+
+      await openSpace();
+
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Kahu HQ" }),
+      ).toBeInTheDocument();
+    });
+
+    it("searches the channels of the space it is about", async () => {
+      shell({ rooms });
+      await openSpace();
+
+      await userEvent.type(screen.getByRole("searchbox"), "announce");
+
+      expect(
+        within(screen.getByRole("list", { name: "Channels" })).getAllByRole(
+          "button",
+        ),
+      ).toHaveLength(1);
+    });
+
+    it("opens a channel picked on it", async () => {
+      shell({ rooms });
+      await openSpace();
+
+      await userEvent.click(
+        within(screen.getByRole("list", { name: "Channels" })).getByRole(
+          "button",
+          { name: "#general" },
+        ),
+      );
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "#general" }),
+      ).toBeInTheDocument();
+    });
+
+    it("connects to a voice channel picked on it, the way the list does", async () => {
+      const { onJoinVoice } = shell({ rooms });
+      await openSpace();
+
+      await userEvent.click(
+        within(screen.getByRole("list", { name: "Channels" })).getByRole(
+          "button",
+          { name: "Lounge" },
+        ),
+      );
+
+      expect(onJoinVoice).toHaveBeenCalledWith("!lounge:example.org");
+    });
+
+    it("joins a channel picked on it that this account is not in", async () => {
+      shell({ rooms });
+      await openSpace();
+
+      await userEvent.click(
+        within(screen.getByRole("list", { name: "Channels" })).getByRole(
+          "button",
+          { name: /join announcements/i },
+        ),
+      );
+
+      expect(roomJoin).toHaveBeenCalledWith("!never:example.org");
+    });
+
+    it("says on it why a join it asked for did not work", async () => {
+      // The same sentence the column beside it carries, because the same
+      // press can be made in either place.
+      roomJoin.mockRejectedValue({ message: "Nope.", detail: "M_FORBIDDEN" });
+      shell({ rooms });
+      await openSpace();
+
+      await userEvent.click(
+        within(screen.getByRole("list", { name: "Channels" })).getByRole(
+          "button",
+          { name: /join announcements/i },
+        ),
+      );
+
+      expect(await screen.findAllByRole("alert")).toHaveLength(2);
     });
   });
 });

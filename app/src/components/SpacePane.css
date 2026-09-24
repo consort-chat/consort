@@ -1,0 +1,275 @@
+/*
+  The screen a space shows when no channel in it is selected.
+
+  The opening pane's sibling and deliberately not its twin. That one is the
+  front door and carries the wash and the grain the sign-in screen has; this
+  one is a working list somebody scrolls, so the surface is flat and the space
+  goes to the rows. Where the two do agree is the shape: a measure rather than
+  the whole window, hierarchy by scale, a ruled list rather than cards.
+*/
+.space {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--space-12) var(--space-8) var(--space-6);
+  background: var(--surface-base);
+}
+
+/* Furniture, in the corner, on the opening pane's terms. */
+.space__unfold {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+}
+
+/*
+  A measure rather than the whole pane. A row stretched across a wide window
+  puts a channel's name and its topic at opposite ends of the screen.
+*/
+.space__sheet {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 38rem;
+}
+
+.space__lede {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/*
+  The space's own name, at the size the opening pane gives the wordmark. This
+  pane is about one space, and the name is the only thing on it that says which.
+*/
+.space__name {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+}
+
+.space__count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+}
+
+/*
+  Full width of the measure, and quiet until it is used. A search field with a
+  border as loud as a button would be the first thing on the pane, and the
+  channels are.
+*/
+.space__search {
+  width: 100%;
+  padding: var(--space-3);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--duration-fast) var(--ease-out-expo),
+    background var(--duration-fast) var(--ease-out-expo);
+}
+
+.space__search::placeholder {
+  color: var(--text-muted);
+}
+
+.space__search:hover {
+  border-color: var(--line-strong);
+}
+
+.space__search:focus {
+  outline: none;
+  background: var(--surface-overlay);
+  border-color: var(--violet);
+  box-shadow: var(--shadow-focus);
+}
+
+.space__section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/*
+  Small, spaced and quiet, the way the opening pane's headings are: the
+  hierarchy on this pane is carried by scale, and the channel names below are
+  the thing to read.
+*/
+.space__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* A count, so it is read as a number rather than as more of the heading. */
+.space__tally {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.space__rooms {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+  Ruled rather than boxed. Cards would give thirty channels thirty boxes of
+  equal weight, which is the channel list again with more padding.
+*/
+.space__rooms > li + li {
+  border-top: 1px solid var(--line-subtle);
+}
+
+.space__room {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-2);
+  border: 0;
+  /* The rule the hover state lights up, reserved so nothing moves when it does. */
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.space__room:hover:not(:disabled),
+.space__room:focus-visible {
+  border-left-color: var(--violet);
+  background: var(--surface-raised);
+  transform: translateX(2px);
+}
+
+.space__room:active:not(:disabled) {
+  border-left-color: var(--violet-press);
+  transform: translateX(1px);
+}
+
+.space__room:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* A row whose join is still out, on the channel list's terms. */
+.space__room:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.space__avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-sm);
+}
+
+/* The name over the topic, taking whatever the avatar and the pill leave. */
+.space__text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.space__room-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+  Under the name rather than beside it, which is what the width is for. One
+  line, because a topic can be three paragraphs and this is a list.
+*/
+.space__room-topic {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+  The way in, in the channel list's treatment so that the two read as the same
+  control: outlined rather than filled, because gold is a mention and mint is
+  voice.
+*/
+.space__join {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  transition:
+    color var(--duration-fast) linear,
+    border-color var(--duration-fast) linear;
+}
+
+.space__room:hover:not(:disabled) .space__join,
+.space__room:focus-visible .space__join {
+  color: var(--text-primary);
+  border-color: var(--line-strong);
+}
+
+.space__problem {
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  margin: var(--space-1) 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  background: var(--danger-surface);
+  border-left: 2px solid var(--danger);
+  border-radius: var(--radius-sm);
+}
+
+.space__none {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/*
+  A narrow window is the sidebar plus a pane with barely room for a name. The
+  measure stops earning its keep there, the way it does on the opening pane.
+*/
+@media (max-width: 720px) {
+  .space {
+    padding: var(--space-8) var(--space-4) var(--space-4);
+  }
+}

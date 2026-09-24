@@ -32,6 +32,7 @@ import { OpeningPane } from "./OpeningPane";
 import { RoomInfoPanel } from "./RoomInfoPanel";
 import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
+import { SpacePane } from "./SpacePane";
 import { SpaceRail } from "./SpaceRail";
 import {
   ThreadPanel,
@@ -628,24 +629,20 @@ export function AppShell({
         )}
 
         {/*
-          The page's `h1` lives in whichever of these is drawn. It names the
-          selected channel, and with nothing selected it is the application
-          itself: there is no room to name, and the opening pane says what
-          there is to say under its own headings.
+          Three panes, narrowing outwards. A selected channel is the room. A
+          space with none selected is that space, because a screen about
+          everywhere was #128's "right now we show nothing". Home with none
+          selected is the opening screen, which is about everywhere on purpose.
 
-          Keyed by room, so switching channels remounts rather than reusing:
-          the scroll position, the draft and the resolved names all belong to
-          the room they were for, and carrying any of them across would put one
-          room's half-typed sentence under another room's name.
+          The page's `h1` lives in whichever of them is drawn, and names what
+          that pane is about.
+
+          The room is keyed by room, so switching channels remounts rather than
+          reusing: the scroll position, the draft and the resolved names all
+          belong to the room they were for, and carrying any of them across
+          would put one room's half-typed sentence under another room's name.
         */}
-        {channel === null ? (
-          <OpeningPane
-            rooms={rooms}
-            call={call}
-            onOpen={openPlace}
-            {...(folded ? { onUnfold: () => setFolded(false) } : {})}
-          />
-        ) : (
+        {channel !== null ? (
           <RoomTimeline
             key={channel.id}
             channel={channel}
@@ -655,6 +652,21 @@ export function AppShell({
             onOpenRoom={openRoom}
             infoOpen={infoOpen}
             onToggleInfo={toggleInfo}
+            {...(folded ? { onUnfold: () => setFolded(false) } : {})}
+          />
+        ) : space !== null && space.id !== HOME_ID ? (
+          <SpacePane
+            space={space}
+            joining={joining}
+            onOpen={selectChannel}
+            onJoin={(roomId) => void joinChannel(roomId)}
+            {...(folded ? { onUnfold: () => setFolded(false) } : {})}
+          />
+        ) : (
+          <OpeningPane
+            rooms={rooms}
+            call={call}
+            onOpen={openPlace}
             {...(folded ? { onUnfold: () => setFolded(false) } : {})}
           />
         )}
