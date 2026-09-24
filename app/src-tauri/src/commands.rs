@@ -1830,9 +1830,11 @@ pub async fn open_link(address: String) -> Result<(), CommandError> {
 /// reach every window from JavaScript.
 ///
 /// As abrupt as the window's own close button, which is to say completely: the
-/// event loop exits the process, so nothing managed here is dropped and a call
-/// in progress is left for the SFU and the homeserver to time out. That is not
-/// new and not this command's to fix.
+/// event loop exits the process from inside its own `run`, so nothing managed
+/// here is ever dropped. What has to happen before that goes in `lib.rs` on
+/// `RunEvent::Exit`, which is where this path and the close button meet, rather
+/// than here where only one of them would be covered. Leaving the voice channel
+/// is the thing that needs it; see `CLAUDE.md` for what it costs not to.
 #[tauri::command]
 pub fn quit(app: tauri::AppHandle) {
     app.exit(0);

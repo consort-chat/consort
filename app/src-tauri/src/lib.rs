@@ -24,11 +24,23 @@ mod state;
 mod testing;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use consort_matrix::SessionStore;
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 use crate::state::AppState;
+
+/// How long quitting waits for the voice channel to be left.
+///
+/// Longer than the budget the call thread gives the request itself, which is
+/// the whole of the constraint: that one bounds the leave, this one bounds the
+/// wait for the thread performing it, and this one winning the race would
+/// abandon leaves that were about to land. See
+/// [`consort_call::SHUTDOWN_LEAVE_TIMEOUT`].
+///
+/// Nobody is looking at a window while it runs. See [`on_exit`].
+const LEAVE_ON_QUIT: Duration = Duration::from_secs(6);
 
 /// Answer one request on the attachment scheme.
 ///
@@ -83,6 +95,30 @@ async fn serve(
         held.mime,
         media::wanted(range, held.bytes.len() as u64),
     )
+}
+
+/// Leave the voice channel on the way out, and take the window off the screen
+/// first.
+///
+/// The one place every quit passes through: Ctrl+Q by way of
+/// [`commands::quit`], the window's close button, and a window manager closing
+/// the window. It is also the last chance anything has to run,
+/// because the event loop exits the process from inside `run` rather than
+/// returning, so nothing Tauri manages is ever dropped and the call teardown a
+/// sign-out gets from [`Drop`] has to be asked for here.
+///
+/// The windows are hidden before the wait rather than left to the process
+/// exit. On the close-button path they have gone already, but Ctrl+Q arrives
+/// here with the window still up, and a window that sits there for a second
+/// not drawing is indistinguishable from one that has hung. Hiding takes
+/// effect immediately: this runs on the thread that owns the event loop, which
+/// is where Tauri applies a window message rather than posting it.
+fn on_exit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    for window in app.webview_windows().values() {
+        let _ = window.hide();
+    }
+
+    app.state::<AppState>().leave_call_on_quit(LEAVE_ON_QUIT);
 }
 
 /// Start the application.
@@ -269,8 +305,15 @@ pub fn run() {
             commands::verification_recovery_exists,
             commands::verification_recover,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start Consort");
+        .build(tauri::generate_context!())
+        .expect("failed to start Consort")
+        .run(|app, event| {
+            // Which event it is, and nothing else. What happens on the way out
+            // is `on_exit`, where a test can reach it.
+            if matches!(event, RunEvent::Exit) {
+                on_exit(app);
+            }
+        });
 }
 
 /// The per-user directory holding the session file and the SDK's SQLite stores.
@@ -473,6 +516,75 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn the_quit_budget_outlasts_the_one_the_call_thread_gives_a_leave() {
+        // Two bounds, nested on purpose. The inner one bounds the request and
+        // the outer one bounds the wait for the thread that made it, so they
+        // cannot be equal: this one winning the race would abandon leaves that
+        // were about to land, on every homeserver slower than the budget.
+        assert!(
+            LEAVE_ON_QUIT > consort_call::SHUTDOWN_LEAVE_TIMEOUT,
+            "{LEAVE_ON_QUIT:?} does not outlast {:?}",
+            consort_call::SHUTDOWN_LEAVE_TIMEOUT
+        );
+    }
+
+    /// The exit hook, on Tauri's headless mock runtime.
+    ///
+    /// What the leave itself does is covered in `state.rs`, where it needs no
+    /// app at all. This is the only test that shows the thing issue #110 was
+    /// about: that the path out of the process reaches the call before the
+    /// process is gone.
+    #[test]
+    fn exiting_leaves_the_call_this_session_is_in() {
+        use crate::events::{AppEvent, RecordingSink};
+        use crate::testing::{FakeCallTransport, fake_backends, wait_for};
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("the mock runtime builds without a display");
+        let dir = tempfile::tempdir().unwrap();
+        let sink = std::sync::Arc::new(RecordingSink::new());
+        app.manage(AppState::new(
+            SessionStore::with_backend(
+                dir.path(),
+                std::sync::Arc::new(consort_matrix::secrets::MemoryBackend::new()),
+            ),
+            settings::SettingsStore::at(dir.path()),
+            sink.clone(),
+        ));
+
+        let transport = FakeCallTransport::joining();
+        let leaves = transport.leaves();
+        app.state::<AppState>().connect_call(
+            "!general:example.org".to_owned(),
+            move || transport,
+            state::CallAudio {
+                device: None,
+                output: None,
+                gate: consort_audio::GateConfig::default(),
+                backends: Box::new(fake_backends),
+                us: "@ada:example.org".to_owned(),
+            },
+        );
+        wait_for(
+            "the call to connect",
+            || {
+                sink.events().iter().any(|event| {
+                    matches!(
+                        event,
+                        AppEvent::Call(consort_call::CallEvent::Connected { .. })
+                    )
+                })
+            },
+            || format!("{:?}", sink.events()),
+        );
+
+        on_exit(app.handle());
+
+        assert_eq!(leaves.count(), 1, "quitting did not leave the call");
     }
 
     #[test]
