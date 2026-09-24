@@ -1,6 +1,12 @@
 import { Fragment, useMemo, useState, type RefObject } from "react";
 
-import type { Message, MessageKind, Participant, SystemMessage } from "../lib/api";
+import type {
+  Message,
+  MessageKind,
+  Participant,
+  SystemChange,
+  SystemMessage,
+} from "../lib/api";
 import { flashMessage } from "../lib/flash";
 import { withAddressesNamed } from "../lib/matrixTo";
 import { useRoomLinks } from "../lib/roomLinks";
@@ -433,38 +439,52 @@ function DaySeparator({ label }: { label: string }) {
 }
 
 /**
- * What a [`SystemMessage`] says, in words.
+ * What a [`SystemChange`] says, in words.
  *
- * `actor` and `subject` are already resolved to display names, or left as
- * Matrix IDs when the room has not told us a name: see the caller, which
- * reads both out of the same `names` lookup the bylines use.
+ * `named` turns a Matrix ID into a display name, or hands back the ID when
+ * the room has not told us one: the caller passes the same `names` lookup the
+ * bylines use. Only the arms that are about a person call it. A room name or
+ * topic is already the text it should read as, and looking one up in a table
+ * of user IDs would be asking a question about the wrong thing.
  *
  * Exported for the tests, on the same terms as [`group`] above: the sentence
  * is the part worth pinning and the markup around it is not.
  */
 export function systemMessageText(
-  kind: SystemMessage["kind"],
+  change: SystemChange,
   actor: string,
-  subject: string,
+  named: (userId: string) => string,
 ): string {
-  switch (kind) {
+  switch (change.kind) {
     case "joined":
-      return `${subject} joined the room`;
+      return `${named(change.subject)} joined the room`;
     case "invited":
-      return `${actor} invited ${subject}`;
+      return `${actor} invited ${named(change.subject)}`;
     case "left":
-      return `${subject} left the room`;
+      return `${named(change.subject)} left the room`;
     case "kicked":
-      return `${actor} removed ${subject} from the room`;
+      return `${actor} removed ${named(change.subject)} from the room`;
     case "banned":
-      return `${actor} banned ${subject}`;
+      return `${actor} banned ${named(change.subject)}`;
+    case "renamed":
+      return change.name === null
+        ? `${actor} removed the room name`
+        : `${actor} changed the room name to ${change.name}`;
+    case "topicChanged":
+      return change.topic === null
+        ? `${actor} removed the topic`
+        : `${actor} changed the topic to ${change.topic}`;
+    case "avatarChanged":
+      return change.url === null
+        ? `${actor} removed the room picture`
+        : `${actor} changed the room picture`;
   }
 }
 
 /**
- * One membership change, drawn as a quiet line rather than as a message.
+ * One change to the room, drawn as a quiet line rather than as a message.
  *
- * No byline, no bubble, no actions: a join or a leave is not something
+ * No byline, no bubble, no actions: a join or a rename is not something
  * anybody said, and drawing it as though it were would put "Add a reaction"
  * under a sentence Consort wrote about the room rather than a person wrote
  * in it.
@@ -476,17 +496,18 @@ function SystemMessageLine({
   message: SystemMessage;
   names: Record<string, string>;
 }) {
-  const actor = names[message.actor] ?? message.actor;
-  const subject = names[message.subject] ?? message.subject;
-
   return (
     <p className="timeline__system" role="note">
-      {systemMessageText(message.kind, actor, subject)}
+      {systemMessageText(
+        message,
+        names[message.actor] ?? message.actor,
+        (userId) => names[userId] ?? userId,
+      )}
     </p>
   );
 }
 
-/** One row of the timeline: a run of messages, or one membership change. */
+/** One row of the timeline: a run of messages, or one change to the room. */
 type Row =
   | { kind: "group"; at: number; group: Group }
   | { kind: "system"; at: number; message: SystemMessage };

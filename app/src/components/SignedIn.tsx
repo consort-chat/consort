@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   asCommandError,
@@ -114,6 +114,16 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     live and the shell is where the selection does. The shell spends it.
   */
   const [asked, setAsked] = useState<{ roomId: string } | null>(null);
+  /*
+    Spent, which until #103 it never was. The shell retries an ask on every
+    room list so that a notification about a room joined a moment ago is a
+    short wait rather than a press that did nothing, and a retry cannot tell on
+    its own that it has already worked. So the ask stayed set and every later
+    sync dragged the selection back to that room, over whatever was being read.
+
+    Stable, because the shell calls this from that same effect.
+  */
+  const spend = useCallback(() => setAsked(null), []);
 
   function dismiss(flowId: string) {
     setFlows((current) => {
@@ -309,6 +319,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       callRefused={callRefused}
       onDismissRefusal={() => setCallRefused(null)}
       showRoom={asked}
+      onRoomShown={spend}
       onSignedOut={onSignedOut}
     />
   );
