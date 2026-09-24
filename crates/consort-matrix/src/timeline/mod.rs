@@ -1291,8 +1291,7 @@ impl Loaded {
     /// store, fifty messages cost under four milliseconds, and this runs on a
     /// page rather than on a receipt: the path a receipt actually arrives by
     /// is [`Self::receipts`], which touches no store at all.
-    async fn catch_up_on_readers(&mut self, room: &Room) -> bool {
-        let mut changed = false;
+    async fn catch_up_on_readers(&mut self, room: &Room) {
         let wanted: Vec<(String, About)> = self
             .history
             .messages()
@@ -1332,11 +1331,10 @@ impl Loaded {
                     }
                 };
                 for (user, _) in found {
-                    changed |= self.read_by.noted(user.as_str(), &id, about.clone());
+                    self.read_by.noted(user.as_str(), &id, about.clone());
                 }
             }
         }
-        changed
     }
 
     /// Take note of the receipts one sync batch carried.
