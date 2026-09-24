@@ -17,7 +17,7 @@ import "./ConfirmDelete.css";
  * somewhere the first press was not.
  *
  * Anchored to the message rather than drawn over the window, on the same terms
- * as [`ReactionPicker`]: it is about that message, and a panel in the middle
+ * as [`EmojiPicker`]: it is about that message, and a panel in the middle
  * of the screen would have to say which one.
  */
 export function ConfirmDelete({

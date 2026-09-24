@@ -1,0 +1,37 @@
+/*
+  The panel, hanging off whatever opened it.
+
+  Only the frame is here. What is inside it is `EmojiGrid.css`, which is the
+  half the composer and the message toolbar share.
+*/
+.picker {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+}
+
+/*
+  Hanging off a control at the left of a row rather than one at the right.
+
+  Both edges are needed because the controls that open this sit at opposite
+  ends of what they belong to: pinning the panel right under the one beside the
+  pills would push it back across the words, which is the distance that second
+  control exists to remove.
+*/
+.picker--left {
+  right: auto;
+  left: 0;
+}
+
+.picker__waiting {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}

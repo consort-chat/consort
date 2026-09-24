@@ -20,7 +20,7 @@ function key(
  * The keyboard rules are about rows, so a category has to be wider than
  * [`ACROSS`] for a press of the down arrow to have anywhere to go.
  */
-const FACES = Array.from({ length: ACROSS + 3 }, (unused, index) =>
+const FACES = Array.from({ length: ACROSS + 3 }, (_, index) =>
   key(`f${index}`, `face ${index}`, [`face`, `f${index}`]),
 );
 

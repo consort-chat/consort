@@ -1869,6 +1869,51 @@ export function setNotificationSettings(
 }
 
 /**
+ * What the emoji picker remembers between opens.
+ *
+ * Mirrors `crate::settings::EmojiSettings`. In the settings file rather than
+ * the webview's own storage: it is a preference like any other, it belongs
+ * beside the rest of them, and a webview that gets cleared should not silently
+ * forget it.
+ */
+export interface EmojiSettings {
+  /**
+   * The keys used here, most recent first.
+   *
+   * Free strings rather than anything this build can draw. Nothing downstream
+   * restricts what a reaction may be, so a key that arrived from a client with
+   * a wider set is still a key somebody chose and may want again.
+   *
+   * Starts as the twelve the quick panel offered, so a fresh account still
+   * finds a thumb without searching for one.
+   */
+  recent: string[];
+  /** Which skin tone to apply, 1 to 5, or 0 for none. */
+  tone: number;
+}
+
+/** What the picker currently remembers. */
+export function emojiSettings(): Promise<EmojiSettings> {
+  return invoke<EmojiSettings>("emoji_settings");
+}
+
+/**
+ * Record that a key was used, and take back the row it made.
+ *
+ * Answers with the new settings rather than nothing, so the row redraws from
+ * the rule that persisted it. Working out the new order here as well would be
+ * two answers to the question of what the row holds.
+ */
+export function emojiUsed(key: string): Promise<EmojiSettings> {
+  return invoke<EmojiSettings>("emoji_used", { key });
+}
+
+/** Choose the skin tone the picker applies, 1 to 5, or 0 for none. */
+export function setEmojiTone(tone: number): Promise<void> {
+  return invoke<void>("set_emoji_tone", { tone });
+}
+
+/**
  * Open the thread hanging from a message, or shut whichever is open.
  *
  * Answers nothing: what was asked for arrives on the `thread` channel. Asking
