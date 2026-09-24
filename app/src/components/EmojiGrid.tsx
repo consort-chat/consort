@@ -88,8 +88,8 @@ export function EmojiGrid({
   const [category, setCategory] = useState<string | null>(null);
   /*
     Which key the arrows are on, or none while focus is still in the box. An
-    index into whatever the grid is currently drawing, so switching category or
-    typing puts it back to the start on its own.
+    index into whatever the grid is currently drawing, so anything that changes
+    that has to lift it out first. See [`lift`].
   */
   const [at, setAt] = useState<number | null>(null);
   const box = useRef<HTMLInputElement | null>(null);
