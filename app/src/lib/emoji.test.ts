@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -266,6 +268,56 @@ describe("the dataset behind it", () => {
 
     expect(keys(matching(set, "raised_hands"))).toContain("🙌");
     expect(keys(matching(set, "thumbs up"))).toContain("👍");
+  });
+});
+
+/*
+  The dataset is the better part of a megabyte and the landing budget is 150 kb
+  of JavaScript, so it lives behind an `import()` and has to stay there. The
+  failure is silent: one static import anywhere folds the whole thing into the
+  first chunk, everything still works, and nothing says so until somebody reads
+  a build log they had no reason to read.
+
+  Read off the source rather than off a build, because a test that had to build
+  first is a test nobody runs.
+*/
+describe("keeping the dataset out of the first chunk", () => {
+  // `process.cwd()` rather than `import.meta.url`, which under jsdom is an
+  // http URL that `readdirSync` will not take.
+  const sources = readdirSync(`${process.cwd()}/src`, {
+    recursive: true,
+    withFileTypes: true,
+  })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        /\.tsx?$/.test(entry.name) &&
+        !entry.name.endsWith(".test.ts") &&
+        !entry.name.endsWith(".test.tsx"),
+    )
+    .map((entry) => ({
+      at: `${entry.parentPath}/${entry.name}`,
+      text: readFileSync(`${entry.parentPath}/${entry.name}`, "utf8"),
+    }));
+
+  it("found the source to read, so an empty sweep cannot pass", () => {
+    expect(sources.length).toBeGreaterThan(20);
+  });
+
+  it("is imported statically by nothing at all", () => {
+    const statically = sources.filter(
+      (file) =>
+        !file.at.endsWith("/emojiSet.ts") &&
+        /from\s+["'][^"']*emojiSet["']/.test(file.text),
+    );
+
+    expect(statically.map((file) => file.at)).toEqual([]);
+  });
+
+  it("is reached through an import() that is still there", () => {
+    const at = sources.find((file) => file.at.endsWith("/emoji.ts"));
+
+    expect(at?.text).toMatch(/import\(["']\.\/emojiSet["']\)/);
   });
 });
 

@@ -49,6 +49,10 @@ const memberProfile = vi.hoisted(() => vi.fn());
 // can stop turning when the panel it asked for is actually there.
 const onThread = vi.hoisted(() => vi.fn());
 const threadOpen = vi.hoisted(() => vi.fn());
+// The picker in the composer row, whose remembered keys live in the settings
+// file. Two of the twelve it starts with are enough here.
+const emojiSettings = vi.hoisted(() => vi.fn());
+const emojiUsed = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
@@ -81,6 +85,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioSettings,
   setPersonVolume,
   memberProfile,
+  emojiSettings,
+  emojiUsed,
 }));
 
 import { COPIED_FOR, RoomTimeline } from "./RoomTimeline";
@@ -115,6 +121,20 @@ const lounge: Channel = { ...general, id: "!lounge:example.org", name: "Lounge",
 
 /** One minute past midnight, so the clock time is stable wherever this runs. */
 const NOON = Date.UTC(2026, 0, 1, 12, 0, 0);
+
+/** Two of the keys the picker's remembered row starts with. */
+const REMEMBERED = ["\u{1F44D}", "\u{1F389}"];
+
+/**
+ * Open the composer's picker and wait for it to be usable.
+ *
+ * The dataset and the remembered row arrive on their own promises. Waiting for
+ * the row waits for both, and the row is what these presses land on.
+ */
+async function openTheEmoji() {
+  await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+  await screen.findByRole("group", { name: "Recently used" });
+}
 
 /** The clock time the component draws, formatted the way it formats it. */
 function timeOf(at: number): string {
@@ -191,6 +211,8 @@ beforeEach(() => {
         return Promise.resolve(() => {});
       },
     );
+  emojiSettings.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
+  emojiUsed.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
   pickAttachment.mockReset().mockResolvedValue(null);
   attachFile.mockReset().mockResolvedValue(undefined);
   attachPasted.mockReset().mockResolvedValue(undefined);
@@ -1209,6 +1231,81 @@ describe("RoomTimeline", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await userEvent.type(screen.getByRole("textbox"), "{Enter}");
     expect(timelineSend).not.toHaveBeenCalled();
+  });
+
+  it("offers a control in the composer row for putting an emoji in the draft", async () => {
+    await pane();
+
+    expect(screen.getByRole("button", { name: "Add an emoji" })).toBeVisible();
+  });
+
+  it("types the key into the draft rather than sending anything", async () => {
+    // The whole difference between the two pickers. This one is not about any
+    // message, so nothing leaves the machine when a key is pressed.
+    await pane();
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+
+    expect(screen.getByRole("textbox")).toHaveValue("hello\u{1F44D}");
+    expect(timelineSend).not.toHaveBeenCalled();
+    expect(timelineReact).not.toHaveBeenCalled();
+  });
+
+  it("puts it where the caret is rather than at the end", async () => {
+    await pane();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ab");
+    box.setSelectionRange(1, 1);
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+
+    expect(box).toHaveValue("a\u{1F44D}b");
+  });
+
+  it("hands the box back, with the caret after what it just put in", async () => {
+    /*
+      Somebody picking an emoji is mid-sentence. Leaving focus in a panel that
+      has closed means the next thing they type goes nowhere, and leaving the
+      caret where the browser puts it after a value change means the rest of
+      the sentence is typed at the far end of the box.
+
+      Mid-string on purpose: with the caret already at the end, both the right
+      answer and doing nothing look the same.
+    */
+    await pane();
+    const box = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await userEvent.type(box, "ab");
+    box.setSelectionRange(1, 1);
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+
+    await waitFor(() => expect(box).toHaveFocus());
+    expect(box.selectionStart).toBe(3);
+    expect(box.selectionEnd).toBe(3);
+  });
+
+  it("closes once a key has been chosen", async () => {
+    await pane();
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
+  it("says the draft changed, so the room still shows somebody typing", async () => {
+    // An emoji is typing. Without this the indicator stops in the middle of
+    // writing a message.
+    await pane();
+
+    await openTheEmoji();
+    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+
+    expect(timelineTyping).toHaveBeenCalledWith(GENERAL, true);
   });
 
   it("opens a card about whoever is being read when their name is pressed", async () => {

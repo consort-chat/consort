@@ -43,6 +43,7 @@ import {
   type Participant,
   type Timeline,
 } from "../lib/api";
+import { ComposerEmoji } from "./ComposerEmoji";
 import { ComposerTarget } from "./ComposerTarget";
 import {
   MessageGroups,
@@ -1425,6 +1426,19 @@ export function RoomTimeline({
         >
           <PaperclipIcon />
         </button>
+        {/*
+          The composer's own picker. The same grid as the one on a message and
+          a different thing to do with the key: this one types it.
+        */}
+        <ComposerEmoji
+          box={draftBox}
+          draft={draft}
+          disabled={sending}
+          onChanged={(text) => {
+            setDraft(text);
+            report(text);
+          }}
+        />
         <textarea
           id="timeline-draft"
           className="timeline__draft"

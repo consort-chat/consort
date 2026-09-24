@@ -28,6 +28,17 @@
   left: 0;
 }
 
+/*
+  Growing up from the control rather than down from it.
+
+  What the composer needs. It sits at the bottom of the window, so a panel
+  eight rows tall opening downwards from there would be mostly off the screen.
+*/
+.picker--up {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+}
+
 .picker__waiting {
   margin: 0;
   padding: var(--space-4);

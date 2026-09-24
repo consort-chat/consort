@@ -35,6 +35,7 @@ export function EmojiPicker({
   onPick,
   onClose,
   align = "right",
+  opens = "down",
 }: {
   /** How a key's label reads, as a verb: "React with" or "Insert". */
   action: string;
@@ -52,6 +53,14 @@ export function EmojiPicker({
    * where the same pinning would put the panel somewhere the press was not.
    */
   align?: "left" | "right";
+  /**
+   * Which way it grows from the control.
+   *
+   * Down from a message, which has the rest of the room under it. Up from the
+   * composer, which is already at the bottom of the window: a panel eight rows
+   * tall opening downwards from there would be mostly off the screen.
+   */
+  opens?: "up" | "down";
 }) {
   const [set, setSet] = useState<EmojiSet | null>(null);
   const [choices, setChoices] = useState<EmojiSettings>(NOTHING_YET);
@@ -127,7 +136,13 @@ export function EmojiPicker({
 
   return (
     <div
-      className={align === "left" ? "picker picker--left" : "picker"}
+      className={[
+        "picker",
+        align === "left" ? "picker--left" : "",
+        opens === "up" ? "picker--up" : "",
+      ]
+        .filter((one) => one !== "")
+        .join(" ")}
       role="group"
       // Named after what it is for rather than "Emoji picker", because the two
       // that exist do different things and this is the sentence that says

@@ -1,0 +1,51 @@
+/*
+  The control beside a composer, and somewhere for its panel to hang from.
+
+  Positioned here rather than against the composer itself, because the panel is
+  pinned to the left edge of this control and the composer's own left edge is a
+  whole row away.
+*/
+.composer-emoji {
+  position: relative;
+  display: flex;
+}
+
+/*
+  Sized and coloured like the paperclip beside it in the room's composer. Both
+  are quiet controls at the end of the same row, and one of them drawn
+  differently would read as the more important of the two.
+*/
+.composer-emoji__open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--composer-control);
+  height: var(--composer-control);
+  padding: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.composer-emoji__open svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-emoji__open:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.composer-emoji__open:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.composer-emoji__open:focus-visible {
+  outline: none;
+  border-color: var(--violet);
+  box-shadow: var(--shadow-focus);
+}
