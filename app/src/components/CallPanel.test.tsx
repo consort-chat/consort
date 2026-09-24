@@ -61,23 +61,48 @@ async function openMore() {
 /**
  * Long enough for a hover to have been meant, twice over.
  *
- * The component waits before it acts on a pointer, in both directions, so a
- * test that asserts nothing happened has to outlast the wait or it is only
- * asserting that it has not happened yet.
+ * The component waits before it acts on a pointer, so a test that asserts
+ * nothing opened has to outlast that wait or it is only asserting that it has
+ * not opened yet.
  */
-const PAST_THE_SETTLE = 400;
+const PAST_THE_OPEN = 400;
 
 /**
- * Sit out the wait above.
+ * Short of the linger, and not by a little.
+ *
+ * The close is the slower of the two waits by an order of magnitude, and this
+ * is the mark a test sits on to say the panel is still there. Well clear of
+ * the open wait, so a panel still on screen here is one being held rather than
+ * one that has not got round to closing.
+ */
+const INSIDE_THE_LINGER = 1000;
+
+/**
+ * Past the linger, with room for a machine under load.
+ *
+ * These waits are real rather than faked, because what is under test is a
+ * duration and a fake clock only ever plays back the number the source already
+ * says. Bracketing it with two real waits is what makes these able to disagree
+ * with the source: a close that came back to the wait that opens fails at
+ * `INSIDE_THE_LINGER`, and one that never comes fails here.
+ *
+ * Half a second of slack over the 1500ms the close was measured at, because
+ * the cost of the slack is a slower suite and the cost of cutting it fine is a
+ * test that fails on a busy machine for no reason anybody can reproduce.
+ */
+const PAST_THE_LINGER = 2000;
+
+/**
+ * Sit out one of the waits above.
  *
  * Inside `act`, because the wait is the whole point: when the panel does close
  * on a pointer leaving, it closes from a timer rather than from anything the
  * test did, and React has no other way to be told that update was expected.
  */
-async function settle() {
+async function sit(ms: number) {
   await act(async () => {
     await new Promise((resolve) => {
-      window.setTimeout(resolve, PAST_THE_SETTLE);
+      window.setTimeout(resolve, ms);
     });
   });
 }
@@ -534,14 +559,34 @@ describe("CallPanel", () => {
       expect(screen.getByRole("button", { name: /^deafen$/i })).toBeVisible();
     });
 
-    it("moves focus into what it opened", async () => {
+    it("moves focus into what a key opened", async () => {
       // Otherwise the panel is out and the next Tab is somewhere else
       // entirely, which for a keyboard is the same as it never having opened.
       panel(CONNECTED);
 
-      await openMore();
+      disclosure().focus();
+      await userEvent.keyboard("{Enter}");
 
       expect(screen.getByRole("button", { name: /^deafen$/i })).toHaveFocus();
+    });
+
+    it("leaves focus on the chevron when a hand opened it", async () => {
+      /*
+        The mouse half of the rule above, and not a smaller version of it. A
+        pointer needs no carrying: the panel is the next thing after the
+        chevron either way, so Tab reaches it from where the focus already is.
+
+        Carrying it would cost the close. Focus inside the panel is what tells
+        the pointer-leave close to hold for somebody using the keyboard, so a
+        press that put it there would pin every mouse-opened panel against the
+        pointer leaving, which is the defect #109 came back about.
+      */
+      panel(CONNECTED);
+
+      await openMore();
+
+      expect(screen.getByRole("button", { name: /^deafen$/i })).toBeVisible();
+      expect(disclosure()).toHaveFocus();
     });
 
     it("closes on Escape and hands the focus back", async () => {
@@ -680,7 +725,7 @@ describe("CallPanel", () => {
         await screen.findByRole("button", { name: /^deafen$/i });
         await userEvent.unhover(disclosure());
 
-        await settle();
+        await sit(PAST_THE_LINGER);
         expect(deafen()).toBeNull();
       });
 
@@ -695,20 +740,84 @@ describe("CallPanel", () => {
         await userEvent.hover(disclosure());
         await userEvent.unhover(disclosure());
 
-        await settle();
+        await sit(PAST_THE_OPEN);
         expect(deafen()).toBeNull();
       });
 
-      it("leaves a panel that was pressed open where it is", async () => {
-        // A press is an ask, and stays answered until it is taken back. Only
-        // a hover is undone by the pointer going away.
+      it("puts a panel that was pressed open away too", async () => {
+        /*
+          This used to assert the opposite, and the opposite is what #109 came
+          back about. The reasoning was that a press is an ask and stays
+          answered until it is taken back, which is true of a keyboard and not
+          of a hand: the pointer leaving *is* how a hand takes it back, and
+          without this the only way to shut a panel opened by pressing the
+          chevron was to press somewhere else entirely.
+        */
         panel(CONNECTED);
 
         await openMore();
-        await userEvent.hover(disclosure());
         await userEvent.unhover(disclosure());
 
-        await settle();
+        await sit(PAST_THE_LINGER);
+        expect(deafen()).toBeNull();
+      });
+
+      it("puts it away after a hand has used what it opened", async () => {
+        /*
+          The same stuck panel one control further in, and the one a rule
+          written around where the focus sits gets wrong. Pressing Deafen with
+          a mouse focuses Deafen, exactly as Tab into it would, so a close that
+          held for any focus inside the panel would hold for the press the
+          panel exists to receive. Every visit would end with it still open.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await userEvent.click(
+          await screen.findByRole("button", { name: /^deafen$/i }),
+        );
+        await userEvent.unhover(disclosure());
+
+        await sit(PAST_THE_LINGER);
+        expect(deafen()).toBeNull();
+      });
+
+      it("keeps it while the linger is still running", async () => {
+        /*
+          The other half of the measurement, and the half that would notice the
+          close coming back to the wait that opens. A second is a long way past
+          150ms and a long way short of the 1500ms asked for on #109, so a
+          panel still on screen here is one being held on purpose.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+        await userEvent.unhover(disclosure());
+
+        await sit(INSIDE_THE_LINGER);
+        expect(deafen()).toBeVisible();
+      });
+
+      it("takes the pending close off a press that arrives inside it", async () => {
+        /*
+          The case a long linger creates and a short one hid. The pointer has
+          gone and the close is counting down, and in that second and a half
+          somebody reaches the control another way: a key, or a finger. Without
+          the press cancelling what the pointer armed, the panel they have just
+          asked for puts itself away a moment later, and every part of that is
+          invisible to them.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+        await userEvent.unhover(disclosure());
+
+        disclosure().focus();
+        await userEvent.keyboard("{Enter}");
+
+        await sit(PAST_THE_LINGER);
         expect(deafen()).toBeVisible();
       });
 
@@ -722,9 +831,49 @@ describe("CallPanel", () => {
         action.focus();
         await userEvent.unhover(disclosure());
 
-        await settle();
+        await sit(PAST_THE_LINGER);
         expect(deafen()).toBeVisible();
         expect(deafen()).toHaveFocus();
+      });
+
+      it("holds still when a key follows a hand into the panel", async () => {
+        /*
+          Pressed open with a mouse and then Tabbed into, which is the order
+          somebody switching from one to the other does it in. The press marks
+          the focus as the hand's, and the Tab has to hand it back, or the
+          pointer wandering off closes the panel around a keyboard that is by
+          then the thing using it.
+        */
+        panel(CONNECTED);
+
+        await openMore();
+        await userEvent.tab();
+        expect(deafen()).toHaveFocus();
+
+        await userEvent.unhover(disclosure());
+
+        await sit(PAST_THE_LINGER);
+        expect(deafen()).toBeVisible();
+        expect(deafen()).toHaveFocus();
+      });
+
+      it("closes even while the chevron itself holds the focus", async () => {
+        /*
+          The limit of the clause above, and what keeps it from becoming the
+          latch it replaced. The keyboard being *in the panel* is what earns a
+          panel the right to stay; the keyboard resting on the control that
+          opens it is not the same thing, and counting it would leave every
+          hover-opened panel stuck for anyone who had tabbed this far.
+        */
+        panel(CONNECTED);
+
+        disclosure().focus();
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+        await userEvent.unhover(disclosure());
+
+        await sit(PAST_THE_LINGER);
+        expect(deafen()).toBeNull();
       });
 
       it("does not take a finger arriving for a hover", async () => {
@@ -743,7 +892,7 @@ describe("CallPanel", () => {
 
         fireEvent.pointerOver(disclosure(), { pointerType: "touch" });
 
-        await settle();
+        await sit(PAST_THE_OPEN);
         expect(deafen()).toBeNull();
       });
 
@@ -766,6 +915,70 @@ describe("CallPanel", () => {
         await userEvent.pointer({ target: disclosure(), keys: "[TouchA]" });
 
         expect(deafen()).toBeVisible();
+      });
+
+      it("opens on one press after a press elsewhere put it away", async () => {
+        /*
+          Thomas's second report on #109, walked exactly: press the chevron,
+          press outside to shut it, come back to the chevron, press it again.
+          The second press has to open it.
+
+          What made it take two was a single flag written by both ways in. The
+          pointer coming back opened the panel on its own, the press read that
+          as open and shut it, and only the press after that appeared to work.
+          On screen it looks like the control flipping to hidden and back for
+          no reason, which is how he described it.
+        */
+        panel(CONNECTED);
+
+        await openMore();
+        expect(deafen()).toBeVisible();
+
+        await userEvent.click(document.body);
+        expect(deafen()).toBeNull();
+
+        // Back to the chevron, which opens it on the way, and then the press.
+        await userEvent.hover(disclosure());
+        await sit(PAST_THE_OPEN);
+        await userEvent.click(disclosure());
+
+        expect(deafen()).toBeVisible();
+      });
+
+      it("keeps it open when a press lands on a panel a hover opened", async () => {
+        /*
+          The same fault one step smaller, and the one that would come back
+          first if the press ever went back to inverting what it found. No
+          press elsewhere, no coming back: just a pointer resting long enough
+          to open the panel and then pressing the control under it.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+
+        await userEvent.click(disclosure());
+
+        expect(deafen()).toBeVisible();
+        expect(disclosure()).toHaveAttribute("aria-expanded", "true");
+      });
+
+      it("still shuts on the press after that", async () => {
+        /*
+          The control for the two above. A first press that always opens would
+          be a chevron a pointer can never shut, so the second press has to
+          take the hover with it rather than leaving it to reopen what was just
+          put away.
+        */
+        panel(CONNECTED);
+
+        await userEvent.hover(disclosure());
+        await screen.findByRole("button", { name: /^deafen$/i });
+
+        await userEvent.click(disclosure());
+        await userEvent.click(disclosure());
+
+        expect(deafen()).toBeNull();
       });
 
       it("still opens from the keyboard, which hovers nothing", async () => {
