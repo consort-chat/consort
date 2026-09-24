@@ -3367,7 +3367,7 @@ mod timeline {
         .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3395,7 +3395,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], None).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3415,7 +3415,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], Some("t-older")).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3434,7 +3434,7 @@ mod timeline {
         let (_dir, client) = signed_in(&server).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -3450,7 +3450,7 @@ mod timeline {
         let (_dir, client) = signed_in(&server).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, "not a room id", sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, "not a room id", sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -3471,7 +3471,7 @@ mod timeline {
         syncing(&server, vec![arriving("$new", "just said", 5_000)]).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {}, |_| {});
         let (connections, connection_sink) = recorder();
         let syncing = sync::start(client, connection_sink);
         wait_until(&connections, |states| states.contains(&Connection::Live)).await;
@@ -3502,7 +3502,7 @@ mod timeline {
         syncing(&server, Vec::new()).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3542,7 +3542,7 @@ mod timeline {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3581,7 +3581,7 @@ mod timeline {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -3626,7 +3626,7 @@ mod timeline {
         paginating(&server, vec![said("$1", "first", 1_000)], None).await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -4342,7 +4342,7 @@ mod timeline {
         .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| {
             settled(reports).is_some_and(|report| !report.messages.is_empty())
         })
@@ -4977,7 +4977,7 @@ mod timeline {
             .await;
             let (rooms_seen, rooms_sink) = recorder::<Timeline>();
             let (threads_seen, threads_sink) = recorder::<Option<timeline::Thread>>();
-            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink, |_| {});
+            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink, |_| {}, |_| {});
             (watch, rooms_seen, threads_seen)
         }
 
@@ -5215,7 +5215,7 @@ mod timeline {
             client: Client,
         ) -> (timeline::Watch, Arc<std::sync::Mutex<Vec<Timeline>>>) {
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             wait_until(&seen, |reports| {
                 at_rest(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -5859,7 +5859,7 @@ mod timeline {
             )
             .await;
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -5915,7 +5915,7 @@ mod timeline {
             paginating(&server, vec![said(ORIGINAL, "the typo", 1_000)], None).await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             let reports = wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -5972,7 +5972,7 @@ mod timeline {
             .await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             let reports = wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -6037,7 +6037,7 @@ mod timeline {
             mount_event(&server, said(ORIGINAL, "the typo", 1_000)).await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             let reports = wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.answered.is_empty())
             })
@@ -6087,7 +6087,7 @@ mod timeline {
 
             let (rooms_seen, rooms_sink) = recorder::<Timeline>();
             let (threads_seen, threads_sink) = recorder::<Option<timeline::Thread>>();
-            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink, |_| {});
+            let watch = timeline::watch(client, ROOM, rooms_sink, threads_sink, |_| {}, |_| {});
             wait_until(&rooms_seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -6230,7 +6230,7 @@ mod timeline {
             .await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {}, |_| {});
             wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| report.messages.len() == 3)
             })
@@ -6283,7 +6283,7 @@ mod timeline {
             .await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             let reports = wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| report.messages.len() == 2)
             })
@@ -6311,7 +6311,7 @@ mod timeline {
             paginating(&server, vec![said(GONE, "wrong number", 1_000)], None).await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {}, |_| {});
             wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -6392,7 +6392,7 @@ mod timeline {
             mount_event(&server, emptied(GONE, 1_000, OTHER)).await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
             let reports = wait_until(&seen, |reports| {
                 settled(reports).is_some_and(|report| !report.answered.is_empty())
             })
@@ -6423,7 +6423,14 @@ mod timeline {
 
             let (rooms_seen, rooms_sink) = recorder::<Timeline>();
             let (panels_seen, panels_sink) = recorder::<Option<timeline::Thread>>();
-            let watch = timeline::watch(client.clone(), ROOM, rooms_sink, panels_sink, |_| {});
+            let watch = timeline::watch(
+                client.clone(),
+                ROOM,
+                rooms_sink,
+                panels_sink,
+                |_| {},
+                |_| {},
+            );
             wait_until(&rooms_seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -6484,7 +6491,14 @@ mod timeline {
 
             let (rooms_seen, rooms_sink) = recorder::<Timeline>();
             let (panels_seen, panels_sink) = recorder::<Option<timeline::Thread>>();
-            let watch = timeline::watch(client.clone(), ROOM, rooms_sink, panels_sink, |_| {});
+            let watch = timeline::watch(
+                client.clone(),
+                ROOM,
+                rooms_sink,
+                panels_sink,
+                |_| {},
+                |_| {},
+            );
             wait_until(&rooms_seen, |reports| {
                 settled(reports).is_some_and(|report| !report.messages.is_empty())
             })
@@ -6558,7 +6572,7 @@ mod timeline {
             .await;
 
             let (seen, sink) = recorder::<Timeline>();
-            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {});
+            let watch = timeline::watch(client.clone(), ROOM, sink, |_| {}, |_| {}, |_| {});
             wait_until(&seen, |reports| {
                 settled(reports)
                     .is_some_and(|report| bodies(report) == vec!["still the wrong number"])
@@ -6651,7 +6665,7 @@ mod read_receipts {
             .await;
         accepting_markers(&server).await;
 
-        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, |_| {});
         watch.mark_read("$said:example.org".to_owned(), true);
         let seen = wait_for_a_marker(&server).await;
         drop(watch);
@@ -6671,7 +6685,7 @@ mod read_receipts {
             .await;
         accepting_markers(&server).await;
 
-        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, |_| {});
         watch.mark_read("$said:example.org".to_owned(), false);
         let seen = wait_for_a_marker(&server).await;
         drop(watch);
@@ -6695,7 +6709,7 @@ mod read_receipts {
             .await;
         accepting_markers(&server).await;
 
-        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, |_| {});
         for _ in 0..5 {
             watch.mark_read("$said:example.org".to_owned(), true);
         }
@@ -6719,7 +6733,7 @@ mod read_receipts {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         watch.mark_read("$gone:example.org".to_owned(), true);
         tokio::time::sleep(Duration::from_millis(200)).await;
         // Still answering, which is the whole assertion.
@@ -6772,7 +6786,7 @@ mod read_receipts {
             .unwrap();
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -6795,7 +6809,7 @@ mod read_receipts {
             .await;
 
         let (seen, sink) = recorder::<Timeline>();
-        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, sink, |_| {}, |_| {}, |_| {});
         let reports = wait_until(&seen, |reports| !reports.is_empty()).await;
         drop(watch);
 
@@ -6902,13 +6916,388 @@ mod read_receipts {
             .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
             .await;
 
-        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {});
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, |_| {});
         watch.mark_read("not an event id".to_owned(), true);
         tokio::time::sleep(Duration::from_millis(200)).await;
         let seen = markers(&server).await;
         drop(watch);
 
         assert!(seen.is_empty(), "got {seen:?}");
+    }
+}
+
+/// Drawing who else has read a message.
+///
+/// The unit tests in `timeline::read_by` pin the rules. These pin the two
+/// paths a receipt actually travels, neither of which a unit test can reach:
+/// an `m.receipt` riding on a sync, and the store a restored session finds
+/// receipts already sitting in.
+mod who_has_read {
+    use super::*;
+    use consort_matrix::timeline::{self, ReadOn, Readers, Timeline};
+    use consort_matrix::{Connection, sync};
+    use matrix_sdk::Client;
+    use matrix_sdk::test_utils::mocks::RoomMessagesResponseTemplate;
+
+    const ROOM: &str = "!general:example.org";
+    const ADA: &str = "@ada:example.org";
+    const CLEO: &str = "@cleo:example.org";
+    const ROOT: &str = "$root:example.org";
+    const FIRST: &str = "$first:example.org";
+    const SECOND: &str = "$second:example.org";
+
+    /// One event as the `/messages` template wants it.
+    fn raw(
+        value: serde_json::Value,
+    ) -> matrix_sdk::ruma::serde::Raw<ruma::events::AnyTimelineEvent> {
+        matrix_sdk::ruma::serde::Raw::new(&value)
+            .expect("the fixture is valid JSON")
+            .cast_unchecked()
+    }
+
+    /// One message as `/messages` hands it back.
+    fn said(id: &str, body: &str, at: u64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "event_id": id,
+            "room_id": ROOM,
+            "sender": "@bob:example.org",
+            "origin_server_ts": at,
+            "content": { "msgtype": "m.text", "body": body },
+        })
+    }
+
+    /// The page of history the room opens on.
+    async fn paginating(server: &MatrixMockServer, chunk: Vec<serde_json::Value>) {
+        server
+            .mock_room_messages()
+            .expect_any_access_token()
+            .ok(RoomMessagesResponseTemplate {
+                end: None,
+                ..RoomMessagesResponseTemplate::default()
+                    .events(chunk.into_iter().map(raw).collect::<Vec<_>>())
+            })
+            .mount()
+            .await;
+    }
+
+    /// One person's public receipt, as the ephemeral event carries it.
+    fn read_by(user: &str, event_id: &str, thread: Option<&str>) -> serde_json::Value {
+        let mut receipt = serde_json::json!({ "ts": 1_700_000_000_000u64 });
+        if let Some(thread) = thread {
+            receipt["thread_id"] = serde_json::json!(thread);
+        }
+        serde_json::json!({ event_id: { "m.read": { user: receipt } } })
+    }
+
+    /// A sync response carrying receipts and nothing else.
+    ///
+    /// Mounted straight onto wiremock for the reason `timeline::syncing` is:
+    /// the builder takes a `JoinedRoomBuilder` this crate cannot name.
+    async fn syncing_receipts(server: &MatrixMockServer, receipts: Vec<serde_json::Value>) {
+        syncing_receipts_in_turn(server, vec![receipts]).await;
+    }
+
+    /// The same, with a different answer each time the client comes back.
+    ///
+    /// Keyed off the `since` token rather than off a counter, which is how a
+    /// homeserver decides the same question: a retry asks for the same step
+    /// again rather than skipping one. The last step is then given for ever,
+    /// which is a room where nobody has read anything new.
+    async fn syncing_receipts_in_turn(
+        server: &MatrixMockServer,
+        steps: Vec<Vec<serde_json::Value>>,
+    ) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(move |request: &wiremock::Request| {
+                let at = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "since")
+                    .and_then(|(_, token)| {
+                        token
+                            .strip_prefix("step")
+                            .and_then(|at| at.parse::<usize>().ok())
+                    })
+                    .map_or(0, |at| at + 1)
+                    .min(steps.len() - 1);
+                let events: Vec<serde_json::Value> = steps[at]
+                    .iter()
+                    .map(|content| serde_json::json!({ "type": "m.receipt", "content": content }))
+                    .collect();
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": format!("step{at}"),
+                    "rooms": {
+                        "join": {
+                            ROOM: {
+                                "timeline": { "events": [], "limited": false },
+                                "ephemeral": { "events": events },
+                            },
+                        },
+                    },
+                }))
+            })
+            .mount(server.server())
+            .await;
+    }
+
+    /// Who the latest report draws against one message.
+    fn against<'a>(reports: &'a [Readers], event_id: &str) -> Vec<&'a str> {
+        reports
+            .last()
+            .map(|report| drawn(&report.main, event_id))
+            .unwrap_or_default()
+    }
+
+    fn drawn<'a>(on: &'a [ReadOn], event_id: &str) -> Vec<&'a str> {
+        on.iter()
+            .find(|one| one.event_id == event_id)
+            .map(|one| one.readers.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    /// A signed-in client with a page of two messages waiting.
+    async fn a_room_of_two_messages(server: &MatrixMockServer) -> (tempfile::TempDir, Client) {
+        let (dir, client) = signed_in(server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        // Newest first, which is what a backwards pagination answers with.
+        paginating(
+            server,
+            vec![said(SECOND, "second", 2_000), said(FIRST, "first", 1_000)],
+        )
+        .await;
+        (dir, client)
+    }
+
+    #[tokio::test]
+    async fn a_receipt_arriving_in_a_sync_draws_a_face() {
+        // The path that makes this a feature rather than a data structure, and
+        // the one no unit test can reach: an ephemeral event, through the
+        // SDK's update channel, into the row somebody is looking at.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_room_of_two_messages(&server).await;
+        syncing_receipts(&server, vec![read_by(ADA, SECOND, None)]).await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client.clone(), ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        let reports = wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+        drop(watch);
+        syncing.abort();
+
+        assert_eq!(against(&reports, SECOND), [ADA]);
+    }
+
+    #[tokio::test]
+    async fn reading_further_down_takes_the_face_off_the_older_message() {
+        // The collapse, end to end. A receipt names the newest thing somebody
+        // has read, so the face moves rather than multiplying, and this is the
+        // path where a build that held the state by message would look right
+        // until somebody read a second message.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_room_of_two_messages(&server).await;
+        // Ada is partway up the room, and then she is not.
+        syncing_receipts_in_turn(
+            &server,
+            vec![
+                vec![read_by(ADA, FIRST, None)],
+                vec![read_by(ADA, SECOND, None)],
+            ],
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client.clone(), ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        let reports = wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+        drop(watch);
+        syncing.abort();
+
+        assert!(
+            reports
+                .iter()
+                .any(|report| drawn(&report.main, FIRST) == [ADA]),
+            "she was never drawn on the older message, so nothing has moved: {reports:?}"
+        );
+        assert_eq!(against(&reports, SECOND), [ADA]);
+        assert_eq!(
+            against(&reports, FIRST),
+            [] as [&str; 0],
+            "the older message kept the face, so the state is keyed by the message"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_receipt_from_before_this_launch_is_read_out_of_the_store() {
+        // The half a sync cannot deliver. Receipts arrive as a delta against a
+        // sync token, so a session that resumes from its own token is never
+        // told about anything anybody read while it was shut down. That is
+        // what the store lookup on the page exists for, and this is the test
+        // that fails if it is removed.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing_receipts(&server, vec![read_by(CLEO, SECOND, None)]).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        // One sync before the room is ever opened, which is what a launch is.
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .unwrap();
+        paginating(
+            &server,
+            vec![said(SECOND, "second", 2_000), said(FIRST, "first", 1_000)],
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Readers>();
+        // No sync loop. Everything drawn here came off the disk.
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let reports = wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+        drop(watch);
+
+        assert_eq!(against(&reports, SECOND), [CLEO]);
+    }
+
+    #[tokio::test]
+    async fn a_receipt_in_a_thread_is_not_the_rooms_answer() {
+        // Trap two, on the wire. A thread keeps receipts of its own and the
+        // room must not borrow them, or every thread in a busy room would
+        // show the room's readers against its replies.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_room_of_two_messages(&server).await;
+        syncing_receipts(
+            &server,
+            vec![
+                read_by(ADA, SECOND, Some(ROOT)),
+                read_by(CLEO, SECOND, None),
+            ],
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client.clone(), ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        // Cleo is in the room's answer, so the batch has been read. Ada read
+        // the same message in a thread and belongs to the panel, not here.
+        let reports = wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+        drop(watch);
+        syncing.abort();
+
+        // The whole answer rather than the row against one message, because a
+        // room that borrowed the thread's readers would draw a second row for
+        // the same message and looking up only the first would miss it.
+        assert_eq!(
+            reports.last().unwrap().main,
+            vec![ReadOn {
+                event_id: SECOND.to_owned(),
+                readers: vec![CLEO.to_owned()],
+                more: 0,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn this_account_is_not_drawn_reading_its_own_room() {
+        // A private receipt sent by this session comes back in this session's
+        // own sync, and so does a public one. Neither is a face to draw.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_room_of_two_messages(&server).await;
+        syncing_receipts(
+            &server,
+            vec![read_by(USER, SECOND, None), read_by(CLEO, FIRST, None)],
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client.clone(), ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+
+        // Cleo arriving is how we know the batch was read at all.
+        let reports = wait_until(&seen, |reports| !against(reports, FIRST).is_empty()).await;
+        drop(watch);
+        syncing.abort();
+
+        assert_eq!(against(&reports, SECOND), [] as [&str; 0]);
+    }
+
+    #[tokio::test]
+    async fn re_reading_the_room_does_not_republish_the_same_faces() {
+        // Going back to the present reads the page again and asks the store
+        // again, which answers with what it answered a moment ago. Saying it
+        // again would wake every face on screen for nothing, and this is the
+        // path where the sync arm's own check cannot help: nothing arrived.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing_receipts(&server, vec![read_by(CLEO, SECOND, None)]).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .unwrap();
+        paginating(
+            &server,
+            vec![said(SECOND, "second", 2_000), said(FIRST, "first", 1_000)],
+        )
+        .await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client, ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+        let after_opening = seen.lock().unwrap().len();
+
+        watch.present();
+        // Long enough for the page and the store lookups behind it.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let after_re_reading = seen.lock().unwrap().len();
+        drop(watch);
+
+        assert_eq!(after_opening, after_re_reading);
+    }
+
+    #[tokio::test]
+    async fn an_unchanged_receipt_is_not_republished_on_every_sync() {
+        // A homeserver repeats the ephemeral event for as long as it is the
+        // latest thing it has to say, which against a mock is several times a
+        // second. Republishing each one would wake the webview forever for a
+        // room where nothing is happening.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_room_of_two_messages(&server).await;
+        syncing_receipts(&server, vec![read_by(ADA, SECOND, None)]).await;
+
+        let (seen, sink) = recorder::<Readers>();
+        let watch = timeline::watch(client.clone(), ROOM, |_: Timeline| {}, |_| {}, |_| {}, sink);
+        let (connections, connection_sink) = recorder();
+        let syncing = sync::start(client, connection_sink);
+        wait_until(&connections, |states| states.contains(&Connection::Live)).await;
+        wait_until(&seen, |reports| !against(reports, SECOND).is_empty()).await;
+
+        let after_first = seen.lock().unwrap().len();
+        // Long enough for several more syncs against a mock that answers at
+        // once.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let after_several = seen.lock().unwrap().len();
+        drop(watch);
+        syncing.abort();
+
+        assert_eq!(after_first, after_several);
     }
 }
 

@@ -1443,6 +1443,66 @@ export interface Message {
 }
 
 /**
+ * Who has read one message, as far as this account can see.
+ *
+ * Mirrors `consort_matrix::ReadOn`. "As far as this account can see" is not a
+ * hedge: a person sending `m.read.private` is visible to nobody, so they are
+ * absent from every one of these and there is no way to tell them apart from
+ * somebody who simply has not read it. `ReadBy` says so in words, always,
+ * which is the only honest thing a row of faces can do about it.
+ */
+export interface ReadOn {
+  /** The message they have read up to. */
+  eventId: string;
+  /**
+   * Up to five of them, by Matrix user ID, in a stable order.
+   *
+   * This session's own is never here. Rust takes it out, on the same terms as
+   * `Typing.users`: nobody needs telling that they have read their own room.
+   */
+  readers: string[];
+  /**
+   * How many more there are than the ones named.
+   *
+   * Absent for a row that fits, which is almost every row. A room with fifty
+   * people in it puts fifty receipts on its newest message, and this is how
+   * that stays a row rather than a wall.
+   */
+  more?: number;
+}
+
+/** One thread's readers, named by the thread they are in. */
+export interface ThreadReaders {
+  /** The message the thread hangs from. */
+  rootId: string;
+  /** Who has read how far inside it. */
+  on: ReadOn[];
+}
+
+/**
+ * Who has read how far in one room, and in the thread open beside it.
+ *
+ * Mirrors `consort_matrix::Readers`. Its own channel rather than a field on
+ * `Timeline`, and the reason is measured: a busy room produces about as many
+ * receipts as messages, and redrawing fifty of them costs 6.3ms against 0.14ms
+ * for the rows that actually moved. See `lib/readers`, which is what keeps the
+ * 0.14ms rather than merely making it possible.
+ */
+export interface Readers {
+  /** The room this is about, on the same terms as `Timeline.roomId`. */
+  roomId: string;
+  /** Who has read how far in the room's own timeline. */
+  main: ReadOn[];
+  /**
+   * The same for the thread somebody has open, when one is.
+   *
+   * Absent with no thread open. A thread keeps receipts of its own and a
+   * receipt in the room does not answer for it.
+   */
+  thread?: ThreadReaders;
+}
+
+/**
  * Who is typing in one room.
  *
  * Mirrors `consort_matrix::Typing`.
@@ -1825,6 +1885,23 @@ export function onThread(
  */
 export function onTyping(handler: (typing: Typing) => void): Promise<UnlistenFn> {
   return listen<Typing>("typing", (event) => handler(event.payload));
+}
+
+/**
+ * Be told who has read how far in the room currently open.
+ *
+ * Carries the room it is about, on the same terms as `onTyping`, so a reader
+ * can tell an answer about the last room from an answer about this one.
+ *
+ * Nothing that draws a message subscribes to this. `lib/readers` does, and a
+ * row of faces then asks it about one message: that is the difference between
+ * a receipt costing 0.14ms and costing 6.3ms, and the whole reason the channel
+ * is separate in the first place.
+ */
+export function onReaders(
+  handler: (readers: Readers) => void,
+): Promise<UnlistenFn> {
+  return listen<Readers>("readers", (event) => handler(event.payload));
 }
 
 /**

@@ -18,6 +18,7 @@ const recentRooms = vi.hoisted(() => vi.fn());
 // to whichever test happened to be running.
 const onTimeline = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
+const onReaders = vi.hoisted(() => vi.fn());
 const onDropped = vi.hoisted(() => vi.fn());
 const timelineTyping = vi.hoisted(() => vi.fn());
 const onThread = vi.hoisted(() => vi.fn());
@@ -44,6 +45,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   logout,
   onTimeline,
   onTyping,
+  onReaders,
   onDropped,
   timelineTyping,
   onThread,
@@ -232,6 +234,7 @@ describe("AppShell", () => {
     recentRooms.mockReset().mockResolvedValue([]);
     onTimeline.mockReset().mockResolvedValue(() => {});
     onTyping.mockReset().mockResolvedValue(() => {});
+  onReaders.mockReset().mockResolvedValue(() => {});
     onDropped.mockReset().mockResolvedValue(() => {});
     timelineTyping.mockReset().mockResolvedValue(undefined);
     onThread.mockReset().mockResolvedValue(() => {});

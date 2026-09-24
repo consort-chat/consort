@@ -167,6 +167,79 @@ pub struct Typing {
     pub users: Vec<String>,
 }
 
+/// Who has read how far, for the room and for whatever thread is open.
+///
+/// Its own value rather than a field on [`Timeline`], and the reason is
+/// measured rather than assumed. On this machine a receipt arriving costs
+/// 0.9us to put on the wire this way and 4.8us as part of a republished
+/// timeline, which is the smaller half of it; the larger half is that a
+/// republished timeline is new objects all the way down, and redrawing fifty
+/// messages costs 6.3ms against 0.14ms for the rows that actually changed. A
+/// busy room produces about as many receipts as messages, so that is the
+/// difference between a conversation that sits still and one that does not.
+///
+/// Both conversations in one value because the channel keeps its latest for a
+/// late subscriber, and two values on one channel would mean the second
+/// erasing the first.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readers {
+    /// The room this is about, on the same terms as [`Timeline::room_id`].
+    pub room_id: String,
+    /// Who has read how far in the room's own timeline.
+    pub main: Vec<ReadOn>,
+    /// The same for the thread somebody has open, when one is.
+    ///
+    /// `None` with no thread open. A thread has receipts of its own and a
+    /// receipt in the room does not answer for it, so the panel is given its
+    /// own answer rather than the room's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadReaders>,
+}
+
+/// One thread's readers, named by the thread they are in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadReaders {
+    /// The message the thread hangs from, so a reader can tell an answer about
+    /// the thread it has open from an answer about the one it just closed.
+    pub root_id: String,
+    /// Who has read how far inside it.
+    pub on: Vec<ReadOn>,
+}
+
+/// Who has read one message, as far as this account can see.
+///
+/// "As far as this account can see" is load-bearing and is not a hedge. A
+/// person who has turned public read receipts off is visible to nobody, so
+/// they are absent from every one of these and there is no way to tell them
+/// from somebody who has not read it. See `ReadBy` in the webview for what is
+/// said about that, and why it is said whether or not anybody is missing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadOn {
+    /// The message they have read up to.
+    pub event_id: String,
+    /// Up to [`crate::timeline::read_by::SHOWN`] of them, by Matrix user ID,
+    /// in a stable order.
+    ///
+    /// This session's own is never here. Nobody needs telling that they have
+    /// read their own room.
+    pub readers: Vec<String>,
+    /// How many more there are than the ones named.
+    ///
+    /// Zero for a row that fits, which is almost every row. A room with fifty
+    /// people in it puts fifty receipts on its newest message, and the count
+    /// is how that stays a row rather than a wall.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub more: u32,
+}
+
+/// Whether a count is nothing, for skipping it on the wire.
+fn is_zero(count: &u32) -> bool {
+    *count == 0
+}
+
 /// One key people have reacted to a message with.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

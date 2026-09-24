@@ -1,0 +1,46 @@
+/*
+  Who has read up to a message, as small faces under the last line of a group.
+
+  Drawn at the end of a group rather than against every message, which is what
+  other clients do and what keeps a quiet room from becoming a column of faces.
+*/
+
+/*
+  Packed against the end of the line, which is where the rest of the client
+  fleet puts them. Packed rather than spread, so the overflow count stays
+  beside the faces instead of being stranded at the edge on its own.
+*/
+.read-by {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+/*
+  Overlapped, so a row of five is not five avatars' worth of width beside a
+  line of text. The negative margin is on the face rather than the gap so that
+  the overflow count keeps its own spacing.
+*/
+.read-by__face + .read-by__face {
+  margin-left: calc(var(--space-2) * -1);
+}
+
+/*
+  A ring in the surface behind them, which is what makes an overlapped row
+  read as several faces rather than one smeared one.
+*/
+.read-by__avatar {
+  --avatar-size: 16px;
+
+  box-shadow: 0 0 0 2px var(--surface-base);
+}
+
+.read-by__more {
+  margin-left: var(--space-1);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-muted);
+}
