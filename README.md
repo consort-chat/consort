@@ -75,6 +75,11 @@ at whatever homeserver you already run.
   rules, so a room you muted in another client is muted here; Settings adds
   only what is true of this machine, and nothing is drawn about what happened
   while Consort was closed.
+- **Where it opens.** With no channel selected, the pane offers the rooms you
+  were last in and any voice channel somebody is sitting in right now, across
+  every space rather than the one on screen. What was opened last is written
+  down locally, per account, so it survives a restart and costs the homeserver
+  nothing.
 
 ---
 

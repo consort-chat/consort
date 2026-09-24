@@ -1,0 +1,253 @@
+/*
+  The screen the application opens on.
+
+  The quiet sibling of the sign-in screen's brand side: the same wash anchored
+  to the same corner and the same grain over it, at a fraction of the weight.
+  That is deliberate continuity rather than decoration. This is the pane
+  somebody lands on a second after leaving that one, and a flat surface here
+  makes the two read as different applications.
+
+  Left aligned and top weighted rather than centred. Centred is what an empty
+  state does, and the whole point of this one is that it is not empty.
+*/
+.opening {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--space-12) var(--space-8) var(--space-6);
+  background:
+    radial-gradient(
+      90% 70% at 0% 0%,
+      oklch(26% 0.06 285) 0%,
+      oklch(21% 0.025 285) 45%,
+      var(--surface-base) 100%
+    );
+}
+
+/* The same grain the brand side carries, at the same strength. */
+.opening::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.045'/></svg>");
+}
+
+/*
+  Pinned to the corner rather than sitting in the column, because it is
+  furniture and the column is the message.
+*/
+.opening__unfold {
+  position: absolute;
+  top: var(--space-4);
+  left: var(--space-4);
+}
+
+/*
+  A measure rather than the whole pane. A row stretched across a wide window
+  puts the name and the line under it at opposite ends of the screen, which is
+  two columns of one fact.
+*/
+.opening__sheet {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-8);
+  width: 100%;
+  max-width: 34rem;
+}
+
+.opening__lede {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/*
+  The sign-in screen's wordmark, at the sign-in screen's size. The heading of
+  the pane is the application itself here: there is no room to name, and the
+  sections below carry what there is to say.
+*/
+.opening__wordmark {
+  margin: 0;
+  font-size: var(--text-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.opening__tagline {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  text-wrap: balance;
+}
+
+.opening__section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/*
+  Small, spaced and quiet. The hierarchy on this pane is carried by scale: the
+  wordmark, then the room names, and these sit below both rather than competing
+  with either. A section heading at body size would make three things on the
+  screen equally loud.
+*/
+.opening__heading {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/*
+  Mint, and the only mint on this pane. It is what the accent is reserved for,
+  and a call in progress is exactly the thing it is reserved to mean.
+*/
+.opening__heading--live {
+  color: var(--mint);
+}
+
+.opening__rooms {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+  A list with rules between its entries, not a grid of cards. Cards would give
+  six rooms six boxes of equal weight and turn the pane into a second channel
+  list; a ruled list reads as somewhere to run an eye down.
+*/
+.opening__rooms > li + li {
+  border-top: 1px solid var(--line-subtle);
+}
+
+.opening__room {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-2);
+  border: 0;
+  /* The rule the hover state lights up, reserved so nothing moves when it does. */
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.opening__room:hover {
+  border-left-color: var(--violet);
+  background: var(--surface-raised);
+  transform: translateX(2px);
+}
+
+.opening__room:active {
+  border-left-color: var(--violet-press);
+  transform: translateX(1px);
+}
+
+.opening__room:focus-visible {
+  outline: none;
+  border-left-color: var(--violet);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-focus);
+}
+
+/* The voice rows take the accent that means voice, on hover as well. */
+.opening__rooms[aria-label="Live now"] .opening__room:hover,
+.opening__rooms[aria-label="Live now"] .opening__room:focus-visible {
+  border-left-color: var(--mint);
+}
+
+.opening__avatar {
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-sm);
+}
+
+.opening__room-name {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/*
+  Sized to what it says, with the name column beside it taking the squeeze.
+  The other way round cut "Ada, Grace and 1 other" off mid-word, which is the
+  half of the row somebody would actually be reading.
+*/
+.opening__room-detail {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.opening__none {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/*
+  The corner the issue asked for it in. Pushed there by the sheet taking the
+  height above it, so it sits at the bottom of a short pane and at the bottom
+  of a tall one.
+*/
+.opening__footnote {
+  position: relative;
+  align-self: flex-end;
+  margin: var(--space-8) 0 0;
+  font-size: var(--text-xs);
+}
+
+.opening__link {
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo);
+}
+
+.opening__link:hover {
+  color: var(--text-secondary);
+  border-bottom-color: var(--line-strong);
+}
+
+.opening__link:focus-visible {
+  outline: none;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  A narrow window is the sidebar plus a pane with barely room for a sentence.
+  The wash and the measure both stop earning their keep there.
+*/
+@media (max-width: 720px) {
+  .opening {
+    padding: var(--space-8) var(--space-4) var(--space-4);
+  }
+}

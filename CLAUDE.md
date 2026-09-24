@@ -12,9 +12,9 @@ threads, replies both sent and drawn, reactions, mentions, a typing indicator,
 read receipts with the unread marks and the where-you-stopped line that go with
 them, desktop notifications that honour the account's push rules, and
 `matrix.to` links that go where they point, editing a message, both sent and
-drawn, and leaving a room or inviting somebody into one. Deleting your own
-message is not built, and neither is upload progress or a thumbnail for a clip
-somebody sends.
+drawn, and an opening screen offering the rooms you were last in. Deleting your
+own message is not built, and neither is upload progress or a thumbnail for a
+clip somebody sends.
 
 ## Layout
 
