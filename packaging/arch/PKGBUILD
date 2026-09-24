@@ -38,6 +38,7 @@ depends=(
   'libstdc++'
   'glibc'
   'hicolor-icon-theme'
+  'libayatana-appindicator'
 )
 makedepends=('cargo' 'git' 'nodejs' 'pnpm')
 

@@ -47,7 +47,11 @@
           "libsoup-3.0-0",
           "libsqlite3-0",
           "libasound2"
-        ]
+        ],
+        "desktopTemplate": "../../packaging/linux/consort.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "../../packaging/linux/consort.desktop"
       }
     },
     "shortDescription": "Matrix client with voice",
