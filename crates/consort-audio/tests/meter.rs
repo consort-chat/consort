@@ -4,15 +4,9 @@
 //! Turning 100 gate decisions a second into something worth sending to a
 //! webview.
 //!
-//! The gate runs at one frame every 10 ms. Sending 100 IPC messages a second,
-//! each a JSON round trip, to move a bar that redraws at 60 Hz at best is
-//! waste. This batches them, and the batching has to preserve the two things a
-//! person is looking for: the loudest moment and the highest confidence. An
-//! average would hide both.
-//!
-//! Batched by frame count rather than by clock. The frame rate is fixed at 100
-//! Hz by construction, so counting is exact and needs no `Instant`, which also
-//! means none of these tests sleep.
+//! The batching has to preserve the two things a person looks for, the loudest
+//! moment and the highest confidence, which an average would hide. Counted
+//! rather than clocked, so none of these tests sleep.
 
 use consort_audio::{FRAME_SAMPLES, FRAMES_PER_READING, GateDecision, Meter, Reading};
 

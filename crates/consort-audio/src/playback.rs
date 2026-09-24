@@ -3,17 +3,10 @@
 
 //! Playing a sound out of a chosen device, as a trait.
 //!
-//! The mirror of [`crate::capture`], and separate from it for the same reason:
-//! the trait is what lets [`crate::thread`] be tested on a machine with no
-//! sound card. The real implementation is in [`crate::cpal_host`].
-//!
-//! Two things come out of here: the test chime in [`crate::tone`], and the
-//! call itself through [`crate::mixing`].
-//!
-//! Call audio was once expected to arrive already mixed from the media layer,
-//! and this said so. It does not. A native LiveKit subscription hands over one
-//! decoded PCM stream per participant and plays none of them, so mixing them
-//! and finding a sound card for the result is this crate's job after all.
+//! The mirror of [`crate::capture`], and a trait for the same reason: it lets
+//! [`crate::thread`] be tested with no sound card. Two things come out of
+//! here, the test chime in [`crate::tone`] and the call through
+//! [`crate::mixing`], which this crate has to mix itself.
 
 use std::fmt;
 
@@ -23,9 +16,7 @@ use crate::tone::Tone;
 /// Everything that can go wrong before the first sample is played.
 ///
 /// Its own type rather than [`crate::CaptureError`], which says "input" in
-/// four of its five messages. Somebody who pressed a button to hear their
-/// speakers and was told there is no audio input device would reasonably
-/// conclude Consort is confused, and would be right.
+/// four of its five messages.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackError {
     /// The host offers no output device at all.
@@ -35,13 +26,10 @@ pub enum PlaybackError {
         requested: String,
         available: Vec<String>,
     },
-    /// The device cannot run at 48 kHz.
+    /// The device cannot run at 48 kHz, which nothing here resamples around.
     ///
-    /// The chime is generated at [`crate::SAMPLE_RATE`] and nothing here
-    /// resamples, which is the same bargain the capture path makes. Not
-    /// reachable from the picker, which lists only devices that have already
-    /// said they can; reachable in the gap between the list being drawn and
-    /// the button being pressed.
+    /// Not reachable from the picker, which lists only devices that said they
+    /// can. Reachable between the list being drawn and the button pressed.
     NoFortyEightKilohertz { device: String },
     /// The device offers a sample format this does not handle.
     UnsupportedFormat { device: String, format: String },
@@ -83,12 +71,8 @@ impl std::error::Error for PlaybackError {}
 /// Told once, when the last sample of the chime has been handed to the device.
 ///
 /// Called on the backend's realtime thread, so it must do no more than a
-/// channel send. It exists because nothing else knows when a sound is over:
-/// the stream goes on asking for samples until somebody drops it, and the only
-/// code that can see the end coming is the code filling the buffer.
-///
-/// `FnMut` rather than `FnOnce` because a cpal callback is `FnMut` and cannot
-/// give up ownership of what it captured. Implementations call it once.
+/// channel send. `FnMut` rather than `FnOnce` because a cpal callback is
+/// `FnMut` and cannot give up ownership. Implementations call it once.
 pub type ToneEnded = Box<dyn FnMut() + Send>;
 
 /// A sound in progress. Dropping it silences the device and gives it back.
@@ -114,16 +98,9 @@ pub trait AudioPlayback: Send + 'static {
     /// Play everything in `voices` through `device` until the returned stream
     /// is dropped.
     ///
-    /// The call's own output, and the reason this trait has two methods rather
-    /// than one. A chime is a fixed length of samples that ends and says so; a
-    /// call is an open device with an unknown number of people arriving and
-    /// leaving behind it, and nothing to announce. Sharing one entry point
-    /// between them would mean a `Tone` that never ends and an `on_end` that is
-    /// never called.
-    ///
-    /// Both may be open at once. Somebody pressing the test chime during a call
-    /// is testing the device the call is coming out of, and refusing them would
-    /// be refusing the one moment the button is most useful.
+    /// A second method rather than a `Tone` that never ends and an `on_end`
+    /// never called. Both may be open at once, because the test button is most
+    /// useful during the call it is testing the output of.
     fn play_call(
         &self,
         device: Option<&str>,
@@ -133,26 +110,17 @@ pub trait AudioPlayback: Send + 'static {
 
 /// A [`Tone`] being handed to a device, one buffer at a time.
 ///
-/// The mirror of [`crate::frames::Frames`], which turns what a microphone
-/// delivers into what the model wants. This turns what the chime produces into
-/// what a device wants: spread across however many channels it negotiated, in
-/// whichever of two sample formats it asked for, in buffers whose size it
-/// chose. It lives here rather than in [`crate::cpal_host`] so that all of
-/// that can be checked without a sound card.
-///
-/// It also owns the only answer to "is it over yet". Nothing else is in a
-/// position to know: the device goes on asking for samples until somebody
-/// drops the stream, and the code filling the buffer is the only code that
-/// sees the end coming.
+/// The mirror of [`crate::frames::Frames`]: the chime spread across however
+/// many channels the device negotiated, in whichever format it asked for.
+/// Here rather than in [`crate::cpal_host`] so it can be checked without a
+/// sound card, and it owns the only answer to "is it over yet".
 pub struct Playing {
     tone: Tone,
     channels: usize,
     /// Whether the last sample of the chime has been written.
     over: bool,
-    /// Whether [`on_end`](Self::on_end) has been called for it.
-    ///
-    /// Separate from `over` because a device keeps asking for buffers
-    /// afterwards, and every one of those would otherwise report the end
+    /// Whether [`on_end`](Self::on_end) has been called for it. Separate from
+    /// `over`, or every buffer the device asks for afterwards reports the end
     /// again.
     announced: bool,
     on_end: ToneEnded,
@@ -163,10 +131,8 @@ impl Playing {
     pub fn new(tone: Tone, channels: u16, on_end: ToneEnded) -> Self {
         Self {
             tone,
-            // Nothing should claim zero channels, but dividing by it would
-            // panic inside a realtime callback, which is the worst place in
-            // the program to find out. `Frames` guards the same thing on the
-            // way in.
+            // Nothing should claim zero channels, but dividing by it panics
+            // inside a realtime callback. `Frames` guards the same thing.
             channels: usize::from(channels).max(1),
             over: false,
             announced: false,
@@ -178,8 +144,8 @@ impl Playing {
     pub fn fill_i16(&mut self, data: &mut [i16]) {
         for group in data.chunks_mut(self.channels) {
             let sample = self.next();
-            // The same sample in every channel. A chime out of the left
-            // speaker only would tell somebody their right speaker is broken.
+            // The same sample in every channel, or a chime out of the left
+            // speaker tells somebody their right speaker is broken.
             group.fill(sample);
         }
         self.announce();
@@ -188,8 +154,8 @@ impl Playing {
     /// Fill one buffer of `f32` samples, which cpal wants in `[-1.0, 1.0]`.
     pub fn fill_f32(&mut self, data: &mut [f32]) {
         for group in data.chunks_mut(self.channels) {
-            // Divided by 32768 rather than by `i16::MAX`, because the range is
-            // asymmetric and `i16::MIN` over `i16::MAX` is past -1.0.
+            // 32768, not `i16::MAX`: the range is asymmetric and `i16::MIN`
+            // over `i16::MAX` is past -1.0.
             let sample = f32::from(self.next()) / 32_768.0;
             group.fill(sample);
         }

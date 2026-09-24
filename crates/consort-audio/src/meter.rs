@@ -3,13 +3,10 @@
 
 //! What the level bar draws.
 //!
-//! The gate runs at one frame every 10 ms. Sending 100 messages a second across
-//! an IPC boundary, each a JSON round trip, to move a bar that redraws at 60 Hz
-//! at best is waste, so this batches them.
-//!
-//! Batched by frame count rather than by clock. The frame rate is fixed at
-//! 100 Hz by construction, so counting is exact, needs no `Instant`, and makes
-//! the tests deterministic without sleeping.
+//! Batches the gate's hundred frames a second down to something worth a JSON
+//! round trip across the IPC boundary. Counted rather than clocked: the frame
+//! rate is fixed by construction, so there is no `Instant` here and the tests
+//! are exact without sleeping.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +14,8 @@ use crate::gate::{FRAME_MS, GateDecision};
 
 /// Frames folded into one reading.
 ///
-/// Five frames is 50 ms, so twenty readings a second. Fast enough that the bar
-/// tracks a voice, slow enough that the IPC is not the expensive part.
+/// Five frames is 50 ms: fast enough that the bar tracks a voice, slow enough
+/// that the IPC is not the expensive part.
 pub const FRAMES_PER_READING: usize = 5;
 
 /// Readings per second, which follows from the constant above.
@@ -30,20 +27,18 @@ pub const READINGS_PER_SECOND: u32 = 1000 / (FRAME_MS * FRAMES_PER_READING as u3
 pub struct Reading {
     /// Peak amplitude in the batch as a fraction of full scale, 0 to 1.
     ///
-    /// The peak and not the mean. A transient landing in the middle of a batch
-    /// is exactly what somebody tapping their microphone is watching for, and
-    /// an average would swallow it.
+    /// The peak, not the mean: a transient in the middle of a batch is what
+    /// somebody tapping their microphone is watching for.
     pub level: f32,
     /// The highest voice probability the model reported in the batch.
     ///
-    /// Also a maximum, and for the same reason: this is the number a person
-    /// reads while choosing a threshold, so it has to be the number the gate
-    /// would have seen.
+    /// Also a maximum, so that the number somebody reads while choosing a
+    /// threshold is the number the gate would have seen.
     pub probability: f32,
     /// Whether the gate was open at any point in the batch.
     ///
-    /// Sticky across the batch. The gate genuinely closes and reopens between
-    /// syllables, and a bar that flickers off mid-word looks broken.
+    /// Sticky, because the gate genuinely closes between syllables and a bar
+    /// that flickers off mid-word looks broken.
     pub open: bool,
 }
 
@@ -77,8 +72,8 @@ impl Meter {
             probability: self.probability,
             open: self.open,
         };
-        // Reset rather than decay. Without this the peak only ever climbs and
-        // the bar sticks at the loudest thing since launch.
+        // Reset, not decay: otherwise the peak only climbs and the bar sticks
+        // at the loudest thing since launch.
         *self = Self::default();
         Some(reading)
     }
@@ -86,9 +81,8 @@ impl Meter {
 
 /// The largest magnitude an `i16` sample can have.
 ///
-/// 32768 rather than `i16::MAX`, because the range is asymmetric: it runs from
-/// -32768 to 32767. Dividing by `i16::MAX` lets a frame of `i16::MIN` report a
-/// level of 1.00003, which is a bar drawn past the end of its own track.
+/// 32768, not `i16::MAX`: the range is asymmetric, so dividing by `i16::MAX`
+/// lets `i16::MIN` report 1.00003 and draws the bar past its own track.
 const FULL_SCALE: f32 = 32_768.0;
 
 /// The loudest sample in a frame, as a fraction of full scale.

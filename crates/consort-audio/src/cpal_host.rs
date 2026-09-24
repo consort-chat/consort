@@ -3,14 +3,10 @@
 
 //! The real sound card, behind [`AudioDevices`].
 //!
-//! Everything in this file needs hardware, so none of it is covered by tests
-//! and it is excluded from the coverage numbers alongside `keyring_store.rs`.
-//! That exclusion is only honest while the file stays this thin: anything here
-//! that starts making decisions belongs in `devices.rs` or `frames.rs`, where
-//! it can be given a fixture and checked.
-//!
-//! The one deliberate exception is `list_the_real_devices` at the bottom, an
-//! ignored test for asking this machine what it has.
+//! Needs hardware, so it is excluded from the coverage numbers alongside
+//! `keyring_store.rs`. That exclusion is only honest while the file stays this
+//! thin: anything here that starts deciding belongs in `devices.rs` or
+//! `frames.rs`, where a fixture can reach it.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, ErrorKind, SampleFormat, StreamConfig};
@@ -204,10 +200,8 @@ struct Output {
 
 /// Find `device`, or the host's default, and settle on a format.
 ///
-/// Shared by the chime and the call so that the two cannot disagree about
-/// which device "default" means or which sample format to prefer. Somebody who
-/// tests their speakers and hears the chime has tested the thing the call will
-/// come out of, which is the entire point of the button.
+/// Shared by the chime and the call so the two cannot disagree about which
+/// device "default" means, or the test button tests the wrong thing.
 fn choose_output(wanted: Option<&str>) -> Result<Output, PlaybackError> {
     let host = cpal::default_host();
     let device = match wanted {
@@ -369,27 +363,9 @@ impl AudioPlayback for CpalHost {
 /// The names of the devices in `devices` that can actually be opened the way
 /// this crate opens them.
 ///
-/// The filter is not belt and braces. Whether a device works in a direction is
-/// something a host may only be guessing at: cpal's ALSA backend derives it
-/// from each PCM hint's `IOID` field, and its own source notes that a hint
-/// leaves that NULL to mean "either", so the answer is a declaration rather
-/// than a fact. On a PipeWire desktop the declarations are wrong often enough
-/// to be embarrassing, and the observed result was a webcam offered as a place
-/// to play sound and a pair of speakers offered as a microphone.
-///
-/// So each candidate is asked what it supports, and only those that offer
-/// something at [`SAMPLE_RATE`] survive. That is the same requirement
-/// [`AudioCapture::open`] enforces a moment later, which is the point: a
-/// picker should not offer a device that selecting it would fail on. Costs
-/// about 300 ms for a whole ALSA namespace and nothing measurable on WASAPI or
-/// CoreAudio, where endpoints are enumerated rather than guessed at.
-///
-/// "Cannot" is narrower than "did not say yes". A device another process has
-/// open answers `DeviceBusy` rather than answering the question, and the other
-/// process is usually Consort, holding the microphone for the level meter on
-/// the very screen this list is drawn on. Dropping those deletes the device in
-/// use from the picker offering it. [`Answer`] is where each reason a host can
-/// fail to say yes gets sorted into kept or dropped, and tested.
+/// Not belt and braces: a host's direction flag is a declaration, and on
+/// PipeWire it is wrong often enough to offer a webcam as an output. Each
+/// candidate is asked instead. See `docs/adr/0004-trust-no-device-list.md`.
 fn collect<D: Iterator<Item = cpal::Device>>(devices: D, direction: Direction) -> Vec<String> {
     devices
         .filter(|device| offers_our_rate(device, direction))
@@ -399,13 +375,9 @@ fn collect<D: Iterator<Item = cpal::Device>>(devices: D, direction: Direction) -
 
 /// Ask `device` whether it supports [`SAMPLE_RATE`] in `direction`.
 ///
-/// A failed query is not automatically a no. cpal separates the reasons, and
-/// the separation is the whole value of asking: `DeviceBusy` means somebody
-/// has the device open, which is proof that it works and is the state the
-/// microphone Consort itself is holding will be in every time this runs.
-/// Treating that as a no deletes the device from the picker that is at that
-/// moment reporting its level. [`Answer`] is where the consequences of each
-/// reason are decided, and tested.
+/// A failed query is not automatically a no. `DeviceBusy` in particular is
+/// usually Consort's own microphone, and is proof the device works.
+/// [`Answer`] is where each reason is sorted into kept or dropped, and tested.
 fn offers_our_rate(device: &cpal::Device, direction: Direction) -> bool {
     let covers_our_rate = |range: &cpal::SupportedStreamConfigRange| {
         range.min_sample_rate() <= SAMPLE_RATE && range.max_sample_rate() >= SAMPLE_RATE
@@ -442,11 +414,8 @@ mod tests {
 
     /// Open the real default microphone and watch the gate work.
     ///
-    /// The prototype's `meter` binary, as a test. This is the tuning loop:
-    /// talk, type, breathe, scrape the desk, and see where speech lands against
-    /// where noise lands. The level column separates two failures that look
-    /// identical from the gate's side, a microphone delivering nothing against
-    /// one that is fine but whose speech the model scores low.
+    /// The tuning loop: talk, type, breathe, scrape the desk, and see where
+    /// speech lands against where noise lands.
     ///
     /// ```sh
     /// cargo test -p consort-audio --lib -- --ignored --nocapture watch_the_real_microphone
@@ -509,8 +478,7 @@ mod tests {
 
     /// Play the test chime out of a real output and listen to it.
     ///
-    /// The other half of Phase 8: `watch_the_real_microphone` proves the input
-    /// by talking, and nothing proves an output except hearing it.
+    /// Nothing proves an output except hearing it.
     ///
     /// ```sh
     /// cargo test -p consort-audio --lib -- --ignored --nocapture play_the_real_tone

@@ -19,11 +19,8 @@ pub enum CaptureError {
         requested: String,
         available: Vec<String>,
     },
-    /// The device cannot run at 48 kHz.
-    ///
-    /// Its own variant because nothing here resamples, so this is a refusal
-    /// rather than a degradation, and the screen has to be able to say which
-    /// device and why rather than just failing.
+    /// The device cannot run at 48 kHz. Its own variant because nothing here
+    /// resamples, so the screen has to name the device and say why.
     NoFortyEightKilohertz { device: String },
     /// The device offers a sample format this does not handle.
     UnsupportedFormat { device: String, format: String },
@@ -78,9 +75,8 @@ pub trait AudioCapture: Send + 'static {
     /// Open `device`, or the host's default when it is `None`, and deliver mono
     /// 48 kHz `i16` frames of [`crate::FRAME_SAMPLES`] samples to `on_frame`.
     ///
-    /// `on_frame` runs on the backend's realtime thread. Implementations must
-    /// keep it to a channel send: anything that blocks, allocates heavily or
-    /// takes a lock shows up as crackle.
+    /// `on_frame` runs on the backend's realtime thread, so implementations
+    /// must keep it to a channel send. Blocking there is crackle.
     fn open(
         &self,
         device: Option<&str>,

@@ -3,12 +3,10 @@
 
 //! What is plugged in, and which of it to use.
 //!
-//! The host is a trait for a practical reason: CI has no sound card, so a
-//! `cpal::default_host()` call in the middle of a function is a function no
-//! test can run. `EventSink` in the Tauri crate already establishes this shape
-//! here. Everything that decides anything takes the device list as data, and
-//! the only code that talks to cpal is [`crate::cpal_host`], which is thin
-//! enough to leave out of the coverage numbers.
+//! The host is a trait because CI has no sound card: everything that decides
+//! anything takes the device list as data, and only [`crate::cpal_host`] talks
+//! to cpal. Why none of that list is trusted:
+//! `docs/adr/0004-trust-no-device-list.md`.
 
 use std::collections::HashMap;
 
@@ -18,11 +16,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
-    /// What the host calls it, which is also all the identity there is.
-    ///
-    /// cpal 0.18 removed `Device::name()` and offers only `Display`, so two
-    /// identical capture cards are indistinguishable to us. Known, accepted,
-    /// and the reason a saved choice can resolve to the wrong twin.
+    /// What the host calls it, and all the identity there is: cpal 0.18
+    /// removed `Device::name()`. Two identical cards are indistinguishable, so
+    /// a saved choice can resolve to the wrong twin.
     pub name: String,
     /// Whether the host reports this as the one it would pick.
     pub is_default: bool,
@@ -38,11 +34,8 @@ pub enum Direction {
 
 /// What a host said when asked whether a device can do what we need.
 ///
-/// Hosts answer that question badly. A direction may be a declaration rather
-/// than a measurement, and the only way to find out is to ask the device, at
-/// which point the reply can be a fact about the device, a fact about this
-/// moment, or something unhelpful. Those are not the same and cannot be
-/// collapsed into a boolean without getting one of them wrong.
+/// A reply can be a fact about the device, a fact about this moment, or
+/// unhelpful. Collapsing those into a boolean gets one of them wrong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
     /// It can.
@@ -62,11 +55,8 @@ pub enum Answer {
 impl Answer {
     /// Whether a device that answered this way belongs in the picker.
     ///
-    /// The two mistakes available are not the same size. Listing a device that
-    /// turns out not to work costs somebody one confusing attempt. Hiding one
-    /// that does work costs them the conclusion that Consort cannot hear them,
-    /// and there is nothing on the screen to argue with. So this drops a
-    /// device only on a definite no, and shows it on anything else.
+    /// Dropped only on a definite no. Hiding a device that works costs
+    /// somebody more than listing one that does not.
     pub fn worth_listing(self) -> bool {
         match self {
             Self::Yes | Self::Busy | Self::Unclear => true,
@@ -80,13 +70,9 @@ pub trait AudioDevices: Send + Sync + 'static {
     /// Every device that can actually be opened in this direction, in host
     /// order.
     ///
-    /// Usable, not merely present. A host may only be declaring a direction
-    /// rather than knowing one, and an implementation that passes those
-    /// declarations straight through offers people a webcam to play sound out
-    /// of. Confirming costs a query per device and is what makes the list
-    /// mean something.
-    ///
-    /// May repeat itself and may be empty. [`catalogue`] is what tidies it.
+    /// Usable, not merely present: an implementation that passes a host's
+    /// direction flags straight through offers a webcam to play sound out of.
+    /// May repeat itself and may be empty. [`catalogue`] tidies it.
     fn enumerate(&self, direction: Direction) -> Vec<Device>;
 }
 
@@ -101,9 +87,9 @@ pub enum Selection {
     Saved(Device),
     /// Nothing was saved, so this is the host's answer.
     Default(Device),
-    /// Something was saved, it is not here any more, and this is being used
-    /// instead. The screen has to say so: a person who picked a headset and is
-    /// being recorded by a laptop lid microphone deserves to be told.
+    /// Something was saved, it is gone, and this is being used instead. The
+    /// screen has to say so, or somebody who picked a headset is recorded by
+    /// a laptop lid without being told.
     Substituted { wanted: String, using: Device },
     /// There is nothing to choose from.
     Nothing,
@@ -121,24 +107,10 @@ impl Selection {
 
     /// The name to hand the audio backend, where `None` means "your default".
     ///
-    /// Not the same question as [`device`](Self::device), which answers what
-    /// to draw as selected. This answers what to open, and the two differ in
-    /// exactly one case: when the resolved device is the one the host already
-    /// calls its default, the backend is asked for the default rather than for
-    /// that name.
-    ///
-    /// The difference is not cosmetic. A name is a photograph of the machine
-    /// at the moment the list was read; the host's default is a live answer.
-    /// Plug in a headset on Windows or macOS and the system default moves,
-    /// which is what somebody who never opened this screen expects to happen.
-    /// A saved name cannot move, and cpal 0.18 offers no identity beyond the
-    /// display name, so re-resolving one can also land on the wrong twin of an
-    /// identical pair.
-    ///
-    /// The exception is a host that lists devices and flags none as default.
-    /// There is nothing to defer to, so the fallback is named: asking for the
-    /// default there fails with "there is no audio input device" on a machine
-    /// that visibly has one.
+    /// Not [`device`](Self::device), which answers what to draw as selected.
+    /// The host's default is a live answer and a saved name is a photograph,
+    /// so the two differ when the resolved device is the host's own default.
+    /// Why that matters: `docs/adr/0004-trust-no-device-list.md`.
     pub fn name_to_open(&self) -> Option<&str> {
         match self.device() {
             Some(device) if device.is_default => None,
@@ -159,8 +131,8 @@ pub fn catalogue(devices: &dyn AudioDevices, direction: Direction) -> Vec<Device
             continue;
         }
         match position.get(&device.name) {
-            // A repeat. The wrappers are not all equal: if any of them is the
-            // one the host would hand back by default, the entry keeps that.
+            // A repeat. If any of them is the one the host would hand back by
+            // default, the entry keeps that.
             Some(&index) => {
                 let kept: &mut Device = &mut listed[index];
                 kept.is_default |= device.is_default;
@@ -202,15 +174,9 @@ pub fn choose(available: &[Device], saved: Option<&str>) -> Selection {
 /// Whether a name is one of ALSA's plugin wrappers rather than something a
 /// person could speak into or listen to.
 ///
-/// A PipeWire desktop offers 21 input devices, of which 12 are these. Nobody
-/// has ever wanted to be recorded by a rate converter, and a list that long
-/// where most of it is plumbing is a list people scroll past instead of read.
-///
 /// Matched against how ALSA names its wrappers, not against any use of the
-/// word, because dropping somebody's actual microphone would be far worse than
-/// leaving a resampler in the list. Sound servers (PipeWire, PulseAudio, JACK)
-/// are deliberately kept: on a modern Linux desktop they are the entries most
-/// worth selecting.
+/// words, because dropping a real microphone is worse than leaving a resampler
+/// listed. PipeWire, PulseAudio and JACK are deliberately kept.
 fn is_plumbing(name: &str) -> bool {
     const WRAPPERS: [&str; 3] = ["Rate Converter Plugin ", "Plugin using ", "Plugin for "];
     const NULL_DEVICE: &str = "Discard all samples (playback) or generate zero samples (capture)";
@@ -229,24 +195,19 @@ fn default_of(available: &[Device]) -> Option<&Device> {
 
 /// What the settings screen is told about one direction.
 ///
-/// Three facts, because a picker needs three and no more: what there is, which
-/// one is in use, and whether that is the one that was asked for. The third is
-/// the easiest to leave out and the most expensive to have left out.
+/// Three facts, because a picker needs three: what there is, which one is in
+/// use, and whether that is the one that was asked for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceList {
     /// Everything worth offering, in host order.
     pub devices: Vec<Device>,
-    /// The device audio will actually go through, by name.
-    ///
-    /// `None` only when there are no devices at all. A picker showing nothing
-    /// selected while audio is flowing would be lying.
+    /// The device audio will actually go through, by name. `None` only when
+    /// there are no devices at all.
     pub selected: Option<String>,
-    /// The saved device, when it is not here any more.
-    ///
-    /// `None` in every other case, including when there is nothing to fall back
-    /// to: with no devices at all there is no substitution to report, only an
-    /// empty machine.
+    /// The saved device, when it is not here any more. `None` when there is
+    /// nothing to fall back to either: that is an empty machine, not a
+    /// substitution.
     pub missing: Option<String>,
 }
 
@@ -276,10 +237,6 @@ pub struct AudioDeviceReport {
 impl AudioDeviceReport {
     /// Ask `host` what it has and resolve each direction against its own saved
     /// choice.
-    ///
-    /// Two arguments rather than one settings struct, so that crossing them is
-    /// a type error at the call site rather than something that silently
-    /// records from the speakers.
     pub fn of(host: &dyn AudioDevices, input: Option<&str>, output: Option<&str>) -> Self {
         Self {
             input: DeviceList::of(catalogue(host, Direction::Input), input),

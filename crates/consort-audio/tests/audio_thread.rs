@@ -3,13 +3,8 @@
 
 //! The thread that owns the microphone.
 //!
-//! It exists because a cpal stream is `!Send`: it cannot be held in shared
-//! application state and it cannot cross an await inside a Tauri command. So it
-//! gets a thread of its own and a channel in, which is the same shape the
-//! MatrixRTC call will need for the same reason.
-//!
 //! Every test here drives a fake backend that hands over the frames it is told
-//! to and records when it was opened and closed. What is being checked is the
+//! to and records when it was opened and closed. What is checked is the
 //! thread's bookkeeping, not whether a sound card works.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};

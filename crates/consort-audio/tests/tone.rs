@@ -3,15 +3,9 @@
 
 //! The sound the output test makes.
 //!
-//! An input device can be checked by talking at it. An output device cannot be
-//! checked by anything at all unless something plays, so this is the only
-//! evidence the output picker will ever have, and it has to be evidence
-//! somebody can interpret: audible, obviously deliberate, and over quickly.
-//!
-//! Pure arithmetic, so all of it is testable without a sound card. The cpal
-//! call that hands these samples to a device is four lines in `cpal_host.rs`
-//! and is excluded from coverage; everything that decides what the sound is
-//! lives here.
+//! The only evidence an output picker will ever have, so it has to be evidence
+//! somebody can interpret: audible, obviously deliberate, over quickly. Pure
+//! arithmetic, so all of it is testable without a sound card.
 
 use consort_audio::{SAMPLE_RATE, Tone};
 

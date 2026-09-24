@@ -3,18 +3,10 @@
 
 //! Deciding whether the person at the microphone is talking.
 //!
-//! RNNoise is a denoiser, and it reports a voice probability for each frame as
-//! a byproduct of denoising. One pass therefore answers both halves of the
-//! question: what to publish, and whether to publish it at all.
-//!
-//! Two types, because they fail differently. [`Hysteresis`] is the decision:
-//! pure arithmetic over a probability, with no model behind it, so it can be
-//! driven frame by frame in a test and every branch reached in microseconds.
-//! [`VoiceGate`] is that plus the model, and its tests need synthesised audio
-//! and a real inference pass.
-//!
-//! Ported from the `matrix-rtc-vad-spike` prototype, which tuned these defaults
-//! by ear against a live call.
+//! RNNoise reports a voice probability as a byproduct of denoising, so one pass
+//! answers both what to publish and whether to publish it. [`Hysteresis`] is
+//! the decision alone, testable frame by frame; [`VoiceGate`] is that plus the
+//! model, and its tests need synthesised audio and a real inference pass.
 
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
@@ -65,15 +57,9 @@ pub struct GateConfig {
     pub denoise: bool,
     /// Send only while somebody is talking.
     ///
-    /// Turning this off publishes every frame and makes the thresholds above
-    /// inert. The model still runs, so the probability is still reported and
-    /// the denoiser still denoises: this is a choice about what to send, not
-    /// about what to compute.
-    ///
-    /// A choice rather than a policy because the gate is not always wanted. A
-    /// quiet room with a good microphone gains nothing from it, and anybody
-    /// whose speech the model happens to score badly is better served by
-    /// transmitting everything than by being cut off mid-sentence.
+    /// Off publishes every frame and makes the thresholds above inert. The
+    /// model still runs and still denoises: this is a choice about what to
+    /// send, not about what to compute.
     pub voice_activity: bool,
 }
 
@@ -85,10 +71,8 @@ impl Default for GateConfig {
             attack_frames: 2,
             hold_ms: 300,
             denoise: true,
-            // On, because the default has to be the gate rather than the
-            // absence of one. Somebody who never opens the settings screen
-            // should not be transmitting their keyboard to everybody in the
-            // room.
+            // On: somebody who never opens the settings screen should not be
+            // transmitting their keyboard to everybody in the room.
             voice_activity: true,
         }
     }
@@ -111,9 +95,8 @@ pub struct GateDecision {
     pub closed: bool,
     /// The model's raw voice probability for this frame, before hysteresis.
     ///
-    /// Passed through untouched, because this is what the meter draws and a
-    /// meter showing the gate's opinion rather than the model's would be
-    /// useless for choosing a threshold.
+    /// Untouched, because the meter draws it and a threshold cannot be chosen
+    /// against the gate's own opinion.
     pub probability: f32,
 }
 
@@ -148,10 +131,8 @@ impl Hysteresis {
 
     /// Swap the tuning, keeping the state machine where it is.
     ///
-    /// Not a reset. Somebody moving a threshold is doing it mid-sentence with
-    /// the meter in front of them, and starting the attack count and the hold
-    /// timer again would cut the word they are in the middle of saying. The
-    /// new thresholds apply from the next frame, which is 10 ms away.
+    /// Not a reset: somebody moves a threshold mid-sentence with the meter in
+    /// front of them, and restarting the hold would cut the word they are on.
     pub fn retune(&mut self, config: GateConfig) {
         self.config = config;
     }
@@ -163,10 +144,7 @@ impl Hysteresis {
     /// Whether the next frame is the one whose output has to be discarded.
     ///
     /// True exactly once per gate, before the first [`step`](Self::step).
-    /// [`VoiceGate`] asks so that it can publish silence for that frame: the
-    /// probability is meaningless, which this type already handles, and the
-    /// denoiser's output for it is a fade-in ramp rather than anything that was
-    /// said, which it cannot.
+    /// [`VoiceGate`] asks so it can publish silence for RNNoise's fade-in.
     pub fn is_warming_up(&self) -> bool {
         self.warming_up
     }
@@ -190,9 +168,8 @@ impl Hysteresis {
         }
 
         if !self.config.voice_activity {
-            // Everything goes out. Checked before the thresholds rather than
-            // by setting them to zero, so that turning the gate back on finds
-            // the tuning exactly as it was left.
+            // Checked here rather than by zeroing the thresholds, so turning
+            // the gate back on finds the tuning as it was left.
             self.open = true;
             return;
         }
@@ -231,14 +208,9 @@ impl Hysteresis {
 /// How many frames the gate's output is held back, so that an opening edge
 /// can still reach for what came before it.
 ///
-/// One more than the default [`GateConfig::attack_frames`], which is the whole
-/// point: the attack spends 20 ms proving somebody has started talking, and
-/// those 20 ms are the start of the word they said. Three frames is 30 ms, so
-/// the proof is covered with a frame to spare.
-///
-/// Not configurable, because the number that matters is the attack and nothing
-/// exposes that either. If the attack ever becomes tunable this has to follow
-/// it up.
+/// One more than the default [`GateConfig::attack_frames`], so the 20 ms the
+/// attack spends proving somebody started talking is covered with a frame to
+/// spare. If the attack ever becomes tunable, this has to follow it up.
 pub const PRE_ROLL_FRAMES: usize = 3;
 
 /// One frame waiting its turn, and what the gate thought of it at the time.
@@ -259,21 +231,10 @@ impl Held {
 /// A delay line that lets the gate change its mind about frames it has already
 /// seen.
 ///
-/// The gate cannot open on the first frame of a word: [`attack_frames`] exists
-/// so that a key press or a desk bump does not open it, and the cost is that by
-/// the time the gate is sure, the consonant that made it sure has been and
-/// gone. "Pop" arrives as "op".
-///
-/// So hold every frame back by [`PRE_ROLL_FRAMES`] and publish the oldest. When
-/// the gate opens, the frames that convinced it are still here, and marking
-/// them open sends the whole word. The attack is paid for in latency instead of
-/// in consonants, which is the trade worth making: 30 ms is inaudible next to
-/// what a jitter buffer already costs, and a clipped word is not.
-///
-/// The delay runs even with [`voice_activity`] off, when nothing is ever
-/// withheld and it achieves nothing. Bypassing it would mean the audio jumping
-/// 30 ms whenever somebody flips that switch, and a click on a settings screen
-/// is a worse thing to hear than 30 ms nobody can perceive.
+/// Without it, [`attack_frames`] costs the consonant that proved somebody was
+/// talking and "pop" arrives as "op". Runs even with [`voice_activity`] off,
+/// where it withholds nothing: bypassing it would jump the audio 30 ms
+/// whenever somebody flips that switch.
 ///
 /// [`attack_frames`]: GateConfig::attack_frames
 /// [`voice_activity`]: GateConfig::voice_activity
@@ -283,12 +244,9 @@ pub struct PreRoll {
     ///
     /// [`step`]: Self::step
     line: std::collections::VecDeque<Held>,
-    /// The frame handed out last call.
-    ///
-    /// The caller is done with it by the time it calls again, so it comes back
-    /// here to be refilled. That makes this whole type allocation-free after
-    /// the first `depth + 1` frames, which matters because it runs on the audio
-    /// thread once every 10 ms.
+    /// The frame handed out last call, come back to be refilled. Keeps this
+    /// type allocation-free, which it has to be: the audio thread runs it
+    /// every 10 ms.
     returned: Option<Held>,
 }
 
@@ -332,9 +290,8 @@ impl PreRoll {
         );
 
         if decision.opened {
-            // The reason this type exists. Everything still in the line was
-            // captured while the gate was making its mind up, which is to say
-            // during the start of the word that changed it.
+            // The reason this type exists: everything still in the line was
+            // captured during the start of the word that opened the gate.
             for held in self.line.iter_mut() {
                 held.open = true;
             }
@@ -354,11 +311,8 @@ impl PreRoll {
             .pop_front()
             .expect("the line is longer than depth, so it is not empty");
         if !out.open {
-            // Silenced here rather than by the gate, so that a frame the gate
-            // shut on can still be reopened while it waits. The caller keeps
-            // publishing it either way: a sender that stops sending looks like
-            // a wedged client to a peer, while Opus collapses silence on the
-            // wire and costs nothing.
+            // Silenced here rather than by the gate, so a frame the gate shut
+            // on can still be reopened while it waits.
             out.samples.fill(0);
         }
         let out = self.returned.insert(out);
@@ -390,9 +344,8 @@ impl VoiceGate {
 
     /// Swap the tuning without disturbing the denoiser or the gate's state.
     ///
-    /// The denoiser in particular must survive this: it carries the spectral
-    /// history that makes it work, and rebuilding it to change a threshold
-    /// would put a fresh warm-up artifact into the middle of a sentence.
+    /// The denoiser must survive this: it carries the spectral history that
+    /// makes it work, and rebuilding it warms up again mid-sentence.
     pub fn retune(&mut self, config: GateConfig) {
         self.hysteresis.retune(config);
     }
@@ -401,16 +354,14 @@ impl VoiceGate {
     ///
     /// `input` and `output` must both be [`FRAME_SAMPLES`] long, mono, 48 kHz.
     ///
-    /// When the gate is shut, `output` is filled with silence rather than left
-    /// alone. The caller is expected to keep publishing it: a sender that stops
-    /// sending looks like a wedged client to a peer, while Opus collapses
-    /// silence on the wire and costs nothing.
+    /// A shut gate fills `output` with silence rather than leaving it alone,
+    /// and the caller keeps publishing it: a sender that stops sending reads
+    /// as a wedged client, while Opus collapses silence on the wire.
     ///
     /// # Panics
     ///
-    /// If either slice is not [`FRAME_SAMPLES`] long. A frame of the wrong
-    /// length means the capture layer is misconfigured, which is a bug at
-    /// startup rather than something to recover from once per 10 ms.
+    /// If either slice is not [`FRAME_SAMPLES`] long, which means the capture
+    /// layer is misconfigured: a bug at startup, not once per 10 ms.
     pub fn process(&mut self, input: &[i16], output: &mut [i16]) -> GateDecision {
         let decision = self.process_ungated(input, output);
         if !decision.open {
@@ -421,11 +372,8 @@ impl VoiceGate {
 
     /// [`process`](Self::process) without the verdict applied to the audio.
     ///
-    /// `output` always carries the processed frame, whatever the gate decided.
-    /// The decision comes back untouched for the caller to act on, or not act
-    /// on yet: [`PreRoll`] exists because the frames worth keeping are the ones
-    /// captured *before* the gate opened, and it cannot keep what `process`
-    /// has already zeroed.
+    /// `output` always carries the processed frame, whatever the gate decided,
+    /// because [`PreRoll`] cannot reopen what `process` has already zeroed.
     ///
     /// # Panics
     ///
@@ -457,12 +405,9 @@ impl VoiceGate {
         let decision = self.hysteresis.step(probability);
 
         if warming_up {
-            // The one frame with no audio worth publishing. RNNoise fades in
-            // over its first output, so this frame is a ramp rather than
-            // anything anybody said. Silenced here rather than left to the
-            // gate, because [`PreRoll`] can reopen a frame the gate shut on and
-            // would otherwise send the ramp as the first thing a listener
-            // hears.
+            // RNNoise fades in over its first output, so this frame is a ramp
+            // rather than anything said. Silenced here and not left to the
+            // gate, which `PreRoll` could reopen.
             output.fill(0);
             return decision;
         }

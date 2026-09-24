@@ -3,14 +3,9 @@
 
 //! Handing the chime to a device.
 //!
-//! The mirror of `frames.rs`, which turns what a microphone delivers into what
-//! the model wants. This turns what [`Tone`] produces into what a device wants:
-//! interleaved across however many channels it has, in whichever of two sample
-//! formats it asked for, in buffers it chose the size of.
-//!
-//! It also owns the only answer to "is it over yet". A stream goes on asking
-//! for samples until somebody drops it, and the code filling the buffer is the
-//! only code that can see the end coming.
+//! The mirror of `frames.rs`: what [`Tone`] produces, interleaved across
+//! however many channels a device has, in whichever format it asked for. It
+//! also owns the only answer to "is it over yet".
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

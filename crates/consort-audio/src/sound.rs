@@ -3,41 +3,10 @@
 
 //! The short sounds a call makes about itself.
 //!
-//! Somebody arriving in a voice channel with no sound is somebody who arrives
-//! unnoticed, and the result is two people starting a sentence at once. The
-//! only way to know is to be looking at the right corner of the screen at the
-//! right moment, which nobody is.
-//!
-//! Distinct from [`crate::tone`], which is arithmetic: that one is the output
-//! test, it has to be recognisably synthetic, and generating it means no file
-//! to ship. These are recorded audio, because a rising fifth somebody chose
-//! sounds like a product and a rising fifth a computer derived sounds like a
-//! modem.
-//!
-//! ## Decoded once, and only if played
-//!
-//! The files are `include_bytes!`d rather than read from disk. A sound that
-//! depends on an install path is a sound that is missing on somebody else's
-//! machine, and the five of them come to about a hundred kilobytes.
-//!
-//! Decoding happens on first use and the result is kept. Somebody who never
-//! joins a call pays nothing, and somebody in a busy channel pays once rather
-//! than once per arrival.
-//!
-//! ## The spoken half, two sentences of three
-//!
-//! [`Phrase`] is the TeamSpeak half: a chime says something happened, a voice
-//! says what. Arriving and leaving are recorded and audible, and where they
-//! came from is in `assets/PROVENANCE.md`.
-//!
-//! "Welcome back" is still silence, because it is the one sentence with no
-//! recording behind it. That is deliberate rather than a bug, and it is the
-//! placeholder that cannot mislead: the setting turns on two sentences that
-//! work, and the third says nothing rather than something wrong. Everything
-//! else about it is already true. It decodes, it is the length of the sentence
-//! it will be, it queues behind the chime rather than over it, and its setting
-//! switches it. One recording dropped into `assets/voice/welcome-back.mp3` is
-//! the whole of what is left.
+//! Recorded, not synthesised like [`crate::tone`]: a rising fifth a computer
+//! derived sounds like a modem. `include_bytes!`d so they cannot go missing on
+//! somebody else's machine, and decoded on first use. Sources are in
+//! `assets/PROVENANCE.md`.
 
 use std::sync::OnceLock;
 
@@ -55,21 +24,20 @@ const JOINED: &[u8] = include_bytes!("../assets/join.mp3");
 /// Somebody left it.
 const LEFT: &[u8] = include_bytes!("../assets/leave.mp3");
 
-/// The sentence played when somebody arrives. See `assets/PROVENANCE.md`.
+/// The sentence played when somebody arrives.
 const SAYS_ENTERED: &[u8] = include_bytes!("../assets/voice/entered.mp3");
 
 /// The sentence played when somebody goes.
 const SAYS_LEFT: &[u8] = include_bytes!("../assets/voice/left.mp3");
 
-/// "Welcome back." Still silence: the one sentence nobody has recorded. See
-/// the module header.
+/// "Welcome back." Decodes to silence, because it is the one sentence nobody
+/// has recorded. A file dropped in here is the whole of what is left.
 const SAYS_WELCOME_BACK: &[u8] = include_bytes!("../assets/voice/welcome-back.mp3");
 
 /// Which sound.
 ///
-/// An enum rather than a path or a name, so that a caller cannot ask for a
-/// file that is not there. Everything shipped is decodable at build time by
-/// construction, and everything else is unrepresentable.
+/// An enum rather than a path, so a caller cannot ask for a file that is not
+/// there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sound {
     /// Somebody arrived.
@@ -79,11 +47,8 @@ pub enum Sound {
 }
 
 impl Sound {
-    /// The samples to play: mono PCM at [`SAMPLE_RATE`].
-    ///
-    /// Empty if the file will not decode, which cannot happen for the files
-    /// this crate ships and is still not worth a panic. A missing chime is a
-    /// call that is quieter than intended; a panic here is a call that ends.
+    /// The samples to play: mono PCM at [`SAMPLE_RATE`]. Empty if the file
+    /// will not decode, because a quiet call beats a call that ends.
     pub fn samples(self) -> &'static [i16] {
         static DECODED: [OnceLock<Vec<i16>>; 2] = [OnceLock::new(), OnceLock::new()];
 
@@ -98,31 +63,23 @@ impl Sound {
 
 /// Which sentence.
 ///
-/// A second enum rather than three more variants of [`Sound`], because the two
-/// are switched on and off separately and the type is what keeps the two
-/// switches from being applied to the wrong one. A caller holding a `Phrase`
-/// cannot accidentally consult the chime setting about it.
-///
-/// The phrases name nobody. That is what TeamSpeak's own default pack did, and
-/// it is the only version that can ship: a name has to be spoken by a
-/// synthesiser, which is a dependency, a licence and a startup cost, and
-/// "somebody" is a word this codebase has already decided is enough elsewhere.
+/// A second enum rather than more [`Sound`] variants, because the two are
+/// switched on and off separately and the type is what stops a switch being
+/// applied to the wrong one. The phrases name nobody: a name needs a
+/// synthesiser.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phrase {
     /// "Somebody has entered your channel."
     Entered,
     /// "Somebody has left your channel."
     Left,
-    /// "Welcome back", to the person who was away and is not any more. The
-    /// one phrase with no recording behind it, so it plays as silence.
+    /// "Welcome back", to somebody who was away. Plays as silence until a
+    /// recording exists.
     WelcomeBack,
 }
 
 impl Phrase {
     /// The samples to play: mono PCM at [`SAMPLE_RATE`].
-    ///
-    /// [`Phrase::WelcomeBack`] is still silence, on purpose. See the module
-    /// header.
     pub fn samples(self) -> &'static [i16] {
         static DECODED: [OnceLock<Vec<i16>>; 3] =
             [OnceLock::new(), OnceLock::new(), OnceLock::new()];
@@ -139,10 +96,8 @@ impl Phrase {
 
 /// Decode `bytes` once and keep the result in `slot`.
 ///
-/// Shared by both enums so that a sound and a sentence cannot end up with
-/// different ideas about what a failed decode does. It renders as silence
-/// either way: a missing chime is a call that is quieter than intended, and a
-/// panic here is a call that ends.
+/// Shared by both enums so a sound and a sentence cannot disagree about what a
+/// failed decode does. It is silence either way.
 fn cached(
     slot: &'static OnceLock<Vec<i16>>,
     bytes: &'static [u8],
@@ -158,11 +113,8 @@ fn cached(
 
 /// Turn an MP3 into mono PCM at [`SAMPLE_RATE`].
 ///
-/// `None` for anything that will not decode, which the caller renders as
-/// silence. Everything here is infallible for the files this crate ships; the
-/// error path exists because `include_bytes!` does not check that the bytes
-/// are audio, and a future replacement should fail quietly rather than at a
-/// `.unwrap()` inside somebody's call.
+/// `None` for anything that will not decode. The error path exists because
+/// `include_bytes!` does not check that the bytes are audio.
 fn decode(bytes: &'static [u8]) -> Option<Vec<i16>> {
     let stream = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
     let mut hint = Hint::new();
@@ -177,8 +129,8 @@ fn decode(bytes: &'static [u8]) -> Option<Vec<i16>> {
         )
         .ok()?;
 
-    // Cloned rather than borrowed, because `track` borrows the reader and the
-    // loop below needs it mutably. Two owned numbers and a codec id.
+    // Cloned because `track` borrows the reader and the loop below needs it
+    // mutably. Two owned numbers and a codec id.
     let track = format.default_track(TrackType::Audio)?;
     let track_id = track.id;
     let params = track.codec_params.as_ref()?.audio()?.clone();
@@ -190,9 +142,8 @@ fn decode(bytes: &'static [u8]) -> Option<Vec<i16>> {
 
     let mut samples = Vec::new();
     let mut interleaved: Vec<i16> = Vec::new();
-    // A decode error mid-file ends the sound rather than discarding it. What
-    // has been decoded so far is still the beginning of the right chime, and
-    // stopping early is less noticeable than not playing at all.
+    // A decode error mid-file ends the sound rather than discarding it: what
+    // decoded is still the beginning of the right chime.
     while let Ok(Some(packet)) = format.next_packet() {
         if packet.track_id != track_id {
             continue;
@@ -213,10 +164,8 @@ fn decode(bytes: &'static [u8]) -> Option<Vec<i16>> {
 
 /// Fold interleaved frames down to one channel.
 ///
-/// Averaged rather than taking the first channel. A stereo file that put the
-/// sound only in the right channel would vanish entirely, and one whose two
-/// channels are out of phase would cancel on the average, which is at least a
-/// failure somebody can hear and diagnose rather than silence.
+/// Averaged rather than taking the first channel, which would lose a stereo
+/// file that put the sound only on the right.
 fn push_mono(interleaved: &[i16], channels: usize, out: &mut Vec<i16>) {
     for frame in interleaved.chunks(channels) {
         let total: i32 = frame.iter().copied().map(i32::from).sum();
@@ -226,11 +175,9 @@ fn push_mono(interleaved: &[i16], channels: usize, out: &mut Vec<i16>) {
 
 /// Stretch or squash `samples` to [`SAMPLE_RATE`].
 ///
-/// Linear, and a no-op for anything already at the right rate, which the files
-/// this crate ships are. It exists for the file somebody drops in to replace
-/// one of them: the whole mixer is 48 kHz, and handing it 44.1 kHz audio plays
-/// the sound nine percent fast and a semitone sharp rather than failing, which
-/// is exactly the kind of bug nobody reports because it merely sounds odd.
+/// Linear, and a no-op for the files this crate ships. It is for a replacement
+/// somebody drops in: 44.1 kHz through a 48 kHz mixer plays a semitone sharp
+/// rather than failing, which is the kind of bug nobody reports.
 fn resample(samples: Vec<i16>, from: u32) -> Vec<i16> {
     if from == SAMPLE_RATE || samples.is_empty() {
         return samples;
@@ -294,9 +241,8 @@ mod tests {
 
     #[test]
     fn a_sound_is_quiet_enough_not_to_startle() {
-        // These fire whenever anybody walks in. Something at full scale in
-        // headphones, several times an evening, is the reason people turn
-        // these off in every client that has them.
+        // These fire whenever anybody walks in, several times an evening, into
+        // headphones.
         for sound in [Sound::Joined, Sound::Left] {
             let loudest = sound.samples().iter().map(|s| s.abs()).max().unwrap_or(0);
             assert!(loudest < 12_000, "{sound:?} peaks at {loudest}");
@@ -313,8 +259,7 @@ mod tests {
     #[test]
     fn decoding_happens_once() {
         // Same slice, not merely an equal one. A busy channel asks for this on
-        // every arrival, and decoding an MP3 per person walking in would be a
-        // hitch in the audio thread's feeder every time somebody joined.
+        // every arrival.
         assert!(std::ptr::eq(
             Sound::Joined.samples(),
             Sound::Joined.samples()
@@ -340,10 +285,8 @@ mod tests {
 
         #[test]
         fn every_phrase_decodes() {
-            // The one thing `include_bytes!` cannot check. It will happily
-            // embed a text file, and silence and an unreadable file are
-            // indistinguishable once played, which is exactly why this is
-            // worth asserting while the files are silent.
+            // The one thing `include_bytes!` cannot check: it will happily
+            // embed a text file.
             for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
                 assert!(
                     !phrase.samples().is_empty(),
@@ -354,10 +297,8 @@ mod tests {
 
         #[test]
         fn a_phrase_is_the_length_of_a_sentence() {
-            // Wider than the chimes on purpose, and for the opposite reason. A
-            // chime has to be over before it intrudes; a sentence has to be
-            // long enough to be one. The bounds are set so that a recording
-            // dropped in later fits without anybody having to come back here.
+            // Wider than the chimes, and set so a recording dropped in later
+            // fits without anybody having to come back here.
             for phrase in [Phrase::Entered, Phrase::Left, Phrase::WelcomeBack] {
                 let seconds = phrase.samples().len() as f64 / f64::from(SAMPLE_RATE);
                 assert!(
@@ -370,8 +311,7 @@ mod tests {
         #[test]
         fn a_recorded_phrase_is_actually_audible() {
             // A file that decodes to the right number of zeroes passes every
-            // other test here and plays nothing. One of the two assertions the
-            // placeholder test was standing in for until the recordings landed.
+            // other test here and plays nothing.
             for phrase in [Phrase::Entered, Phrase::Left] {
                 let loudest = phrase.samples().iter().map(|s| s.abs()).max().unwrap_or(0);
                 assert!(loudest > 1000, "{phrase:?} peaks at {loudest}");
@@ -380,20 +320,14 @@ mod tests {
 
         #[test]
         fn entering_and_leaving_do_not_sound_the_same() {
-            // The other one. Two sentences a person cannot tell apart are one
-            // sentence that fires twice as often, which is the chimes' problem
-            // rather than the fix for it.
             assert_ne!(Phrase::Entered.samples(), Phrase::Left.samples());
         }
 
         #[test]
         fn a_phrase_is_no_louder_than_the_chime_it_follows() {
-            // The chimes bound their peak. Speech cannot be measured that way:
-            // a sentence is mostly quiet, with consonants several times its own
-            // average, so a peak that would be alarming from a tone is ordinary
-            // from a voice. Compare what the ear integrates instead, or a
-            // sentence mastered hot lands right behind a chime that was
-            // deliberately kept gentle.
+            // RMS, not peak like the chimes. Speech is mostly quiet with
+            // consonants several times its own average, so a peak that would
+            // be alarming from a tone is ordinary from a voice.
             let chime = rms(Sound::Joined.samples());
             for phrase in [Phrase::Entered, Phrase::Left] {
                 let level = rms(phrase.samples());
@@ -406,11 +340,9 @@ mod tests {
 
         #[test]
         fn welcome_back_is_a_placeholder_until_somebody_records_it() {
-            // The last of the three, kept back from the test that covered all
-            // of them and for the same reason: so the swap cannot happen
-            // quietly. When this fails the recording has landed, and the two
-            // tests above should gain a third phrase rather than this one
-            // being deleted on its own.
+            // When this fails the recording has landed, and the two tests
+            // above should gain a third phrase rather than this one being
+            // deleted on its own.
             let loudest = Phrase::WelcomeBack
                 .samples()
                 .iter()
@@ -425,9 +357,7 @@ mod tests {
 
         #[test]
         fn decoding_happens_once() {
-            // Same slice, not merely an equal one. These are longer than the
-            // chimes, so decoding one per arrival would be a bigger hitch in
-            // the feeder than the chimes would have been.
+            // Same slice, not merely an equal one.
             assert!(std::ptr::eq(
                 Phrase::Entered.samples(),
                 Phrase::Entered.samples()
