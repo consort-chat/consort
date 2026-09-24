@@ -75,7 +75,7 @@
   scrollbar-width: none;
 }
 
-/* The one WebKitGTK reads. It asked for `thin` above and #125 arrived fat. */
+/* Both or neither. WebKit understood this long before `scrollbar-width`. */
 .emoji__tabs::-webkit-scrollbar {
   display: none;
 }

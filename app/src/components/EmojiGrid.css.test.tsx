@@ -120,11 +120,11 @@ describe("the category strip", () => {
     ).toBe("none");
   });
 
-  it("hides the one WebKit draws anyway", () => {
+  it("hides the one WebKit draws as well", () => {
     /*
-      The rule that does the work on the engine Consort ships against. The
-      strip asked for `thin` and #125 arrived with a picture of a fat bar, so
-      `scrollbar-width` is not what WebKitGTK is reading.
+      Both rules or neither. Which of them webkit2gtk 2.52 acts on is not
+      something jsdom can be asked, and the strip asking for `thin` was
+      already not enough to keep the bar off the tabs.
     */
     drawTheGrid();
 
