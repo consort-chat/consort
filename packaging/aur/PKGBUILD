@@ -45,6 +45,14 @@ license=('AGPL-3.0-only')
 # belong to hicolor-icon-theme. It is pulled in transitively by gtk3 in practice,
 # but a package that owns files inside another package's directory tree should
 # depend on it outright. namcap flags the omission.
+#
+# libayatana-appindicator is the other one, and it is the one `readelf -d` will
+# never find: the tray icon reaches libayatana-appindicator3.so.1 by name
+# through libloading, so it is opened at runtime and never linked. namcap will
+# call it an unnecessary dependency for exactly that reason and is wrong. Drop
+# it and Consort still starts, with no tray icon and a line in the log saying
+# why, which is a failure nobody reports because nobody knows there was meant
+# to be one.
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
@@ -59,6 +67,7 @@ depends=(
   'libstdc++'
   'glibc'
   'hicolor-icon-theme'
+  'libayatana-appindicator'
 )
 makedepends=('cargo' 'git' 'nodejs' 'pnpm')
 

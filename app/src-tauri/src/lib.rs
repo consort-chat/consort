@@ -22,6 +22,7 @@ mod sound;
 mod state;
 #[cfg(test)]
 mod testing;
+mod tray;
 
 use std::path::PathBuf;
 
@@ -175,6 +176,11 @@ pub fn run() {
             // test could build.
             app.state::<AppState>()
                 .draw_notifications_with(std::sync::Arc::new(app.handle().clone()));
+
+            // Here rather than anywhere later, because this is the main thread
+            // and `tray::install` needs to be on it to survive a machine with
+            // no appindicator library. See the comment there.
+            tray::install(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| match event {
