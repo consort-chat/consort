@@ -1672,6 +1672,23 @@ export function timelineClose(): Promise<void> {
 }
 
 /**
+ * The rooms this account has opened, most recently first.
+ *
+ * Room IDs and nothing else. What each of them is called, what it looks like
+ * and which rail entry it hangs under are all in the room list already, and a
+ * second copy here would be a second thing to go stale.
+ *
+ * Asked for rather than pushed, and answered out of a file rather than from
+ * the homeserver: this is what the screen the application opens on draws, and
+ * that screen is drawn before the first sync response has landed.
+ *
+ * Empty while signed out, and empty for rooms opened under another account.
+ */
+export function recentRooms(): Promise<string[]> {
+  return invoke<string[]>("recent_rooms");
+}
+
+/**
  * Ask the open room for a page of older messages.
  *
  * Answers nothing: the page arrives on the `timeline` channel as a longer

@@ -9,6 +9,8 @@ const audioTestStop = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 const logout = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
+// The screen drawn with no channel selected asks which rooms were opened last.
+const recentRooms = vi.hoisted(() => vi.fn());
 
 // The main pane draws a room's messages, which is a subscription and three
 // commands. Mocked rather than left to fail: an unmocked `invoke` rejects into
@@ -54,6 +56,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberNames,
   roomAt,
   roomAvatar,
+  recentRooms,
   threadOpen,
 }));
 
@@ -226,6 +229,7 @@ describe("AppShell", () => {
     onAudio.mockReset().mockResolvedValue(() => {});
     logout.mockReset().mockResolvedValue(undefined);
     roomAvatar.mockReset().mockResolvedValue(null);
+    recentRooms.mockReset().mockResolvedValue([]);
     onTimeline.mockReset().mockResolvedValue(() => {});
     onTyping.mockReset().mockResolvedValue(() => {});
     onDropped.mockReset().mockResolvedValue(() => {});
@@ -1183,7 +1187,7 @@ describe("AppShell", () => {
       await goBack();
 
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-        "Nothing here yet",
+        "Consort",
       );
     });
 
@@ -1256,6 +1260,67 @@ describe("AppShell", () => {
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
         "Lounge",
       );
+      expect(onJoinVoice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the screen with no channel selected", () => {
+    const LOUNGE = "!lounge:example.org";
+    const TECH = "!tech:example.org";
+
+    /** Home is selected; the other rail entry holds the rooms below. */
+    const elsewhere: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!general:example.org", "general")],
+        },
+        {
+          id: "!kahu:example.org",
+          name: "Kahu HQ",
+          avatar: null,
+          channels: [textChannel(TECH, "tech"), voice(LOUNGE, "Lounge")],
+        },
+      ],
+    };
+
+    it("opens a recent room that is under another rail entry", async () => {
+      // The reason the pane hands back the entry as well as the channel.
+      // Selecting a channel from the list beside it can assume the space it
+      // was picked in; this cannot, because the pane lists every one of them.
+      recentRooms.mockResolvedValue([TECH]);
+      shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /#tech/ }),
+      );
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#tech",
+      );
+    });
+
+    it("joins a recent voice channel, the way the list beside it does", async () => {
+      recentRooms.mockResolvedValue([LOUNGE]);
+      const { onJoinVoice } = shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Lounge/ }),
+      );
+
+      expect(onJoinVoice).toHaveBeenCalledWith(LOUNGE);
+    });
+
+    it("does not join a recent text room", async () => {
+      recentRooms.mockResolvedValue([TECH]);
+      const { onJoinVoice } = shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /#tech/ }),
+      );
+
       expect(onJoinVoice).not.toHaveBeenCalled();
     });
   });

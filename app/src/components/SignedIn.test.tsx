@@ -21,6 +21,8 @@ const callSetAway = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
 const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
+// The screen drawn with no channel selected asks which rooms were opened last.
+const recentRooms = vi.hoisted(() => vi.fn());
 // The people under a voice channel draw their avatars, which is a command.
 // Mocked rather than left to fail quietly: an unmocked `invoke` throws into
 // the catch that turns a missing picture into an initial, so the tests would
@@ -66,6 +68,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   callConnect,
   callDisconnect,
   roomAvatar,
+  recentRooms,
   memberAvatar,
   resendState,
   verificationVerifyThisSession,
@@ -205,6 +208,7 @@ function resetApiMocks() {
   callConnect.mockReset().mockResolvedValue(undefined);
   callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
+  recentRooms.mockReset().mockResolvedValue([]);
   memberAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
@@ -1246,7 +1250,7 @@ describe("SignedIn the room list", () => {
     await accountPanel();
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1307,14 +1311,14 @@ describe("SignedIn the room list", () => {
     // Away from it, under their own steam.
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
 
     // A sync. The tree is new, which is the whole of what it takes.
     act(() => roomsHandler()({ spaces: [homeSpace, kahuHq] }));
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1364,7 +1368,7 @@ describe("SignedIn the room list", () => {
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1395,7 +1399,7 @@ describe("SignedIn the room list", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
     expect(
       screen.queryByRole("button", { name: "#general" }),
