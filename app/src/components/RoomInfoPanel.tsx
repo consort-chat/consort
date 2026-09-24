@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   asCommandError,
@@ -167,7 +167,7 @@ export function RoomInfoPanel({
     });
   }
 
-  function sendInvite(event: React.FormEvent) {
+  function sendInvite(event: FormEvent) {
     event.preventDefault();
     const who = invitee.trim();
     // Nothing typed is not a request. The homeserver would refuse it and the
