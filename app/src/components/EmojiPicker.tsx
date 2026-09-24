@@ -24,8 +24,10 @@ const NOTHING_YET: EmojiSettings = { recent: [], tone: 0 };
  *
  * An attribute rather than a ref, because the two controls on a message are
  * drawn once per message and a ref would hold whichever was rendered last.
- * Pressing a different message's control still closes this one, because the
- * toggle moves the open panel to that message anyway.
+ * Which one belongs to this panel is answered by where it sits: every caller
+ * draws the control and the panel inside one element, so only a marked control
+ * under the panel's own parent is this panel's. A marked control anywhere else
+ * is a second picker being opened, and this one has to shut.
  */
 export const OPENS_A_PICKER = "data-opens-a-picker";
 
@@ -115,9 +117,12 @@ export function EmojiPicker({
         onClose();
         return;
       }
+      if (panel.current?.contains(event.target) === true) return;
+
+      const control = event.target.closest(`[${OPENS_A_PICKER}]`);
       if (
-        panel.current?.contains(event.target) === true ||
-        event.target.closest(`[${OPENS_A_PICKER}]`) !== null
+        control !== null &&
+        panel.current?.parentElement?.contains(control) === true
       ) {
         return;
       }

@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   inTone,
@@ -148,6 +148,30 @@ describe("the dataset behind it", () => {
 
     expect(second).toBe(first);
     await first;
+  });
+
+  it("lets a load that failed be tried again", async () => {
+    /*
+      The memo must not hold a rejection. The chunk is fetched off disk on
+      first open, and one read that fails, or one stale index.html after an
+      update, would otherwise leave every picker in the session sitting on
+      "Fetching the emoji" until the application is restarted.
+    */
+    vi.resetModules();
+    let attempts = 0;
+    vi.doMock("./emojiSet", () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("chunk gone");
+      return { set: SMALL };
+    });
+
+    const { loadEmoji: afresh } = await import("./emoji");
+    // The message is vitest's own wrapper around the factory's, so the thing
+    // worth asserting is that it rejected and that the next call did not.
+    await expect(afresh()).rejects.toThrow();
+    await expect(afresh()).resolves.toBe(SMALL);
+
+    vi.doUnmock("./emojiSet");
   });
 
   it("is grouped the way the picker draws its tabs", async () => {

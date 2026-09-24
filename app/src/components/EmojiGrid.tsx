@@ -115,12 +115,17 @@ export function EmojiGrid({
     Focus follows `at` rather than being moved at the key press, because the
     button being moved to may have only just been drawn: an arrow that changes
     the row is a render away from having anything to focus.
+
+    On `at` alone, deliberately. Anything else that changes what the grid holds
+    lifts the cursor out of it first, so a second dependency here would only
+    add ways for the grid to take focus off something the cursor had nothing to
+    do with: the remembered keys arriving late, for one.
   */
   useEffect(() => {
     if (at === null) return;
     const keys = grid.current?.querySelectorAll("button");
     (keys?.item(at) as HTMLElement | undefined)?.focus();
-  }, [at, showing]);
+  }, [at]);
 
   function moveTo(next: number) {
     setAt(Math.max(0, Math.min(showing.length - 1, next)));

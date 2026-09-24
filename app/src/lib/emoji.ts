@@ -69,9 +69,21 @@ export interface EmojiSet {
  */
 let pending: Promise<EmojiSet> | null = null;
 
-/** The standard set, loading it the first time somebody opens a picker. */
+/**
+ * The standard set, loading it the first time somebody opens a picker.
+ *
+ * A failure is not remembered. The chunk is read off disk on first open, and a
+ * memo holding the rejection would leave every later open of either picker
+ * waiting on a fetch that is never retried, for the rest of the session.
+ */
 export function loadEmoji(): Promise<EmojiSet> {
-  pending ??= import("./emojiSet").then((module) => module.set);
+  pending ??= import("./emojiSet").then(
+    (module) => module.set,
+    (reason: unknown) => {
+      pending = null;
+      throw reason;
+    },
+  );
   return pending;
 }
 

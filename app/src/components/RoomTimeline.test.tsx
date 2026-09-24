@@ -1297,6 +1297,18 @@ describe("RoomTimeline", () => {
     expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
   });
 
+  it("shuts when a message's own picker is opened instead", async () => {
+    // One panel at a time, across both kinds. Two open at once is two grids
+    // with nothing saying which of them the next press belongs to.
+    await pane();
+    await arrive(timeline([said("$1", ADA, "hello")]));
+    await openTheEmoji();
+
+    await userEvent.click(screen.getAllByRole("button", { name: "React" })[0]!);
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
   it("closes again when the control that opened it is pressed", async () => {
     // It says `aria-expanded`, so it is a control that opens and shuts. The
     // press has to reach the toggle rather than being spent on the rule that
