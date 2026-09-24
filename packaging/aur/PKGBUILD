@@ -69,7 +69,7 @@ depends=(
   'hicolor-icon-theme'
   'libayatana-appindicator'
 )
-makedepends=('cargo' 'git' 'nodejs' 'pnpm')
+makedepends=('cargo' 'git' 'nodejs>=24' 'pnpm')
 
 provides=("$_pkgname")
 conflicts=("$_pkgname")
