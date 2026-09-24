@@ -62,6 +62,12 @@ at whatever homeserver you already run.
   you come back to opens where you left off with a line across it. Read
   receipts go out publicly by default, the way every other Matrix client sends
   them; Settings has a switch that keeps them to your own account instead.
+- **Who has read what.** Small faces under the last message in a group, showing
+  who has read up to it, and a count when more have read it than the row can
+  hold. Only people who share read receipts can appear there, so the row says
+  so: somebody who has turned the switch above off is invisible to everybody,
+  and fewer faces than there are people in the room is that setting working
+  rather than this feature failing.
 - **Notifications.** A desktop notification when Consort is not the window you
   are looking at, or when it is and you are reading a different channel.
   Clicking one brings the window forward and opens the channel it was about.
@@ -191,7 +197,7 @@ resource here. The full standard, and what gets a change sent back, is in
 | Voice over MatrixRTC and LiveKit, with device settings | working |
 | Text, attachments, threads, replies, reactions, mentions | working |
 | Sending attachments, by picker, drag or paste | working |
-| Read receipts, unread channels, where reading stopped | working |
+| Read receipts sent and drawn, unread channels, where reading stopped | working |
 | Desktop notifications, honouring your push rules | working |
 | Editing, upload progress, video thumbnails | planned |
 | Signed and notarised builds for Windows and macOS | someday |
