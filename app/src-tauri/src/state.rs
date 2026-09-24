@@ -723,6 +723,7 @@ impl AppState {
         let events = self.events.clone();
         let for_threads = self.events.clone();
         let for_typing = self.events.clone();
+        let for_readers = self.events.clone();
         // Assigned rather than pushed, so the previous watcher is dropped, and
         // therefore aborted, by the assignment itself.
         *self.locked_timeline() = Some(timeline::watch(
@@ -731,6 +732,7 @@ impl AppState {
             move |timeline| events.emit(AppEvent::Timeline(timeline)),
             move |thread| for_threads.emit(AppEvent::Thread(thread.map(Box::new))),
             move |typing| for_typing.emit(AppEvent::Typing(typing)),
+            move |readers| for_readers.emit(AppEvent::Readers(readers)),
         ));
     }
 

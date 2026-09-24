@@ -65,9 +65,12 @@ use matrix_sdk::ruma::events::{
 };
 use matrix_sdk::ruma::serde::Raw;
 
+use matrix_sdk::ruma::events::receipt::ReceiptType;
+
 use crate::timeline::dto::{
     Media, Message, MessageKind, SystemChange, SystemMessage, ThreadSummary,
 };
+use crate::timeline::read_by::About;
 
 /// One `m.reaction` event, unpacked.
 ///
@@ -179,6 +182,65 @@ pub fn thread_root(event: &TimelineEvent) -> Option<String> {
         Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
         _ => None,
     }
+}
+
+/// One person's claim to have read up to one message.
+///
+/// Its own type rather than a tuple, on the same terms as [`Annotated`]: three
+/// values in a row is three chances to pass them in the wrong order, and the
+/// compiler would not mind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Read {
+    /// Who read it, as a Matrix user ID.
+    pub user: String,
+    /// The newest message they have read. Everything before it is implied.
+    pub event_id: String,
+    /// Which conversation they read it in.
+    pub about: About,
+}
+
+/// Who an `m.receipt` event says has read what, or `None` for anything else.
+///
+/// The whole batch every time, because that is what the event carries: one of
+/// these holds every receipt that moved since the last sync, across any number
+/// of people and messages.
+///
+/// An empty answer is not the same as `None`. A receipt event carrying nothing
+/// this draws is an `m.receipt` all the same, and saying so is what lets the
+/// caller tell "a batch with no public receipts in it" from "no batch".
+///
+/// ## Only the public ones
+///
+/// `m.read` is the only receipt anybody else in the room can see, so it is the
+/// only one drawn. The private receipts that reach this client are its own,
+/// sent by whichever setting `crate::receipts::mark_read` was called under,
+/// and drawing one would put this account's own face against its own message.
+///
+/// ## Which conversation
+///
+/// A receipt with no `thread_id` and a receipt naming `main` are both about the
+/// room's own timeline. The difference is what the sending client knew rather
+/// than what was read, and a build that understood only one of the two would
+/// draw nobody for half the people in the room.
+pub fn receipts(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<Read>> {
+    let AnySyncEphemeralRoomEvent::Receipt(receipt) = event.deserialize().ok()? else {
+        return None;
+    };
+
+    let mut said = Vec::new();
+    for (event_id, kinds) in receipt.content.0 {
+        let Some(public) = kinds.get(&ReceiptType::Read) else {
+            continue;
+        };
+        for (user, one) in public {
+            said.push(Read {
+                user: user.to_string(),
+                event_id: event_id.to_string(),
+                about: About::from(&one.thread),
+            });
+        }
+    }
+    Some(said)
 }
 
 /// Who an `m.typing` event says is typing, or `None` for anything else.
@@ -2159,5 +2221,161 @@ mod tests {
                 "{kind} should still be undrawn"
             );
         }
+    }
+
+    /// An `m.receipt` as a homeserver sends it, with `content` as its content.
+    fn receipt_event(content: Value) -> Raw<AnySyncEphemeralRoomEvent> {
+        Raw::new(&json!({ "type": "m.receipt", "content": content }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked()
+    }
+
+    /// One person's public receipt on one message, with whatever thread field.
+    fn read_by(user: &str, event_id: &str, thread: Option<&str>) -> Value {
+        let mut receipt = json!({ "ts": 1_700_000_000_000u64 });
+        if let Some(thread) = thread {
+            receipt["thread_id"] = json!(thread);
+        }
+        json!({ event_id: { "m.read": { user: receipt } } })
+    }
+
+    #[test]
+    fn a_receipt_with_no_thread_is_about_the_room() {
+        // The one almost every client sends, and the one this build sends.
+        // A room that only understood "main" would draw nobody.
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            None,
+        )));
+
+        assert_eq!(
+            said,
+            Some(vec![Read {
+                user: "@ada:example.org".to_owned(),
+                event_id: "$said:example.org".to_owned(),
+                about: About::Room,
+            }])
+        );
+    }
+
+    #[test]
+    fn a_receipt_naming_the_main_timeline_is_also_about_the_room() {
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("main"),
+        )));
+
+        assert_eq!(said.unwrap()[0].about, About::Room);
+    }
+
+    #[test]
+    fn a_receipt_naming_a_thread_is_about_that_thread() {
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("$root:example.org"),
+        )));
+
+        assert_eq!(
+            said.unwrap()[0].about,
+            About::Thread("$root:example.org".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_thread_this_build_cannot_name_is_still_not_the_room() {
+        // `thread_id` is an arbitrary string on the wire, and ruma hands back
+        // anything that is neither "main" nor an event ID as a value of its
+        // own. Read as the room it would put a stranger's face against a
+        // message they have not seen, which is the failure worth avoiding:
+        // drawing nothing for a thread nobody can name costs a face somebody
+        // never sees.
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("something-from-a-later-specification"),
+        )));
+
+        assert_ne!(said.unwrap()[0].about, About::Room);
+    }
+
+    #[test]
+    fn a_private_receipt_is_not_something_to_draw() {
+        // Only `m.read` is visible to the room, so only `m.read` is drawn. The
+        // private ones that reach this client are its own, and drawing one
+        // would put this account's own face against its own message.
+        let said = receipts(&receipt_event(json!({
+            "$said:example.org": {
+                "m.read.private": { "@ada:example.org": { "ts": 1_700_000_000_000u64 } }
+            }
+        })));
+
+        assert_eq!(said, Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_fully_read_marker_riding_along_is_not_a_receipt() {
+        // `m.fully_read` shares the event's shape and is not a claim about
+        // anybody but the account that sent it.
+        let said = receipts(&receipt_event(json!({
+            "$said:example.org": {
+                "m.fully_read": { "@ada:example.org": { "ts": 1_700_000_000_000u64 } }
+            }
+        })));
+
+        assert_eq!(said, Some(Vec::new()));
+    }
+
+    #[test]
+    fn everybody_named_in_one_receipt_event_is_reported() {
+        // One event carries the whole batch: several people, several messages.
+        let said = receipts(&receipt_event(json!({
+            "$one:example.org": {
+                "m.read": {
+                    "@ada:example.org": { "ts": 1_700_000_000_000u64 },
+                    "@bob:example.org": { "ts": 1_700_000_000_001u64 }
+                }
+            },
+            "$two:example.org": {
+                "m.read": { "@cleo:example.org": { "ts": 1_700_000_000_002u64 } }
+            }
+        })))
+        .unwrap();
+
+        let mut seen: Vec<(String, String)> = said
+            .into_iter()
+            .map(|one| (one.user, one.event_id))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("@ada:example.org".to_owned(), "$one:example.org".to_owned()),
+                ("@bob:example.org".to_owned(), "$one:example.org".to_owned()),
+                (
+                    "@cleo:example.org".to_owned(),
+                    "$two:example.org".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ephemeral_event_that_is_not_a_receipt_says_nothing() {
+        let said = receipts(&receipt_event_of_kind("m.typing"));
+
+        assert_eq!(said, None);
+    }
+
+    /// An ephemeral event of some other kind.
+    fn receipt_event_of_kind(kind: &str) -> Raw<AnySyncEphemeralRoomEvent> {
+        Raw::new(&json!({
+            "type": kind,
+            "content": { "user_ids": ["@ada:example.org"] },
+        }))
+        .expect("the fixture is valid JSON")
+        .cast_unchecked()
     }
 }
