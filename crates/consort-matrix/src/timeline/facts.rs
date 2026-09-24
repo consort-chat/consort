@@ -48,9 +48,18 @@
 //! paged back in after being deleted is indistinguishable from a message in
 //! the room, and is drawn there. Nothing here can tell them apart, and
 //! guessing would be worse than the noise.
+//!
+//! A thread hanging *from* a deleted message is the opposite case and reads
+//! the opposite way, which is worth saying because the two look alike. What a
+//! redaction takes is the relation the event declares about itself, in
+//! `content`. A thread summary is not that: it is an aggregation the
+//! homeserver computes over the replies and hangs off `unsigned`, none of
+//! which a redaction touches. It is still on the wire, and [`deleted`] reads
+//! it.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
+use matrix_sdk::ruma::events::relation::{BundledMessageLikeRelations, BundledThread};
 use matrix_sdk::ruma::events::room::MediaSource;
 use matrix_sdk::ruma::events::room::member::{MembershipState, OriginalSyncRoomMemberEvent};
 use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
@@ -64,10 +73,14 @@ use matrix_sdk::ruma::events::{
     RedactedSyncMessageLikeEvent, SyncMessageLikeEvent, SyncStateEvent,
 };
 use matrix_sdk::ruma::serde::Raw;
+use serde::Deserialize;
+
+use matrix_sdk::ruma::events::receipt::ReceiptType;
 
 use crate::timeline::dto::{
     Media, Message, MessageKind, SystemChange, SystemMessage, ThreadSummary,
 };
+use crate::timeline::read_by::About;
 
 /// One `m.reaction` event, unpacked.
 ///
@@ -179,6 +192,65 @@ pub fn thread_root(event: &TimelineEvent) -> Option<String> {
         Some(Relation::Thread(thread)) => Some(thread.event_id.to_string()),
         _ => None,
     }
+}
+
+/// One person's claim to have read up to one message.
+///
+/// Its own type rather than a tuple, on the same terms as [`Annotated`]: three
+/// values in a row is three chances to pass them in the wrong order, and the
+/// compiler would not mind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Read {
+    /// Who read it, as a Matrix user ID.
+    pub user: String,
+    /// The newest message they have read. Everything before it is implied.
+    pub event_id: String,
+    /// Which conversation they read it in.
+    pub about: About,
+}
+
+/// Who an `m.receipt` event says has read what, or `None` for anything else.
+///
+/// The whole batch every time, because that is what the event carries: one of
+/// these holds every receipt that moved since the last sync, across any number
+/// of people and messages.
+///
+/// An empty answer is not the same as `None`. A receipt event carrying nothing
+/// this draws is an `m.receipt` all the same, and saying so is what lets the
+/// caller tell "a batch with no public receipts in it" from "no batch".
+///
+/// ## Only the public ones
+///
+/// `m.read` is the only receipt anybody else in the room can see, so it is the
+/// only one drawn. The private receipts that reach this client are its own,
+/// sent by whichever setting `crate::receipts::mark_read` was called under,
+/// and drawing one would put this account's own face against its own message.
+///
+/// ## Which conversation
+///
+/// A receipt with no `thread_id` and a receipt naming `main` are both about the
+/// room's own timeline. The difference is what the sending client knew rather
+/// than what was read, and a build that understood only one of the two would
+/// draw nobody for half the people in the room.
+pub fn receipts(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<Read>> {
+    let AnySyncEphemeralRoomEvent::Receipt(receipt) = event.deserialize().ok()? else {
+        return None;
+    };
+
+    let mut said = Vec::new();
+    for (event_id, kinds) in receipt.content.0 {
+        let Some(public) = kinds.get(&ReceiptType::Read) else {
+            continue;
+        };
+        for (user, one) in public {
+            said.push(Read {
+                user: user.to_string(),
+                event_id: event_id.to_string(),
+                about: About::from(&one.thread),
+            });
+        }
+    }
+    Some(said)
 }
 
 /// Who an `m.typing` event says is typing, or `None` for anything else.
@@ -438,7 +510,7 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         SyncMessageLikeEvent::Original(said) => said,
         // Emptied by the homeserver. There is nothing left to read, which is
         // exactly what the mark says.
-        SyncMessageLikeEvent::Redacted(gone) => return deleted(&gone),
+        SyncMessageLikeEvent::Redacted(gone) => return deleted(event, &gone),
     };
 
     // Before the body is read, because both of these have one and drawing it
@@ -582,20 +654,52 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
             .filter(|formatted| formatted.format == MessageFormat::Html)
             .map(|formatted| without_quoted_reply(formatted.body)),
         media,
-        thread: said.unsigned.relations.thread.map(|bundle| ThreadSummary {
-            // Saturating rather than fallible. The count is the homeserver's
-            // own tally, and a thread long enough to overflow this is one
-            // nobody is reaching the end of, so a badge that has stopped
-            // counting beats a message that failed to draw.
-            count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
-            participated: bundle.current_user_participated,
-        }),
+        thread: said.unsigned.relations.thread.as_deref().map(summary),
         reply_to,
         mentions,
         // Nobody has, or this would not have deserialised as an original.
         deleted_by: None,
         kind,
     })
+}
+
+/// One homeserver's thread tally as the interface's.
+///
+/// Free and shared, because the two paths that build a message read the same
+/// bundle from different places and a second copy of this rule would be a
+/// second answer free to drift.
+///
+/// Saturating rather than fallible. The count is the homeserver's own tally,
+/// and a thread long enough to overflow this is one nobody is reaching the end
+/// of, so a badge that has stopped counting beats a message that failed to
+/// draw.
+fn summary(bundle: &BundledThread) -> ThreadSummary {
+    ThreadSummary {
+        count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
+        participated: bundle.current_user_participated,
+    }
+}
+
+/// The part of `unsigned` that ruma's redacted view does not offer.
+///
+/// Deserialised by hand for one reason: [`RedactedUnsigned`] is the whole of
+/// what a redacted event's `unsigned` is modelled as, and it holds
+/// `redacted_because` and nothing else. The aggregations are still on the
+/// wire. See [`deleted`].
+///
+/// The field below is [`MessageLikeUnsigned`]'s own declaration copied: same
+/// name, same `default`, same type. That is deliberate and it is what makes
+/// this worth trusting. The two paths that build a message read the bundle
+/// through the same code, so they agree on a well-formed one and fail
+/// together on anything else, which is the property #86 wanted and could not
+/// have.
+///
+/// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
+/// [`MessageLikeUnsigned`]: matrix_sdk::ruma::events::MessageLikeUnsigned
+#[derive(Deserialize)]
+struct StillBundled {
+    #[serde(rename = "m.relations", default)]
+    relations: BundledMessageLikeRelations<AnySyncMessageLikeEvent>,
 }
 
 /// Which event a message is answering, if it chose one.
@@ -730,12 +834,19 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
 /// what lets the mark name a moderator by their display name, which this side
 /// does not know.
 ///
-/// `thread` is absent and cannot be otherwise. A bundled thread summary lives
-/// in `unsigned`, and a redacted event's `unsigned` carries `redacted_because`
-/// and nothing else, so there is no count here to read. See
-/// [`crate::timeline::History::redacted`], which clears it from the other end
-/// so that the two paths draw the same room.
+/// `thread` is the exception, and it is read off the raw JSON rather than off
+/// the deserialised event, the way [`undecryptable`] reads `origin_server_ts`.
+/// The replies under a deleted root were not redacted, and a redaction strips
+/// `content` and leaves `unsigned` alone, so the homeserver goes on bundling
+/// the tally onto the event and goes on counting into it. What has no count is
+/// ruma: [`RedactedUnsigned`] models `redacted_because` and nothing else, so
+/// the typed view drops a field that is sitting in the bytes. Reading it here
+/// is what lets [`crate::timeline::History::redacted`] keep the summary on the
+/// live path without the two ends disagreeing after a reload.
+///
+/// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
 fn deleted(
+    event: &TimelineEvent,
     gone: &RedactedSyncMessageLikeEvent<RedactedRoomMessageEventContent>,
 ) -> Option<Message> {
     Some(Message {
@@ -745,7 +856,17 @@ fn deleted(
         body: String::new(),
         html: None,
         media: None,
-        thread: None,
+        // Absent for almost every mark, because a homeserver bundles nothing
+        // onto a message nobody replied to. Unreadable `unsigned` is read the
+        // same way: no door rather than a guess at one.
+        thread: event
+            .raw()
+            .get_field::<StillBundled>("unsigned")
+            .ok()
+            .flatten()
+            .and_then(|unsigned| unsigned.relations.thread)
+            .as_deref()
+            .map(summary),
         edited: false,
         reactions: Vec::new(),
         reply_to: None,
@@ -1624,6 +1745,28 @@ mod tests {
         }))
     }
 
+    /// The same, with the thread summary a homeserver still bundles onto it.
+    ///
+    /// A redaction strips `content` and leaves `unsigned` alone, and Synapse
+    /// computes the aggregation when it serialises the event rather than when
+    /// the event was written, so a deleted root arrives looking exactly like
+    /// this. Checked against a real one rather than assumed: see
+    /// `a_redacted_thread_root_still_carries_its_count` in
+    /// `tests/against_a_real_homeserver.rs`.
+    fn emptied_in_a_thread(by: Value, count: u64, participated: bool) -> TimelineEvent {
+        let mut unsigned = thread_bundle(count, participated);
+        unsigned["redacted_because"] = by;
+
+        event(json!({
+            "type": "m.room.message",
+            "event_id": "$gone:example.org",
+            "sender": "@ada:example.org",
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": {},
+            "unsigned": unsigned,
+        }))
+    }
+
     /// One `m.room.redaction` as it appears in `redacted_because`.
     fn because(sender: &str) -> Value {
         json!({
@@ -1678,6 +1821,48 @@ mod tests {
 
         assert_eq!(gone.deleted_by, None);
         assert_eq!(gone.kind, MessageKind::Deleted);
+    }
+
+    #[test]
+    fn a_mark_keeps_the_way_into_the_thread_hanging_from_it() {
+        // The replies are not redacted and the homeserver still counts them,
+        // so the count is on the wire. Read it, and the room keeps the one
+        // control that opens the panel. Without this the conversation is
+        // still there and nothing in the interface can reach it.
+        let gone = message(&emptied_in_a_thread(because("@ada:example.org"), 3, true)).unwrap();
+
+        assert_eq!(gone.kind, MessageKind::Deleted);
+        assert_eq!(
+            gone.thread,
+            Some(ThreadSummary {
+                count: 3,
+                participated: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_mark_with_no_replies_under_it_has_no_door_to_draw() {
+        // A homeserver bundles nothing onto a message nobody replied to, so
+        // absence here is the ordinary case rather than a read that failed.
+        let gone = message(&emptied(because("@ada:example.org"))).unwrap();
+
+        assert_eq!(gone.thread, None);
+    }
+
+    #[test]
+    fn a_count_too_large_to_draw_stops_at_the_largest_one_that_is() {
+        // The same saturating read as the path an unredacted root takes, and
+        // the same reason: a badge that has stopped counting beats a mark
+        // that failed to draw. One rule, used from both ends.
+        let gone = message(&emptied_in_a_thread(
+            because("@ada:example.org"),
+            u64::from(u32::MAX) + 1,
+            false,
+        ))
+        .unwrap();
+
+        assert_eq!(gone.thread.map(|thread| thread.count), Some(u32::MAX));
     }
 
     #[test]
@@ -2159,5 +2344,161 @@ mod tests {
                 "{kind} should still be undrawn"
             );
         }
+    }
+
+    /// An `m.receipt` as a homeserver sends it, with `content` as its content.
+    fn receipt_event(content: Value) -> Raw<AnySyncEphemeralRoomEvent> {
+        Raw::new(&json!({ "type": "m.receipt", "content": content }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked()
+    }
+
+    /// One person's public receipt on one message, with whatever thread field.
+    fn read_by(user: &str, event_id: &str, thread: Option<&str>) -> Value {
+        let mut receipt = json!({ "ts": 1_700_000_000_000u64 });
+        if let Some(thread) = thread {
+            receipt["thread_id"] = json!(thread);
+        }
+        json!({ event_id: { "m.read": { user: receipt } } })
+    }
+
+    #[test]
+    fn a_receipt_with_no_thread_is_about_the_room() {
+        // The one almost every client sends, and the one this build sends.
+        // A room that only understood "main" would draw nobody.
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            None,
+        )));
+
+        assert_eq!(
+            said,
+            Some(vec![Read {
+                user: "@ada:example.org".to_owned(),
+                event_id: "$said:example.org".to_owned(),
+                about: About::Room,
+            }])
+        );
+    }
+
+    #[test]
+    fn a_receipt_naming_the_main_timeline_is_also_about_the_room() {
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("main"),
+        )));
+
+        assert_eq!(said.unwrap()[0].about, About::Room);
+    }
+
+    #[test]
+    fn a_receipt_naming_a_thread_is_about_that_thread() {
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("$root:example.org"),
+        )));
+
+        assert_eq!(
+            said.unwrap()[0].about,
+            About::Thread("$root:example.org".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_thread_this_build_cannot_name_is_still_not_the_room() {
+        // `thread_id` is an arbitrary string on the wire, and ruma hands back
+        // anything that is neither "main" nor an event ID as a value of its
+        // own. Read as the room it would put a stranger's face against a
+        // message they have not seen, which is the failure worth avoiding:
+        // drawing nothing for a thread nobody can name costs a face somebody
+        // never sees.
+        let said = receipts(&receipt_event(read_by(
+            "@ada:example.org",
+            "$said:example.org",
+            Some("something-from-a-later-specification"),
+        )));
+
+        assert_ne!(said.unwrap()[0].about, About::Room);
+    }
+
+    #[test]
+    fn a_private_receipt_is_not_something_to_draw() {
+        // Only `m.read` is visible to the room, so only `m.read` is drawn. The
+        // private ones that reach this client are its own, and drawing one
+        // would put this account's own face against its own message.
+        let said = receipts(&receipt_event(json!({
+            "$said:example.org": {
+                "m.read.private": { "@ada:example.org": { "ts": 1_700_000_000_000u64 } }
+            }
+        })));
+
+        assert_eq!(said, Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_fully_read_marker_riding_along_is_not_a_receipt() {
+        // `m.fully_read` shares the event's shape and is not a claim about
+        // anybody but the account that sent it.
+        let said = receipts(&receipt_event(json!({
+            "$said:example.org": {
+                "m.fully_read": { "@ada:example.org": { "ts": 1_700_000_000_000u64 } }
+            }
+        })));
+
+        assert_eq!(said, Some(Vec::new()));
+    }
+
+    #[test]
+    fn everybody_named_in_one_receipt_event_is_reported() {
+        // One event carries the whole batch: several people, several messages.
+        let said = receipts(&receipt_event(json!({
+            "$one:example.org": {
+                "m.read": {
+                    "@ada:example.org": { "ts": 1_700_000_000_000u64 },
+                    "@bob:example.org": { "ts": 1_700_000_000_001u64 }
+                }
+            },
+            "$two:example.org": {
+                "m.read": { "@cleo:example.org": { "ts": 1_700_000_000_002u64 } }
+            }
+        })))
+        .unwrap();
+
+        let mut seen: Vec<(String, String)> = said
+            .into_iter()
+            .map(|one| (one.user, one.event_id))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                ("@ada:example.org".to_owned(), "$one:example.org".to_owned()),
+                ("@bob:example.org".to_owned(), "$one:example.org".to_owned()),
+                (
+                    "@cleo:example.org".to_owned(),
+                    "$two:example.org".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_ephemeral_event_that_is_not_a_receipt_says_nothing() {
+        let said = receipts(&receipt_event_of_kind("m.typing"));
+
+        assert_eq!(said, None);
+    }
+
+    /// An ephemeral event of some other kind.
+    fn receipt_event_of_kind(kind: &str) -> Raw<AnySyncEphemeralRoomEvent> {
+        Raw::new(&json!({
+            "type": kind,
+            "content": { "user_ids": ["@ada:example.org"] },
+        }))
+        .expect("the fixture is valid JSON")
+        .cast_unchecked()
     }
 }

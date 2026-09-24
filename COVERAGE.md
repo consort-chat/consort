@@ -4,8 +4,8 @@ Target is 90% or better, and the suite currently clears it on both sides.
 
 | | Lines | Tests |
 |---|---|---|
-| Rust | 93.6% | 1519 |
-| Frontend | 97.4% | 1012 |
+| Rust | 93.4% | 1706 |
+| Frontend | 98.3% | 1373 |
 
 Run them:
 
@@ -136,3 +136,43 @@ is measured normally: the state mappings live in `dto.rs`, the dedup and
 identity handling in `Report` take plain strings rather than an SDK request
 object, and the task ownership in `Flows` and `run` is generic over what a flow
 is. What is left uncovered is genuinely the cryptography.
+
+## What a covered line does not tell you
+
+Two places on the frontend where a line counts as covered and no assertion can
+say what it did. Both are measured rather than assumed, and #98 has the
+working.
+
+**A rejection from a `vi.fn()` mock is never an unhandled rejection.** Vitest
+attaches its own handler to the promise a mock returns so it can record the
+settled result, and that marks the rejection handled. So a `.catch` whose whole
+body is swallowing the error cannot be pinned through
+`process.on("unhandledRejection")`: the line is covered, the catch did run, and
+nothing can assert it caught anything.
+
+| how the rejection is made | `unhandledRejection` sees it |
+|---|---|
+| `void Promise.reject(x)` | yes |
+| `vi.fn().mockRejectedValue(x)` | no |
+| `vi.fn().mockImplementation(() => Promise.reject(x))` | no |
+| `vi.fn(() => Promise.reject(x))` | no |
+| a plain `() => Promise.reject(x)`, no `vi.fn` | yes |
+
+Most catches in `app/src` do something afterwards, log, set state, put a
+sentence on screen, and each of those is tested through what it does. Eighteen
+have an empty body, four of them holding only a comment: one in `AppShell.tsx`,
+two in `MediaControls.tsx`, one in `PersonMenu.tsx`, ten in `RoomTimeline.tsx`
+and four in `ThreadPanel.tsx`. Those are the ones nothing speaks for. Pinning
+one means mocking that command with a plain function rather than a `vi.fn()`,
+which gives up the call assertions on it, so it is worth doing where the
+swallowing is the point and not otherwise.
+
+**A state update after an unmount is silent.** React dropped the warning in 18
+and 19 has not brought it back, so `if (!cancelled) setThing(x)` in a handler
+whose whole body is a state update behaves identically present or absent. There
+is nothing to observe and so nothing to test. `SignedIn.tsx` carried twelve of
+them and they were two thirds of its branch count: 36 branches before, 12
+after, 100% both times. The two `cancelled` checks left in that file do
+something, stopping a listener that arrived late and not asking to be caught up
+into a screen that has gone, and each fails a test when it is removed. That is
+the line: a check earns its place when removing it turns a test red.

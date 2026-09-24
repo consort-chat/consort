@@ -43,13 +43,25 @@ otherwise pnpm is installed on its own.
 ```sh
 # Arch
 sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl alsa-lib \
-               appmenu-gtk-module libappindicator-gtk3 librsvg
+               appmenu-gtk-module libayatana-appindicator librsvg
 
 # Debian / Ubuntu
 sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
                  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
                  libasound2-dev
 ```
+
+The appindicator library is the tray icon's, and it behaves unlike anything else
+in those lists. Nothing links against it: `libappindicator-sys` opens it by name
+at runtime, so a machine without it compiles Consort perfectly well and then
+starts it with no tray icon and a line in the log saying why.
+
+The Tauri CLI is stricter than the compiler about it. `pnpm tauri build` asks
+pkg-config for it, to decide which package the .deb should depend on, and stops
+with `Can't detect any appindicator library` when there is none. So: optional to
+compile, required to bundle, and what makes the tray icon actually appear. One
+package covers all three on either distro, and the released packages name it
+themselves, so nobody installing one has to know any of this.
 
 macOS needs Xcode command line tools. Windows needs more than one line's worth,
 including one prerequisite that reports a successful install while installing

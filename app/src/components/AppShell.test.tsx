@@ -9,6 +9,8 @@ const audioTestStop = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 const logout = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
+// The screen drawn with no channel selected asks which rooms were opened last.
+const recentRooms = vi.hoisted(() => vi.fn());
 
 // The main pane draws a room's messages, which is a subscription and three
 // commands. Mocked rather than left to fail: an unmocked `invoke` rejects into
@@ -16,6 +18,7 @@ const roomAvatar = vi.hoisted(() => vi.fn());
 // to whichever test happened to be running.
 const onTimeline = vi.hoisted(() => vi.fn());
 const onTyping = vi.hoisted(() => vi.fn());
+const onReaders = vi.hoisted(() => vi.fn());
 const onDropped = vi.hoisted(() => vi.fn());
 const timelineTyping = vi.hoisted(() => vi.fn());
 const onThread = vi.hoisted(() => vi.fn());
@@ -42,6 +45,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   logout,
   onTimeline,
   onTyping,
+  onReaders,
   onDropped,
   timelineTyping,
   onThread,
@@ -54,6 +58,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberNames,
   roomAt,
   roomAvatar,
+  recentRooms,
   threadOpen,
 }));
 
@@ -226,8 +231,10 @@ describe("AppShell", () => {
     onAudio.mockReset().mockResolvedValue(() => {});
     logout.mockReset().mockResolvedValue(undefined);
     roomAvatar.mockReset().mockResolvedValue(null);
+    recentRooms.mockReset().mockResolvedValue([]);
     onTimeline.mockReset().mockResolvedValue(() => {});
     onTyping.mockReset().mockResolvedValue(() => {});
+  onReaders.mockReset().mockResolvedValue(() => {});
     onDropped.mockReset().mockResolvedValue(() => {});
     timelineTyping.mockReset().mockResolvedValue(undefined);
     onThread.mockReset().mockResolvedValue(() => {});
@@ -622,6 +629,116 @@ describe("AppShell", () => {
       // There is no heading to press in the empty pane, and nothing for a
       // panel about a room to describe.
       shell({ rooms: withRoom });
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+  });
+
+  /*
+    What happens to the selection when a room stops being one of this
+    account's, which until #93 could only happen from another session.
+
+    Nothing in the shell does any of this on purpose. Both selections are
+    derived from the room list every render, so a room that has gone simply
+    stops being selected, and these say that out loud because the alternative
+    reading is written down in `openRoom` and is not quite right: what is left
+    where it is is the stored channel ID, and what somebody sees is the empty
+    pane.
+  */
+  describe("a room that has been left", () => {
+    const GENERAL = "!general:example.org";
+    const LOUNGE = "!lounge:example.org";
+
+    function withRooms(channels: Channel[]): Rooms {
+      return {
+        spaces: [
+          {
+            id: "home",
+            name: "Home",
+            avatar: null,
+            channels,
+          },
+        ],
+      };
+    }
+
+    const both = withRooms([
+      textChannel(GENERAL, "general"),
+      textChannel(LOUNGE, "lounge"),
+    ]);
+
+    /** Select `name` in the channel list, as a click would. */
+    async function select(name: RegExp) {
+      await userEvent.click(
+        within(screen.getByRole("region", { name: "Text" })).getByRole(
+          "button",
+          { name },
+        ),
+      );
+    }
+
+    it("falls back to the empty pane when the room being read goes", async () => {
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "#general",
+        }),
+      ).toBeVisible();
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Consort",
+      );
+    });
+
+    it("stays in the space the room was in rather than jumping", async () => {
+      // The rail entry outlives the room. Somebody who left one channel of a
+      // space is still in the space, and a selection that fell back to the
+      // first entry would move them somewhere they did not ask to be.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
+
+      expect(
+        within(screen.getByRole("region", { name: "Text" })).getByRole(
+          "button",
+          { name: /lounge/ },
+        ),
+      ).toBeVisible();
+    });
+
+    it("leaves the selection alone when it is some other room that goes", async () => {
+      // The half that makes the other half worth having. Leaving a room is
+      // not a reason to stop reading the one on screen.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+
+      again({ rooms: withRooms([textChannel(GENERAL, "general")]) });
+
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "#general",
+        }),
+      ).toBeVisible();
+    });
+
+    it("takes the room's details away with the room", async () => {
+      // The panel is where the leave control is, so the panel is what would
+      // otherwise be left describing a room this account is not in, offering
+      // to leave it again.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+      await userEvent.click(
+        within(screen.getByRole("main")).getByRole("button", {
+          name: "#general",
+        }),
+      );
+      expect(screen.getByRole("heading", { name: "Room info" })).toBeVisible();
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
 
       expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
     });
@@ -1183,7 +1300,7 @@ describe("AppShell", () => {
       await goBack();
 
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-        "Nothing here yet",
+        "Consort",
       );
     });
 
@@ -1256,6 +1373,67 @@ describe("AppShell", () => {
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
         "Lounge",
       );
+      expect(onJoinVoice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the screen with no channel selected", () => {
+    const LOUNGE = "!lounge:example.org";
+    const TECH = "!tech:example.org";
+
+    /** Home is selected; the other rail entry holds the rooms below. */
+    const elsewhere: Rooms = {
+      spaces: [
+        {
+          id: "home",
+          name: "Home",
+          avatar: null,
+          channels: [textChannel("!general:example.org", "general")],
+        },
+        {
+          id: "!kahu:example.org",
+          name: "Kahu HQ",
+          avatar: null,
+          channels: [textChannel(TECH, "tech"), voice(LOUNGE, "Lounge")],
+        },
+      ],
+    };
+
+    it("opens a recent room that is under another rail entry", async () => {
+      // The reason the pane hands back the entry as well as the channel.
+      // Selecting a channel from the list beside it can assume the space it
+      // was picked in; this cannot, because the pane lists every one of them.
+      recentRooms.mockResolvedValue([TECH]);
+      shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /#tech/ }),
+      );
+
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "#tech",
+      );
+    });
+
+    it("joins a recent voice channel, the way the list beside it does", async () => {
+      recentRooms.mockResolvedValue([LOUNGE]);
+      const { onJoinVoice } = shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Lounge/ }),
+      );
+
+      expect(onJoinVoice).toHaveBeenCalledWith(LOUNGE);
+    });
+
+    it("does not join a recent text room", async () => {
+      recentRooms.mockResolvedValue([TECH]);
+      const { onJoinVoice } = shell({ rooms: elsewhere });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /#tech/ }),
+      );
+
       expect(onJoinVoice).not.toHaveBeenCalled();
     });
   });

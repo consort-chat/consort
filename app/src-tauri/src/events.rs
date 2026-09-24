@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use consort_audio::AudioEvent;
 use consort_call::{CallEvent, SelfAudio};
 use consort_matrix::{
-    CallReadiness, Connection, Flow, KeyBackup, Rooms, SessionVerification, Thread, Timeline,
-    Typing,
+    CallReadiness, Connection, Flow, KeyBackup, Readers, Rooms, SessionVerification, Thread,
+    Timeline, Typing,
 };
 use serde::Serialize;
 
@@ -129,6 +129,14 @@ pub enum AppEvent {
     /// talking would push the whole conversation across the boundary on every
     /// keystroke either of them made.
     Typing(Typing),
+    /// Who has read how far in the room currently open, and in its thread.
+    ///
+    /// Its own channel rather than a field on [`Timeline`](Self::Timeline) for
+    /// the reason typing has one, and the reason was measured rather than
+    /// assumed. See [`Readers`]: a busy room produces about as many receipts
+    /// as messages, and a republished timeline redraws fifty messages at 6.3ms
+    /// against 0.14ms for the rows that actually moved.
+    Readers(Readers),
     /// A room somebody asked to be shown, from outside the webview.
     ///
     /// One thing sends this: a click on a desktop notification. It is not a
@@ -178,6 +186,8 @@ impl AppEvent {
     pub const THREAD: &'static str = "thread";
     /// The channel carrying who is typing in the open room.
     pub const TYPING: &'static str = "typing";
+    /// The channel carrying who has read how far in the open room.
+    pub const READERS: &'static str = "readers";
     /// The channel carrying a room a notification asked to be shown.
     pub const SHOW_ROOM: &'static str = "show-room";
     /// The channel carrying files dragged onto the window.
@@ -200,6 +210,7 @@ impl AppEvent {
             Self::Timeline(_) => Self::TIMELINE,
             Self::Thread(_) => Self::THREAD,
             Self::Typing(_) => Self::TYPING,
+            Self::Readers(_) => Self::READERS,
             Self::ShowRoom(_) => Self::SHOW_ROOM,
             Self::Dropped(_) => Self::DROPPED,
         }
@@ -260,7 +271,8 @@ impl AppEvent {
             // a webview that reloaded mid-sentence that nobody is typing any
             // more. Without it the last name said would stand until somebody
             // in that room typed again, which in a quiet room is never.
-            | Self::Typing(_) => true,
+            | Self::Typing(_)
+            | Self::Readers(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             // Open is state and shut is history, on the same terms as a
             // verification flow. A panel that is shut is not a panel showing
@@ -311,6 +323,7 @@ impl AppEvent {
             Self::Timeline(timeline) => serde_json::to_value(timeline),
             Self::Thread(thread) => serde_json::to_value(thread),
             Self::Typing(typing) => serde_json::to_value(typing),
+            Self::Readers(readers) => serde_json::to_value(readers),
             Self::ShowRoom(room_id) => serde_json::to_value(room_id),
             Self::Dropped(files) => serde_json::to_value(files),
         }

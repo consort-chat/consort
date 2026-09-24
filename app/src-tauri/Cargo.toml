@@ -44,7 +44,11 @@ consort-audio = { path = "../../crates/consort-audio" }
 # `consort-matrix`: only this binary pays for it.
 consort-call = { path = "../../crates/consort-call" }
 consort-matrix = { path = "../../crates/consort-matrix" }
-tauri = { version = "2", features = [] }
+# `tray-icon` for the icon in the system tray. It brings `tray-icon` and `muda`,
+# and on Linux it reaches libayatana-appindicator3 through `libloading` rather
+# than linking it, so it adds no DT_NEEDED entry and the Arch recipes have to
+# name that library by hand. `src/tray.rs` has what happens when it is missing.
+tauri = { version = "2", features = ["tray-icon"] }
 # For the attachment scheme's URLs. The handle a message carries is JSON, and a
 # path cannot hold quotes and braces as themselves.
 base64 = "0.22"

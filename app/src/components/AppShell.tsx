@@ -27,10 +27,10 @@ import { CallCard } from "./CallCard";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList } from "./ChannelList";
+import { OpeningPane } from "./OpeningPane";
 import { RoomInfoPanel } from "./RoomInfoPanel";
 import { RoomTimeline } from "./RoomTimeline";
 import { SettingsModal } from "./SettingsModal";
-import { SidebarToggle } from "./SidebarToggle";
 import { SpaceRail } from "./SpaceRail";
 import {
   ThreadPanel,
@@ -70,11 +70,6 @@ function KeyBackupNotice({ state }: { state: KeyBackup["state"] }) {
       follow you.
     </p>
   );
-}
-
-/** What the main pane says when no channel is selected. */
-function paneDetail(): string {
-  return "Pick a channel to read it. Clicking a voice one joins it as well.";
 }
 
 /**
@@ -123,16 +118,6 @@ function nameOfLinkedRoom(rooms: Rooms, roomOrAlias: string): string | null {
       : `#${channelLabel(found)}`;
   }
   return null;
-}
-
-/** The heading of the main pane: the channel, or the honest absence of one. */
-function paneHeadline(channel: Channel | null): string {
-  if (channel === null) return "Nothing here yet";
-  // The hash is the text channel's, and only the text channel's. It is how
-  // every client anybody already uses says which of the two this is.
-  return channel.kind === "voice"
-    ? channelLabel(channel)
-    : `#${channelLabel(channel)}`;
 }
 
 interface Props {
@@ -447,6 +432,20 @@ export function AppShell({
     if (chosen?.kind === "voice") onJoinVoice(id);
   }
 
+  /**
+   * Open a channel picked somewhere other than the list beside it.
+   *
+   * `selectChannel` cannot serve this: it looks the channel up in the selected
+   * space, and the opening pane offers rooms from every rail entry. Both the
+   * entry and the channel come back from the caller rather than being searched
+   * for again here, because the pane resolved them against this same room list
+   * to be able to draw them at all.
+   */
+  function openPlace(spaceId: string, chosen: Channel) {
+    goTo({ spaceId, channelId: chosen.id });
+    if (chosen.kind === "voice") onJoinVoice(chosen.id);
+  }
+
   /*
     Whether anything below has something to draw. Written out here rather than
     left to the four components, because each of them decides for itself to
@@ -595,8 +594,9 @@ export function AppShell({
 
         {/*
           The page's `h1` lives in whichever of these is drawn. It names the
-          selected channel, and says there is nothing here when nothing is
-          selected, which is the state the app opens in.
+          selected channel, and with nothing selected it is the application
+          itself: there is no room to name, and the opening pane says what
+          there is to say under its own headings.
 
           Keyed by room, so switching channels remounts rather than reusing:
           the scroll position, the draft and the resolved names all belong to
@@ -604,20 +604,12 @@ export function AppShell({
           room's half-typed sentence under another room's name.
         */}
         {channel === null ? (
-          <div className="shell__empty">
-            {/*
-              Its own copy of the control, because this pane has no header to
-              put one in. Folding the list before picking a channel would
-              otherwise be a one-way door.
-            */}
-            {folded && (
-              <div className="shell__unfold">
-                <SidebarToggle folded onToggle={() => setFolded(false)} />
-              </div>
-            )}
-            <h1 className="shell__empty-headline">{paneHeadline(channel)}</h1>
-            <p className="shell__empty-detail">{paneDetail()}</p>
-          </div>
+          <OpeningPane
+            rooms={rooms}
+            call={call}
+            onOpen={openPlace}
+            {...(folded ? { onUnfold: () => setFolded(false) } : {})}
+          />
         ) : (
           <RoomTimeline
             key={channel.id}
@@ -673,7 +665,12 @@ export function AppShell({
         room: the empty pane has nothing for it to describe.
       */}
       {infoOpen && channel !== null && (
-        <RoomInfoPanel channel={channel} onClose={hideInfo} />
+        <RoomInfoPanel
+          channel={channel}
+          selfId={profile.user_id}
+          onClose={hideInfo}
+          onOpenRoom={openRoom}
+        />
       )}
       </div>
 

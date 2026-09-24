@@ -1,0 +1,167 @@
+/*
+  How big Consort is drawn.
+
+  Its own stylesheet, on the same terms as the sections beside it: each settings
+  pane owns one, and the slider rules below are deliberately the same shape as
+  the voice section's, because two settings screens that look different from
+  each other look like two applications.
+*/
+.a11y {
+  display: grid;
+  gap: var(--space-8);
+  max-width: 46rem;
+}
+
+.a11y__field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/*
+  A slider, its label and its number, on one line.
+
+  The label takes a fixed share rather than its own width, so the two sliders
+  start at the same place and can be compared by eye. `ch` rather than `rem`
+  because what has to fit is a number of characters, and a font size this very
+  screen changes should not be able to cut the longer of the two labels off.
+
+  `minmax(0, …)` on the first two tracks, not a bare `14ch`. This screen is the
+  one that can make its own pane narrow: at 200% application scale in a small
+  window the settings pane is a couple of hundred CSS pixels across, and a track
+  that refused to shrink would push the slider out past the pane's edge, which
+  is clipped rather than scrolled. Shrinking means the label truncates and the
+  control somebody came here for stays reachable.
+*/
+.a11y-scale {
+  display: grid;
+  grid-template-columns: minmax(0, 14ch) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.a11y-scale__label {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  A real range input, restyled. The track and thumb rules are doubled for
+  WebKit and Gecko because the two name the pseudo-elements differently and
+  neither accepts the other's; a browser that skips a rule it does not know
+  would otherwise drop the whole block.
+*/
+.a11y-scale__slider {
+  width: 100%;
+  height: var(--space-4);
+  appearance: none;
+  cursor: pointer;
+  background: none;
+}
+
+.a11y-scale__slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--surface-overlay);
+  border-radius: 999px;
+}
+
+.a11y-scale__slider::-moz-range-track {
+  height: 4px;
+  background: var(--surface-overlay);
+  border-radius: 999px;
+}
+
+.a11y-scale__slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  appearance: none;
+  background: var(--text-secondary);
+  border: 0;
+  border-radius: 50%;
+  transition: background var(--duration-fast) ease;
+}
+
+.a11y-scale__slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--text-secondary);
+  border: 0;
+  border-radius: 50%;
+  transition: background var(--duration-fast) ease;
+}
+
+.a11y-scale__slider:hover::-webkit-slider-thumb {
+  background: var(--text-primary);
+}
+
+.a11y-scale__slider:hover::-moz-range-thumb {
+  background: var(--text-primary);
+}
+
+.a11y-scale__slider:focus-visible {
+  outline: none;
+}
+
+.a11y-scale__slider:focus-visible::-webkit-slider-thumb {
+  background: var(--violet);
+  box-shadow: var(--shadow-focus);
+}
+
+.a11y-scale__slider:focus-visible::-moz-range-thumb {
+  background: var(--violet);
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  Tabular figures, so the number does not shuffle sideways as it counts through
+  the range while somebody is dragging.
+*/
+.a11y-scale__value {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.a11y__note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.a11y__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em;
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+/*
+  Printed rather than only bound. A shortcut nothing on screen mentions is a
+  shortcut nobody finds, and this is the one that works when the window has
+  become too large to read the rest of.
+*/
+.a11y__keys kbd {
+  padding: 0.1em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--text-primary);
+  background: var(--surface-overlay);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.a11y__problem {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--danger);
+  background: var(--danger-surface);
+  border-radius: var(--radius-sm);
+}
