@@ -31,6 +31,8 @@ const timelinePresent = vi.hoisted(() => vi.fn());
 const timelineSend = vi.hoisted(() => vi.fn());
 const memberNames = vi.hoisted(() => vi.fn());
 const roomAt = vi.hoisted(() => vi.fn());
+// Walking into a channel a space lists and this account has never been in.
+const roomJoin = vi.hoisted(() => vi.fn());
 // The right of the window holds one panel at a time, so asking for a room's
 // details shuts whatever thread was there.
 const threadOpen = vi.hoisted(() => vi.fn());
@@ -55,6 +57,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineSend,
   memberNames,
   roomAt,
+  roomJoin,
   roomAvatar,
   recentRooms,
   threadOpen,
@@ -243,6 +246,7 @@ describe("AppShell", () => {
     timelineSend.mockReset().mockResolvedValue(undefined);
     memberNames.mockReset().mockResolvedValue({});
     roomAt.mockReset().mockResolvedValue("!tech:example.org");
+    roomJoin.mockReset().mockResolvedValue(undefined);
     threadOpen.mockReset().mockResolvedValue(undefined);
   });
 
@@ -1432,6 +1436,181 @@ describe("AppShell", () => {
       );
 
       expect(onJoinVoice).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("walking into a channel this account is not in", () => {
+    const NEVER = "!never:example.org";
+
+    /** One space, holding one channel the account has never joined. */
+    function listing(kind: Channel["kind"] = "text"): Rooms {
+      return {
+        spaces: [
+          { id: "home", name: "Home", avatar: null, channels: [] },
+          {
+            id: "!s:example.org",
+            name: "Kahu HQ",
+            avatar: null,
+            channels: [
+              {
+                id: NEVER,
+                name: "announcements",
+                kind,
+                avatar: null,
+                joined: false,
+                participants: [],
+                unread: 0,
+                mentions: 0,
+              },
+            ],
+          },
+        ],
+      };
+    }
+
+    /** The same channel, as the next sync reports it once the join lands. */
+    function joined(kind: Channel["kind"] = "text"): Rooms {
+      const tree = listing(kind);
+      return {
+        spaces: tree.spaces.map((space) => ({
+          ...space,
+          channels: space.channels.map((channel) => ({
+            ...channel,
+            joined: true,
+          })),
+        })),
+      };
+    }
+
+    /** Pick the space in the rail, which is what puts its channels in view. */
+    async function openSpace() {
+      await userEvent.click(screen.getByRole("button", { name: "Kahu HQ" }));
+    }
+
+    it("asks the homeserver to let this account in", async () => {
+      shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+
+      expect(roomJoin).toHaveBeenCalledWith(NEVER);
+    });
+
+    it("opens the channel once the join has landed", async () => {
+      const { again } = shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+      again({ rooms: joined() });
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "#announcements" }),
+      ).toBeInTheDocument();
+    });
+
+    it("leaves the pane where it was until the join has landed", async () => {
+      // The room is in the list before anybody is in it, so selecting it on
+      // the press would open a timeline of a room this account is not in.
+      let settle = () => {};
+      roomJoin.mockReturnValue(
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        }),
+      );
+      shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+
+      expect(
+        screen.queryByRole("heading", { level: 1, name: "#announcements" }),
+      ).toBeNull();
+      await act(async () => {
+        settle();
+      });
+    });
+
+    it("does not connect to a voice channel it has only just joined", async () => {
+      // Two things from one press, and they are different asks. Being let into
+      // a room is what was clicked; walking into the call in it is the next
+      // click, on a row that is now an ordinary voice channel.
+      const { again, onJoinVoice } = shell({ rooms: listing("voice") });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+      again({ rooms: joined("voice") });
+
+      await screen.findByRole("heading", { level: 1, name: "announcements" });
+      expect(onJoinVoice).not.toHaveBeenCalled();
+    });
+
+    it("says why a join did not work", async () => {
+      roomJoin.mockRejectedValue({
+        message: "The homeserver would not let you into that channel.",
+        detail: "M_FORBIDDEN",
+      });
+      shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "The homeserver would not let you into that channel.",
+      );
+    });
+
+    it("leaves the pane where it was when a join is refused", async () => {
+      roomJoin.mockRejectedValue({ message: "Nope.", detail: "M_FORBIDDEN" });
+      shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+
+      await screen.findByRole("alert");
+      expect(
+        screen.queryByRole("heading", { level: 1, name: "#announcements" }),
+      ).toBeNull();
+    });
+
+    it("clears the last refusal when the channel is tried again", async () => {
+      // Otherwise the sentence about the first attempt sits under a row that
+      // is busy doing something about it.
+      let settle = () => {};
+      roomJoin
+        .mockRejectedValueOnce({ message: "Nope.", detail: "M_FORBIDDEN" })
+        .mockReturnValueOnce(
+          new Promise<void>((resolve) => {
+            settle = resolve;
+          }),
+        );
+      shell({ rooms: listing() });
+      await openSpace();
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+      await screen.findByRole("alert");
+
+      await userEvent.click(
+        screen.getByRole("button", { name: /join announcements/i }),
+      );
+
+      expect(screen.queryByRole("alert")).toBeNull();
+      await act(async () => {
+        settle();
+      });
     });
   });
 });

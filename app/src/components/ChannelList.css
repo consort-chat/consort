@@ -130,8 +130,8 @@
 }
 
 /*
-  A channel this account is not in. Dimmed and not clickable, and the cursor
-  says so before the click does.
+  A row whose join is still out. Dimmed and not clickable, and the cursor says
+  so before the click does.
 */
 .channels__entry:disabled {
   cursor: default;
@@ -257,6 +257,39 @@
   background: var(--danger-surface);
   border-left: 2px solid var(--danger);
   border-radius: var(--radius-sm);
+}
+
+/*
+  The way into a channel this account is not in.
+
+  A third column on the row rather than a control beside it, so the whole row
+  stays one target. Outlined rather than filled: gold is a mention and mint is
+  voice, and a filled pill here would be a third thing competing for the eye on
+  a column that is mostly names.
+*/
+.channels__entry:has(.channels__join) {
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+}
+
+.channels__join {
+  flex-shrink: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border: 1px solid var(--line-subtle);
+  border-radius: 9px;
+  transition: color var(--duration-fast) linear,
+    border-color var(--duration-fast) linear;
+}
+
+.channels__entry:hover:not(:disabled) .channels__join,
+.channels__entry:focus-visible .channels__join {
+  color: var(--text-primary);
+  border-color: var(--line-strong);
 }
 
 .channels__name {

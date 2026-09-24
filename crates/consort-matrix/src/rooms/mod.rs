@@ -46,7 +46,7 @@ pub use avatar::{avatar, member_avatar};
 pub use direct::direct;
 pub use dto::{Channel, ChannelKind, HOME_ID, Participant, Rooms, Space};
 pub use link::{permalink, room_at};
-pub use membership::{can_invite, invite, leave};
+pub use membership::{can_invite, invite, join, leave};
 pub use people::{Member, Members, Naming, Roster, members};
 pub use profile::{MemberProfile, Presence, member_profile};
 

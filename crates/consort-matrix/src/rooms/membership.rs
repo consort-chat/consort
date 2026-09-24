@@ -1,11 +1,24 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Leaving a room, and asking somebody into one.
+//! Joining a room, leaving one, and asking somebody into one.
 //!
-//! The two ends of belonging to a room, and the first things Consort does that
-//! change who is in one. [`super::direct`] is the nearest existing neighbour: a
-//! room operation with a side effect, reached from a click.
+//! The ends of belonging to a room, and the things Consort does that change
+//! who is in one. [`super::direct`] is the nearest existing neighbour: a room
+//! operation with a side effect, reached from a click.
+//!
+//! ## Joining needs a server name, not just a room ID
+//!
+//! [`join`] is the one thing here reached for a room the account is not in, so
+//! it is the one thing that cannot start from a [`Room`]: there is no local
+//! record of a room nobody has joined. What there is instead is the
+//! `m.space.child` event that put it in the list, and that carries the servers
+//! the space says are in it.
+//!
+//! Those matter. A room ID is not an address, and a homeserver asked to join a
+//! room it has never heard of by ID alone has nowhere to ask. Every other
+//! client sends the `via` list for this reason, which is why [`join`] gathers
+//! it from every joined space rather than sending the ID on its own.
 //!
 //! ## Leaving does not come back
 //!
@@ -34,12 +47,78 @@
 //! What is left over is [`crate::Error::InviteRefused`]: everything local said
 //! yes and the homeserver said no anyway.
 
+use std::collections::BTreeSet;
+
 use matrix_sdk::Client;
 use matrix_sdk::Room;
 use matrix_sdk::ruma::events::room::member::MembershipState;
-use matrix_sdk::ruma::{OwnedUserId, RoomId, UserId};
+use matrix_sdk::ruma::events::space::child::SpaceChildEventContent;
+use matrix_sdk::ruma::{OwnedServerName, OwnedUserId, RoomId, RoomOrAliasId, UserId};
 
 use crate::error::{Error, Result};
+
+/// Join `room_id`, through whichever servers a space says it is on.
+///
+/// The refusal is its own error rather than the SDK's, whose sentence ends in
+/// "please try again". A space listing a room is not a promise that anybody
+/// may walk into it, so the ordinary failure here is a room that is invite
+/// only, and trying again does nothing about that.
+///
+/// Nothing is done about what is selected afterwards, on [`leave`]'s terms:
+/// the room turning up in the list as joined is what the interface reads, and
+/// a command with an opinion about the selection would be a second answer to a
+/// question the room list already answers.
+pub async fn join(client: &Client, room_id: &str) -> Result<()> {
+    let room = RoomId::parse(room_id).map_err(|_| Error::NoSuchAddress {
+        address: room_id.to_owned(),
+    })?;
+
+    let via = via_for(client, &room).await;
+
+    client
+        .join_room_by_id_or_alias(<&RoomOrAliasId>::from(&*room), &via)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, %room_id, "the homeserver refused a join");
+            Error::JoinRefused {
+                room_id: room_id.to_owned(),
+            }
+        })?;
+
+    Ok(())
+}
+
+/// The servers every joined space says `room_id` is on.
+///
+/// Read out of the local store, so a join costs no request beyond itself. Only
+/// spaces are asked: an ordinary room holds no `m.space.child`, and walking
+/// every room on a large account to learn that would be a page of store reads
+/// for one click.
+///
+/// Empty for a room nothing lists, which is the honest answer rather than a
+/// guess. The homeserver then does what it would have done with the ID alone.
+async fn via_for(client: &Client, room_id: &RoomId) -> Vec<OwnedServerName> {
+    let mut servers = BTreeSet::new();
+
+    for space in client.joined_rooms().iter().filter(|room| room.is_space()) {
+        let Ok(Some(raw)) = space
+            .get_state_event_static_for_key::<SpaceChildEventContent, _>(room_id)
+            .await
+        else {
+            continue;
+        };
+        let Ok(event) = raw.deserialize() else {
+            continue;
+        };
+        let Some(original) = event.as_sync().and_then(|event| event.as_original()) else {
+            continue;
+        };
+
+        servers.extend(original.content.via.iter().cloned());
+    }
+
+    servers.into_iter().collect()
+}
 
 /// Leave `room_id`.
 ///

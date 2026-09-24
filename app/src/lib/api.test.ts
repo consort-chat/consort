@@ -61,6 +61,7 @@ import {
   roomAt,
   roomCanInvite,
   roomInvite,
+  roomJoin,
   roomLeave,
   directRoom,
   memberNames,
@@ -445,6 +446,14 @@ describe("replies and links", () => {
 describe("leaving a room and inviting somebody", () => {
   beforeEach(() => {
     invoke.mockReset();
+  });
+
+  it("names the room a join is of", async () => {
+    await roomJoin("!never:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("room_join", {
+      roomId: "!never:example.org",
+    });
   });
 
   it("names the room a leave is of", async () => {

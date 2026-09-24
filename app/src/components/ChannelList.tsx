@@ -227,12 +227,32 @@ function UnreadBadge({ count, channel }: { count: number; channel: Channel }) {
   );
 }
 
+/**
+ * A join in flight, or the one that did not work.
+ *
+ * One value rather than two, because at most one of these is interesting at a
+ * time: a second join cannot start while the first is out, and a failure is
+ * about the room that was last asked for. `problem` is null while the request
+ * is still going and a sentence for a person once it is not.
+ */
+export interface Joining {
+  roomId: string;
+  problem: string | null;
+}
+
+/** What a row says on its way in, when it is not already in. */
+function joinLabel(channel: Channel, underway: boolean): string {
+  return `${underway ? "Joining" : "Join"} ${channelLabel(channel)}`;
+}
+
 function ChannelRow({
   channel,
   selected,
   call,
   speaking,
+  joining,
   onSelect,
+  onJoin,
   onOpenChat,
   onOpenPerson,
 }: {
@@ -240,7 +260,11 @@ function ChannelRow({
   selected: boolean;
   call: Call;
   speaking: ReadonlySet<string>;
+  /** This session's join, when it is about this row. Null when it is not. */
+  joining: Joining | null;
   onSelect: () => void;
+  /** Ask to be let into this channel. Only a row this account is not in. */
+  onJoin: () => void;
   /** Show this channel's messages without connecting to it. Voice only. */
   onOpenChat: () => void;
   onOpenPerson: (
@@ -252,6 +276,7 @@ function ChannelRow({
   const voice = channel.kind === "voice";
   const callState = voice ? callStateOf(channel, call) : null;
   const roster = peopleIn(channel, call);
+  const underway = joining !== null && joining.problem === null;
 
   return (
     <li>
@@ -292,22 +317,34 @@ function ChannelRow({
           */
           data-unread={channel.unread > 0}
           /*
-            A room this account is not in cannot be opened, so the control that
-            would open it is disabled rather than absent. Hiding it would make
-            Consort disagree with every other client about how many channels the
-            space has.
+            A room this account is not in is a room to walk into, not a row to
+            be refused by. Only this session's own join disables it, and only
+            while it is out: a refusal leaves the control live, because a
+            channel that was invite only this morning is one somebody may have
+            been asked into since.
           */
-          disabled={!channel.joined}
+          disabled={underway}
           aria-current={selected ? "true" : undefined}
+          aria-label={channel.joined ? undefined : joinLabel(channel, underway)}
           title={
             channel.joined
               ? undefined
-              : "This account has not joined this channel."
+              : "This account has not joined this channel. Click to join it."
           }
-          onClick={onSelect}
+          onClick={channel.joined ? onSelect : onJoin}
         >
           {voice ? <VoiceIcon /> : <span className="channels__hash">#</span>}
           <span className="channels__name">{channelLabel(channel)}</span>
+          {/*
+            Inside the control rather than beside it, so the whole row is the
+            one target. A second button saying Join would be a second place to
+            click that did what the first one does.
+          */}
+          {!channel.joined && (
+            <span className="channels__join" aria-hidden="true">
+              {underway ? "Joining" : "Join"}
+            </span>
+          )}
         </button>
         {/*
           Only on a voice channel, because a text one is already what this does.
@@ -363,6 +400,15 @@ function ChannelRow({
         </p>
       )}
       {/*
+        The same treatment, for the same reason: the only thing worth saying
+        about a join that was refused is which channel would not take it.
+      */}
+      {joining?.problem != null && (
+        <p className="channels__problem" role="alert">
+          {joining.problem}
+        </p>
+      )}
+      {/*
         Outside the button, deliberately. A person in the channel is not part
         of the control that opens it, and nesting them would make every name a
         target that opens the room instead.
@@ -386,7 +432,9 @@ function Group({
   selectedId,
   call,
   speaking,
+  joining,
   onSelect,
+  onJoin,
   onOpenChat,
   onOpenPerson,
 }: {
@@ -395,7 +443,10 @@ function Group({
   selectedId: string | null;
   call: Call;
   speaking: ReadonlySet<string>;
+  joining: Joining | null;
   onSelect: (id: string) => void;
+  /** Ask to be let into a channel this account is not in. */
+  onJoin: (id: string) => void;
   /** Show a channel without connecting. Only a voice row draws the control. */
   onOpenChat: (id: string) => void;
   onOpenPerson: (
@@ -419,7 +470,9 @@ function Group({
             selected={channel.id === selectedId}
             call={call}
             speaking={speaking}
+            joining={joining?.roomId === channel.id ? joining : null}
             onSelect={() => onSelect(channel.id)}
+            onJoin={() => onJoin(channel.id)}
             onOpenChat={() => onOpenChat(channel.id)}
             onOpenPerson={onOpenPerson}
           />
@@ -451,7 +504,19 @@ interface Props {
   speaking?: ReadonlySet<string>;
   /** Whoever is signed in, so a person's card can tell when it is about them. */
   selfId: string;
+  /**
+   * The join this session has out, or the one that was refused.
+   *
+   * Held by the shell rather than here, on `callRefused`'s terms: it outlives
+   * the request that made it, and a component that owned it would clear it on
+   * every re-render caused by anything else in the list.
+   *
+   * Absent when nothing has been asked for, which is almost always.
+   */
+  joining?: Joining | null;
   onSelect: (id: string) => void;
+  /** Ask to be let into a channel this account is not in. */
+  onJoin: (id: string) => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
   /** Fold this column away. The control that brings it back is elsewhere. */
@@ -471,7 +536,9 @@ export function ChannelList({
   call,
   speaking = NOBODY,
   selfId,
+  joining = null,
   onSelect,
+  onJoin,
   onOpenRoom,
   onFold,
 }: Props) {
@@ -530,7 +597,9 @@ export function ChannelList({
             selectedId={selectedId}
             call={call}
             speaking={speaking}
+            joining={joining}
             onSelect={onSelect}
+            onJoin={onJoin}
             onOpenChat={onOpenRoom}
             onOpenPerson={open}
           />
@@ -540,7 +609,9 @@ export function ChannelList({
             selectedId={selectedId}
             call={call}
             speaking={speaking}
+            joining={joining}
             onSelect={onSelect}
+            onJoin={onJoin}
             onOpenChat={onOpenRoom}
             onOpenPerson={open}
           />

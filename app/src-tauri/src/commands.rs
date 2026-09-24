@@ -355,6 +355,22 @@ pub async fn room_leave_for(state: &AppState, room_id: String) -> Result<(), Com
     Ok(())
 }
 
+/// Join `room_id`.
+///
+/// Reached for a room a space lists and this account has never been in, which
+/// is the one kind of room the interface can name and the local store knows
+/// nothing about. See `consort_matrix::rooms::membership` for why the servers
+/// to go through come out of the space rather than the room.
+///
+/// Nothing is done about what is selected afterwards, on `room_leave_for`'s
+/// terms: the room turning up in the list as joined is the answer somebody
+/// sees, and a command with an opinion about the selection would be a second
+/// answer to a question the room list already answers.
+pub async fn room_join_for(state: &AppState, room_id: String) -> Result<(), CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::join(&client, &room_id).await?)
+}
+
 /// Ask `user_id` into `room_id`.
 ///
 /// Every reason this refuses is a sentence written for a person, including the
@@ -2041,6 +2057,12 @@ pub async fn room_copy_link(
 #[tauri::command]
 pub async fn room_at(state: State<'_, AppState>, address: String) -> Result<String, CommandError> {
     room_at_for(&state, address).await
+}
+
+/// Join one room. See `room_join_for`.
+#[tauri::command]
+pub async fn room_join(state: State<'_, AppState>, room_id: String) -> Result<(), CommandError> {
+    room_join_for(&state, room_id).await
 }
 
 /// Leave one room. See `room_leave_for`.
@@ -5175,6 +5197,89 @@ mod against_a_mock_homeserver {
                     room_id: "!gone:example.org".to_owned()
                 }
                 .user_message()
+            );
+        }
+    }
+
+    /// Joining a room a space listed and this account was never in.
+    ///
+    /// Thin, deliberately. Which servers the join goes through and what a
+    /// refusal reads like are `consort_matrix`'s, and are tested there. What
+    /// is left for this layer is that the command reaches them at all and does
+    /// not panic with nobody signed in.
+    mod joining {
+        use super::*;
+        use std::sync::Mutex;
+
+        const NEVER: &str = "!never:example.org";
+
+        /// A signed-in account, a homeserver that will take a join, and a
+        /// count of the joins that reached it.
+        async fn ready(
+            server: &MatrixMockServer,
+        ) -> (tempfile::TempDir, AppState, Arc<Mutex<usize>>) {
+            mount_login(server).await;
+            let (dir, state, _sink) = state();
+            login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+                .await
+                .unwrap();
+
+            let sent = Arc::new(Mutex::new(0usize));
+            let count = sent.clone();
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path_regex(
+                    r"^/_matrix/client/v3/join/.*$",
+                ))
+                .respond_with(move |_: &wiremock::Request| {
+                    *count.lock().unwrap() += 1;
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "room_id": NEVER }))
+                })
+                .mount(server.server())
+                .await;
+
+            (dir, state, sent)
+        }
+
+        #[tokio::test]
+        async fn joining_a_room_reaches_the_homeserver() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, sent) = ready(&server).await;
+
+            room_join_for(&state, NEVER.to_owned())
+                .await
+                .expect("a join goes out");
+
+            assert_eq!(*sent.lock().unwrap(), 1);
+        }
+
+        #[tokio::test]
+        async fn a_refused_join_arrives_as_a_sentence_for_a_person() {
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sent) = ready(&server).await;
+
+            let refused = room_join_for(&state, "not a room".to_owned())
+                .await
+                .unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NoSuchAddress {
+                    address: "not a room".to_owned()
+                }
+                .user_message()
+            );
+        }
+
+        #[tokio::test]
+        async fn joining_while_signed_out_is_an_error_and_not_a_panic() {
+            let (_dir, state, _sink) = state();
+
+            let refused = room_join_for(&state, NEVER.to_owned()).await.unwrap_err();
+
+            assert_eq!(
+                refused.message,
+                consort_matrix::Error::NotLoggedIn.user_message()
             );
         }
     }

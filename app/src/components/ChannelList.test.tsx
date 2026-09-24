@@ -121,6 +121,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space(channels)}
         selectedId={null}
         call={IDLE}
@@ -226,6 +227,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -242,6 +244,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           voice("!b:example.org", "Lounge"),
@@ -264,6 +267,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           text("!c:example.org", "zulu"),
           voice("!d:example.org", "Zulu Voice"),
@@ -287,6 +291,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -305,6 +310,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([])}
         selectedId={null}
         call={IDLE}
@@ -321,6 +327,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           text("!a:example.org", "general"),
           text("!b:example.org", "random"),
@@ -347,6 +354,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -359,9 +367,10 @@ describe("ChannelList", () => {
     expect(onSelect).toHaveBeenCalledWith("!v:example.org");
   });
 
-  it("shows a channel this account never joined, and will not open it", async () => {
-    // Hiding it would make Consort disagree with every other client about how
-    // many channels the space has. Offering it would open nothing.
+  it("offers a channel this account never joined as one to join", () => {
+    // What was here was a row that could not be clicked, which is #128: the
+    // space says the channel exists and every other client lets somebody walk
+    // into it.
     const onSelect = vi.fn();
     render(
       <ChannelList
@@ -372,15 +381,147 @@ describe("ChannelList", () => {
         selectedId={null}
         call={IDLE}
         onSelect={onSelect}
+        onJoin={vi.fn()}
       />,
     );
 
-    const entry = screen.getByRole("button", { name: /unknown channel/i });
+    const entry = screen.getByRole("button", { name: /join unknown channel/i });
+    expect(entry).toBeEnabled();
+  });
+
+  it("joins a channel this account is not in rather than selecting it", async () => {
+    // Two different things from one row. Selecting a room nobody is in would
+    // open a timeline of nothing, so the click asks to be let in first.
+    const onSelect = vi.fn();
+    const onJoin = vi.fn();
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([text("!never:example.org", "announcements", false)])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={onSelect}
+        onJoin={onJoin}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /join announcements/i }),
+    );
+
+    expect(onJoin).toHaveBeenCalledWith("!never:example.org");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("says a join is in flight, and will not send a second one", async () => {
+    const onJoin = vi.fn();
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([text("!never:example.org", "announcements", false)])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+        onJoin={onJoin}
+        joining={{ roomId: "!never:example.org", problem: null }}
+      />,
+    );
+
+    const entry = screen.getByRole("button", { name: /joining announcements/i });
     expect(entry).toBeDisabled();
-    expect(entry).toHaveAttribute("title", expect.stringMatching(/not joined/i));
 
     await userEvent.click(entry);
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onJoin).not.toHaveBeenCalled();
+  });
+
+  it("leaves the other channels clickable while one is joining", async () => {
+    // One join in flight is not the list going away. Disabling everything
+    // would make a slow homeserver look like a frozen application.
+    const onJoin = vi.fn();
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([
+          text("!never:example.org", "announcements", false),
+          text("!other:example.org", "notices", false),
+        ])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+        onJoin={onJoin}
+        joining={{ roomId: "!never:example.org", problem: null }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /join notices/i }));
+
+    expect(onJoin).toHaveBeenCalledWith("!other:example.org");
+  });
+
+  it("says why a join did not work, beside the channel it was for", () => {
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([
+          text("!never:example.org", "announcements", false),
+          text("!other:example.org", "notices", false),
+        ])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+        onJoin={vi.fn()}
+        joining={{
+          roomId: "!never:example.org",
+          problem: "That channel is invite only.",
+        }}
+      />,
+    );
+
+    // `getByRole` rather than `getAllByRole`, because it throws on a second
+    // one: the refusal belongs to the row it was about, and a sentence under
+    // every unjoined channel would be the list saying it four times.
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("That channel is invite only.");
+    const row = alert.closest("li");
+    expect(row).toHaveTextContent("announcements");
+    expect(row).not.toHaveTextContent("notices");
+  });
+
+  it("offers a refused channel again rather than leaving it dead", async () => {
+    // A room that was invite only this morning can be one somebody has since
+    // been asked into, and a control that gave up after one refusal would
+    // need the application restarting to try again.
+    const onJoin = vi.fn();
+    render(
+      <ChannelList
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        onFold={vi.fn()}
+        space={space([text("!never:example.org", "announcements", false)])}
+        selectedId={null}
+        call={IDLE}
+        onSelect={vi.fn()}
+        onJoin={onJoin}
+        joining={{
+          roomId: "!never:example.org",
+          problem: "That channel is invite only.",
+        }}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /join announcements/i }),
+    );
+
+    expect(onJoin).toHaveBeenCalledWith("!never:example.org");
   });
 
   it("reads a voice channel without connecting to it", async () => {
@@ -393,6 +534,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={onOpenRoom}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([voice(LOUNGE, "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -416,6 +558,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([text("!a:example.org", "general")])}
         selectedId={null}
         call={IDLE}
@@ -429,12 +572,13 @@ describe("ChannelList", () => {
   });
 
   it("offers nothing of the kind on a channel this account is not in", () => {
-    // There is nothing to read. The row beside it is disabled and says why.
+    // There is nothing to read. The row itself offers the way in.
     render(
       <ChannelList
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([voice(LOUNGE, "Lounge", [], false)])}
         selectedId={null}
         call={IDLE}
@@ -455,6 +599,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@ada:example.org", "Ada"),
@@ -481,6 +626,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [
             person("@zoe:example.org", "Zoe"),
@@ -507,6 +653,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([voice("!v:example.org", "Lounge")])}
         selectedId={null}
         call={IDLE}
@@ -528,6 +675,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -554,6 +702,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -581,6 +730,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -610,6 +760,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([
           voice("!v:example.org", "Lounge", [person("@ada:example.org", "Ada")]),
         ])}
@@ -631,6 +782,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
         space={space([text("!never:example.org", null, false)])}
         selectedId={null}
         call={IDLE}
@@ -661,6 +813,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -683,6 +836,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -701,6 +855,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId="!a:example.org"
           call={{
@@ -725,6 +880,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{
@@ -751,6 +907,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={{ state: "failed", roomId: LOUNGE, error: "no voice server" }}
@@ -772,6 +929,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@stale:example.org", "Stale")])])}
           selectedId={null}
           call={{
@@ -799,6 +957,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -827,6 +986,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -851,6 +1011,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -881,6 +1042,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -914,6 +1076,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -938,6 +1101,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -960,6 +1124,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -993,6 +1158,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -1019,6 +1185,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -1047,6 +1214,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "disconnected" }}
@@ -1066,6 +1234,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([
             voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")]),
             voice("!b:example.org", "Music", [person("@bob:example.org", "Bob")]),
@@ -1100,6 +1269,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge", [person("@ada:example.org", "Ada")])])}
           selectedId={null}
           call={{ state: "connecting", roomId: LOUNGE }}
@@ -1118,6 +1288,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={withLounge()}
           selectedId={null}
           call={IDLE}
@@ -1138,6 +1309,7 @@ describe("ChannelList", () => {
         selfId="@bob:example.org"
         onOpenRoom={vi.fn()}
         onFold={vi.fn()}
+        onJoin={vi.fn()}
           space={space([voice(LOUNGE, "Lounge")])}
           selectedId={null}
           call={{
@@ -1183,6 +1355,7 @@ describe("ChannelList", () => {
           selectedId={null}
           call={IDLE}
           onSelect={vi.fn()}
+          onJoin={vi.fn()}
         />,
       );
 
@@ -1218,6 +1391,7 @@ describe("ChannelList", () => {
             trouble: null,
           }}
           onSelect={vi.fn()}
+          onJoin={vi.fn()}
         />
       );
     }
@@ -1261,6 +1435,7 @@ describe("ChannelList", () => {
             trouble: null,
           }}
           onSelect={onSelect}
+          onJoin={vi.fn()}
         />,
       );
 
