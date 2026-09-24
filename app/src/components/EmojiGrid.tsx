@@ -19,7 +19,7 @@ import "./EmojiGrid.css";
  * runtime is not on offer, and a number both halves agree on is better than a
  * measurement one half cannot take.
  */
-export const ACROSS = 9;
+export const ACROSS = 10;
 
 /**
  * The search, the categories and the keys.
@@ -131,9 +131,9 @@ export function EmojiGrid({
   }, [at]);
 
   /*
-    The category on show, kept in view. The strip draws no scrollbar (#125),
-    and a search unmounts it and hands it back scrolled to the left, so this
-    is all that says where among nineteen categories somebody is.
+    The category on show, kept in view. The strip has a scrollbar again (#125),
+    but a search unmounts it and hands it back scrolled to the left, with
+    whatever somebody chose possibly off the right-hand end.
   */
   useEffect(() => {
     tab.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -244,12 +244,16 @@ export function EmojiGrid({
               type="button"
               className="emoji__tab"
               aria-current={group.slug === shown?.slug ? "true" : undefined}
+              // The glyph is not a label, so the name is carried twice over:
+              // once for a screen reader and once as a tooltip for a pointer.
+              aria-label={group.name}
+              title={group.name}
               onClick={() => {
                 setCategory(group.slug);
                 lift();
               }}
             >
-              {group.name}
+              {ICONS[group.slug] ?? group.name}
             </button>
           ))}
         </div>
@@ -302,6 +306,26 @@ export function EmojiGrid({
 
 /** What the first tab is called. */
 const RECENT = "Recent";
+
+/**
+ * What a tab shows instead of its name, by slug.
+ *
+ * Ten categories of prose is a strip several times wider than the panel, so the
+ * bar is the only way across it. Icons shrink it to something that mostly fits,
+ * which answers the scrolling on #125 rather than only the bar's place.
+ */
+const ICONS: Readonly<Record<string, string>> = {
+  recent: "🕑",
+  "smileys-emotion": "😀",
+  "people-body": "👋",
+  "animals-nature": "🐻",
+  "food-drink": "🍎",
+  "travel-places": "✈️",
+  activities: "⚽",
+  objects: "💡",
+  symbols: "🔣",
+  flags: "🏁",
+};
 
 /**
  * The categories, with the recently used ones in front of them.

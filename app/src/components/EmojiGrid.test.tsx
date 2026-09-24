@@ -70,6 +70,9 @@ function draw(props: Partial<Parameters<typeof EmojiGrid>[0]> = {}) {
 /** The box everything here is typed into. */
 const searchBox = () => screen.getByRole("searchbox", { name: /search/i });
 
+/** The strip of categories across the top. */
+const strip = () => screen.getByRole("group", { name: /categor/i });
+
 /** What the live region is currently saying. */
 const announcement = () => screen.getByRole("status").textContent;
 
@@ -312,11 +315,12 @@ describe("the categories", () => {
 });
 
 /*
-  The strip of categories scrolls sideways and draws no scrollbar (#125), so
-  these are what is left of knowing where in it you are. Both were the bar's
-  job.
+  The strip scrolls sideways and its bar is back (#125). These are the things
+  the bar cannot do on its own: say which category is showing, find it again
+  after a search has unmounted the strip and handed it back at the left, and
+  say what a tab is for when the tab is one glyph wide.
 */
-describe("getting around the categories without a scrollbar", () => {
+describe("getting around the categories", () => {
   it("scrolls the one on show into view", async () => {
     const { user } = draw();
 
@@ -359,6 +363,61 @@ describe("getting around the categories without a scrollbar", () => {
     expect(scrolledIntoView().slice(before)).toContain(
       screen.getByRole("button", { name: "People & Body" }),
     );
+  });
+
+  it("labels a category with an icon rather than with its name", () => {
+    /*
+      Navigating by icon, which also keeps the strip short enough to need much
+      less of the scrolling #125 is about.
+    */
+    draw();
+
+    const tab = within(strip()).getByRole("button", {
+      name: "Smileys & Emotion",
+    });
+
+    expect(tab).toHaveTextContent("😀");
+    expect(tab).not.toHaveTextContent("Smileys");
+  });
+
+  it("names the tab anyway, for a screen reader and for a tooltip", () => {
+    // A glyph is not a label. Every lookup in this file goes through the name,
+    // so losing it would take the whole strip with it.
+    draw();
+
+    const tab = within(strip()).getByRole("button", { name: "People & Body" });
+
+    expect(tab).toHaveAccessibleName("People & Body");
+    expect(tab).toHaveAttribute("title", "People & Body");
+  });
+
+  it("gives the remembered keys an icon of their own", () => {
+    draw({ recent: ["👍"] });
+
+    expect(within(strip()).getByRole("button", { name: "Recent" }))
+      .toHaveTextContent("🕑");
+  });
+
+  it("falls back to the name for a category it has no icon for", () => {
+    /*
+      Emojibase can add a group, and a tab with neither an icon nor a name is a
+      blank button nobody can tell from the next one.
+    */
+    draw({
+      set: {
+        ...SMALL,
+        groups: [
+          {
+            name: "Brand New",
+            slug: "brand-new",
+            emoji: [key("🫠", "melting face", ["melting"])],
+          },
+        ],
+      },
+    });
+
+    expect(within(strip()).getByRole("button", { name: "Brand New" }))
+      .toHaveTextContent("Brand New");
   });
 
   it("walks the strip on Tab and opens a category from the keyboard", async () => {

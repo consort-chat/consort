@@ -15,14 +15,14 @@
   can set to 150%, and a grid measured in pixels would keep its old size while
   the words beside it grew.
 
-  The third is that the category strip draws no scrollbar. WebKit puts one
-  inside the box, across the bottom of the tabs, and a press near the foot of a
-  category then lands on the bar rather than the category (#125).
+  The third is where the category strip's scrollbar sits. WebKit draws it
+  inside the box, so without room reserved below the tabs it lands across their
+  feet and swallows a press aimed there (#125).
 
   A file of its own, because it is the only kind of test that wants CSS. See
   `vitest.config.ts` for why `.css.test.tsx` is the name that gets one.
 */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import "./EmojiGrid.css";
@@ -91,6 +91,15 @@ describe("the shape of the grid", () => {
     expect(key * REM).toBeGreaterThanOrEqual(FLOOR);
   });
 
+  it("caps the grid in rows rather than at a fixed height", () => {
+    // A length here would keep its old size at 150% text while the keys inside
+    // it grew, so the bottom row would be cut in half rather than scrolled to.
+    drawTheGrid();
+    const rows = screen.getByRole("group", { name: "Smileys & Emotion" });
+
+    expect(getComputedStyle(rows).maxHeight).toContain("var(--emoji-key)");
+  });
+
   it("sizes the key it actually draws from that number", () => {
     // Otherwise the two above are measuring a custom property nothing uses.
     drawTheGrid();
@@ -104,6 +113,14 @@ describe("the shape of the grid", () => {
 /** The strip of categories, which is the one thing here that scrolls sideways. */
 const strip = () => screen.getByRole("group", { name: /categor/i });
 
+/**
+ * What the bar takes across the foot of the strip, in CSS pixels.
+ *
+ * The one pictured on #125 measured about seven, and a GTK overlay bar widens
+ * to roughly twice that when the pointer comes near it.
+ */
+const BAR = 14;
+
 /** Every rule jsdom parsed. A pseudo-element is reachable no other way. */
 function everyRule(): readonly string[] {
   return Array.from(document.styleSheets).flatMap((sheet) =>
@@ -112,37 +129,69 @@ function everyRule(): readonly string[] {
 }
 
 describe("the category strip", () => {
-  it("asks for no scrollbar", () => {
+  it("draws a scrollbar, which is the only way across the categories", () => {
     drawTheGrid();
 
     expect(
       getComputedStyle(strip()).getPropertyValue("scrollbar-width").trim(),
-    ).toBe("none");
+    ).toBe("thin");
   });
 
-  it("hides the one WebKit draws as well", () => {
-    /*
-      Both rules or neither. Which of them webkit2gtk 2.52 acts on is not
-      something jsdom can be asked, and the strip asking for `thin` was
-      already not enough to keep the bar off the tabs.
-    */
+  it("does not hide the one WebKit draws either", () => {
+    // The pair of rules that took the bar away. Asking for `thin` above while
+    // a pseudo-element rule still says `display: none` would leave it gone.
     drawTheGrid();
 
-    const webkit = everyRule().filter((rule) =>
-      rule.startsWith(".emoji__tabs::-webkit-scrollbar"),
+    const hidden = everyRule().filter(
+      (rule) =>
+        rule.startsWith(".emoji__tabs::-webkit-scrollbar") &&
+        rule.includes("display: none"),
     );
 
-    expect(webkit).toHaveLength(1);
-    expect(webkit[0]).toContain("display: none");
+    expect(hidden).toEqual([]);
   });
 
   it("still scrolls, because there are more categories than fit", () => {
-    // Hiding the bar by taking the overflow away would pass both of the above
-    // and lose every category past the fold.
+    // A strip that had lost its overflow would have a usable bar and nothing
+    // for it to move.
     drawTheGrid();
 
     expect(getComputedStyle(strip()).getPropertyValue("overflow-x")).toBe(
       "auto",
     );
+  });
+
+  it("reserves room below the tabs for the bar to sit in", () => {
+    // The actual fix for #125. jsdom does no layout, so what is checkable is
+    // that the clearance exists, is measured against the text size, and is
+    // deeper than the bar it is holding off.
+    const grid = drawTheGrid();
+    const clearance = getComputedStyle(grid)
+      .getPropertyValue("--emoji-bar")
+      .trim();
+
+    expect(clearance).toMatch(/rem$/);
+    expect(parseFloat(clearance) * REM).toBeGreaterThanOrEqual(BAR);
+    expect(getComputedStyle(strip()).paddingBottom).toBe("var(--emoji-bar)");
+  });
+
+  it("leaves a tab big enough to hit all of", () => {
+    // The other half of it. The clearance keeps the bar off the tabs; this is
+    // the tabs being worth the room in the first place.
+    const grid = drawTheGrid();
+    const height = getComputedStyle(grid).getPropertyValue("--emoji-tab").trim();
+
+    expect(height).toMatch(/rem$/);
+    expect(parseFloat(height) * REM).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("sizes the tab it actually draws from that number", () => {
+    // Otherwise the one above is measuring a custom property nothing uses.
+    drawTheGrid();
+    const tab = within(strip()).getByRole("button", {
+      name: "Smileys & Emotion",
+    });
+
+    expect(getComputedStyle(tab).minHeight).toBe("var(--emoji-tab)");
   });
 });

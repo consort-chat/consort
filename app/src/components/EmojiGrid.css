@@ -14,8 +14,22 @@
     a grid that wrapped at a different one would send the cursor somewhere the
     eye is not.
   */
-  --emoji-across: 9;
-  --emoji-key: 2.125rem;
+  --emoji-across: 10;
+  --emoji-key: 2.375rem;
+
+  /*
+    How tall a category tab is, which has to clear the 24 CSS pixel floor on
+    its own: a tab is one glyph wide now, so there is no line of text holding
+    it open.
+  */
+  --emoji-tab: 1.875rem;
+
+  /*
+    Room below the tabs for the horizontal scrollbar. WebKit draws the bar
+    inside the box, so this is what keeps it off the tabs (#125). The one
+    pictured there measured about seven pixels and widens on approach.
+  */
+  --emoji-bar: 0.875rem;
 
   display: flex;
   flex-direction: column;
@@ -62,46 +76,54 @@
 }
 
 /*
-  Scrolls sideways and draws no bar doing it. WebKit puts the bar inside the
-  box, across the bottom of the tabs, so a press near the foot of a category
-  lands on the bar instead (#125). `EmojiGrid.tsx` scrolls the current one in.
+  Scrolls sideways, with the bar that does it sitting in the padding below the
+  tabs rather than across them (#125). The tabs are held off the top edge as
+  well, so the strip reads as a strip rather than as the lid of the grid.
 */
 .emoji__tabs {
   display: flex;
   gap: var(--space-1);
   overflow-x: auto;
-  padding-bottom: var(--space-1);
+  padding-top: var(--space-1);
+  padding-bottom: var(--emoji-bar);
   border-bottom: 1px solid var(--line-subtle);
-  scrollbar-width: none;
-}
-
-/* Both or neither. WebKit understood this long before `scrollbar-width`. */
-.emoji__tabs::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
 }
 
 .emoji__tab {
   flex: none;
-  min-height: 1.5rem;
-  padding: 0 var(--space-2);
+  display: grid;
+  place-items: center;
+  min-width: var(--emoji-tab);
+  min-height: var(--emoji-tab);
+  padding: 0 var(--space-1);
   background: none;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   border: none;
   border-radius: var(--radius-sm);
   font: inherit;
-  font-size: var(--text-2xs);
+  font-size: var(--text-base);
+  line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: color var(--duration-fast) ease;
+  /*
+    An emoji draws in its own colours, so the text ladder that dimmed a word
+    does nothing to a glyph. Faded rather than drained: greyscale would make
+    every tab a grey blob, and telling them apart is the whole point of them.
+  */
+  opacity: 0.7;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
-.emoji__tab:hover {
-  color: var(--text-secondary);
+.emoji__tab:hover,
+.emoji__tab[aria-current="true"] {
+  opacity: 1;
 }
 
 .emoji__tab[aria-current="true"] {
   background: var(--surface-overlay);
-  color: var(--text-primary);
 }
 
 .emoji__tab:focus-visible {
@@ -117,18 +139,18 @@
 
 /*
   Tall enough to scroll and short enough to leave the message it hangs off
-  visible. Eight rows, which is where the biggest category stops being a wall.
+  visible. Nine rows, which is where the biggest category stops being a wall.
 */
 .emoji__grid {
   overflow-y: auto;
-  max-height: calc(8 * var(--emoji-key));
+  max-height: calc(9 * var(--emoji-key));
   scrollbar-width: thin;
 }
 
 /*
   WCAG 2.5.8 asks 24 by 24 CSS pixels of anything there is to press, and the
   row under a message has been under that three times. `--emoji-key` is
-  2.125rem, which is 34px at the default root size and grows from there.
+  2.375rem, which is 38px at the default root size and grows from there.
 */
 .emoji__key {
   display: grid;
