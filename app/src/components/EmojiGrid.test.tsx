@@ -327,6 +327,23 @@ describe("getting around the categories without a scrollbar", () => {
     );
   });
 
+  it("scrolls it into view going backwards too", async () => {
+    /*
+      One ref shared by every tab, so the new current one is attached to it and
+      the old one detached. Backwards is the order where doing that in the
+      wrong phase would leave the ref empty and this affordance half dead.
+    */
+    const { user } = draw();
+    await user.click(screen.getByRole("button", { name: "People & Body" }));
+    const before = scrolledIntoView().length;
+
+    await user.click(screen.getByRole("button", { name: "Smileys & Emotion" }));
+
+    expect(scrolledIntoView().slice(before)).toContain(
+      screen.getByRole("button", { name: "Smileys & Emotion" }),
+    );
+  });
+
   it("scrolls it back when a search has been and gone", async () => {
     /*
       Searching unmounts the strip, so it comes back at the left with the
