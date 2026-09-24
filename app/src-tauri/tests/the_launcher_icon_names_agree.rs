@@ -163,6 +163,18 @@ fn every_recipe_installs_the_desktop_entry_the_bundler_is_given() {
             "{} installs a desktop entry the .deb and .rpm are not built from",
             recipe.display()
         );
+        // The basename is an application's identity to anything that has no
+        // `StartupWMClass` to go on, and it is the one part of the entry the
+        // recipes choose rather than copy. The .deb calls it `Consort.desktop`
+        // after `productName`; this is the same name in the spelling `argv[0]`
+        // uses, and a recipe free to call it something else is a recipe free to
+        // give Arch a different application.
+        assert_eq!(
+            file_name(&installed.destination),
+            format!("{}.desktop", binary_name()),
+            "{} installs the desktop entry under a name nothing else uses",
+            recipe.display()
+        );
     }
 }
 
