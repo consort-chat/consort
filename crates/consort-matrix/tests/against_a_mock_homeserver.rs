@@ -7129,3 +7129,257 @@ mod notifications {
         assert!(seen.lock().unwrap().is_empty());
     }
 }
+
+/// Who is in a room, asked for when its details are opened.
+mod room_members {
+    use super::*;
+    use consort_matrix::rooms::{Naming, members};
+    use matrix_sdk::ruma::events::room::member::RoomMemberEvent;
+    use matrix_sdk::ruma::serde::Raw;
+
+    const ROOM: &str = "!general:example.org";
+
+    /// One `m.room.member`, as the `/members` endpoint hands them over.
+    ///
+    /// The event ID is a counter rather than anything derived from the user,
+    /// because a user ID is full of characters an event ID may not carry.
+    fn member(
+        nth: u32,
+        user_id: &str,
+        membership: &str,
+        name: Option<&str>,
+    ) -> Raw<RoomMemberEvent> {
+        let mut content = serde_json::json!({ "membership": membership });
+        if let Some(name) = name {
+            content["displayname"] = serde_json::json!(name);
+        }
+
+        serde_json::from_value(serde_json::json!({
+            "type": "m.room.member",
+            "event_id": format!("$member{nth}"),
+            "sender": user_id,
+            "state_key": user_id,
+            "origin_server_ts": 1_000,
+            "room_id": ROOM,
+            "content": content,
+        }))
+        .unwrap()
+    }
+
+    /// A joined room whose `/members` answers with `people`.
+    async fn room_of(
+        server: &MatrixMockServer,
+        people: Vec<Raw<RoomMemberEvent>>,
+    ) -> (tempfile::TempDir, matrix_sdk::Client) {
+        let (dir, client) = signed_in(server).await;
+        server.mock_get_members().ok(people).mount().await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        (dir, client)
+    }
+
+    fn names(roster: &consort_matrix::rooms::Roster) -> Vec<&str> {
+        roster
+            .shown
+            .iter()
+            .map(|member| member.person.name.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_people_in_a_room_are_listed_by_name() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![
+                member(1, "@zoe:example.org", "join", Some("Zoe")),
+                member(2, "@ada:example.org", "join", Some("Ada")),
+            ],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&people.joined), vec!["Ada", "Zoe"]);
+    }
+
+    #[tokio::test]
+    async fn the_count_beside_the_heading_is_of_the_people_who_joined() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![
+                member(1, "@ada:example.org", "join", Some("Ada")),
+                member(2, "@zoe:example.org", "join", Some("Zoe")),
+                member(3, "@mel:example.org", "invite", Some("Mel")),
+            ],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(people.joined.count, 2);
+    }
+
+    #[tokio::test]
+    async fn somebody_invited_is_listed_apart_from_somebody_who_joined() {
+        // The distinction that matters before anybody pastes anything: an
+        // invited person cannot read what is being said here yet.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![
+                member(1, "@ada:example.org", "join", Some("Ada")),
+                member(2, "@mel:example.org", "invite", Some("Mel")),
+            ],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&people.joined), vec!["Ada"]);
+        assert_eq!(names(&people.invited), vec!["Mel"]);
+        assert_eq!(people.invited.count, 1);
+    }
+
+    #[tokio::test]
+    async fn somebody_who_left_is_in_neither_list() {
+        // Both lists are read out of one query, so the filter is the only
+        // thing keeping a room's whole history of departures off the panel.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![
+                member(1, "@ada:example.org", "join", Some("Ada")),
+                member(2, "@gone:example.org", "leave", Some("Gone")),
+                member(3, "@banned:example.org", "ban", Some("Banned")),
+            ],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&people.joined), vec!["Ada"]);
+        assert!(people.invited.shown.is_empty());
+    }
+
+    #[tokio::test]
+    async fn somebody_who_has_set_no_name_is_drawn_as_their_user_id() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) =
+            room_of(&server, vec![member(1, "@ada:example.org", "join", None)]).await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&people.joined), vec!["@ada:example.org"]);
+        assert_eq!(people.joined.shown[0].naming, Some(Naming::Absent));
+    }
+
+    #[tokio::test]
+    async fn a_name_that_is_only_spaces_is_no_name_at_all() {
+        // Legal, and some bridges set one. A row whose name is an empty space
+        // reads as a rendering fault rather than as somebody unnamed.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![member(1, "@ada:example.org", "join", Some("   "))],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&people.joined), vec!["@ada:example.org"]);
+        assert_eq!(people.joined.shown[0].naming, Some(Naming::Absent));
+    }
+
+    #[tokio::test]
+    async fn two_people_with_one_display_name_are_told_apart_by_their_user_id() {
+        // The impersonation surface. Without this both rows say "Ada" and the
+        // interface has nothing on it that says which is which.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![
+                member(1, "@ada:example.org", "join", Some("Ada")),
+                member(2, "@impostor:example.org", "join", Some("Ada")),
+            ],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(
+            names(&people.joined),
+            vec!["Ada (@ada:example.org)", "Ada (@impostor:example.org)"]
+        );
+        assert_eq!(people.joined.shown[0].naming, Some(Naming::Shared));
+        assert_eq!(people.joined.shown[1].naming, Some(Naming::Shared));
+    }
+
+    #[tokio::test]
+    async fn a_name_nobody_else_uses_needs_nothing_said_about_it() {
+        // The control for the two above. Most people are this, and a marker on
+        // every row would be a marker that means nothing.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_of(
+            &server,
+            vec![member(1, "@ada:example.org", "join", Some("Ada"))],
+        )
+        .await;
+
+        let people = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(people.joined.shown[0].naming, None);
+    }
+
+    #[tokio::test]
+    async fn the_member_list_is_fetched_once_and_read_from_the_store_after_that() {
+        // What makes this affordable as a command. The first ask costs a
+        // `/members` request, and every ask after it reads the store, so
+        // opening and shutting the panel is not a request per open.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .mock_get_members()
+            .ok(vec![member(1, "@ada:example.org", "join", Some("Ada"))])
+            .mock_once()
+            .mount()
+            .await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+
+        members(&client, ROOM).await.unwrap();
+        let again = members(&client, ROOM).await.unwrap();
+
+        assert_eq!(names(&again.joined), vec!["Ada"]);
+    }
+
+    #[tokio::test]
+    async fn a_room_this_account_is_not_in_says_so_rather_than_answering_nobody() {
+        // An empty list for a room full of people is the wrong answer to draw.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = members(&client, "!elsewhere:example.org")
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.user_message().contains("not one this account is in"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_room_id_never_reaches_the_homeserver() {
+        // Nothing is mounted for `/members` here, so a request would 404 and
+        // the answer would be right for the wrong reason. The parse fails
+        // first.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        assert!(members(&client, "not a room").await.is_err());
+    }
+}

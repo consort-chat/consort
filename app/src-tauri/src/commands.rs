@@ -324,6 +324,29 @@ pub async fn member_profile_for(
     Ok(rooms::member_profile(&client, &user_id).await)
 }
 
+/// Who is in one room, the joined and the invited kept apart.
+///
+/// A command rather than a field on the room list, for the reason
+/// [`room_avatar_for`] is one and more so: the list is re-sent in full
+/// whenever anything in it changes, and a member list per room would multiply
+/// a payload that is a few kilobytes today by every room on the account.
+///
+/// Asked for when somebody opens a room's details, and the answer is a
+/// snapshot of that moment rather than something that keeps itself up to date.
+/// See `consort_matrix::rooms::people` for what one ask costs and why the list
+/// is capped while the count is not.
+///
+/// An error rather than an empty room when this account is not in the room or
+/// is not signed in. Both would otherwise be drawn as a room nobody is in,
+/// which is a different and much more alarming thing to be told.
+pub async fn room_members_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(rooms::members(&client, &room_id).await?)
+}
+
 /// What to call each of `user_ids` in `room_id`.
 ///
 /// A batch rather than one at a time, because a screen of messages is a
@@ -1940,6 +1963,18 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// Who is in one room.
+///
+/// Asked for when somebody opens a room's details, and never on the way to
+/// drawing the room list. See `room_members_for`.
+#[tauri::command]
+pub async fn room_members(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<rooms::Members, CommandError> {
+    room_members_for(&state, room_id).await
 }
 
 /// What can be said about one person beyond their name.
@@ -3888,6 +3923,35 @@ mod against_a_mock_homeserver {
         )
         .await
         .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_while_signed_out_says_so() {
+        // Unlike the avatar beside a name, an empty answer here would be drawn
+        // as a room with nobody in it, so there is nothing to degrade to.
+        let (_dir, state, _sink) = state();
+
+        let error = room_members_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_who_is_in_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = room_members_for(&state, "!gone:example.org".to_owned())
+            .await
+            .unwrap_err();
 
         assert!(!error.message().is_empty());
     }

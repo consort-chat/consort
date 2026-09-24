@@ -621,6 +621,65 @@ export function directRoom(userId: string): Promise<string> {
 }
 
 /**
+ * Why somebody's name carries their user ID.
+ *
+ * Two different facts that arrive as the same shape of string, and the list
+ * draws them differently. `"absent"` is somebody who has set no display name
+ * in this room, so the ID is standing in for one. `"shared"` is somebody whose
+ * display name is also somebody else's in the same room, which is the shape
+ * every impersonation in Matrix takes.
+ */
+export type Naming = "absent" | "shared";
+
+/** One person in a room. */
+export interface Member {
+  /**
+   * Who they are, in the shape a person's card takes, so that pressing a row
+   * can hand the card what it needs without asking for it again.
+   */
+  person: Participant;
+  /** Why their name has their user ID in it. Absent for most people. */
+  naming?: Naming;
+}
+
+/**
+ * One membership's worth of people.
+ *
+ * `count` is how many there are and `shown` is how many fitted. The two
+ * disagree in a big room on purpose: the question a heading answers is how
+ * many people are here, not how many of them the panel could list.
+ */
+export interface Roster {
+  count: number;
+  shown: Member[];
+}
+
+/** Who is in one room, the joined and the invited kept apart. */
+export interface Members {
+  joined: Roster;
+  invited: Roster;
+}
+
+/**
+ * Who is in one room.
+ *
+ * A command rather than a field on the room list, because the list is re-sent
+ * in full whenever anything in it changes and a member list per room would
+ * multiply a payload that is a few kilobytes today by every room on the
+ * account.
+ *
+ * A snapshot of the moment it is asked for, not something that keeps itself up
+ * to date. Ask again to see the room as it is now.
+ *
+ * Rejects rather than answering an empty room when this account is not in the
+ * room or is not signed in, because "nobody is here" is a different and much
+ * more alarming thing to draw.
+ */
+export function roomMembers(roomId: string): Promise<Members> {
+  return invoke<Members>("room_members", { roomId });
+}
+
+/**
  * The five things a person can do to a verification flow.
  *
  * All of them take the same pair of identifiers, straight off the event that
