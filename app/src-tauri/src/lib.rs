@@ -196,6 +196,18 @@ pub fn run() {
         .setup(|app| {
             let data_dir = resolve_data_dir(app.handle())?;
             let store = SessionStore::new(&data_dir);
+            let settings = crate::settings::SettingsStore::at(&data_dir);
+
+            // Here rather than from the page, and before anything is managed,
+            // because this is the one half of the chosen size that can be in
+            // place before the first paint. A window from the config exists by
+            // the time setup runs, and nothing has been drawn in it yet.
+            //
+            // The text scale cannot be done here: it is a root font size, so
+            // only the page can set one, and the page has to ask for it. That
+            // settles during the splash, which is the screen Consort opens on
+            // regardless.
+            commands::zoom(app.handle(), settings.load().appearance.application_scale);
 
             tracing::info!(
                 path = %data_dir.display(),
@@ -208,7 +220,7 @@ pub fn run() {
             // emits through.
             app.manage(AppState::new(
                 store,
-                crate::settings::SettingsStore::at(&data_dir),
+                settings,
                 std::sync::Arc::new(app.handle().clone()),
             ));
 
@@ -297,6 +309,9 @@ pub fn run() {
             commands::set_privacy_settings,
             commands::notification_settings,
             commands::set_notification_settings,
+            commands::appearance_settings,
+            commands::set_appearance_settings,
+            commands::preview_application_scale,
             commands::set_person_volume,
             commands::audio_test_start,
             commands::audio_test_stop,

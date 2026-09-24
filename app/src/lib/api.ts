@@ -2022,6 +2022,72 @@ export function setNotificationSettings(
 }
 
 /**
+ * How big the application is drawn.
+ *
+ * Two numbers because these are two knobs. `applicationScale` is the webview's
+ * own zoom, which moves everything a page has: words, pictures, avatars,
+ * borders. `textScale` is a multiplier on the root font size, which moves only
+ * what is measured in `rem`, so the words and the spacing around them grow and
+ * a picture somebody sent stays the size they sent it.
+ *
+ * Both are multipliers of the size Consort has always drawn at, and 1 is that
+ * size. The ranges, and the arithmetic of moving inside them, are in
+ * `lib/scale.ts`.
+ */
+export interface AppearanceSettings {
+  /** The webview zoom. Applied by Rust, because only Rust can. */
+  applicationScale: number;
+  /** The root font size, on top of the zoom. Applied by the page. */
+  textScale: number;
+}
+
+/**
+ * What is currently chosen.
+ *
+ * Always in range: Rust clamps what comes out of the file as well as what goes
+ * in, so a hand-edited `settings.json` cannot produce a window nobody can
+ * read their way out of.
+ */
+export function appearanceSettings(): Promise<AppearanceSettings> {
+  return invoke<AppearanceSettings>("appearance_settings");
+}
+
+/**
+ * Replace them.
+ *
+ * Rust zooms the window as part of this, so the application scale is applied
+ * and saved together and cannot end up meaning two things. The text scale is
+ * only saved: a root font size is the page's to set, and `applyTextScale` in
+ * `lib/scale.ts` is what sets it.
+ *
+ * A size outside the range is stored at the nearest end rather than refused.
+ * Both sliders apply as they are dragged, so the window has already moved by
+ * the time this is called.
+ */
+export function setAppearanceSettings(
+  appearance: AppearanceSettings,
+): Promise<void> {
+  return invoke<void>("set_appearance_settings", { appearance });
+}
+
+/**
+ * Draw the window at `scale` without remembering it.
+ *
+ * What the application scale slider calls on every move. Drawing has to be
+ * immediate, because watching the size change is the whole value of a slider;
+ * writing has to not be, because a drag produces an event per pixel and each
+ * one would be the settings file rewritten. `setAppearanceSettings` is what
+ * writes, once the pointer has stopped.
+ *
+ * Separate from `applyTextScale` in `lib/scale.ts`, which is the same idea for
+ * the other knob and needs no command at all: a root font size is the page's
+ * own to set.
+ */
+export function previewApplicationScale(scale: number): Promise<void> {
+  return invoke<void>("preview_application_scale", { scale });
+}
+
+/**
  * Open the thread hanging from a message, or shut whichever is open.
  *
  * Answers nothing: what was asked for arrives on the `thread` channel. Asking

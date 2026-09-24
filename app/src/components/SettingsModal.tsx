@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Profile } from "../lib/api";
+import { AccessibilitySection } from "./AccessibilitySection";
 import { MyAccountSection } from "./MyAccountSection";
 import { NotificationsSection } from "./NotificationsSection";
 import { PrivacySection } from "./PrivacySection";
@@ -13,6 +14,7 @@ const SECTIONS = [
   { id: "voice", label: "Voice & Video" },
   { id: "notifications", label: "Notifications" },
   { id: "privacy", label: "Privacy" },
+  { id: "accessibility", label: "Accessibility" },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -217,6 +219,7 @@ export function SettingsModal({ profile, onClose, onSignedOut }: Props) {
             )}
             {section === "notifications" && <NotificationsSection />}
             {section === "privacy" && <PrivacySection />}
+            {section === "accessibility" && <AccessibilitySection />}
           </div>
         </div>
       </div>
