@@ -21,6 +21,8 @@ const callSetAway = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
 const callDisconnect = vi.hoisted(() => vi.fn());
 const roomAvatar = vi.hoisted(() => vi.fn());
+// The screen drawn with no channel selected asks which rooms were opened last.
+const recentRooms = vi.hoisted(() => vi.fn());
 // The people under a voice channel draw their avatars, which is a command.
 // Mocked rather than left to fail quietly: an unmocked `invoke` throws into
 // the catch that turns a missing picture into an initial, so the tests would
@@ -67,6 +69,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   callConnect,
   callDisconnect,
   roomAvatar,
+  recentRooms,
   memberAvatar,
   resendState,
   verificationVerifyThisSession,
@@ -207,6 +210,7 @@ function resetApiMocks() {
   callConnect.mockReset().mockResolvedValue(undefined);
   callDisconnect.mockReset().mockResolvedValue(undefined);
   roomAvatar.mockReset().mockResolvedValue(null);
+  recentRooms.mockReset().mockResolvedValue([]);
   memberAvatar.mockReset().mockResolvedValue(null);
   resendState.mockReset().mockResolvedValue(undefined);
   verificationVerifyThisSession.mockReset().mockResolvedValue(undefined);
@@ -375,9 +379,11 @@ describe("SignedIn", () => {
     await waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
   });
 
-  it("does not set state after unmounting", async () => {
-    // A storage lookup that resolves after the component is gone would warn
-    // in React and, worse, hide a real leak behind the noise.
+  it("says nothing when the storage lookup lands after the screen has gone", async () => {
+    // Half of why that effect has no cleanup. React drops a state update
+    // aimed at a component that is no longer mounted without a word, so a
+    // late answer costs nothing and there is nothing to check first. If it
+    // ever starts complaining again, this is where that shows up.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     let release: (value: TokenStorage) => void = () => {};
     tokenStorage.mockReturnValue(new Promise((resolve) => (release = resolve)));
@@ -670,12 +676,20 @@ describe("SignedIn verification state", () => {
     /*
       Stopping a listener is a promise, so there is a window between this
       screen leaving and the listeners actually stopping, and anything already
-      on its way lands in it. Every handler guards on that.
+      on its way lands in it. No handler checks for that, and this is the test
+      that says none needs to.
 
-      A smoke test rather than a proof of the guards: React drops a state
-      update aimed at a component that has gone without complaining either
-      way. What it does catch is a handler that reads its payload before
-      checking, or that touches anything the unmount took with it.
+      It used to be read the other way round, as cover for eleven `cancelled`
+      checks, and in that reading it could not fail: with them or without them
+      React drops a state update aimed at a component that has gone, without a
+      word. #98 turned the same result the right way up. The checks are gone
+      and this is what holds their absence up: if React ever starts
+      complaining again it surfaces here, and they go back.
+
+      It also does more than it did. Every payload is one Rust actually sends,
+      and with no check short-circuiting them the handler bodies now run, so
+      one that choked on its own payload would fail here rather than be
+      skipped over.
     */
     const complaints = vi.spyOn(console, "error").mockImplementation(() => {});
     const channels: Array<[typeof onConnection, unknown]> = [
@@ -1249,7 +1263,7 @@ describe("SignedIn the room list", () => {
     await accountPanel();
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1310,14 +1324,14 @@ describe("SignedIn the room list", () => {
     // Away from it, under their own steam.
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
 
     // A sync. The tree is new, which is the whole of what it takes.
     act(() => roomsHandler()({ spaces: [homeSpace, kahuHq] }));
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1367,7 +1381,7 @@ describe("SignedIn the room list", () => {
     await userEvent.click(screen.getByRole("button", { name: "Home" }));
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
   });
 
@@ -1398,7 +1412,7 @@ describe("SignedIn the room list", () => {
     );
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-      "Nothing here yet",
+      "Consort",
     );
     expect(
       screen.queryByRole("button", { name: "#general" }),

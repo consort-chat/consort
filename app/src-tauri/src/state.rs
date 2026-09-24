@@ -4,6 +4,7 @@
 //! Application state shared by every Tauri command.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use consort_call::{CallEvent, CallTransport, Microphone};
 use consort_matrix::{
@@ -310,6 +311,18 @@ pub struct AppState {
     /// A `std::sync::Mutex` rather than tokio's. Nothing here awaits while
     /// holding it, and the commands that reach it are synchronous.
     call: std::sync::Mutex<Option<CallBridge>>,
+    /// Which room the call above is in, while it is in one.
+    ///
+    /// Kept here rather than asked of the call thread, which is behind a
+    /// command channel and could only answer asynchronously. The one caller is
+    /// [`Self::disconnect_call_from`], which runs while somebody is leaving a
+    /// room and has to decide before the leave goes out.
+    ///
+    /// An `Arc` because [`Self::call_reporter`]'s closure is what clears it.
+    /// The room belongs to the call rather than to the thread, so it has to be
+    /// put back by whatever ends the call, and the click is not always what
+    /// ends one.
+    called: Arc<std::sync::Mutex<Option<String>>>,
     /// What the notification watcher reads to decide whether to interrupt.
     ///
     /// Shared rather than read back off this struct, because the watcher's
@@ -450,6 +463,7 @@ impl AppState {
             call_audio: Arc::new(std::sync::Mutex::new(None)),
             timeline: std::sync::Mutex::new(None),
             call: std::sync::Mutex::new(None),
+            called: Arc::new(std::sync::Mutex::new(None)),
             notification_task: Mutex::new(None),
             attention: Attention::default(),
             notifier: Arc::new(std::sync::Mutex::new(None)),
@@ -532,6 +546,11 @@ impl AppState {
         audio: CallAudio,
     ) {
         *self.locked_call_audio() = Some(audio);
+        // Before the join rather than after it, because what this answers is
+        // "which room would leaving end this call", and that is true from the
+        // moment a membership starts going out rather than from the moment one
+        // is acknowledged.
+        *self.locked_called() = Some(room_id.clone());
 
         let mut slot = self.locked_call();
         let bridge = slot.get_or_insert_with(|| {
@@ -600,6 +619,85 @@ impl AppState {
         }
     }
 
+    /// Leave the voice channel if it is the one in `room_id`, and say whether
+    /// it was.
+    ///
+    /// What leaving a room calls before it leaves it. A voice channel is an
+    /// ordinary Matrix room, so a room somebody leaves can be the room their
+    /// call is in, and a call left running against it would go on publishing a
+    /// membership to a room this account is no longer a member of. What
+    /// everybody else would see is a name sitting in a channel until the
+    /// membership times out, which is the case `rooms::OCCUPIED_POLL` exists
+    /// for and not one to create on purpose.
+    ///
+    /// Keyed on the room rather than unconditional, because the common leave
+    /// is of a text room while a call is going on elsewhere, and dropping that
+    /// call would be a far worse surprise than the one this prevents.
+    ///
+    /// Not awaited, and it cannot be: the call thread is reached over a
+    /// command channel and unwinds its membership on its own runtime. So the
+    /// leave that follows may well reach the homeserver first, in which case
+    /// the membership is left to expire rather than withdrawn. The thing that
+    /// matters either way is that this session stops sending audio to a room
+    /// it has left, and that is done by the time this returns.
+    pub fn disconnect_call_from(&self, room_id: &str) -> bool {
+        if self.locked_called().as_deref() != Some(room_id) {
+            return false;
+        }
+        self.disconnect_call();
+        true
+    }
+
+    /// Leave the voice channel on the way out of the process, waiting at most
+    /// `budget` for it.
+    ///
+    /// Asked for rather than got for free, because a quit drops nothing. Tauri's
+    /// event loop exits the process from inside `run`, so the state it manages
+    /// is never dropped and the [`CallBridge`] teardown that a sign-out relies
+    /// on never runs. Without this, Ctrl+Q while in a call publishes no leave at
+    /// all and everybody else in the channel watches a phantom of this device
+    /// until the homeserver clears it. `CLAUDE.md` says how long that is.
+    ///
+    /// Returns whether the leave finished inside `budget`. `false` is not a
+    /// failure, it is the bound doing its job: the membership then lapses the
+    /// way it did before any of this existed.
+    ///
+    /// The drop happens on a thread of its own, and that is the whole reason
+    /// this is not one line. Dropping the bridge here would be a wait with no
+    /// bound on it: the call thread takes its shutdown message only once
+    /// whatever it is already doing has finished, so a quit during a slow join
+    /// would sit through the join first. Somebody who cannot close the
+    /// application is a worse outcome than a ghost in a channel.
+    ///
+    /// Nothing is announced and the microphone is not given back, unlike
+    /// [`Self::clear_client`]. Both exist to correct what the interface shows,
+    /// and there is no interface left to correct: the window has gone and the
+    /// process is going with it.
+    pub fn leave_call_on_quit(&self, budget: Duration) -> bool {
+        let Some(bridge) = self.locked_call().take() else {
+            return true;
+        };
+
+        let (left, wait) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("consort-call-farewell".to_owned())
+            .spawn(move || {
+                drop(bridge);
+                let _ = left.send(());
+            })
+            .expect("the operating system refused a thread");
+
+        if wait.recv_timeout(budget).is_err() {
+            tracing::warn!(
+                ?budget,
+                "quitting gave up on leaving the call; the membership will expire on its own"
+            );
+            return false;
+        }
+
+        true
+    }
+
     /// Mute or unmute this session's microphone.
     ///
     /// A no-op before the first call of the session, when there is no thread to
@@ -647,6 +745,7 @@ impl AppState {
         let microphone = self.microphone.clone();
         let voices = self.voices.clone();
         let call_audio = self.call_audio.clone();
+        let called = self.called.clone();
         let talking = self.talking.clone();
 
         move |event| {
@@ -670,6 +769,13 @@ impl AppState {
                 }
                 CallEvent::Connected { .. } => {}
                 CallEvent::Disconnected | CallEvent::Failed { .. } => {
+                    // Put back here rather than where the disconnect was asked
+                    // for, on the same terms as the microphone below it: the
+                    // call ends for reasons that are not a click, and the room
+                    // has to stop being the answer for every one of them.
+                    *called
+                        .lock()
+                        .expect("the called-room mutex is never poisoned") = None;
                     sound.stop_call();
                     // The tally is ticked by the microphone, and the line
                     // above is what stops it. Without this whoever was talking
@@ -898,6 +1004,12 @@ impl AppState {
         self.call_audio
             .lock()
             .expect("the call audio mutex is never poisoned")
+    }
+
+    fn locked_called(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.called
+            .lock()
+            .expect("the called-room mutex is never poisoned")
     }
 
     /// Send the current state of every push channel again.
@@ -1135,6 +1247,9 @@ impl AppState {
             self.events.emit(AppEvent::Call(CallEvent::Disconnected));
         }
         *self.locked_call_audio() = None;
+        // The pump has been joined by now, so nothing is going to arrive and
+        // clear this on its own. See the reporter, which is the other half.
+        *self.locked_called() = None;
 
         stop_task(&self.refresh_task).await;
 
@@ -1287,7 +1402,7 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::events::RecordingSink;
-    use crate::testing::{FakeCallTransport, fake_backends, wait_for};
+    use crate::testing::{FakeCallTransport, PATIENCE, fake_backends, wait_for};
     use consort_matrix::StopReason;
     use consort_matrix::secrets::MemoryBackend;
     use std::sync::Arc;
@@ -1861,6 +1976,65 @@ mod tests {
         }
 
         #[test]
+        fn quitting_leaves_the_call_rather_than_letting_the_membership_lapse() {
+            // Issue #110. Tauri's event loop exits the process from inside
+            // `run`, so nothing it manages is ever dropped and the teardown a
+            // sign-out relies on never happens. A quit that publishes no leave
+            // leaves everybody else in the channel watching a phantom of this
+            // device until the homeserver fires the dead man's switch.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::joining();
+            let leaves = transport.leaves();
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+            until_call(&sink, "connected");
+
+            let left = state.leave_call_on_quit(PATIENCE);
+
+            assert!(left, "the leave did not finish inside the budget");
+            assert_eq!(leaves.count(), 1, "nothing left the call");
+            assert!(
+                !state.has_call_thread(),
+                "the call thread outlived the leave"
+            );
+        }
+
+        #[test]
+        fn a_leave_that_never_answers_still_lets_the_process_go() {
+            // The constraint that keeps this from being one line. Somebody
+            // whose homeserver has stopped answering must still be able to
+            // close the application, so the wait is bounded and a leave that
+            // outlasts the bound is abandoned rather than waited on.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::whose_leave_never_answers();
+            let leaves = transport.leaves();
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+            until_call(&sink, "connected");
+
+            let started = std::time::Instant::now();
+            let left = state.leave_call_on_quit(Duration::from_millis(50));
+
+            assert!(!left, "a leave that never answered was reported as done");
+            assert_eq!(leaves.count(), 0, "a leave that hangs cannot have landed");
+            // Generous against a loaded machine and still nowhere near the
+            // budget the call thread gives the request itself, which is what
+            // an unbounded wait here would sit through.
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "quitting waited {:?} on a leave that was never going to answer",
+                started.elapsed()
+            );
+        }
+
+        #[test]
+        fn quitting_without_a_call_waits_for_nothing() {
+            // The common case, and the one a budget must not charge for: most
+            // sessions never join a voice channel at all.
+            let (_dir, state, _sink) = state();
+
+            assert!(state.leave_call_on_quit(Duration::ZERO));
+        }
+
+        #[test]
         fn moving_between_channels_keeps_the_microphone_open_throughout() {
             // The reason the microphone follows the call events rather than
             // the clicks. Both orderings connect in the end; only this one
@@ -2079,6 +2253,74 @@ mod tests {
 
             assert!(!state.has_call_thread());
             assert_eq!(last_call_state(&sink), None);
+        }
+
+        #[test]
+        fn leaving_the_room_a_call_is_in_ends_the_call() {
+            // The edge that makes leaving a room more than one request. A
+            // voice channel is a room, and a session that left the room while
+            // still publishing a membership to it is a name sitting in a
+            // channel nobody can remove it from.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(state.disconnect_call_from(GENERAL));
+
+            until_call(&sink, "disconnected");
+        }
+
+        #[test]
+        fn leaving_a_different_room_leaves_the_call_alone() {
+            // The half that has to hold for the other half to be worth having.
+            // Somebody in a call in one channel who leaves a text room is
+            // still in the call, and a disconnect keyed on nothing would drop
+            // it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(!state.disconnect_call_from("!other:example.org"));
+
+            assert_eq!(last_call_state(&sink).as_deref(), Some("connected"));
+        }
+
+        #[test]
+        fn leaving_a_room_while_in_no_call_at_all_does_nothing() {
+            let (_dir, state, sink) = state();
+
+            assert!(!state.disconnect_call_from(GENERAL));
+
+            assert_eq!(last_call_state(&sink), None);
+        }
+
+        #[test]
+        fn a_call_that_has_ended_is_no_longer_in_any_room() {
+            // Without this the room is remembered past the call, and leaving
+            // that room an hour later would disconnect whatever call this
+            // session had moved on to.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            state.disconnect_call();
+            until_call(&sink, "disconnected");
+
+            assert!(!state.disconnect_call_from(GENERAL));
+        }
+
+        #[test]
+        fn moving_to_another_channel_moves_which_room_a_leave_would_end() {
+            // One thread, several calls. The room is a property of the call
+            // rather than of the thread, so joining a second channel has to
+            // replace it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            join(&state, "!lounge:example.org", true);
+            until_call(&sink, "connected");
+
+            assert!(!state.disconnect_call_from(GENERAL));
+            assert!(state.disconnect_call_from("!lounge:example.org"));
         }
     }
 }

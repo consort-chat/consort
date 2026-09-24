@@ -22,6 +22,7 @@ use consort_matrix::atomic;
 use serde::{Deserialize, Serialize};
 
 use crate::notify::NotificationSettings;
+use crate::recent::RecentRooms;
 
 /// The name of the file inside the application data directory.
 const FILE: &str = "settings.json";
@@ -41,6 +42,13 @@ pub struct Settings {
     pub calls: CallSettings,
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
+    /// The rooms this account has opened, most recently first.
+    ///
+    /// Here rather than in a file of its own because it is the same kind of
+    /// thing as the per-person volumes above: a by-product of using the
+    /// application, not worth a second writer, and written through the one
+    /// that already fsyncs before it renames.
+    pub recent: RecentRooms,
 }
 
 /// What this account tells other people about itself.
@@ -237,7 +245,48 @@ mod tests {
             calls: CallSettings::default(),
             privacy: PrivacySettings::default(),
             notifications: NotificationSettings::default(),
+            recent: RecentRooms::default(),
         }
+    }
+
+    #[test]
+    fn the_rooms_an_account_opened_survive_a_restart() {
+        // The whole reason this is in the file rather than in memory. A list
+        // that started empty every launch would be empty on the one screen
+        // that reads it, which is the screen the application opens on.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings
+            .recent
+            .opened("@ada:example.org", "!lounge:example.org");
+        store.save(&settings).expect("save");
+
+        // A second store over the same directory, which is all the next launch
+        // builds.
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(
+            next_launch.load().recent.of("@ada:example.org"),
+            ["!lounge:example.org"]
+        );
+    }
+
+    #[test]
+    fn a_settings_file_written_before_recent_rooms_existed_still_loads() {
+        // Every settings file on disk today was written before this section,
+        // and a load that failed on its absence would take somebody's audio
+        // thresholds with it.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            br#"{"audio":{"input":"Yeti","output":null,"gate":{}}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert!(loaded.recent.of("@ada:example.org").is_empty());
     }
 
     #[test]

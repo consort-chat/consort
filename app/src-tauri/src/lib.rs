@@ -16,6 +16,7 @@ mod ears;
 mod events;
 mod media;
 mod notify;
+mod recent;
 mod renderer;
 mod settings;
 mod sound;
@@ -24,11 +25,23 @@ mod state;
 mod testing;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use consort_matrix::SessionStore;
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 use crate::state::AppState;
+
+/// How long quitting waits for the voice channel to be left.
+///
+/// Longer than the budget the call thread gives the request itself, which is
+/// the whole of the constraint: that one bounds the leave, this one bounds the
+/// wait for the thread performing it, and this one winning the race would
+/// abandon leaves that were about to land. See
+/// [`consort_call::SHUTDOWN_LEAVE_TIMEOUT`].
+///
+/// Nobody is looking at a window while it runs. See [`on_the_way_out`].
+const LEAVE_ON_QUIT: Duration = Duration::from_secs(6);
 
 /// Answer one request on the attachment scheme.
 ///
@@ -83,6 +96,38 @@ async fn serve(
         held.mime,
         media::wanted(range, held.bytes.len() as u64),
     )
+}
+
+/// Leave the voice channel on the way out.
+///
+/// The one place every quit passes through: Ctrl+Q by way of
+/// [`commands::quit`], the window's close button, and a window manager closing
+/// the window. It has to exist at all because the event loop exits the process
+/// from inside `run` rather than returning, so nothing Tauri manages is ever
+/// dropped and the call teardown a sign-out gets from [`Drop`] never happens.
+///
+/// On `ExitRequested` rather than `Exit`, which is later and reads like the
+/// more obvious last chance. The difference is the single-instance guard:
+/// plugin hooks run before this one and `tauri-plugin-single-instance` releases
+/// its D-Bus name on `Exit`, so a wait there would hold the SQLite crypto store
+/// open with the guard already down. A relaunch inside the wait would then be a
+/// second Consort fighting the first for that store, which is the one thing the
+/// guard exists to prevent. Here the guard is still up, and the worst a
+/// relaunch can do is hand its arguments to a process on its way out and appear
+/// to do nothing.
+///
+/// This blocks the thread that owns the event loop, which is the thread that
+/// draws. Nothing should be on screen by the time it runs: the close button has
+/// already destroyed the window, and [`commands::quit`] hides it before asking
+/// to exit for exactly this reason.
+///
+/// One thing this asks of whatever comes next: nothing prevents the exit today,
+/// and something that did (a tray icon, a "keep running in the background") would
+/// have to move this. The leave has already gone out by the time an exit is
+/// cancelled, and a session left in a channel it is still connected to would
+/// show as connected to nobody but itself.
+fn on_the_way_out<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    app.state::<AppState>().leave_call_on_quit(LEAVE_ON_QUIT);
 }
 
 /// Start the application.
@@ -213,8 +258,10 @@ pub fn run() {
             commands::member_avatar,
             commands::member_profile,
             commands::member_names,
+            commands::room_members,
             commands::timeline_open,
             commands::timeline_close,
+            commands::recent_rooms,
             commands::timeline_earlier,
             commands::timeline_later,
             commands::timeline_go_to,
@@ -232,6 +279,9 @@ pub fn run() {
             commands::open_link,
             commands::quit,
             commands::room_at,
+            commands::room_leave,
+            commands::room_invite,
+            commands::room_can_invite,
             commands::direct_room,
             commands::timeline_copy_link,
             commands::room_copy_link,
@@ -269,8 +319,16 @@ pub fn run() {
             commands::verification_recovery_exists,
             commands::verification_recover,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start Consort");
+        .build(tauri::generate_context!())
+        .expect("failed to start Consort")
+        .run(|app, event| {
+            // Which event it is, and nothing else. What happens then is
+            // `on_the_way_out`, where a test can reach it, including why this
+            // is the requested exit rather than the exit itself.
+            if matches!(event, RunEvent::ExitRequested { .. }) {
+                on_the_way_out(app);
+            }
+        });
 }
 
 /// The per-user directory holding the session file and the SDK's SQLite stores.
@@ -473,6 +531,75 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn the_quit_budget_outlasts_the_one_the_call_thread_gives_a_leave() {
+        // Two bounds, nested on purpose. The inner one bounds the request and
+        // the outer one bounds the wait for the thread that made it, so they
+        // cannot be equal: this one winning the race would abandon leaves that
+        // were about to land, on every homeserver slower than the budget.
+        assert!(
+            LEAVE_ON_QUIT > consort_call::SHUTDOWN_LEAVE_TIMEOUT,
+            "{LEAVE_ON_QUIT:?} does not outlast {:?}",
+            consort_call::SHUTDOWN_LEAVE_TIMEOUT
+        );
+    }
+
+    /// The quit hook, on Tauri's headless mock runtime.
+    ///
+    /// What the leave itself does is covered in `state.rs`, where it needs no
+    /// app at all. This is the only test that shows the thing issue #110 was
+    /// about: that the path out of the process reaches the call before the
+    /// process is gone.
+    #[test]
+    fn quitting_leaves_the_call_this_session_is_in() {
+        use crate::events::{AppEvent, RecordingSink};
+        use crate::testing::{FakeCallTransport, fake_backends, wait_for};
+
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("the mock runtime builds without a display");
+        let dir = tempfile::tempdir().unwrap();
+        let sink = std::sync::Arc::new(RecordingSink::new());
+        app.manage(AppState::new(
+            SessionStore::with_backend(
+                dir.path(),
+                std::sync::Arc::new(consort_matrix::secrets::MemoryBackend::new()),
+            ),
+            settings::SettingsStore::at(dir.path()),
+            sink.clone(),
+        ));
+
+        let transport = FakeCallTransport::joining();
+        let leaves = transport.leaves();
+        app.state::<AppState>().connect_call(
+            "!general:example.org".to_owned(),
+            move || transport,
+            state::CallAudio {
+                device: None,
+                output: None,
+                gate: consort_audio::GateConfig::default(),
+                backends: Box::new(fake_backends),
+                us: "@ada:example.org".to_owned(),
+            },
+        );
+        wait_for(
+            "the call to connect",
+            || {
+                sink.events().iter().any(|event| {
+                    matches!(
+                        event,
+                        AppEvent::Call(consort_call::CallEvent::Connected { .. })
+                    )
+                })
+            },
+            || format!("{:?}", sink.events()),
+        );
+
+        on_the_way_out(app.handle());
+
+        assert_eq!(leaves.count(), 1, "quitting did not leave the call");
     }
 
     #[test]

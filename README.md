@@ -14,8 +14,8 @@ at whatever homeserver you already run.
 > draws your rooms, joins voice channels, and reads and writes text, threads,
 > replies, reactions, attachments and edits, sending included. It marks what
 > you have not read, remembers where you stopped, and tells you when something
-> arrives while you are looking at something else. Deleting your own message is
-> not built.
+> arrives while you are looking at something else. You can leave a room, and
+> ask somebody into one. Deleting your own message is not built.
 
 ---
 
@@ -68,6 +68,12 @@ at whatever homeserver you already run.
   so: somebody who has turned the switch above off is invisible to everybody,
   and fewer faces than there are people in the room is that setting working
   rather than this feature failing.
+- **Leaving a room, and asking somebody into one.** Both live under the room's
+  own details, beside its name and topic. Leaving asks first, because it does
+  not come back: an invite-only room left by mistake needs somebody still in it
+  to ask you back. Inviting takes a Matrix user ID, and says which of five
+  things went wrong when one does, because "that did not work" is useless when
+  the reason is that somebody here banned them.
 - **Notifications.** A desktop notification when Consort is not the window you
   are looking at, or when it is and you are reading a different channel.
   Clicking one brings the window forward and opens the channel it was about.
@@ -75,6 +81,11 @@ at whatever homeserver you already run.
   rules, so a room you muted in another client is muted here; Settings adds
   only what is true of this machine, and nothing is drawn about what happened
   while Consort was closed.
+- **Where it opens.** With no channel selected, the pane offers the rooms you
+  were last in and any voice channel somebody is sitting in right now, across
+  every space rather than the one on screen. What was opened last is written
+  down locally, per account, so it survives a restart and costs the homeserver
+  nothing.
 
 ---
 
@@ -199,6 +210,7 @@ resource here. The full standard, and what gets a change sent back, is in
 | Sending attachments, by picker, drag or paste | working |
 | Read receipts sent and drawn, unread channels, where reading stopped | working |
 | Desktop notifications, honouring your push rules | working |
+| Leaving a room, and inviting somebody to one | working |
 | Editing, upload progress, video thumbnails | planned |
 | Signed and notarised builds for Windows and macOS | someday |
 

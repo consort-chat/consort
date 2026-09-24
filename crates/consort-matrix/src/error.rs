@@ -115,6 +115,53 @@ pub enum Error {
     #[error("{event_id} was not sent by this account, so it cannot be edited")]
     NotYourMessage { event_id: String },
 
+    /// An invitation to somebody who is already in the room.
+    ///
+    /// The first of four reasons an invitation does not go out, and all four
+    /// are decided here rather than read off the homeserver's refusal. Synapse
+    /// answers every one of them with `M_FORBIDDEN` and a sentence written for
+    /// whoever reads its logs, so a client that waited for the server to
+    /// explain would have one message for four situations that want four.
+    #[error("{user_id} is already in {room_id}")]
+    AlreadyInRoom { room_id: String, user_id: String },
+
+    /// An invitation to somebody who has one already and has not answered.
+    ///
+    /// Apart from [`Self::AlreadyInRoom`] because the answer is different.
+    /// That one is finished; this one is waiting on somebody else, and saying
+    /// so is what stops a second and third invitation going out in the belief
+    /// that the first did nothing.
+    #[error("{user_id} has already been invited to {room_id}")]
+    AlreadyInvited { room_id: String, user_id: String },
+
+    /// An invitation to somebody this room has banned.
+    ///
+    /// The one of the four worth spelling out most. A ban is a decision
+    /// somebody in the room made, it is undone by unbanning rather than by
+    /// trying again, and a message that only said the invitation failed would
+    /// send them looking at their own typing.
+    #[error("{user_id} is banned from {room_id}")]
+    BannedFromRoom { room_id: String, user_id: String },
+
+    /// An invitation from an account whose power level does not allow one.
+    ///
+    /// The second of two locks, on the same terms as [`Self::NotYourMessage`]:
+    /// the panel draws the control disabled with a reason, and this is the one
+    /// that still holds if a later change to the panel gets that wrong. It is
+    /// also what catches a power level that changed between the panel being
+    /// drawn and the button being pressed.
+    #[error("this account may not invite anybody to {room_id}")]
+    NotAllowedToInvite { room_id: String },
+
+    /// An invitation everything local allowed and the homeserver refused.
+    ///
+    /// Its own variant rather than falling through to [`Self::Sdk`], whose
+    /// sentence ends in "please try again". Nothing this reaches is fixed by
+    /// trying again: it is somebody who does not exist, a server that will not
+    /// federate with this one, or a rule Consort cannot see.
+    #[error("the homeserver refused an invitation of {user_id} to {room_id}")]
+    InviteRefused { room_id: String, user_id: String },
+
     /// An attachment larger than this build will carry into the webview.
     ///
     /// The bytes are held whole on both sides of the IPC boundary for a
@@ -248,7 +295,24 @@ impl Error {
                 "Nothing here could find a room at that address.".to_owned()
             }
             Self::NoSuchUser { .. } => {
-                "That is not a Matrix user, so there is nobody to message.".to_owned()
+                "That is not a Matrix user ID. They look like `@name:example.org`.".to_owned()
+            }
+            Self::AlreadyInRoom { .. } => "They are already in this room.".to_owned(),
+            Self::AlreadyInvited { .. } => {
+                "They have already been invited to this room and have not answered yet.".to_owned()
+            }
+            Self::BannedFromRoom { .. } => {
+                "They are banned from this room. Somebody has to unban them before they can be \
+                 invited back."
+                    .to_owned()
+            }
+            Self::NotAllowedToInvite { .. } => {
+                "You do not have permission to invite people to this room.".to_owned()
+            }
+            Self::InviteRefused { .. } => {
+                "The homeserver would not send that invitation. Check the user ID, and whether \
+                 their server can be reached from yours."
+                    .to_owned()
             }
             Self::NoSuchRoom { .. } => {
                 "That room is not one this account is in. It may have been left from another \
@@ -428,6 +492,25 @@ mod tests {
             },
             Error::NotYourMessage {
                 event_id: "$theirs:example.org".to_owned(),
+            },
+            Error::AlreadyInRoom {
+                room_id: "!general:example.org".to_owned(),
+                user_id: "@ada:example.org".to_owned(),
+            },
+            Error::AlreadyInvited {
+                room_id: "!general:example.org".to_owned(),
+                user_id: "@ada:example.org".to_owned(),
+            },
+            Error::BannedFromRoom {
+                room_id: "!general:example.org".to_owned(),
+                user_id: "@ada:example.org".to_owned(),
+            },
+            Error::NotAllowedToInvite {
+                room_id: "!general:example.org".to_owned(),
+            },
+            Error::InviteRefused {
+                room_id: "!general:example.org".to_owned(),
+                user_id: "@ada:example.org".to_owned(),
             },
             Error::MediaTooLarge {
                 bytes: 40_000_000,
