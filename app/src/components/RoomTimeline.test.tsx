@@ -133,7 +133,7 @@ const REMEMBERED = ["\u{1F44D}", "\u{1F389}"];
  */
 async function openTheEmoji() {
   await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
-  await screen.findByRole("group", { name: "Recently used" });
+  await screen.findByRole("group", { name: "Recent" });
 }
 
 /** The clock time the component draws, formatted the way it formats it. */
@@ -1246,7 +1246,7 @@ describe("RoomTimeline", () => {
     await userEvent.type(screen.getByRole("textbox"), "hello");
 
     await openTheEmoji();
-    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
 
     expect(screen.getByRole("textbox")).toHaveValue("hello\u{1F44D}");
     expect(timelineSend).not.toHaveBeenCalled();
@@ -1260,7 +1260,7 @@ describe("RoomTimeline", () => {
     box.setSelectionRange(1, 1);
 
     await openTheEmoji();
-    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
 
     expect(box).toHaveValue("a\u{1F44D}b");
   });
@@ -1281,7 +1281,7 @@ describe("RoomTimeline", () => {
     box.setSelectionRange(1, 1);
 
     await openTheEmoji();
-    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
 
     await waitFor(() => expect(box).toHaveFocus());
     expect(box.selectionStart).toBe(3);
@@ -1292,7 +1292,7 @@ describe("RoomTimeline", () => {
     await pane();
 
     await openTheEmoji();
-    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
 
     expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
   });
@@ -1315,7 +1315,7 @@ describe("RoomTimeline", () => {
     await pane();
 
     await openTheEmoji();
-    await userEvent.click(screen.getByRole("button", { name: "Insert \u{1F44D}" }));
+    await userEvent.click(screen.getByRole("button", { name: "Insert thumbs up" }));
 
     expect(timelineTyping).toHaveBeenCalledWith(GENERAL, true);
   });

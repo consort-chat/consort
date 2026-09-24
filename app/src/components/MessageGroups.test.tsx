@@ -5,10 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const memberAvatar = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 /*
-  The picker's own row, which is what these assertions press.
+  The picker's remembered keys, which are the category it opens on and what
+  these assertions press.
 
-  It comes out of the settings file, which no test may touch, and it starts as
-  the twelve keys the quick panel used to offer: `crate::settings::EmojiSettings`
+  They come out of the settings file, which no test may touch, and they start
+  as the twelve the quick panel used to offer: `crate::settings::EmojiSettings`
   is where that list lives now. Two of them are enough here.
 */
 const emojiSettings = vi.hoisted(() => vi.fn());
@@ -47,19 +48,19 @@ beforeEach(() => {
   emojiUsed.mockReset().mockResolvedValue({ recent: RECENT, tone: 0 });
 });
 
-/** Two of the keys the picker's row starts with. */
+/** Two of the keys the picker's remembered category starts with. */
 const RECENT = ["\u{1F44D}", "\u{1F389}"];
 
 /**
  * Open a picker from `control` and wait for it to be usable.
  *
  * Two things arrive on their own promises: the dataset, which draws the panel,
- * and the settings, which fill the remembered row. Waiting for the row waits
- * for both, and the row is what these presses land on.
+ * and the settings, which say what the remembered category holds. Waiting for
+ * that category waits for both, and it is what these presses land on.
  */
 async function pickerFrom(control: HTMLElement) {
   await userEvent.click(control);
-  await screen.findByRole("group", { name: "Recently used" });
+  await screen.findByRole("group", { name: "Recent" });
   return screen.getByRole("group", { name: "React with an emoji" });
 }
 
@@ -1130,7 +1131,7 @@ describe("reactions", () => {
     drawReactable([said("$1", ADA, "hello")], onReact);
 
     await pickerFrom(screen.getByRole("button", { name: "React" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
   });
@@ -1149,7 +1150,7 @@ describe("reactions", () => {
     );
 
     await pickerFrom(screen.getByRole("button", { name: "React" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", "$mine");
   });
@@ -1158,7 +1159,7 @@ describe("reactions", () => {
     drawReactable([said("$1", ADA, "hello")], vi.fn());
     await pickerFrom(screen.getByRole("button", { name: "React" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(screen.queryByRole("group", { name: "React with an emoji" })).toBeNull();
   });
@@ -1218,7 +1219,7 @@ describe("adding another reaction", () => {
     drawReactable([cheered], onReact);
 
     await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
   });
@@ -1266,7 +1267,7 @@ describe("adding another reaction", () => {
 
     await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
 
-    expect(screen.getByRole("button", { name: "React with 🎉" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "React with party popper" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

@@ -56,8 +56,10 @@ const { loadEmoji } = await import("../lib/emoji");
 
 beforeEach(() => {
   vi.mocked(loadEmoji).mockResolvedValue(SMALL);
-  vi.mocked(emojiSettings).mockResolvedValue({ recent: ["🎉"], tone: 0 });
-  vi.mocked(emojiUsed).mockResolvedValue({ recent: ["😀", "🎉"], tone: 0 });
+  // Nothing remembered by default, so the picker opens on the first standard
+  // category and the tests below are about the panel rather than the row.
+  vi.mocked(emojiSettings).mockResolvedValue({ recent: [], tone: 0 });
+  vi.mocked(emojiUsed).mockResolvedValue({ recent: ["😀"], tone: 0 });
   vi.mocked(setEmojiTone).mockResolvedValue(undefined);
 });
 
@@ -95,11 +97,11 @@ describe("opening the picker", () => {
     expect(await drawn()).toBeVisible();
   });
 
-  it("puts the row it remembers above the categories", async () => {
+  it("opens on the keys it remembers when there are any", async () => {
+    vi.mocked(emojiSettings).mockResolvedValue({ recent: ["🎉"], tone: 0 });
     draw();
-    await drawn();
 
-    const recent = screen.getByRole("group", { name: /recent/i });
+    const recent = await screen.findByRole("group", { name: "Recent" });
     expect(within(recent).getByRole("button", { name: "React with 🎉" }))
       .toBeVisible();
   });
@@ -112,7 +114,7 @@ describe("opening the picker", () => {
     draw();
 
     expect(await drawn()).toBeVisible();
-    expect(screen.queryByRole("group", { name: /recent/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recent" })).toBeNull();
   });
 });
 
@@ -127,19 +129,15 @@ describe("what it does with a key", () => {
     expect(emojiUsed).toHaveBeenCalledWith("😀");
   });
 
-  it("redraws the row from what was written rather than guessing", async () => {
+  it("takes the remembered row back from what was written, not a guess", async () => {
     const { user } = draw();
     await drawn();
 
     await user.click(screen.getByRole("button", { name: "React with grinning face" }));
 
-    const recent = screen.getByRole("group", { name: /recent/i });
+    // The category appears because the write came back saying it should.
     await waitFor(() => {
-      expect(
-        within(recent)
-          .getAllByRole("button")
-          .map((one) => one.textContent),
-      ).toEqual(["😀", "🎉"]);
+      expect(screen.getByRole("button", { name: "Recent" })).toBeVisible();
     });
   });
 

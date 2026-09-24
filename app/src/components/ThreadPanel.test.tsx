@@ -642,9 +642,9 @@ describe("ThreadPanel", () => {
     await opened();
 
     await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
-    await screen.findByRole("group", { name: "Recently used" });
+    await screen.findByRole("group", { name: "Recent" });
     await userEvent.click(
-      screen.getByRole("button", { name: "Insert \u{1F44D}" }),
+      screen.getByRole("button", { name: "Insert thumbs up" }),
     );
 
     expect(screen.getByRole("textbox")).toHaveValue("\u{1F44D}");

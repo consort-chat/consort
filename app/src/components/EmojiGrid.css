@@ -99,8 +99,7 @@
   box-shadow: var(--shadow-focus);
 }
 
-.emoji__grid,
-.emoji__row {
+.emoji__grid {
   display: grid;
   grid-template-columns: repeat(var(--emoji-across), minmax(0, 1fr));
   gap: 2px;
@@ -114,11 +113,6 @@
   overflow-y: auto;
   max-height: calc(8 * var(--emoji-key));
   scrollbar-width: thin;
-}
-
-.emoji__row {
-  padding-bottom: var(--space-1);
-  border-bottom: 1px solid var(--line-subtle);
 }
 
 /*

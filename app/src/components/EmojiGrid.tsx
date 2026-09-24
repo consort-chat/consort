@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { inTone, matching, type Emoji, type EmojiSet } from "../lib/emoji";
+import {
+  inTone,
+  matching,
+  type Emoji,
+  type EmojiGroup,
+  type EmojiSet,
+} from "../lib/emoji";
 import "./EmojiGrid.css";
 
 /**
@@ -59,12 +65,11 @@ export function EmojiGrid({
   /** The keys this session has already used, drawn as pressed. Reactions only. */
   chosen?: ReadonlySet<string> | undefined;
   /**
-   * What to put in the row above the categories, most recent first.
+   * The keys used here, most recent first.
    *
-   * Free strings rather than emoji out of the set. One of them may be a key
-   * this build has never heard of, which still has to draw: a picker that
-   * could only offer what it knows would be a regression the first time
-   * somebody in the room used a client with a wider set.
+   * Drawn as the first category rather than as a row of its own. See
+   * [`withRecent`], which is also where the fallback for a key this build has
+   * never heard of lives.
    */
   recent: readonly string[];
   /** Which skin tone to apply, 1 to 5, or 0 for none. */
@@ -89,8 +94,12 @@ export function EmojiGrid({
   }, []);
 
   const found = useMemo(() => matching(set, query), [set, query]);
+  const categories = useMemo(
+    () => withRecent(set, recent),
+    [set, recent],
+  );
   const searching = query.trim() !== "";
-  const showing = searching ? found : (set.groups[category]?.emoji ?? []);
+  const showing = searching ? found : (categories[category]?.emoji ?? []);
 
   /*
     Focus follows `at` rather than being moved at the key press, because the
@@ -188,26 +197,9 @@ export function EmojiGrid({
         {searching ? count : ""}
       </p>
 
-      {recent.length > 0 && !searching && (
-        <div className="emoji__row" role="group" aria-label="Recently used">
-          {recent.map((key) => (
-            <button
-              key={key}
-              type="button"
-              className="emoji__key"
-              aria-label={`${action} ${key}`}
-              aria-pressed={chosen === undefined ? undefined : chosen.has(key)}
-              onClick={() => onPick(key)}
-            >
-              {key}
-            </button>
-          ))}
-        </div>
-      )}
-
       {!searching && (
         <div className="emoji__tabs" role="group" aria-label="Emoji categories">
-          {set.groups.map((group, index) => (
+          {categories.map((group, index) => (
             <button
               key={group.slug}
               type="button"
@@ -225,7 +217,7 @@ export function EmojiGrid({
         ref={grid}
         className="emoji__grid"
         role="group"
-        aria-label={searching ? count : (set.groups[category]?.name ?? "")}
+        aria-label={searching ? count : (categories[category]?.name ?? "")}
         onKeyDown={(event) => {
           if (steer(event, at ?? 0)) event.preventDefault();
         }}
@@ -264,6 +256,50 @@ export function EmojiGrid({
       </div>
     </div>
   );
+}
+
+/** What the first tab is called. */
+const RECENT = "Recent";
+
+/**
+ * The categories, with the recently used ones in front of them.
+ *
+ * A category rather than a row of its own above the grid. A separate row would
+ * be eighteen more stops in the tab order that the arrow keys could not reach,
+ * which would make the most-used part of the picker the one part that is worst
+ * to use without a mouse.
+ *
+ * A remembered key is a string rather than an emoji out of the set, so its name
+ * is looked up and falls back to the key itself. That fallback is the property
+ * the whole picker has to keep: a key from a client with a wider set than this
+ * one still draws, and can still be sent again.
+ *
+ * No skins on any of them. What was remembered is what was used, tone and all,
+ * and applying the current tone on top would make a key somebody picked in one
+ * tone come back in another.
+ */
+function withRecent(
+  set: EmojiSet,
+  recent: readonly string[],
+): readonly EmojiGroup[] {
+  if (recent.length === 0) return set.groups;
+
+  const named = new Map(
+    set.groups.flatMap((group) => group.emoji).map((one) => [one.key, one.name]),
+  );
+  return [
+    {
+      name: RECENT,
+      slug: "recent",
+      emoji: recent.map((key) => ({
+        key,
+        name: named.get(key) ?? key,
+        terms: [],
+        skins: [],
+      })),
+    },
+    ...set.groups,
+  ];
 }
 
 /** One key in the grid. */

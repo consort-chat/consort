@@ -286,40 +286,70 @@ describe("what pressing a key does", () => {
   });
 });
 
-describe("the recently used row", () => {
-  it("draws what it was given, above the categories", async () => {
+describe("the keys somebody has used before", () => {
+  it("opens on them, as the first category", async () => {
     const { onPick, user } = draw({ recent: ["👍", "f2"] });
 
-    const recent = screen.getByRole("group", { name: /recent/i });
-    const keys = within(recent).getAllByRole("button");
-    expect(keys.map((one) => one.textContent)).toEqual(["👍", "f2"]);
+    const grid = screen.getByRole("group", { name: "Recent" });
+    expect(
+      within(grid)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["👍", "f2"]);
 
-    await user.click(keys[0]!);
+    await user.click(screen.getByRole("button", { name: "React with thumbs up" }));
     expect(onPick).toHaveBeenCalledWith("👍");
   });
 
-  it("is not drawn at all when there is nothing in it", () => {
-    draw({ recent: [] });
+  it("names them the way the rest of the grid names them", () => {
+    // The same emoji announced two different ways depending on which tab it
+    // was found in would be worse than not naming it at all.
+    draw({ recent: ["👍"] });
 
-    expect(screen.queryByRole("group", { name: /recent/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "React with thumbs up" }))
+      .toBeVisible();
   });
 
-  it("goes away while a search is running, which is not what it is for", async () => {
-    const { user } = draw({ recent: ["👍"] });
+  it("offers no such category when there is nothing in it", () => {
+    draw({ recent: [] });
 
-    await user.keyboard("thumb");
+    expect(screen.queryByRole("button", { name: "Recent" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Smileys & Emotion" }))
+      .toBeVisible();
+  });
 
-    expect(screen.queryByRole("group", { name: /recent/i })).toBeNull();
+  it("reaches them with the arrow keys like anything else", async () => {
+    /*
+      The reason they are a category rather than a row above the grid. A row of
+      its own would be eighteen more stops in the tab order that the arrows
+      could not reach, which would leave the most-used part of the picker the
+      worst part of it to use without a mouse.
+    */
+    const { onPick, user } = draw({ recent: ["👍", "f2"] });
+
+    await user.keyboard("{ArrowDown}{ArrowRight}{Enter}");
+
+    expect(onPick).toHaveBeenCalledWith("f2");
   });
 
   it("draws a key nobody here has a name for", () => {
     // The property the whole picker has to keep: a key from a client with a
     // wider set than this one still draws, and can still be sent again.
-    draw({ recent: ["🛸👽", "👍"] });
+    const { user } = draw({ recent: ["🛸👽"] });
 
-    const recent = screen.getByRole("group", { name: /recent/i });
-    expect(within(recent).getByRole("button", { name: "React with 🛸👽" }))
+    expect(screen.getByRole("button", { name: "React with 🛸👽" }))
       .toBeVisible();
+    expect(user).toBeDefined();
+  });
+
+  it("leaves a remembered key in the tone it was used in", async () => {
+    // What was remembered is what was sent. Applying the tone now chosen would
+    // hand back a different key from the one somebody pressed to get here.
+    const { onPick, user } = draw({ recent: ["👋🏻"], tone: 5 });
+
+    await user.click(screen.getByRole("button", { name: "React with 👋🏻" }));
+
+    expect(onPick).toHaveBeenCalledWith("👋🏻");
   });
 });
 
