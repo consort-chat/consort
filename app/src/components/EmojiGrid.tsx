@@ -122,13 +122,21 @@ export function EmojiGrid({
     (keys?.item(at) as HTMLElement | undefined)?.focus();
   }, [at, showing]);
 
-  /** Put the cursor back at the top whenever what is under it changes. */
-  useEffect(() => {
-    setAt(null);
-  }, [query, category]);
-
   function moveTo(next: number) {
     setAt(Math.max(0, Math.min(showing.length - 1, next)));
+  }
+
+  /**
+   * Take the cursor out of the grid, because what is under it is changing.
+   *
+   * Called from the two handlers that change it rather than from an effect
+   * watching them. An effect is a render late, which is long enough for the
+   * grid to have been redrawn with the old cursor still on it: focus is pulled
+   * off the tab somebody just pressed and onto whatever key happens to sit at
+   * that index in the new category.
+   */
+  function lift() {
+    setAt(null);
   }
 
   /** The arrows, wherever they are pressed. Returns whether it took the key. */
@@ -186,7 +194,10 @@ export function EmojiGrid({
         aria-label="Search emoji"
         placeholder="Search"
         value={query}
-        onChange={(event) => setQuery(event.target.value)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          lift();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
@@ -215,7 +226,10 @@ export function EmojiGrid({
               type="button"
               className="emoji__tab"
               aria-current={group.slug === shown?.slug ? "true" : undefined}
-              onClick={() => setCategory(group.slug)}
+              onClick={() => {
+                setCategory(group.slug);
+                lift();
+              }}
             >
               {group.name}
             </button>

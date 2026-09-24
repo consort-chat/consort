@@ -176,6 +176,23 @@ describe("finding an emoji without a mouse", () => {
     expect(last.tabIndex).toBe(0);
   });
 
+  it("stays in the box when somebody types after using the arrows", async () => {
+    /*
+      The cursor has to be lifted out of the grid as the results change under
+      it, or the grid takes focus off the box on the first letter typed and
+      the rest of the word goes nowhere. Reachable with the mouse: arrow into
+      the grid, then click back into the box and carry on typing.
+    */
+    const { user } = draw();
+    await user.keyboard("{ArrowDown}");
+    await user.click(searchBox());
+
+    await user.keyboard("wav");
+
+    expect(searchBox()).toHaveFocus();
+    expect(searchBox()).toHaveValue("wav");
+  });
+
   it("takes the first match on Enter, without leaving the box", async () => {
     const { onPick, user } = draw();
 
@@ -239,6 +256,43 @@ describe("the categories", () => {
       .toBeVisible();
     expect(screen.queryByRole("button", { name: "React with face 0" }))
       .toBeNull();
+  });
+
+  it("leaves focus on the tab that was pressed", async () => {
+    /*
+      The cursor has to be put back to the top of a category that has just
+      changed under it, and doing that a render late lets the grid pull focus
+      out of the tab somebody is still on. From the keyboard that is a press
+      of Enter on "People & Body" that lands on the sixteenth key of it.
+    */
+    const { user } = draw();
+    // Into the smaller category first, so that moving to the larger one has a
+    // key at the cursor's old index for focus to be pulled onto.
+    await user.click(screen.getByRole("button", { name: "People & Body" }));
+    await user.click(searchBox());
+    await user.keyboard("{ArrowDown}{ArrowRight}");
+
+    const tab = screen.getByRole("button", { name: "Smileys & Emotion" });
+    await user.click(tab);
+
+    expect(tab).toHaveFocus();
+  });
+
+  it("puts the tab stop back on the first key of the new category", async () => {
+    /*
+      The cursor carries the grid's single tab stop with it. Left where it was,
+      it points at an index the smaller category has no key at, and then no key
+      holds the stop at all: Tab out of the search box skips the grid entirely
+      rather than landing in it.
+    */
+    const { user } = draw();
+    await user.keyboard("{ArrowDown}{ArrowRight}{ArrowRight}");
+
+    await user.click(screen.getByRole("button", { name: "People & Body" }));
+
+    expect(
+      screen.getByRole("button", { name: "React with thumbs up" }).tabIndex,
+    ).toBe(0);
   });
 
   it("names the grid after what is in it, so it is not just a pile of keys", async () => {
