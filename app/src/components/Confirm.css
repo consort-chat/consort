@@ -1,13 +1,20 @@
 /*
-  The question asked before a message is deleted, hanging off the control that
-  asked it.
+  The question asked before something irreversible happens, hanging off the
+  control that asked it.
 
   Wider than the reaction picker and for a different reason: that one is a grid
   of glyphs, and this is two sentences somebody has to read before answering.
+
+  Which way it opens belongs to the anchor rather than to this, because that is
+  a fact about where the control sits: a message action row has the window
+  below it, and a panel footer has the window edge. 17rem is also exactly the
+  measure inside the room details column, so it fits there without a second
+  width.
 */
 .confirm {
   position: absolute;
-  top: calc(100% + var(--space-1));
+  top: var(--confirm-top, calc(100% + var(--space-1)));
+  bottom: var(--confirm-bottom, auto);
   right: 0;
   z-index: 20;
   width: 17rem;
@@ -28,7 +35,7 @@
 
 /*
   Quieter than the question and deliberately not hidden behind a disclosure.
-  It is the half that says what deleting actually does, and somebody deciding
+  It is the half that says what the button actually does, and somebody deciding
   needs it in front of them rather than a click away.
 */
 .confirm__says {

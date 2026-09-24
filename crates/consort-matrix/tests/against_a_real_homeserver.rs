@@ -1890,3 +1890,95 @@ mod gate {
         supervisor.abort();
     }
 }
+
+/// A thread whose root somebody deleted, against a real homeserver.
+///
+/// This is the one claim behind the fix for issue #100 that only a homeserver
+/// can settle, and it was a guess until it was checked. A bundled thread
+/// summary hangs off `unsigned`, a redaction strips `content` and leaves
+/// `unsigned` alone, and Synapse computes the aggregation when it serialises
+/// the event rather than when the event was written. So the tally is still on
+/// the wire after the root is deleted, and the room can go on drawing the one
+/// control that opens the replies.
+///
+/// Ruma is what does not carry it: `RedactedUnsigned` models
+/// `redacted_because` and nothing else, which is why `facts::deleted` reads
+/// the field off the raw JSON. A unit test proves that read against bytes this
+/// repository wrote. It cannot prove a homeserver still sends them, and if one
+/// stops, the feature breaks quietly into a door that is simply missing. That
+/// is what this is here to make loud.
+mod threads {
+    use super::*;
+    use consort_matrix::timeline;
+    use matrix_sdk::ruma::OwnedEventId;
+    use matrix_sdk::ruma::api::client::room::create_room;
+    use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
+
+    #[tokio::test]
+    #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+    async fn a_redacted_thread_root_still_carries_its_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let account = a_brand_new_account("thread-root-redacted").await;
+        let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+            .await
+            .unwrap();
+
+        let room = client
+            .create_room(create_room::v3::Request::new())
+            .await
+            .unwrap();
+        let room_id = room.room_id().to_string();
+
+        let root: OwnedEventId = room
+            .send(RoomMessageEventContent::text_plain("the question"))
+            .await
+            .unwrap()
+            .response
+            .event_id;
+        for reply in ["one", "two"] {
+            timeline::send_in_thread(&client, &room_id, root.as_str(), root.as_str(), None, reply)
+                .await
+                .unwrap();
+        }
+
+        timeline::delete(&client, &room_id, root.as_str())
+            .await
+            .unwrap();
+
+        // The wire contract, asserted on the bytes rather than through
+        // anything this workspace deserialises. A failure here is a
+        // homeserver having changed its mind, and it takes the ground out
+        // from under the fix for #100: see the issue for why neither
+        // remembering relations locally nor waiting on MSC3389 is an answer.
+        let raw = room.event(&root, None).await.unwrap();
+        let json: serde_json::Value = serde_json::from_str(raw.raw().json().get()).unwrap();
+        assert!(
+            json["unsigned"]["redacted_because"].is_object(),
+            "the root was not redacted, so this test proves nothing: {json:#}"
+        );
+        assert_eq!(
+            json["unsigned"]["m.relations"]["m.thread"]["count"], 2,
+            "the homeserver has stopped bundling a thread summary onto a \
+             redacted root, which is the whole basis of the fix for #100: {json:#}"
+        );
+
+        // And this side's reading of those bytes. The count survives the
+        // deletion, so the mark keeps the door and the room can draw one.
+        let panel = timeline::thread(&client, &room_id, root.as_str())
+            .await
+            .unwrap();
+        let mark = panel.root.expect("a deleted root is still drawn as a mark");
+
+        assert_eq!(mark.kind, consort_matrix::MessageKind::Deleted);
+        assert_eq!(
+            mark.thread.map(|thread| thread.count),
+            Some(2),
+            "the mark lost the way into its own thread"
+        );
+        assert_eq!(
+            panel.messages.len(),
+            2,
+            "the replies went with the root, which nothing redacted"
+        );
+    }
+}
