@@ -332,7 +332,7 @@ Coverage must stay above 90% on both halves; CI fails below it. See
 
 New behaviour needs a test. Test behaviour, not implementation.
 
-Three patterns this codebase relies on, worth following rather than
+Five patterns this codebase relies on, worth following rather than
 rediscovering:
 
 - **Homeserver code is testable.** `MatrixMockServer`, from matrix-sdk's
@@ -364,6 +364,17 @@ rediscovering:
 - **Secrets go through a trait.** `secrets::Backend` has a `MemoryBackend`
   implementation, and `SessionStore::with_backend` takes one. No test should
   ever touch the developer's real keyring.
+- **A rejected `vi.fn()` is not an unhandled rejection.** Vitest attaches its
+  own handler to the promise a mock returns, so it can record the settled
+  result, and `process.on("unhandledRejection")` never sees it. A `.catch`
+  whose whole body is swallowing the error is therefore unpinnable: the line
+  counts as covered and no assertion can say it caught anything. A plain
+  `() => Promise.reject(x)` mock does leak and is the way to pin one, at the
+  cost of the call assertions a `vi.fn` would give.
+  [COVERAGE.md](COVERAGE.md) has the measurements, the eighteen catches this
+  applies to, and the same problem in its other shape: a state update after an
+  unmount is silent, so an `if (!cancelled)` in front of one is a branch no
+  test can distinguish from its own absence.
 
 ## AI-assisted contribution policy
 
