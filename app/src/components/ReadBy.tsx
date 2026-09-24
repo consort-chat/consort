@@ -17,10 +17,9 @@ import "./ReadBy.css";
  */
 export function readBySays(names: string[], more: number): string {
   const seen = more > 0 ? [...names, `${more} more`] : names;
-  const listed =
-    seen.length === 1
-      ? seen[0]
-      : `${seen.slice(0, -1).join(", ")} and ${seen[seen.length - 1]}`;
+  const last = seen.at(-1) ?? "";
+  const rest = seen.slice(0, -1);
+  const listed = rest.length === 0 ? last : `${rest.join(", ")} and ${last}`;
 
   return `Read by ${listed}. Only people who share read receipts are shown.`;
 }
