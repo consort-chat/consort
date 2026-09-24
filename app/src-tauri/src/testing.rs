@@ -268,6 +268,31 @@ pub struct FakeCallTransport {
     /// tests never have two calls at once and a channel per room would be
     /// machinery for nobody.
     roster: tokio::sync::watch::Sender<Standing>,
+    /// Whether a leave ever answers. One that does not is what a homeserver
+    /// that has stopped answering looks like from here.
+    leave_answers: bool,
+    /// Counted rather than kept, and shared with every session handed out.
+    ///
+    /// A test that cares about a leave cannot hold the session that performs
+    /// one: `AppState::connect_call` takes the transport by value and the
+    /// session is built inside the call thread. So the record is the thing
+    /// handed out, and [`FakeCallTransport::leaves`] is how a test keeps hold
+    /// of it.
+    left: Leaves,
+}
+
+/// How many times a [`FakeCallTransport`]'s calls have been left.
+#[derive(Clone, Default)]
+pub struct Leaves(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Leaves {
+    /// How many leaves have completed.
+    ///
+    /// Completed, not attempted: a leave that never answers is never counted,
+    /// which is what makes the difference between the two visible to a test.
+    pub fn count(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 /// What a fake call currently is: who is in it, and what is wrong with it.
@@ -279,7 +304,28 @@ impl FakeCallTransport {
         Self {
             joins: true,
             roster: tokio::sync::watch::channel((Vec::new(), None)).0,
+            leave_answers: true,
+            left: Leaves::default(),
         }
+    }
+
+    /// A transport whose calls join and whose leaves never answer.
+    ///
+    /// What a homeserver that has gone away mid-call does to a leave, and the
+    /// case every bound on one exists for.
+    pub fn whose_leave_never_answers() -> Self {
+        Self {
+            leave_answers: false,
+            ..Self::joining()
+        }
+    }
+
+    /// The record of leaves the calls this hands out share.
+    ///
+    /// Cloned before the transport is handed over, because handing it over is
+    /// how a call is joined.
+    pub fn leaves(&self) -> Leaves {
+        self.left.clone()
     }
 
     /// Put `people` in the calls this hands out.
@@ -310,6 +356,8 @@ impl FakeCallTransport {
 
 pub struct FakeCallSession {
     roster: tokio::sync::watch::Sender<Standing>,
+    leave_answers: bool,
+    left: Leaves,
 }
 
 pub struct FakeCallTrack;
@@ -372,6 +420,11 @@ impl consort_call::CallSession for FakeCallSession {
     }
 
     async fn leave(self) -> Result<(), consort_call::CallFailure> {
+        if !self.leave_answers {
+            std::future::pending::<()>().await;
+        }
+
+        self.left.0.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -383,6 +436,8 @@ impl consort_call::CallTransport for FakeCallTransport {
         if self.joins {
             Ok(FakeCallSession {
                 roster: self.roster.clone(),
+                leave_answers: self.leave_answers,
+                left: self.left.clone(),
             })
         } else {
             Err(consort_call::CallFailure::UnknownRoom {
