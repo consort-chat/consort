@@ -16,7 +16,7 @@ import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
 import { ConfirmDelete } from "./ConfirmDelete";
-import { EmojiPicker } from "./EmojiPicker";
+import { EmojiPicker, OPENS_A_PICKER } from "./EmojiPicker";
 import { RoomAvatar } from "./RoomAvatar";
 
 /**
@@ -1272,6 +1272,7 @@ export function MessageGroups({
                                     className="timeline__add-key"
                                     aria-label="Add a reaction"
                                     title="Add a reaction"
+                                    {...{ [OPENS_A_PICKER]: "" }}
                                     aria-expanded={
                                       picking?.id === message.id &&
                                       picking.at === "row"
@@ -1365,6 +1366,7 @@ export function MessageGroups({
                                 className="timeline__action"
                                 aria-label="React"
                                 title="React"
+                                {...{ [OPENS_A_PICKER]: "" }}
                                 aria-expanded={
                                   picking?.id === message.id &&
                                   picking.at === "toolbar"

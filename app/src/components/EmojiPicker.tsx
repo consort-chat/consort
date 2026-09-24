@@ -15,6 +15,21 @@ import "./EmojiPicker.css";
 const NOTHING_YET: EmojiSettings = { recent: [], tone: 0 };
 
 /**
+ * The mark on a control that opens one of these.
+ *
+ * Without it, pressing that control a second time reopens the panel rather
+ * than shutting it: the press shuts it on the way down, through the rule below
+ * about pressing outside, and the control's own toggle then opens it again on
+ * the way up. It says `aria-expanded`, so it has to be able to collapse.
+ *
+ * An attribute rather than a ref, because the two controls on a message are
+ * drawn once per message and a ref would hold whichever was rendered last.
+ * Pressing a different message's control still closes this one, because the
+ * toggle moves the open panel to that message anyway.
+ */
+export const OPENS_A_PICKER = "data-opens-a-picker";
+
+/**
  * Somewhere to pick an emoji from.
  *
  * Two controls open one of these and they differ in one thing: what `onPick`
@@ -96,7 +111,14 @@ export function EmojiPicker({
       somebody asking for this to close.
     */
     function away(event: MouseEvent) {
-      if (event.target instanceof Node && panel.current?.contains(event.target)) {
+      if (!(event.target instanceof Element)) {
+        onClose();
+        return;
+      }
+      if (
+        panel.current?.contains(event.target) === true ||
+        event.target.closest(`[${OPENS_A_PICKER}]`) !== null
+      ) {
         return;
       }
       onClose();

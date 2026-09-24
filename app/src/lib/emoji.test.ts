@@ -1,5 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
-
+/// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
 
 import {
@@ -282,23 +281,19 @@ describe("the dataset behind it", () => {
   first is a test nobody runs.
 */
 describe("keeping the dataset out of the first chunk", () => {
-  // `process.cwd()` rather than `import.meta.url`, which under jsdom is an
-  // http URL that `readdirSync` will not take.
-  const sources = readdirSync(`${process.cwd()}/src`, {
-    recursive: true,
-    withFileTypes: true,
-  })
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        /\.tsx?$/.test(entry.name) &&
-        !entry.name.endsWith(".test.ts") &&
-        !entry.name.endsWith(".test.tsx"),
-    )
-    .map((entry) => ({
-      at: `${entry.parentPath}/${entry.name}`,
-      text: readFileSync(`${entry.parentPath}/${entry.name}`, "utf8"),
-    }));
+  /*
+    Vite's own raw glob rather than `node:fs`, which would want `@types/node`
+    in a tree that has three runtime dependencies and no need of a fourth.
+  */
+  const sources = Object.entries(
+    import.meta.glob("../**/*.{ts,tsx}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>,
+  )
+    .filter(([at]) => !/\.test\.tsx?$/.test(at))
+    .map(([at, text]) => ({ at, text }));
 
   it("found the source to read, so an empty sweep cannot pass", () => {
     expect(sources.length).toBeGreaterThan(20);

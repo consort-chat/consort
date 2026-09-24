@@ -1,7 +1,7 @@
 import { useState, type RefObject } from "react";
 
 import { withInserted } from "../lib/draft";
-import { EmojiPicker } from "./EmojiPicker";
+import { EmojiPicker, OPENS_A_PICKER } from "./EmojiPicker";
 import "./ComposerEmoji.css";
 
 /**
@@ -69,6 +69,7 @@ export function ComposerEmoji({
         className="composer-emoji__open"
         aria-label="Add an emoji"
         aria-expanded={open}
+        {...{ [OPENS_A_PICKER]: "" }}
         disabled={disabled === true}
         onClick={() => setOpen((was) => !was)}
       >

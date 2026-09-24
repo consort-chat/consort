@@ -1297,6 +1297,18 @@ describe("RoomTimeline", () => {
     expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
   });
 
+  it("closes again when the control that opened it is pressed", async () => {
+    // It says `aria-expanded`, so it is a control that opens and shuts. The
+    // press has to reach the toggle rather than being spent on the rule that
+    // shuts the panel when something outside it is pressed.
+    await pane();
+    await openTheEmoji();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+
+    expect(screen.queryByRole("group", { name: "Insert an emoji" })).toBeNull();
+  });
+
   it("says the draft changed, so the room still shows somebody typing", async () => {
     // An emoji is typing. Without this the indicator stops in the middle of
     // writing a message.
