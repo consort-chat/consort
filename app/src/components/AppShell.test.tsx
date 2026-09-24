@@ -685,9 +685,9 @@ describe("AppShell", () => {
 
       again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
 
-      expect(
-        screen.getByRole("heading", { name: "Nothing here yet" }),
-      ).toBeVisible();
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Consort",
+      );
     });
 
     it("stays in the space the room was in rather than jumping", async () => {
