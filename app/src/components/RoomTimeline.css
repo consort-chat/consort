@@ -753,8 +753,27 @@
     width it is and the ellipsis below has something to happen against.
   */
   overflow: hidden;
-  margin: 0 0 var(--space-1);
-  padding: 0;
+  /*
+    24 CSS pixels to press, and not one more pixel of the list.
+
+    SC 2.5.8 asks 24 by 24 of anything there is to hit and this row drew 19.5,
+    which is its words and nothing else (#107). It is the one control around a
+    message the inline exception does not reach: a row of its own rather than a
+    target in a sentence, with nothing beside it constraining its height and
+    nothing else that goes to the message it names.
+
+    The height comes out of the space this row already had rather than being
+    added to the conversation. The gap under it moves inside the box as
+    padding, so the words below stay where they are, and the half pixel left
+    over is taken from above, which is all the room there is: the sender's name
+    overflows its 16px byline to 19.5 and stops half a pixel short of this. An
+    even 2.25px in each direction would have put this button over the bottom of
+    that name, where a press meant for the person would go to the message
+    instead.
+  */
+  min-height: 24px;
+  margin: -0.5px 0 0;
+  padding: 0.5px 0 var(--space-1);
   background: none;
   border: 0;
   color: var(--text-muted);
