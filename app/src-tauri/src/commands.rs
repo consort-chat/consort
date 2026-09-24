@@ -23,7 +23,7 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::PrivacySettings;
+use crate::settings::{EmojiSettings, PrivacySettings};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -607,6 +607,34 @@ fn set_privacy_settings_for(
 ) -> Result<(), crate::settings::SettingsError> {
     let mut settings = state.settings().load();
     settings.privacy = privacy;
+    state.settings().save(&settings)
+}
+
+/// What the emoji picker remembers: the recently used row and the skin tone.
+fn emoji_settings_for(state: &AppState) -> EmojiSettings {
+    state.settings().load().emoji
+}
+
+/// Record that `key` was used, and hand back the row it made.
+///
+/// Returns rather than only writing, so that the picker draws the row from the
+/// rule that persisted it. The alternative is the same bumping written twice,
+/// once here and once in the frontend, which is two answers to the question of
+/// what the row holds.
+fn emoji_used_for(
+    state: &AppState,
+    key: &str,
+) -> Result<EmojiSettings, crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.emoji.used(key);
+    state.settings().save(&settings)?;
+    Ok(settings.emoji)
+}
+
+/// Choose the skin tone the picker applies, 1 to 5, or 0 for none.
+fn set_emoji_tone_for(state: &AppState, tone: u8) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.emoji.tone = tone;
     state.settings().save(&settings)
 }
 
@@ -1588,6 +1616,25 @@ pub fn set_privacy_settings(
     Ok(())
 }
 
+/// See `emoji_settings_for`.
+#[tauri::command]
+pub fn emoji_settings(state: State<'_, AppState>) -> EmojiSettings {
+    emoji_settings_for(&state)
+}
+
+/// See `emoji_used_for`.
+#[tauri::command]
+pub fn emoji_used(state: State<'_, AppState>, key: String) -> Result<EmojiSettings, CommandError> {
+    Ok(emoji_used_for(&state, &key)?)
+}
+
+/// See `set_emoji_tone_for`.
+#[tauri::command]
+pub fn set_emoji_tone(state: State<'_, AppState>, tone: u8) -> Result<(), CommandError> {
+    set_emoji_tone_for(&state, tone)?;
+    Ok(())
+}
+
 /// See `notification_settings_for`.
 #[tauri::command]
 pub fn notification_settings(state: State<'_, AppState>) -> NotificationSettings {
@@ -2260,6 +2307,63 @@ mod tests {
         }
 
         #[test]
+        fn a_fresh_picker_offers_what_the_quick_panel_offered() {
+            let (_dir, state, _) = state();
+
+            assert_eq!(emoji_settings_for(&state), EmojiSettings::default());
+        }
+
+        #[test]
+        fn using_a_key_is_remembered_and_handed_straight_back() {
+            // Handed back rather than only written, so the row the picker is
+            // drawing redraws from the same rule that persisted it instead of
+            // keeping a second copy of the bumping in the frontend.
+            let (_dir, state, _) = state();
+
+            let after = emoji_used_for(&state, "\u{1F984}").expect("save");
+
+            assert_eq!(after.recent.first().map(String::as_str), Some("\u{1F984}"));
+            assert_eq!(emoji_settings_for(&state), after);
+        }
+
+        #[test]
+        fn a_chosen_skin_tone_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_emoji_tone_for(&state, 4).expect("save");
+
+            assert_eq!(emoji_settings_for(&state).tone, 4);
+        }
+
+        #[test]
+        fn saving_the_picker_leaves_the_audio_section_alone() {
+            // One file, several screens. A write from the picker that took the
+            // whole file with it would undo somebody's microphone.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            emoji_used_for(&state, "\u{1F984}").expect("save");
+            set_emoji_tone_for(&state, 2).expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+            assert_eq!(emoji_settings_for(&state).tone, 2);
+            assert_eq!(
+                emoji_settings_for(&state)
+                    .recent
+                    .first()
+                    .map(String::as_str),
+                Some("\u{1F984}")
+            );
+        }
+
+        #[test]
         fn receipts_are_public_until_somebody_says_otherwise() {
             // The default the room is entitled to. A client that quietly told
             // nobody it had read anything would make every other person in
@@ -2386,6 +2490,7 @@ mod tests {
                 },
                 privacy: crate::settings::PrivacySettings::default(),
                 notifications: NotificationSettings::default(),
+                emoji: crate::settings::EmojiSettings::default(),
             };
             state.settings().save(&stored).expect("save");
 
