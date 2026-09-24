@@ -330,13 +330,152 @@
 }
 
 /*
-  Why the group exists, said once at the top of it rather than repeated on
-  every row. Somebody invited cannot read what is being said here yet, and the
-  moment that matters is the moment before somebody pastes something.
+  The two things this panel does that change who is in the room, pinned below
+  the half that scrolls.
+
+  Pinned because of what goes above them. The scrolling half is the room's own
+  facts and grows with the room, and a control that ends a membership sitting
+  under a hundred names is a control people scroll past to reach. It is the
+  same division the sidebar uses: the list scrolls, and the two things that are
+  always worth reaching do not.
 */
-.info__note {
+.info__actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-6) var(--space-6);
+  border-top: 1px solid var(--line-subtle);
+}
+
+/* The box and the button as one row, because they are one question. */
+.info__invite {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.info__who-box {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  /*
+    A user ID is a thing to be compared character by character, like the
+    published address above it, and the two should not disagree about what one
+    looks like.
+  */
+  font-family: var(--font-mono);
+}
+
+.info__who-box::placeholder {
+  color: var(--text-muted);
+  /* The placeholder is an example rather than a value, so it is not typeset
+     as one. */
+  font-family: var(--font-sans);
+}
+
+.info__who-box:focus-visible {
+  outline: none;
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-focus);
+}
+
+.info__invite-go {
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.info__invite-go:hover:not(:disabled) {
+  background: var(--surface-overlay);
+  border-color: var(--line-strong);
+  color: var(--text-primary);
+}
+
+.info__invite-go:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  Faded rather than hidden, and the sentence under it says why. A control that
+  is not there reads as something the application cannot do; this is something
+  this room will not let this account do.
+*/
+.info__who-box:disabled,
+.info__invite-go:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/*
+  The asides: why a control is off, what an invitation still needs, and why the
+  invited are their own group. Each sits under the thing it is about.
+*/
+.info__note,
+.info__sent {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.4;
+}
+
+/*
+  The one control in Consort that cannot be undone by pressing it again, in the
+  one colour nothing else in this panel uses. Outlined rather than filled: it
+  is the last thing here and it should be findable without being the loudest
+  thing on the panel.
+*/
+.info__leave {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.info__leave:hover {
+  background: var(--danger-surface);
+}
+
+.info__leave:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  What the confirmation hangs off, and which way it opens.
+
+  Upward, because this is the bottom of the window: a panel hanging below the
+  last control in the last row would be drawn off the screen. The message
+  action row sets neither and gets the default, which is downward, for the
+  same reason in reverse.
+*/
+.info__anchor {
+  --confirm-top: auto;
+  --confirm-bottom: calc(100% + var(--space-1));
+
+  position: relative;
 }

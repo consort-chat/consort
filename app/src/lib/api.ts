@@ -2154,6 +2154,47 @@ export function roomCopyLink(roomId: string): Promise<void> {
 }
 
 /**
+ * Leave one room.
+ *
+ * Nothing comes back but the fact that it worked. What the room list says a
+ * moment later is the answer somebody sees: the room goes out of it, the
+ * shell's selection stops resolving to anything, and the pane falls back to
+ * the empty state. A command that also told the interface what to select would
+ * be a second opinion about a question the room list already answers.
+ *
+ * Rejects with a sentence for a person. The only thing that reaches it in
+ * practice is the network, because any member of a room may leave one.
+ */
+export function roomLeave(roomId: string): Promise<void> {
+  return invoke<void>("room_leave", { roomId });
+}
+
+/**
+ * Ask somebody into one room, by user ID.
+ *
+ * Rejects with one of five sentences, each of which says something different
+ * and useful: they are already here, they have been asked and have not
+ * answered, they are banned, this account may not invite, or the homeserver
+ * refused. Three of those are one indistinguishable `M_FORBIDDEN` on the wire,
+ * so the telling apart happens in Rust before the request goes out.
+ */
+export function roomInvite(roomId: string, userId: string): Promise<void> {
+  return invoke<void>("room_invite", { roomId, userId });
+}
+
+/**
+ * Whether this account may invite anybody into one room.
+ *
+ * Asked once per room the details panel is pointed at, so the control can be
+ * drawn disabled with a reason rather than left out. Rejects for a room this
+ * account is not in, which is a different answer from `false` and has to stay
+ * one: `false` is drawn as a permission.
+ */
+export function roomCanInvite(roomId: string): Promise<boolean> {
+  return invoke<boolean>("room_can_invite", { roomId });
+}
+
+/**
  * The joined room one `matrix.to` address points at.
  *
  * A room ID answers immediately and an alias costs a directory lookup, which

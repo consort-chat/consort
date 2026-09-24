@@ -19,7 +19,6 @@ import {
   systemMessageText,
   timeOf,
 } from "./MessageGroups";
-import { ConfirmDelete } from "./ConfirmDelete";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type { Message, SystemChange, SystemMessage } from "../lib/api";
@@ -1382,23 +1381,29 @@ describe("deleting a message", () => {
     ).toBeInTheDocument();
   });
 
-  it("says what deleting actually does before it is done", () => {
+  it("says what deleting actually does before it is done", async () => {
     // Redacting is not erasing, and a sentence promising otherwise would be a
-    // promise Consort cannot keep across federation.
-    render(
-      <ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />,
-    );
+    // promise Consort cannot keep across federation. Driven through the
+    // control rather than by rendering the panel, because the words belong to
+    // this call site now: `Confirm` only knows it has a sentence to draw.
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete: vi.fn() });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(
-      screen.getByText(/Servers and clients that already have a copy may keep it/),
+      screen.getByText(
+        /Servers and clients that already have a copy may keep it/,
+      ),
     ).toBeInTheDocument();
   });
 
-  it("puts the focus on the half that does nothing", () => {
+  it("puts the focus on the half that does nothing", async () => {
     // The first press rule, one layer down: the key somebody hits without
     // reading is Enter, and it must not land on the irreversible answer to a
     // question they have not read.
-    render(<ConfirmDelete onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    drawWithActions([said("$1", BOB, "wrong number")], { onDelete: vi.fn() });
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
 
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
   });
