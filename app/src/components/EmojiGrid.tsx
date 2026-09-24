@@ -79,7 +79,13 @@ export function EmojiGrid({
   onPick: (key: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState(0);
+  /*
+    Which category is on show, by slug rather than by index. The remembered
+    keys arrive on their own promise and appear as a category in front of the
+    rest, so an index chosen before they land would mean a different category
+    after.
+  */
+  const [category, setCategory] = useState<string | null>(null);
   /*
     Which key the arrows are on, or none while focus is still in the box. An
     index into whatever the grid is currently drawing, so switching category or
@@ -99,7 +105,11 @@ export function EmojiGrid({
     [set, recent],
   );
   const searching = query.trim() !== "";
-  const showing = searching ? found : (categories[category]?.emoji ?? []);
+  // Null is whichever is first, which is the remembered keys once there are
+  // any and the first standard category before that.
+  const shown =
+    categories.find((one) => one.slug === category) ?? categories[0];
+  const showing = searching ? found : (shown?.emoji ?? []);
 
   /*
     Focus follows `at` rather than being moved at the key press, because the
@@ -199,13 +209,13 @@ export function EmojiGrid({
 
       {!searching && (
         <div className="emoji__tabs" role="group" aria-label="Emoji categories">
-          {categories.map((group, index) => (
+          {categories.map((group) => (
             <button
               key={group.slug}
               type="button"
               className="emoji__tab"
-              aria-current={index === category ? "true" : undefined}
-              onClick={() => setCategory(index)}
+              aria-current={group.slug === shown?.slug ? "true" : undefined}
+              onClick={() => setCategory(group.slug)}
             >
               {group.name}
             </button>
@@ -217,7 +227,7 @@ export function EmojiGrid({
         ref={grid}
         className="emoji__grid"
         role="group"
-        aria-label={searching ? count : (categories[category]?.name ?? "")}
+        aria-label={searching ? count : (shown?.name ?? "")}
         onKeyDown={(event) => {
           if (steer(event, at ?? 0)) event.preventDefault();
         }}
