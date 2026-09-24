@@ -48,9 +48,18 @@
 //! paged back in after being deleted is indistinguishable from a message in
 //! the room, and is drawn there. Nothing here can tell them apart, and
 //! guessing would be worse than the noise.
+//!
+//! A thread hanging *from* a deleted message is the opposite case and reads
+//! the opposite way, which is worth saying because the two look alike. What a
+//! redaction takes is the relation the event declares about itself, in
+//! `content`. A thread summary is not that: it is an aggregation the
+//! homeserver computes over the replies and hangs off `unsigned`, none of
+//! which a redaction touches. It is still on the wire, and [`deleted`] reads
+//! it.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
+use matrix_sdk::ruma::events::relation::{BundledMessageLikeRelations, BundledThread};
 use matrix_sdk::ruma::events::room::MediaSource;
 use matrix_sdk::ruma::events::room::member::{MembershipState, OriginalSyncRoomMemberEvent};
 use matrix_sdk::ruma::events::room::message::sanitize::remove_plain_reply_fallback;
@@ -64,6 +73,7 @@ use matrix_sdk::ruma::events::{
     RedactedSyncMessageLikeEvent, SyncMessageLikeEvent, SyncStateEvent,
 };
 use matrix_sdk::ruma::serde::Raw;
+use serde::Deserialize;
 
 use crate::timeline::dto::{
     Media, Message, MessageKind, SystemChange, SystemMessage, ThreadSummary,
@@ -438,7 +448,7 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         SyncMessageLikeEvent::Original(said) => said,
         // Emptied by the homeserver. There is nothing left to read, which is
         // exactly what the mark says.
-        SyncMessageLikeEvent::Redacted(gone) => return deleted(&gone),
+        SyncMessageLikeEvent::Redacted(gone) => return deleted(event, &gone),
     };
 
     // Before the body is read, because both of these have one and drawing it
@@ -582,20 +592,52 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
             .filter(|formatted| formatted.format == MessageFormat::Html)
             .map(|formatted| without_quoted_reply(formatted.body)),
         media,
-        thread: said.unsigned.relations.thread.map(|bundle| ThreadSummary {
-            // Saturating rather than fallible. The count is the homeserver's
-            // own tally, and a thread long enough to overflow this is one
-            // nobody is reaching the end of, so a badge that has stopped
-            // counting beats a message that failed to draw.
-            count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
-            participated: bundle.current_user_participated,
-        }),
+        thread: said.unsigned.relations.thread.as_deref().map(summary),
         reply_to,
         mentions,
         // Nobody has, or this would not have deserialised as an original.
         deleted_by: None,
         kind,
     })
+}
+
+/// One homeserver's thread tally as the interface's.
+///
+/// Free and shared, because the two paths that build a message read the same
+/// bundle from different places and a second copy of this rule would be a
+/// second answer free to drift.
+///
+/// Saturating rather than fallible. The count is the homeserver's own tally,
+/// and a thread long enough to overflow this is one nobody is reaching the end
+/// of, so a badge that has stopped counting beats a message that failed to
+/// draw.
+fn summary(bundle: &BundledThread) -> ThreadSummary {
+    ThreadSummary {
+        count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
+        participated: bundle.current_user_participated,
+    }
+}
+
+/// The part of `unsigned` that ruma's redacted view does not offer.
+///
+/// Deserialised by hand for one reason: [`RedactedUnsigned`] is the whole of
+/// what a redacted event's `unsigned` is modelled as, and it holds
+/// `redacted_because` and nothing else. The aggregations are still on the
+/// wire. See [`deleted`].
+///
+/// The field below is [`MessageLikeUnsigned`]'s own declaration copied: same
+/// name, same `default`, same type. That is deliberate and it is what makes
+/// this worth trusting. The two paths that build a message read the bundle
+/// through the same code, so they agree on a well-formed one and fail
+/// together on anything else, which is the property #86 wanted and could not
+/// have.
+///
+/// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
+/// [`MessageLikeUnsigned`]: matrix_sdk::ruma::events::MessageLikeUnsigned
+#[derive(Deserialize)]
+struct StillBundled {
+    #[serde(rename = "m.relations", default)]
+    relations: BundledMessageLikeRelations<AnySyncMessageLikeEvent>,
 }
 
 /// Which event a message is answering, if it chose one.
@@ -730,12 +772,19 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
 /// what lets the mark name a moderator by their display name, which this side
 /// does not know.
 ///
-/// `thread` is absent and cannot be otherwise. A bundled thread summary lives
-/// in `unsigned`, and a redacted event's `unsigned` carries `redacted_because`
-/// and nothing else, so there is no count here to read. See
-/// [`crate::timeline::History::redacted`], which clears it from the other end
-/// so that the two paths draw the same room.
+/// `thread` is the exception, and it is read off the raw JSON rather than off
+/// the deserialised event, the way [`undecryptable`] reads `origin_server_ts`.
+/// The replies under a deleted root were not redacted, and a redaction strips
+/// `content` and leaves `unsigned` alone, so the homeserver goes on bundling
+/// the tally onto the event and goes on counting into it. What has no count is
+/// ruma: [`RedactedUnsigned`] models `redacted_because` and nothing else, so
+/// the typed view drops a field that is sitting in the bytes. Reading it here
+/// is what lets [`crate::timeline::History::redacted`] keep the summary on the
+/// live path without the two ends disagreeing after a reload.
+///
+/// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
 fn deleted(
+    event: &TimelineEvent,
     gone: &RedactedSyncMessageLikeEvent<RedactedRoomMessageEventContent>,
 ) -> Option<Message> {
     Some(Message {
@@ -745,7 +794,17 @@ fn deleted(
         body: String::new(),
         html: None,
         media: None,
-        thread: None,
+        // Absent for almost every mark, because a homeserver bundles nothing
+        // onto a message nobody replied to. Unreadable `unsigned` is read the
+        // same way: no door rather than a guess at one.
+        thread: event
+            .raw()
+            .get_field::<StillBundled>("unsigned")
+            .ok()
+            .flatten()
+            .and_then(|unsigned| unsigned.relations.thread)
+            .as_deref()
+            .map(summary),
         edited: false,
         reactions: Vec::new(),
         reply_to: None,
@@ -1624,6 +1683,28 @@ mod tests {
         }))
     }
 
+    /// The same, with the thread summary a homeserver still bundles onto it.
+    ///
+    /// A redaction strips `content` and leaves `unsigned` alone, and Synapse
+    /// computes the aggregation when it serialises the event rather than when
+    /// the event was written, so a deleted root arrives looking exactly like
+    /// this. Checked against a real one rather than assumed: see
+    /// `a_redacted_thread_root_still_carries_its_count` in
+    /// `tests/against_a_real_homeserver.rs`.
+    fn emptied_in_a_thread(by: Value, count: u64, participated: bool) -> TimelineEvent {
+        let mut unsigned = thread_bundle(count, participated);
+        unsigned["redacted_because"] = by;
+
+        event(json!({
+            "type": "m.room.message",
+            "event_id": "$gone:example.org",
+            "sender": "@ada:example.org",
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": {},
+            "unsigned": unsigned,
+        }))
+    }
+
     /// One `m.room.redaction` as it appears in `redacted_because`.
     fn because(sender: &str) -> Value {
         json!({
@@ -1678,6 +1759,48 @@ mod tests {
 
         assert_eq!(gone.deleted_by, None);
         assert_eq!(gone.kind, MessageKind::Deleted);
+    }
+
+    #[test]
+    fn a_mark_keeps_the_way_into_the_thread_hanging_from_it() {
+        // The replies are not redacted and the homeserver still counts them,
+        // so the count is on the wire. Read it, and the room keeps the one
+        // control that opens the panel. Without this the conversation is
+        // still there and nothing in the interface can reach it.
+        let gone = message(&emptied_in_a_thread(because("@ada:example.org"), 3, true)).unwrap();
+
+        assert_eq!(gone.kind, MessageKind::Deleted);
+        assert_eq!(
+            gone.thread,
+            Some(ThreadSummary {
+                count: 3,
+                participated: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_mark_with_no_replies_under_it_has_no_door_to_draw() {
+        // A homeserver bundles nothing onto a message nobody replied to, so
+        // absence here is the ordinary case rather than a read that failed.
+        let gone = message(&emptied(because("@ada:example.org"))).unwrap();
+
+        assert_eq!(gone.thread, None);
+    }
+
+    #[test]
+    fn a_count_too_large_to_draw_stops_at_the_largest_one_that_is() {
+        // The same saturating read as the path an unredacted root takes, and
+        // the same reason: a badge that has stopped counting beats a mark
+        // that failed to draw. One rule, used from both ends.
+        let gone = message(&emptied_in_a_thread(
+            because("@ada:example.org"),
+            u64::from(u32::MAX) + 1,
+            false,
+        ))
+        .unwrap();
+
+        assert_eq!(gone.thread.map(|thread| thread.count), Some(u32::MAX));
     }
 
     #[test]
