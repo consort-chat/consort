@@ -627,6 +627,116 @@ describe("AppShell", () => {
     });
   });
 
+  /*
+    What happens to the selection when a room stops being one of this
+    account's, which until #93 could only happen from another session.
+
+    Nothing in the shell does any of this on purpose. Both selections are
+    derived from the room list every render, so a room that has gone simply
+    stops being selected, and these say that out loud because the alternative
+    reading is written down in `openRoom` and is not quite right: what is left
+    where it is is the stored channel ID, and what somebody sees is the empty
+    pane.
+  */
+  describe("a room that has been left", () => {
+    const GENERAL = "!general:example.org";
+    const LOUNGE = "!lounge:example.org";
+
+    function withRooms(channels: Channel[]): Rooms {
+      return {
+        spaces: [
+          {
+            id: "home",
+            name: "Home",
+            avatar: null,
+            channels,
+          },
+        ],
+      };
+    }
+
+    const both = withRooms([
+      textChannel(GENERAL, "general"),
+      textChannel(LOUNGE, "lounge"),
+    ]);
+
+    /** Select `name` in the channel list, as a click would. */
+    async function select(name: RegExp) {
+      await userEvent.click(
+        within(screen.getByRole("region", { name: "Text" })).getByRole(
+          "button",
+          { name },
+        ),
+      );
+    }
+
+    it("falls back to the empty pane when the room being read goes", async () => {
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "#general",
+        }),
+      ).toBeVisible();
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
+
+      expect(
+        screen.getByRole("heading", { name: "Nothing here yet" }),
+      ).toBeVisible();
+    });
+
+    it("stays in the space the room was in rather than jumping", async () => {
+      // The rail entry outlives the room. Somebody who left one channel of a
+      // space is still in the space, and a selection that fell back to the
+      // first entry would move them somewhere they did not ask to be.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
+
+      expect(
+        within(screen.getByRole("region", { name: "Text" })).getByRole(
+          "button",
+          { name: /lounge/ },
+        ),
+      ).toBeVisible();
+    });
+
+    it("leaves the selection alone when it is some other room that goes", async () => {
+      // The half that makes the other half worth having. Leaving a room is
+      // not a reason to stop reading the one on screen.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+
+      again({ rooms: withRooms([textChannel(GENERAL, "general")]) });
+
+      expect(
+        within(screen.getByRole("main")).getByRole("heading", {
+          name: "#general",
+        }),
+      ).toBeVisible();
+    });
+
+    it("takes the room's details away with the room", async () => {
+      // The panel is where the leave control is, so the panel is what would
+      // otherwise be left describing a room this account is not in, offering
+      // to leave it again.
+      const { again } = shell({ rooms: both });
+      await select(/general/);
+      await userEvent.click(
+        within(screen.getByRole("main")).getByRole("button", {
+          name: "#general",
+        }),
+      );
+      expect(screen.getByRole("heading", { name: "Room info" })).toBeVisible();
+
+      again({ rooms: withRooms([textChannel(LOUNGE, "lounge")]) });
+
+      expect(screen.queryByRole("heading", { name: "Room info" })).toBeNull();
+    });
+  });
+
   describe("voice channels", () => {
     const LOUNGE = "!lounge:example.org";
 

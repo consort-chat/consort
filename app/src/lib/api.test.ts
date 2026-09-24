@@ -59,6 +59,9 @@ import {
   threadSend,
   openLink,
   roomAt,
+  roomCanInvite,
+  roomInvite,
+  roomLeave,
   directRoom,
   memberNames,
   onTimeline,
@@ -429,6 +432,54 @@ describe("replies and links", () => {
     expect(invoke).toHaveBeenCalledWith("room_at", {
       address: "#general:example.org",
     });
+  });
+});
+
+/*
+  The one thing a component test cannot catch, because every one of them mocks
+  this module: a typo in a command name or an argument is a rejection at
+  runtime and a green suite everywhere else. These two change who is in a room,
+  so a silent no-op is the worst way for them to be wrong.
+*/
+describe("leaving a room and inviting somebody", () => {
+  beforeEach(() => {
+    invoke.mockReset();
+  });
+
+  it("names the room a leave is of", async () => {
+    await roomLeave("!general:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("room_leave", {
+      roomId: "!general:example.org",
+    });
+  });
+
+  it("names the room and the person an invitation is for", async () => {
+    await roomInvite("!general:example.org", "@ada:example.org");
+
+    expect(invoke).toHaveBeenCalledWith("room_invite", {
+      roomId: "!general:example.org",
+      userId: "@ada:example.org",
+    });
+  });
+
+  it("asks whether this account may invite into one room", async () => {
+    invoke.mockResolvedValue(true);
+
+    await expect(roomCanInvite("!general:example.org")).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith("room_can_invite", {
+      roomId: "!general:example.org",
+    });
+  });
+
+  it("passes a refusal on rather than swallowing it", async () => {
+    // The panel draws what comes back here, and a promise that resolved on a
+    // refusal would draw "invited" over an invitation that never went.
+    invoke.mockRejectedValue({ message: "They are already in this room." });
+
+    await expect(
+      roomInvite("!general:example.org", "@ada:example.org"),
+    ).rejects.toMatchObject({ message: "They are already in this room." });
   });
 });
 
