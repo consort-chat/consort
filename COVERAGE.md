@@ -4,8 +4,23 @@ Target is 90% or better, and the suite currently clears it on both sides.
 
 | | Lines | Tests |
 |---|---|---|
-| Rust | 93.4% | 1706 |
-| Frontend | 98.3% | 1373 |
+| Rust | 93.4% | 1715 |
+| Frontend | 98.1% | 1463 |
+
+Both rows are read off CI rather than measured on somebody's machine, so they
+are the numbers the thresholds were actually checked against. The Tests column
+counts what a plain run runs, which leaves out the 32 `#[ignore]`d Rust tests
+the sections below are about.
+
+The Frontend job prints its summary and the figure can be read straight out of
+the log. The Rust job cannot: its coverage step writes lcov instead of a table,
+and `--fail-under-lines` says nothing when it passes. The number comes from the
+`rust-coverage` artifact that step uploads, which is that same measurement:
+
+```sh
+gh run download <run id> -n rust-coverage
+awk -F: '/^LF:/{f+=$2} /^LH:/{h+=$2} END{printf "%.1f%%\n", 100*h/f}' lcov.info
+```
 
 Run them:
 
