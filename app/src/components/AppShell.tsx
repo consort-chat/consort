@@ -6,6 +6,7 @@ import {
   asCommandError,
   callRoomId,
   roomAt,
+  roomJoin,
   threadOpen,
   type Call,
   type CallRefused,
@@ -26,7 +27,7 @@ import { RoomLinksContext, type RoomLinks } from "../lib/roomLinks";
 import { CallCard } from "./CallCard";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
-import { ChannelList } from "./ChannelList";
+import { ChannelList, type Joining } from "./ChannelList";
 import { OpeningPane } from "./OpeningPane";
 import { RoomInfoPanel } from "./RoomInfoPanel";
 import { RoomTimeline } from "./RoomTimeline";
@@ -271,6 +272,14 @@ export function AppShell({
   const [focus, setFocus] = useState<{ eventId: string } | null>(null);
   /* Why the last link somebody pressed went nowhere, if it did. */
   const [linkProblem, setLinkProblem] = useState<string | null>(null);
+  /*
+    The channel this session asked to be let into, until it is in it.
+
+    Here rather than in the channel list, on `callRefused`'s terms: it outlives
+    the press that made it, and a component that owned it would clear it on
+    every re-render caused by anything else in the column.
+  */
+  const [joining, setJoining] = useState<Joining | null>(null);
 
   // So a panel dragged wide on a large window is not wider than a small one.
   useEffect(() => {
@@ -433,6 +442,30 @@ export function AppShell({
   }
 
   /**
+   * Ask to be let into a channel the space lists and this account is not in.
+   *
+   * The selection moves afterwards rather than on the press, because the room
+   * is already in the list before anybody is in it: selecting it early would
+   * open a timeline of a room this account cannot read. The room list catching
+   * up is what fills that pane, on the same terms as every other way in.
+   *
+   * A voice channel is opened and not connected to. Being let into a room and
+   * walking into the call in it are two asks, and the second one is a click on
+   * a row that is an ordinary voice channel by then.
+   */
+  async function joinChannel(roomId: string) {
+    const spaceId = space?.id ?? HOME_ID;
+    setJoining({ roomId, problem: null });
+    try {
+      await roomJoin(roomId);
+      setJoining(null);
+      goTo({ spaceId, channelId: roomId });
+    } catch (raw: unknown) {
+      setJoining({ roomId, problem: asCommandError(raw).message });
+    }
+  }
+
+  /**
    * Open a channel picked somewhere other than the list beside it.
    *
    * `selectChannel` cannot serve this: it looks the channel up in the selected
@@ -488,7 +521,9 @@ export function AppShell({
               call={call}
               speaking={speaking}
               selfId={profile.user_id}
+              joining={joining}
               onSelect={selectChannel}
+              onJoin={(roomId) => void joinChannel(roomId)}
               onOpenRoom={openRoom}
               onFold={() => setFolded(true)}
             />

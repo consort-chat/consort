@@ -2359,6 +2359,24 @@ export function roomCopyLink(roomId: string): Promise<void> {
 }
 
 /**
+ * Join one room, by ID.
+ *
+ * For a room a space lists that this account has never been in, which is the
+ * one kind of room the channel list can name and the local store knows nothing
+ * about. Which servers the join goes through is worked out in Rust from the
+ * `m.space.child` that put the room in the list.
+ *
+ * Nothing comes back but the fact that it worked, on `roomLeave`'s terms. What
+ * the room list says a moment later is the answer somebody sees.
+ *
+ * Rejects with a sentence for a person. The one worth expecting is a room that
+ * is invite only, which no amount of trying again fixes.
+ */
+export function roomJoin(roomId: string): Promise<void> {
+  return invoke<void>("room_join", { roomId });
+}
+
+/**
  * Leave one room.
  *
  * Nothing comes back but the fact that it worked. What the room list says a

@@ -162,6 +162,16 @@ pub enum Error {
     #[error("the homeserver refused an invitation of {user_id} to {room_id}")]
     InviteRefused { room_id: String, user_id: String },
 
+    /// A room a space listed that the homeserver would not let this account
+    /// into.
+    ///
+    /// Its own variant for [`Self::InviteRefused`]'s reason. A space listing a
+    /// room is not a promise that anybody may walk into it, so the ordinary
+    /// answer here is an invite-only room rather than anything that trying
+    /// again would fix.
+    #[error("the homeserver refused to let this account into {room_id}")]
+    JoinRefused { room_id: String },
+
     /// An attachment larger than this build will carry into the webview.
     ///
     /// The bytes are held whole on both sides of the IPC boundary for a
@@ -312,6 +322,11 @@ impl Error {
             Self::InviteRefused { .. } => {
                 "The homeserver would not send that invitation. Check the user ID, and whether \
                  their server can be reached from yours."
+                    .to_owned()
+            }
+            Self::JoinRefused { .. } => {
+                "The homeserver would not let you into that channel. It may be invite only, so \
+                 ask somebody already in it."
                     .to_owned()
             }
             Self::NoSuchRoom { .. } => {

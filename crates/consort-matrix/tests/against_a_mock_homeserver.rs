@@ -8220,3 +8220,236 @@ mod membership {
         assert!(matches!(error, consort_matrix::Error::NoSuchRoom { .. }));
     }
 }
+
+/// Joining a room a space listed and this account was never in.
+mod joining {
+    use super::*;
+    use consort_matrix::rooms::join;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const NEVER: &str = "!never:example.org";
+
+    /// One state event, built the way the room list tests build theirs.
+    ///
+    /// Everything after a colon in an event ID is read as a server name, so
+    /// the ID is stripped to letters and digits or ruma drops the whole event
+    /// without saying so.
+    fn state_event(
+        event_type: &str,
+        state_key: &str,
+        content: serde_json::Value,
+    ) -> serde_json::Value {
+        let event_id: String = format!("{event_type}{state_key}")
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+
+        serde_json::json!({
+            "type": event_type,
+            "state_key": state_key,
+            "content": content,
+            "event_id": format!("$e{event_id}"),
+            "sender": USER,
+            "origin_server_ts": 1_000,
+        })
+    }
+
+    fn created(room_type: Option<&str>) -> serde_json::Value {
+        let mut content = serde_json::json!({ "creator": USER, "room_version": "10" });
+        if let Some(room_type) = room_type {
+            content["type"] = room_type.into();
+        }
+        state_event("m.room.create", "", content)
+    }
+
+    /// A space claiming `room_id`, reachable through `via`.
+    fn child(room_id: &str, via: &[&str]) -> serde_json::Value {
+        state_event("m.space.child", room_id, serde_json::json!({ "via": via }))
+    }
+
+    /// A signed-in client that has synced `joined` once.
+    async fn synced(
+        server: &MatrixMockServer,
+        joined: serde_json::Value,
+    ) -> (tempfile::TempDir, matrix_sdk::Client) {
+        let (dir, client) = signed_in(server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "next_batch": "s1", "rooms": { "join": joined } }),
+            ))
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        (dir, client)
+    }
+
+    /// One space, claiming one child through `via` that nobody has joined.
+    async fn a_space_claiming(
+        server: &MatrixMockServer,
+        via: &[&str],
+    ) -> (tempfile::TempDir, matrix_sdk::Client) {
+        synced(
+            server,
+            serde_json::json!({
+                "!space:example.org": { "state": { "events": [
+                    created(Some("m.space")),
+                    child(NEVER, via),
+                ] } },
+            }),
+        )
+        .await
+    }
+
+    /// Answer every join with success, and record the query it arrived with.
+    ///
+    /// The query rather than the body, because the servers to try are query
+    /// parameters on this endpoint and are the whole point of sending it.
+    async fn mock_join(server: &MatrixMockServer) -> Arc<Mutex<Vec<String>>> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = seen.clone();
+
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path_regex(
+                r"^/_matrix/client/v3/join/.*$",
+            ))
+            .respond_with(move |request: &wiremock::Request| {
+                record
+                    .lock()
+                    .unwrap()
+                    .push(request.url.query().unwrap_or_default().to_owned());
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "room_id": NEVER }))
+            })
+            .mount(server.server())
+            .await;
+
+        seen
+    }
+
+    #[tokio::test]
+    async fn joining_a_room_a_space_listed_tells_the_homeserver() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_space_claiming(&server, &["example.org"]).await;
+        let seen = mock_join(&server).await;
+
+        join(&client, NEVER)
+            .await
+            .expect("a listed room is joinable");
+
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_join_goes_through_the_servers_the_space_named() {
+        // The reason this is `join_room_by_id_or_alias` rather than the
+        // simpler call beside it. A room the local homeserver has never seen
+        // cannot be reached by ID alone, and `m.space.child` is where the
+        // space says which servers are in it.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_space_claiming(&server, &["far.example.net"]).await;
+        let seen = mock_join(&server).await;
+
+        join(&client, NEVER)
+            .await
+            .expect("a listed room is joinable");
+
+        let query = seen.lock().unwrap()[0].clone();
+        assert!(query.contains("via=far.example.net"), "{query}");
+    }
+
+    #[tokio::test]
+    async fn a_room_two_spaces_claim_is_joined_through_both_of_their_servers() {
+        // A room can be a child of more than one space, and the two need not
+        // name the same server. Taking the first space's answer would throw
+        // away the one that happens to work.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = synced(
+            &server,
+            serde_json::json!({
+                "!one:example.org": { "state": { "events": [
+                    created(Some("m.space")),
+                    child(NEVER, &["first.example.net"]),
+                ] } },
+                "!two:example.org": { "state": { "events": [
+                    created(Some("m.space")),
+                    child(NEVER, &["second.example.net"]),
+                ] } },
+            }),
+        )
+        .await;
+        let seen = mock_join(&server).await;
+
+        join(&client, NEVER)
+            .await
+            .expect("a listed room is joinable");
+
+        let query = seen.lock().unwrap()[0].clone();
+        assert!(query.contains("via=first.example.net"), "{query}");
+        assert!(query.contains("via=second.example.net"), "{query}");
+    }
+
+    #[tokio::test]
+    async fn a_room_no_space_claims_is_joined_without_naming_a_server() {
+        // No space lists it, so there is nothing to say about where it is.
+        // Inventing a server would be a guess sent as a fact.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_space_claiming(&server, &["far.example.net"]).await;
+        let seen = mock_join(&server).await;
+
+        join(&client, "!elsewhere:example.org")
+            .await
+            .expect("a room nothing lists can still be joined by ID");
+
+        let query = seen.lock().unwrap()[0].clone();
+        assert!(!query.contains("via="), "{query}");
+    }
+
+    #[tokio::test]
+    async fn something_that_is_not_a_room_id_never_reaches_the_homeserver() {
+        // Nothing is mounted, so a request would 404. The parse refuses first.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = join(&client, "not a room id")
+            .await
+            .expect_err("a malformed room ID names no room");
+
+        assert!(matches!(error, consort_matrix::Error::NoSuchAddress { .. }));
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_that_refuses_a_join_says_what_to_check() {
+        // The case somebody actually meets: a room listed by a space that is
+        // invite only. "Please try again" is the wrong advice for it, which is
+        // why this does not fall through to the SDK's own sentence.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = a_space_claiming(&server, &["example.org"]).await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path_regex(
+                r"^/_matrix/client/v3/join/.*$",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                    "errcode": "M_FORBIDDEN",
+                    "error": "You are not invited to this room.",
+                })),
+            )
+            .mount(server.server())
+            .await;
+
+        let error = join(&client, NEVER)
+            .await
+            .expect_err("a room that will not have us is an error");
+
+        assert!(matches!(error, consort_matrix::Error::JoinRefused { .. }));
+        let message = error.user_message();
+        assert!(!message.contains("M_FORBIDDEN"), "{message}");
+        assert!(!message.contains("You are not invited"), "{message}");
+    }
+}

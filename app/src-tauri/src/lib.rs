@@ -297,6 +297,7 @@ pub fn run() {
             commands::open_link,
             commands::quit,
             commands::room_at,
+            commands::room_join,
             commands::room_leave,
             commands::room_invite,
             commands::room_can_invite,
