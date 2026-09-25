@@ -3,22 +3,11 @@
 
 //! The thread that owns the microphone.
 //!
-//! A cpal `Stream` is `!Send`. It cannot live in shared application state, it
-//! cannot be held across an await inside a Tauri command, and it has to be
-//! dropped on the thread that built it. So it gets a thread of its own, and
-//! everything else reaches it through a channel.
-//!
-//! That is the same shape `Call::join` will need when the MatrixRTC layer
-//! arrives, for the same reason and with the same constraint written down in
-//! `app/src-tauri/src/state.rs`. Building it here, around a meter that is easy
-//! to reason about, is much cheaper than discovering its shape halfway through
-//! wiring up a call.
-//!
-//! One channel, not two. The capture callback posts frames onto the same queue
-//! the commands arrive on, so the thread has a single `recv` and no select. A
-//! separate frame channel would need one, and would also deadlock on shutdown:
-//! the stream holds a sender, the thread owns the stream, and neither would let
-//! go first.
+//! A cpal `Stream` is `!Send` and has to be dropped on the thread that built
+//! it, so it gets one. One channel, not two: frames are posted onto the queue
+//! the commands arrive on, so there is a single `recv` and no select. A
+//! separate frame channel would deadlock on shutdown, because the stream holds
+//! a sender and the thread owns the stream.
 
 use std::sync::mpsc::{Sender, channel};
 use std::thread::JoinHandle;
@@ -53,8 +42,7 @@ pub enum AudioEvent {
     /// for.
     ToneStarted { device: String },
     /// The chime is over, whether it finished or was cut short. One event for
-    /// both, because the only thing waiting on it is a button that needs to go
-    /// back to being pressable.
+    /// both: a button going back to pressable is all that waits on it.
     ToneStopped,
     /// The chime could not begin.
     ToneFailed { error: String },
@@ -69,37 +57,23 @@ pub enum AudioEvent {
     CallAudioStopped,
     /// The microphone is being played back on this output.
     MonitorStarted { device: String },
-    /// The microphone could not be played back.
-    ///
-    /// Its own event rather than [`Self::CallAudioFailed`], which the shell
-    /// raises a banner for: this is a settings screen asking a question, not a
-    /// call nobody can hear.
+    /// The microphone could not be played back. Its own event rather than
+    /// [`Self::CallAudioFailed`], which the shell raises a banner for.
     MonitorFailed { error: String },
     /// The microphone is no longer being played back.
     MonitorStopped,
 }
 
-/// Who the monitor's own voice is, in the mixer.
-///
-/// Any key would do. This one is never anybody's Matrix ID, and the monitor
-/// has a mixer to itself, so nothing can collide with it.
+/// Who the monitor's own voice is, in the mixer. Never a Matrix ID, and the
+/// monitor has a mixer to itself, so nothing can collide with it.
 const MONITOR: &str = "you";
 
 /// Where gated audio goes while a call is running.
 ///
-/// A closure rather than a trait, matching [`crate::FrameSink`] on the way in,
-/// and for the same reason: the one thing on the other side of it is a queue,
-/// and a trait would put a name for that queue in this crate. Nothing here
-/// should know that calls exist.
-///
-/// `open` is the gate's verdict for this frame. `false` means the samples are
-/// the silence the gate substituted rather than anything anybody said, which
-/// is what lets the reader mute a publication instead of guessing from the
-/// amplitude.
-///
-/// Called on the audio thread, once per frame, so once per 10 ms. Not on the
-/// realtime callback, so it may allocate, but it must not block: everything
-/// else this thread does is behind it, including the meter.
+/// `open` is the gate's verdict, so `false` means substituted silence rather
+/// than anything said, and the reader can mute a publication instead of
+/// guessing from the amplitude. Called on the audio thread once per 10 ms, so
+/// it may allocate but must not block: the meter is behind it.
 pub type GatedSink = Box<dyn FnMut(&[i16], bool) + Send>;
 
 /// What the thread accepts.
@@ -111,21 +85,17 @@ enum Message {
     Stop,
     /// Retune the running gate without reopening the device.
     ///
-    /// Its own message rather than another `Start`. Somebody moving a
-    /// threshold or turning voice activity off is watching the meter while
-    /// they do it, and reopening the sound card under them drops the bar to
-    /// zero for a moment and re-announces the device.
+    /// Its own message rather than another `Start`, which would drop the meter
+    /// to zero under somebody who is watching it while they tune.
     Retune {
         gate: GateConfig,
     },
     /// One captured frame, posted by the backend's realtime callback.
     Frame(Vec<i16>),
-    /// Install a reader for the gate's output, or `None` to remove the one
-    /// installed.
+    /// Install a reader for the gate's output, or `None` to remove it.
     ///
-    /// Carried on the same channel as everything else, so a sink installed
-    /// before `Start` sees the first frame and one removed after `Stop` cannot
-    /// see a frame that arrived in between.
+    /// On the same channel as everything else, so a sink installed before
+    /// `Start` sees the first frame and the ordering holds at both ends.
     Publish(Option<GatedSink>),
     PlayTone {
         device: Option<String>,
@@ -133,9 +103,8 @@ enum Message {
     StopTone,
     /// Open an output and play everybody else in the call through it.
     ///
-    /// Its own message rather than a flag on `Start`, because the two ends are
-    /// independent: the microphone can be reopened mid-call without the call
-    /// going quiet, and a device change on one side must not disturb the other.
+    /// Its own message, not a flag on `Start`: a device change on one end must
+    /// not disturb the other.
     PlayCall {
         device: Option<String>,
         voices: Voices,
@@ -143,19 +112,15 @@ enum Message {
     StopCall,
     /// Open an output and play this microphone back through it.
     ///
-    /// Its own message rather than a `PlayCall` with a mixer the caller feeds,
-    /// because what goes into it is the gate's output, which only this thread
-    /// has. A caller would have to install a sink that reached back into a
-    /// mixer it also held, which is two halves of one thing in two places.
+    /// Not a `PlayCall` with a caller-fed mixer, because what goes into it is
+    /// the gate's output, which only this thread has.
     StartMonitor {
         device: Option<String>,
     },
     StopMonitor,
     /// The chime handed its last sample to the device, posted by the backend's
-    /// realtime callback.
-    ///
-    /// Carries which chime, because a second press can be underway by the time
-    /// this arrives and acting on a stale one would cut the new chime off.
+    /// realtime callback. Carries which chime, because a second press can be
+    /// underway by the time it arrives.
     ToneEnded(u64),
     Shutdown,
 }
@@ -203,29 +168,23 @@ impl AudioThread {
 
     /// Change the running gate's tuning, leaving the device open.
     ///
-    /// Silently ignored when nothing is capturing: the tuning is passed to
-    /// [`start`](Self::start) anyway, so there is nothing to remember here.
-    /// Answered with nothing, because the meter is already the answer.
+    /// Ignored when nothing is capturing, since [`start`](Self::start) takes
+    /// the tuning anyway. Answered with nothing: the meter is the answer.
     pub fn retune(&self, gate: GateConfig) {
         self.send(Message::Retune { gate });
     }
 
     /// Send every gated frame to `sink` from now on, replacing any current
-    /// one.
-    ///
-    /// Answered with nothing. Whether audio is reaching anybody is a question
-    /// about the call, not about this thread, and the call is what can answer
-    /// it.
+    /// one. Answered with nothing: whether audio reaches anybody is a question
+    /// about the call.
     pub fn publish_to(&self, sink: GatedSink) {
         self.send(Message::Publish(Some(sink)));
     }
 
     /// Stop sending gated frames anywhere.
     ///
-    /// Called when the call ends. Leaving a sink installed past the end of a
-    /// call is not harmful, but it is work done for nobody, and on a queue
-    /// nothing is draining it is work that shows up in the log as dropped
-    /// frames.
+    /// Called when the call ends. A sink left installed is work done for
+    /// nobody, onto a queue nothing drains, logged as dropped frames.
     pub fn stop_publishing(&self) {
         self.send(Message::Publish(None));
     }
@@ -260,9 +219,8 @@ impl AudioThread {
 
     /// Play this microphone back, so somebody can hear what they are sending.
     ///
-    /// What comes out is the gate's own output: denoised, gated, pre-roll and
-    /// all. That is the point, and it is why this is not simply a second
-    /// capture stream.
+    /// The gate's own output: denoised, gated, pre-roll and all. That is why
+    /// it is not simply a second capture stream.
     pub fn start_monitor(&self, device: Option<String>) {
         self.send(Message::StartMonitor { device });
     }
@@ -273,18 +231,16 @@ impl AudioThread {
     }
 
     fn send(&self, message: Message) {
-        // A closed channel means the thread is already gone, which is only
-        // reachable if it panicked. Nothing useful can be done about it from
-        // here, and the caller finds out when the event channel closes.
+        // A closed channel means the thread panicked. The caller finds out
+        // when the event channel closes.
         let _ = self.commands.send(message);
     }
 }
 
 impl Drop for AudioThread {
     fn drop(&mut self) {
-        // An explicit shutdown rather than relying on the channel closing: the
-        // running stream holds a sender too, and the thread is what drops the
-        // stream, so waiting for the last sender would wait forever.
+        // Explicit rather than relying on the channel closing: the running
+        // stream holds a sender, and the thread is what drops the stream.
         self.send(Message::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -301,11 +257,8 @@ struct Running {
     /// The gate's output buffer, reused rather than allocated per frame.
     gated: Vec<i16>,
     /// Holds the gate's output back far enough for an opening edge to reach
-    /// the frames that caused it.
-    ///
-    /// Inside `Running` rather than beside `publishing`, so that changing the
-    /// microphone starts a new line. The alternative is publishing 30 ms
-    /// captured from a device somebody has just switched away from.
+    /// the frames that caused it. Inside `Running` so a device change starts
+    /// a new line, rather than publishing 30 ms from the old microphone.
     pre_roll: PreRoll,
 }
 
@@ -317,35 +270,29 @@ fn run(
     events: Sender<AudioEvent>,
 ) {
     let mut running: Option<Running> = None;
-    // Where the gate's output goes, when anybody wants it. Outside `Running`
-    // on purpose: a call outlives a device change, and reopening the
+    // Outside `Running`: a call outlives a device change, and reopening the
     // microphone must not silently stop feeding it.
     let mut publishing: Option<GatedSink> = None;
     // Held only to keep the output open; dropping it silences the chime.
     let mut tone: Option<Box<dyn PlaybackStream>> = None;
     // The same, for the call. A second stream on (usually) the same device, so
-    // that testing the speakers during a call neither interrupts it nor is
-    // interrupted by it.
+    // the test button neither interrupts a call nor is interrupted by one.
     let mut call: Option<Box<dyn PlaybackStream>> = None;
-    // The same again, for the settings screen playing the microphone back, and
-    // with the mixer it is fed through. A third stream rather than borrowing
-    // the call's, because monitoring during a call would otherwise put one
-    // voice into everybody else's mix.
+    // A third, for playing the microphone back. Not the call's, which would
+    // put one voice into everybody else's mix.
     let mut monitor: Option<(Box<dyn PlaybackStream>, Voices)> = None;
-    // Which chime is playing. Bumped on every start and every stop, so an
-    // ending reported by a chime that has already been replaced or cancelled
-    // arrives carrying a number nothing matches any more and is dropped.
+    // Which chime is playing. Bumped on every start and stop, so an ending
+    // reported by a replaced chime carries a number nothing matches.
     let mut chime: u64 = 0;
 
     while let Ok(message) = inbox.recv() {
         match message {
             Message::Start { device, gate } => {
-                // Torn down before the new one is opened, always. Two open
-                // streams means two claims on the sound card, and on a device
-                // that allows only one the second fails for a reason nothing
-                // explains. This also runs when the new stream then fails,
-                // which is deliberate: leaving the previous microphone live
-                // while the screen says otherwise is worse than silence.
+                // Always torn down before the new one is opened: two claims on
+                // a device that allows one fails for a reason nothing
+                // explains. Runs even when the new stream then fails, so the
+                // old microphone cannot stay live behind a screen saying it is
+                // not.
                 running = None;
 
                 let post = frames.clone();
@@ -397,9 +344,7 @@ fn run(
             }
 
             Message::PlayCall { device, voices } => {
-                // Dropped before the new one is opened, for the reason `Start`
-                // gives: two claims on one device is a failure nothing
-                // explains.
+                // Dropped first, for the reason `Start` gives.
                 call = None;
 
                 match playback.play_call(device.as_deref(), voices) {
@@ -435,8 +380,7 @@ fn run(
             }
 
             Message::StartMonitor { device } => {
-                // Dropped first, for the reason every other stream is: two
-                // claims on one device is a failure nothing explains.
+                // Dropped first, for the reason `Start` gives.
                 monitor = None;
 
                 let voices = Voices::new();
@@ -526,9 +470,8 @@ fn run(
 
             Message::ToneEnded(which) => {
                 if which != chime {
-                    // A chime that was replaced or cancelled, reporting its
-                    // end afterwards. Believing it would silence whatever is
-                    // playing now.
+                    // A replaced chime reporting its end. Believing it would
+                    // silence whatever is playing now.
                     continue;
                 }
                 tone = None;
@@ -545,9 +488,8 @@ fn run(
                     continue;
                 };
                 if frame.len() != FRAME_SAMPLES {
-                    // `Frames` only ever emits whole frames, so this is a
-                    // backend doing something unexpected. Skipping it keeps the
-                    // thread alive; `VoiceGate::process` would panic, and a
+                    // `Frames` only emits whole frames, so this is a backend
+                    // misbehaving. `VoiceGate::process` would panic, and a
                     // panicked audio thread takes the microphone with it.
                     tracing::warn!(
                         samples = frame.len(),
@@ -557,41 +499,29 @@ fn run(
                     continue;
                 }
 
-                // Ungated, because the pre-roll decides what to silence. It
-                // is holding frames the gate has not opened for yet and may
-                // still change its mind about, and it cannot reopen what it
-                // was handed as zeroes.
+                // Ungated, because the pre-roll decides what to silence and
+                // cannot reopen what it was handed as zeroes.
                 let decision = state.gate.process_ungated(&frame, &mut state.gated);
 
                 // Before the meter, because this is the frame's reason for
-                // existing and the meter is a picture of it. A send failure on
-                // the event channel below ends the loop, and ending it after
-                // the audio has gone out costs a caller nothing.
-                //
-                // What goes out is 30 ms behind what was just captured. The
-                // meter below is not, and deliberately: it draws what the model
-                // thinks of the frame in front of it, and a bar lagging a
-                // person's own voice is the one thing on this screen somebody
-                // would notice.
+                // existing. What goes out is 30 ms behind the capture and the
+                // meter below is not, deliberately: a bar lagging a person's
+                // own voice is what they would notice.
                 if let Some((published, open)) = state.pre_roll.step(&state.gated, decision) {
                     if let Some(sink) = publishing.as_mut() {
                         sink(published, open);
                     }
-                    // Only while the gate is open, because that is the whole
-                    // question being asked: what leaves this machine, not what
-                    // the microphone hears. Somebody who turns voice activity
-                    // off hears themselves continuously, which is also the
-                    // truth about what they are sending.
+                    // Only while the gate is open, so the monitor answers what
+                    // leaves this machine rather than what the microphone
+                    // hears.
                     if open && let Some((_, voices)) = monitor.as_ref() {
                         voices.hear(MONITOR, published);
                     }
                 }
 
-                // Metered on the captured frame, not on the gate's output. A
-                // bar that reads zero whenever the gate is shut cannot tell
-                // "the microphone is dead" from "the microphone is fine and the
-                // model is not scoring this as speech", which is the single
-                // most useful thing this screen can show.
+                // Metered on the captured frame, not the gate's output: a bar
+                // that reads zero while the gate is shut cannot tell a dead
+                // microphone from one the model is not scoring as speech.
                 if let Some(reading) = state.meter.fold(decision, &frame)
                     && events.send(AudioEvent::Level(reading)).is_err()
                 {

@@ -3,15 +3,10 @@
 
 //! Guards the one mistake that silently kills this whole pipeline.
 //!
-//! nnnoiseless wants `f32` samples that are still in **i16 range**, not the
-//! `[-1.0, 1.0]` that float PCM normally means. Dividing by 32768 on the way in
-//! is the reflex: it compiles, it runs, and it hands the model a signal about
-//! 90 dB below what it was trained on. The model then reports silence forever,
-//! the gate never opens, and nothing anywhere logs a problem.
-//!
-//! These assert that the model reacts to a voiced vowel at i16 scale and does
-//! not at normalised scale. That is a statement about the convention, not about
-//! how good the model is.
+//! nnnoiseless wants `f32` samples still in **i16 range**, not the
+//! `[-1.0, 1.0]` float PCM normally means. Dividing by 32768 is the reflex, and
+//! it hands the model a signal 90 dB too quiet: the gate never opens and
+//! nothing logs a problem. A statement about the convention, not the model.
 
 use consort_audio::{FRAME_SAMPLES, GateConfig, VoiceGate};
 use nnnoiseless::DenoiseState;

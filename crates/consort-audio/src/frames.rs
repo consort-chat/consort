@@ -3,15 +3,10 @@
 
 //! Between the sound card and the model.
 //!
-//! A backend delivers interleaved samples, in its own sample format, in buffers
-//! sized to suit itself. The gate accepts exactly [`FRAME_SAMPLES`] mono `i16`
-//! samples and nothing else. This closes that gap, and it is the only part of
-//! the capture path that is arithmetic rather than glue, so it lives away from
-//! the cpal call that cannot be tested.
-//!
-//! Deliberately no resampling. 48 kHz is the only rate RNNoise accepts and it
-//! is also what the media layer wants, so a device that cannot do 48 kHz is an
-//! error at startup rather than a silent quality loss.
+//! A backend delivers interleaved samples in buffers sized to suit itself; the
+//! gate accepts exactly [`FRAME_SAMPLES`] mono `i16` and nothing else. No
+//! resampling, deliberately: 48 kHz is the only rate RNNoise accepts, so a
+//! device that cannot do it is an error at startup.
 
 use crate::gate::FRAME_SAMPLES;
 
@@ -25,9 +20,8 @@ impl Frames {
     /// `channels` is what the device negotiated.
     pub fn new(channels: u16) -> Self {
         Self {
-            // Nothing should claim zero channels, but dividing by it would
-            // panic inside a realtime audio callback, which is the worst place
-            // in the program to find out.
+            // Nothing should claim zero channels, but dividing by it panics
+            // inside a realtime callback.
             channels: usize::from(channels).max(1),
             pending: Vec::with_capacity(FRAME_SAMPLES),
         }
@@ -40,9 +34,8 @@ impl Frames {
     /// anything that blocks, allocates heavily, or locks turns into crackle.
     pub fn push_i16(&mut self, data: &[i16], mut on_frame: impl FnMut(&[i16])) {
         for group in data.chunks_exact(self.channels) {
-            // Summed as i32 because two channels at full scale do not fit in an
-            // i16, and wrapping there would turn the loudest possible signal
-            // into noise.
+            // i32 because two channels at full scale do not fit in an i16, and
+            // wrapping turns the loudest possible signal into noise.
             let sum: i32 = group.iter().copied().map(i32::from).sum();
             let mono = sum / self.channels as i32;
             self.push(clamp_i32(mono), &mut on_frame);
