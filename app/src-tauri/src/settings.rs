@@ -67,6 +67,7 @@ pub struct Settings {
     pub calls: CallSettings,
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
+    pub emoji: EmojiSettings,
     pub appearance: AppearanceSettings,
     /// The rooms this account has opened, most recently first.
     ///
@@ -75,6 +76,61 @@ pub struct Settings {
     /// application, not worth a second writer, and written through the one
     /// that already fsyncs before it renames.
     pub recent: RecentRooms,
+}
+
+/// How many keys the recently used row remembers.
+///
+/// Two rows of the nine the grid draws. Long enough that the twelve it starts
+/// with survive a handful of new ones, short enough that the row is somewhere
+/// to glance rather than somewhere to read.
+const REMEMBERED: usize = 18;
+
+/// What the picker remembers between opens.
+///
+/// Here rather than in the webview's own storage because it is a preference
+/// like any other, it belongs next to the rest of them in a file somebody can
+/// read, and a webview that is cleared should not silently forget it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EmojiSettings {
+    /// The keys used here, most recent first.
+    ///
+    /// Free strings rather than anything validated. Nothing downstream
+    /// restricts what a reaction may be, and a key this build has no picture
+    /// for is still a key somebody chose and may want again.
+    pub recent: Vec<String>,
+    /// Which skin tone the picker applies, 1 to 5, or 0 for none.
+    pub tone: u8,
+}
+
+impl Default for EmojiSettings {
+    /// The twelve keys the quick panel offered before there was a picker.
+    ///
+    /// A fresh account has reacted to nothing, and an empty row would make the
+    /// first thumbs up something to go looking for. These are what that panel
+    /// was right about: almost every reaction anybody sends is agreement,
+    /// disagreement, or a laugh.
+    fn default() -> Self {
+        Self {
+            recent: [
+                "\u{1F44D}",
+                "\u{1F44E}",
+                "\u{1F604}",
+                "\u{1F389}",
+                "\u{1F615}",
+                "\u{2764}\u{FE0F}",
+                "\u{1F680}",
+                "\u{1F440}",
+                "\u{2705}",
+                "\u{1F64F}",
+                "\u{1F525}",
+                "\u{1F622}",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            tone: 0,
+        }
+    }
 }
 
 /// How big the application is drawn.
@@ -108,6 +164,19 @@ impl Default for AppearanceSettings {
             application_scale: 1.0,
             text_scale: 1.0,
         }
+    }
+}
+
+impl EmojiSettings {
+    /// Record that `key` was just used.
+    ///
+    /// Moves rather than adds when it is already there, so the row holds
+    /// eighteen distinct keys rather than eighteen copies of the one somebody
+    /// uses most.
+    pub fn used(&mut self, key: &str) {
+        self.recent.retain(|one| one != key);
+        self.recent.insert(0, key.to_owned());
+        self.recent.truncate(REMEMBERED);
     }
 }
 
@@ -346,6 +415,7 @@ mod tests {
             calls: CallSettings::default(),
             privacy: PrivacySettings::default(),
             notifications: NotificationSettings::default(),
+            emoji: EmojiSettings::default(),
             appearance: AppearanceSettings::default(),
             recent: RecentRooms::default(),
         }
@@ -774,6 +844,72 @@ mod tests {
         assert!(
             std::error::Error::source(&error).is_some(),
             "the underlying cause has to survive, or the log says nothing useful"
+        );
+    }
+
+    #[test]
+    fn a_fresh_account_starts_with_the_keys_the_quick_panel_offered() {
+        // What the picker replaces. Somebody who has reacted to nothing yet
+        // still finds a thumb without searching for one, which is the thing
+        // twelve hard-coded keys were right about.
+        let emoji = EmojiSettings::default();
+
+        assert_eq!(emoji.recent.first().map(String::as_str), Some("\u{1F44D}"));
+        assert_eq!(emoji.recent.len(), 12);
+        assert_eq!(emoji.tone, 0);
+    }
+
+    #[test]
+    fn using_a_key_puts_it_at_the_front() {
+        let mut emoji = EmojiSettings::default();
+
+        emoji.used("\u{1F680}");
+
+        assert_eq!(emoji.recent.first().map(String::as_str), Some("\u{1F680}"));
+    }
+
+    #[test]
+    fn using_a_key_already_in_the_row_moves_it_rather_than_repeating_it() {
+        let mut emoji = EmojiSettings::default();
+        let before = emoji.recent.len();
+
+        emoji.used("\u{1F440}");
+
+        assert_eq!(emoji.recent.first().map(String::as_str), Some("\u{1F440}"));
+        assert_eq!(
+            emoji
+                .recent
+                .iter()
+                .filter(|one| *one == "\u{1F440}")
+                .count(),
+            1
+        );
+        assert_eq!(emoji.recent.len(), before);
+    }
+
+    #[test]
+    fn the_row_stops_rather_than_growing_without_end() {
+        let mut emoji = EmojiSettings::default();
+
+        for index in 0..100 {
+            emoji.used(&format!("key-{index}"));
+        }
+
+        assert_eq!(emoji.recent.len(), REMEMBERED);
+        assert_eq!(emoji.recent.first().map(String::as_str), Some("key-99"));
+    }
+
+    #[test]
+    fn a_key_nobody_here_has_a_picture_for_is_remembered_all_the_same() {
+        // Nothing downstream restricts what a reaction may be, and the row is
+        // a list of keys rather than a list of emoji this build knows.
+        let mut emoji = EmojiSettings::default();
+
+        emoji.used("mxc://example.org/party-parrot");
+
+        assert_eq!(
+            emoji.recent.first().map(String::as_str),
+            Some("mxc://example.org/party-parrot")
         );
     }
 

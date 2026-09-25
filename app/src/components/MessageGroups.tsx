@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, type RefObject } from "react";
 
+import { mxcUrl } from "../lib/api";
 import type {
   Message,
   MessageKind,
@@ -15,7 +16,7 @@ import { PlainBody } from "./PlainBody";
 import { MessageMedia } from "./MessageMedia";
 import { PresenceDot } from "./PresenceDot";
 import { Confirm } from "./Confirm";
-import { ReactionPicker } from "./ReactionPicker";
+import { EmojiPicker, OPENS_A_PICKER } from "./EmojiPicker";
 import { ReadBy } from "./ReadBy";
 import { RoomAvatar } from "./RoomAvatar";
 
@@ -608,6 +609,45 @@ function EditedMark() {
 }
 
 /**
+ * What a reaction pill shows.
+ *
+ * Almost always the key itself, drawn as the text it is. Nothing downstream
+ * restricts what a reaction may be: `consort_matrix::timeline::reactions`
+ * counts an opaque string, and a client with a wider set than this one is the
+ * ordinary case rather than the exception.
+ *
+ * The exception is a custom emoji. MSC2545 keys one by the image's own
+ * `mxc://` URI, which Element and Cinny both send and both draw as a picture,
+ * so drawing the key as text here would put a raw URI in the pill. It goes
+ * through `consortmedia` like every other picture: an `mxc://` handed to the
+ * webview as a URL it could fetch itself is a read receipt nobody asked for
+ * and an IP address nobody gave.
+ *
+ * `alt` is empty because the button around it is already labelled. See
+ * [`nameOfKey`] for what that label says and why it is not the shortcode.
+ */
+function ReactionKey({ code }: { code: string }) {
+  const source = mxcUrl(code);
+  if (source === undefined) {
+    return <span aria-hidden="true">{code}</span>;
+  }
+  return <img className="timeline__reaction-image" src={source} alt="" />;
+}
+
+/**
+ * What to call one key when reading the pill out.
+ *
+ * MSC2545 carries the shortcode alongside the key on the reaction event, and
+ * that is the name this should say. Nothing surfaces it yet: the aggregation
+ * in `consort-matrix` keeps the key and the count, and reading the packs is
+ * #20. Until then the honest answer is what kind of thing it is, rather than
+ * a URI read out character by character.
+ */
+function nameOfKey(code: string): string {
+  return mxcUrl(code) === undefined ? code : "Custom reaction";
+}
+
+/**
  * A wastebasket, for the control that deletes a message.
  */
 function TrashIcon() {
@@ -900,7 +940,8 @@ export function MessageGroups({
     }
 
     return (
-      <ReactionPicker
+      <EmojiPicker
+        action="React with"
         align={at === "row" ? "left" : "right"}
         chosen={
           new Set(
@@ -909,7 +950,7 @@ export function MessageGroups({
               .map((one) => one.key),
           )
         }
-        onChoose={(key) => {
+        onPick={(key) => {
           const already = message.reactions?.find((one) => one.key === key);
           onReact(message.id, key, already?.mine);
           setPicking(null);
@@ -1221,13 +1262,13 @@ export function MessageGroups({
                                   type="button"
                                   className="timeline__reaction"
                                   aria-pressed={one.mine !== undefined}
-                                  aria-label={`${one.key}, ${one.count}`}
+                                  aria-label={`${nameOfKey(one.key)}, ${one.count}`}
                                   disabled={onReact === undefined}
                                   onClick={() =>
                                     onReact?.(message.id, one.key, one.mine)
                                   }
                                 >
-                                  <span aria-hidden="true">{one.key}</span>
+                                  <ReactionKey code={one.key} />
                                   <span
                                     className="timeline__reaction-count"
                                     aria-hidden="true"
@@ -1250,6 +1291,7 @@ export function MessageGroups({
                                     className="timeline__add-key"
                                     aria-label="Add a reaction"
                                     title="Add a reaction"
+                                    {...{ [OPENS_A_PICKER]: "" }}
                                     aria-expanded={
                                       picking?.id === message.id &&
                                       picking.at === "row"
@@ -1357,6 +1399,7 @@ export function MessageGroups({
                                 className="timeline__action"
                                 aria-label="React"
                                 title="React"
+                                {...{ [OPENS_A_PICKER]: "" }}
                                 aria-expanded={
                                   picking?.id === message.id &&
                                   picking.at === "toolbar"

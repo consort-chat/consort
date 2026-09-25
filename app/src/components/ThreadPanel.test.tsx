@@ -22,6 +22,10 @@ const memberProfile = vi.hoisted(() => vi.fn());
 // For the card a name opens, which reads its own saved volume.
 const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
+// The picker in this panel's own composer, whose remembered row lives in the
+// settings file.
+const emojiSettings = vi.hoisted(() => vi.fn());
+const emojiUsed = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onThread,
@@ -36,6 +40,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
   audioSettings,
   setPersonVolume,
+  emojiSettings,
+  emojiUsed,
 }));
 
 import { ThreadPanel } from "./ThreadPanel";
@@ -92,6 +98,11 @@ beforeEach(() => {
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
+  emojiSettings.mockReset().mockResolvedValue({
+    recent: ["\u{1F44D}"],
+    tone: 0,
+  });
+  emojiUsed.mockReset().mockResolvedValue({ recent: ["\u{1F44D}"], tone: 0 });
   audioSettings.mockReset().mockResolvedValue({ people: {} });
   setPersonVolume.mockReset().mockResolvedValue(undefined);
   onThread.mockReset().mockImplementation((handler: typeof publish) => {
@@ -620,6 +631,25 @@ describe("ThreadPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+  });
+
+  it("offers the same emoji control the room's composer has", async () => {
+    /*
+      Two boxes on one screen, and the second one is not an afterthought:
+      somebody replying in a thread reaches for the same control in the same
+      place, and a panel that offered it in one box and not the other would be
+      a difference nobody could see the reason for.
+    */
+    await opened();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add an emoji" }));
+    await screen.findByRole("group", { name: "Recent" });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Insert thumbs up" }),
+    );
+
+    expect(screen.getByRole("textbox")).toHaveValue("\u{1F44D}");
+    expect(threadSend).not.toHaveBeenCalled();
   });
 
   it("sends nothing when nothing has been typed", async () => {

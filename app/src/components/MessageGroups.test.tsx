@@ -4,10 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const memberAvatar = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
+/*
+  The picker's remembered keys, which are the category it opens on and what
+  these assertions press.
+
+  They come out of the settings file, which no test may touch, and they start
+  as the twelve the quick panel used to offer: `crate::settings::EmojiSettings`
+  is where that list lives now. Two of them are enough here.
+*/
+const emojiSettings = vi.hoisted(() => vi.fn());
+const emojiUsed = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
   memberProfile,
+  emojiSettings,
+  emojiUsed,
 }));
 
 import {
@@ -21,6 +33,7 @@ import {
 } from "./MessageGroups";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
+import { mediaUrl } from "../lib/api";
 import type { Message, SystemChange, SystemMessage } from "../lib/api";
 
 beforeEach(() => {
@@ -30,7 +43,25 @@ beforeEach(() => {
   resetPresenceCache();
   memberAvatar.mockReset().mockResolvedValue(null);
   memberProfile.mockReset().mockResolvedValue(null);
+  emojiSettings.mockReset().mockResolvedValue({ recent: RECENT, tone: 0 });
+  emojiUsed.mockReset().mockResolvedValue({ recent: RECENT, tone: 0 });
 });
+
+/** Two of the keys the picker's remembered category starts with. */
+const RECENT = ["\u{1F44D}", "\u{1F389}"];
+
+/**
+ * Open a picker from `control` and wait for it to be usable.
+ *
+ * Two things arrive on their own promises: the dataset, which draws the panel,
+ * and the settings, which say what the remembered category holds. Waiting for
+ * that category waits for both, and it is what these presses land on.
+ */
+async function pickerFrom(control: HTMLElement) {
+  await userEvent.click(control);
+  await screen.findByRole("group", { name: "Recent" });
+  return screen.getByRole("group", { name: "React with an emoji" });
+}
 
 const GENERAL = "!general:example.org";
 const ADA = "@ada:example.org";
@@ -1098,8 +1129,8 @@ describe("reactions", () => {
     const onReact = vi.fn();
     drawReactable([said("$1", ADA, "hello")], onReact);
 
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
   });
@@ -1117,28 +1148,28 @@ describe("reactions", () => {
       onReact,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", "$mine");
   });
 
   it("closes the picker once a key has been chosen", async () => {
     drawReactable([said("$1", ADA, "hello")], vi.fn());
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
 
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
-    expect(screen.queryByRole("group", { name: "React with" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "React with an emoji" })).toBeNull();
   });
 
   it("closes the picker on Escape", async () => {
     drawReactable([said("$1", ADA, "hello")], vi.fn());
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
 
     await userEvent.keyboard("{Escape}");
 
-    expect(screen.queryByRole("group", { name: "React with" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "React with an emoji" })).toBeNull();
   });
 
   it("opens one picker at a time", async () => {
@@ -1150,10 +1181,12 @@ describe("reactions", () => {
     );
 
     const both = screen.getAllByRole("button", { name: "React" });
-    await userEvent.click(both[0]!);
-    await userEvent.click(both[1]!);
+    await pickerFrom(both[0]!);
+    await pickerFrom(both[1]!);
 
-    expect(screen.getAllByRole("group", { name: "React with" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("group", { name: "React with an emoji" }),
+    ).toHaveLength(1);
   });
 });
 
@@ -1184,8 +1217,8 @@ describe("adding another reaction", () => {
     const onReact = vi.fn();
     drawReactable([cheered], onReact);
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
-    await userEvent.click(screen.getByRole("button", { name: "React with 👍" }));
+    await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
+    await userEvent.click(screen.getByRole("button", { name: "React with thumbs up" }));
 
     expect(onReact).toHaveBeenCalledWith("$1", "👍", undefined);
   });
@@ -1195,7 +1228,7 @@ describe("adding another reaction", () => {
     // would be the journey it exists to remove.
     const { container } = drawReactable([cheered], vi.fn());
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+    await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
 
     expect(container.querySelector(".timeline__reactions .picker")).not.toBeNull();
     expect(container.querySelector(".timeline__actions .picker")).toBeNull();
@@ -1204,7 +1237,7 @@ describe("adding another reaction", () => {
   it("draws it by the toolbar when the toolbar is what was pressed", async () => {
     const { container } = drawReactable([cheered], vi.fn());
 
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
 
     expect(container.querySelector(".timeline__actions .picker")).not.toBeNull();
     expect(container.querySelector(".timeline__reactions .picker")).toBeNull();
@@ -1213,10 +1246,12 @@ describe("adding another reaction", () => {
   it("opens one panel at a time, whichever control was pressed", async () => {
     drawReactable([cheered], vi.fn());
 
-    await userEvent.click(screen.getByRole("button", { name: "React" }));
-    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+    await pickerFrom(screen.getByRole("button", { name: "React" }));
+    await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
 
-    expect(screen.getAllByRole("group", { name: "React with" })).toHaveLength(1);
+    expect(
+      screen.getAllByRole("group", { name: "React with an emoji" }),
+    ).toHaveLength(1);
   });
 
   it("marks a key this session has already used", async () => {
@@ -1229,11 +1264,81 @@ describe("adding another reaction", () => {
       vi.fn(),
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Add a reaction" }));
+    await pickerFrom(screen.getByRole("button", { name: "Add a reaction" }));
 
-    expect(screen.getByRole("button", { name: "React with 🎉" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "React with party popper" })).toHaveAttribute(
       "aria-pressed",
       "true",
+    );
+  });
+});
+
+describe("a reaction this build has no picture for", () => {
+  /*
+    The property that has to survive the picker: nothing downstream restricts
+    what a reaction may be. `consort_matrix::timeline::reactions` counts a key
+    as an opaque string, and a client with a wider set than this one is the
+    ordinary case rather than the exception.
+  */
+  it("draws a key that is not an emoji at all, as the text it is", () => {
+    draw([
+      said("$1", ADA, "hello", NOON, {
+        reactions: [{ key: "lgtm", count: 3 }],
+      }),
+    ]);
+
+    expect(screen.getByRole("button", { name: "lgtm, 3" })).toBeVisible();
+  });
+
+  /*
+    MSC2545 keys a custom emoji reaction by the image's own `mxc://` URI, with
+    the shortcode carried alongside on the event. Element and Cinny both send
+    that and both draw an `mxc://` key as a picture, so a pill holding the raw
+    URI as text is the one thing this must not do.
+
+    Through `consortmedia` like every other picture here, never a URL the page
+    could fetch for itself. The shortcode beside it is #20's half: until the
+    packs are read there is no name to show, so the label says what kind of
+    thing it is rather than reading a URI out loud.
+  */
+  it("draws a custom emoji reaction as a picture rather than a URI", () => {
+    draw([
+      said("$1", ADA, "hello", NOON, {
+        reactions: [{ key: "mxc://example.org/parrot", count: 2 }],
+      }),
+    ]);
+
+    const pill = screen.getByRole("button", { name: "Custom reaction, 2" });
+    const image = within(pill).getByRole("presentation");
+    expect(image).toHaveAttribute(
+      "src",
+      mediaUrl(JSON.stringify({ url: "mxc://example.org/parrot" })),
+    );
+    expect(pill).not.toHaveTextContent("mxc://");
+  });
+
+  it("counts it and takes it back the way any other pill does", () => {
+    const onReact = vi.fn();
+    drawReactable(
+      [
+        said("$1", ADA, "hello", NOON, {
+          reactions: [
+            { key: "mxc://example.org/parrot", count: 2, mine: "$mine" },
+          ],
+        }),
+      ],
+      onReact,
+    );
+
+    const pill = screen.getByRole("button", { name: "Custom reaction, 2" });
+    expect(pill).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(pill);
+
+    expect(onReact).toHaveBeenCalledWith(
+      "$1",
+      "mxc://example.org/parrot",
+      "$mine",
     );
   });
 });

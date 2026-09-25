@@ -15,7 +15,7 @@ import "./Confirm.css";
  * was not.
  *
  * Anchored to the control that asked rather than drawn over the window, on the
- * same terms as [`ReactionPicker`]: it is about that one thing, and a panel in
+ * same terms as [`EmojiPicker`]: it is about that one thing, and a panel in
  * the middle of the screen would have to say which. Whichever way round it
  * opens is the anchor's business, through `--confirm-top` and
  * `--confirm-bottom`.
