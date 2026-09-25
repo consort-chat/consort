@@ -4,6 +4,91 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.8.0 (2026-09-25)
+
+### Added
+
+- **call:** A floating card for the call you are in (@tominal)
+- **threads:** Name the panel after the conversation in it (@tominal)
+- **shell:** Remember where you were, for back and forward (@tominal)
+- **rooms:** Open a room's details from its header (@tominal)
+- **rooms:** Close the room's details on Escape (@tominal)
+- **timeline:** Delete a message you sent, and mark where it was (@tominal)
+- **call:** Put the call card back from the voice strip (@tominal)
+- **timeline:** Show joins, leaves, invites, kicks and bans in the room (@bernalalexis-try)
+- **timeline:** Draw room name, topic and picture changes (@tominal)
+- **matrix:** Know who has read how far, on a channel of its own (@tominal)
+- **ui:** Draw who has read a message, and say who cannot be seen (@tominal)
+- **app:** Remember which rooms this account has opened (@tominal)
+- **ui:** An opening screen with somewhere to go (#83) (@tominal)
+- **rooms:** Leave a room, and ask somebody into one (@tominal)
+- **app:** Commands for leaving a room and inviting somebody (@tominal)
+- **info:** Leave the room, and ask somebody into it (@tominal)
+- **rooms:** Read who is in a room, on request rather than in the snapshot (@tominal)
+- **info:** A People section under the room's topic (@tominal)
+- **ui:** Scale the application, by slider and by Ctrl and plus (@tominal)
+- **packaging:** Install one desktop entry, and check the names in it (@tominal)
+- **ui:** Put Consort in the system tray (@tominal)
+- **emoji:** The standard set, searchable, behind a dynamic import (@tominal)
+- **reactions:** The real picker on a message, and a pill for a key with no glyph (@tominal)
+- **composer:** The second control, which types the key instead of sending it (@tominal)
+- **rooms:** Let somebody walk into a channel a space lists (@tominal)
+- **ui:** A space's own screen, with a search over its channels (@tominal)
+
+### Changed
+
+- **call:** Give the sidebar face a component of its own (@tominal)
+- **ui:** One clamp for everything that floats (@tominal)
+- **ui:** Build the list of readers without indexing past the end (@tominal)
+- **matrix:** The store catch-up answers nothing, because nobody asked (@tominal)
+- **ui:** One confirmation panel rather than one per thing (@tominal)
+- **signed-in:** Drop twelve unmount checks that check nothing (@tominal)
+- **ui:** Iterate the zoom listeners directly (@tominal)
+- **picker:** Make the remembered keys a category rather than a row (@tominal)
+
+### Documentation
+
+- Say that who has read a message is drawn now (@tominal)
+- Say that a room can be left and somebody asked into one (@tominal)
+- **coverage:** Say what a covered line does not tell you (@tominal)
+- **ui:** Count the text size steps correctly (@tominal)
+- **picker:** The cursor is lifted by the handlers, not by itself (@tominal)
+- **emoji:** Stop claiming WebKitGTK ignores scrollbar-width (@tominal)
+- **coverage:** Take the four numbers from CI rather than from memory (@tominal)
+- **audio:** Cut consort-audio's comment down to what the code cannot say (@tominal)
+
+### Fixed
+
+- **ci:** Make the Hygiene gates able to fail (@tominal)
+- **ci:** Give the Hygiene container a CA store to clone with (@tominal)
+- **ci:** Let the Hygiene steps read the workspace git refuses to trust (@tominal)
+- **timeline:** A thread you do not have to aim at (@tominal)
+- **shell:** Move one entry per press of the mouse's Back button (@tominal)
+- **call:** Put deafen and away behind a chevron (@tominal)
+- **call:** Give the words room, and open the panel on a hover too (@tominal)
+- **timeline:** Say where a message went when it was sent from a window (@tominal)
+- **timeline:** Stay where you were reading, and stop the window lying (@tominal)
+- **timeline:** Reaction pills you do not have to aim at (@tominal)
+- **shell:** Spend the room a clicked notification asked for (@tominal)
+- **shell:** Spend the message a followed link asked for (@tominal)
+- **call:** Let the pointer close the panel, and stop the press fighting it (@tominal)
+- **timeline:** Give the quoted line above an answer 24px to press (@tominal)
+- **call:** Leave the voice channel before the process goes (@tominal)
+- **call:** Wait for the leave while the single-instance guard is still up (@tominal)
+- **call:** Hide the window from the command, where the hide can take effect (@tominal)
+- **timeline:** Keep the way into a thread whose root was deleted (@tominal)
+- **receipts:** Put the faces at the end of the line, not the start (@tominal)
+- **picker:** Let the control that opened a picker shut it again (@tominal)
+- **picker:** Hold the open category by name rather than by position (@tominal)
+- **picker:** Lift the arrow cursor as what is under it changes (@tominal)
+- **picker:** Three from review, one of them mine (@tominal)
+- **emoji:** Take the scrollbar out of the category strip (@tominal)
+- **emoji:** Put the category scrollbar back, below the tabs (@tominal)
+
+### New contributors
+
+- @bernalalexis-try made their first contribution
+
 ## 0.7.0 (2026-09-22)
 
 ### Added
