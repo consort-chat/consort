@@ -78,6 +78,17 @@ export function channelHeading(channel: Channel): string {
 }
 
 /**
+ * What a control that walks into a channel is called.
+ *
+ * Here rather than in either component that draws one, for this file's reason:
+ * the channel list and the space's own pane both offer the same thing, and two
+ * copies of the phrasing is two accessible names that can drift apart.
+ */
+export function joinLabel(channel: Channel, underway: boolean): string {
+  return `${underway ? "Joining" : "Join"} ${channelLabel(channel)}`;
+}
+
+/**
  * One short phrase per call state.
  *
  * Deliberately not the same words as `connectionLabel`. Both channels have a

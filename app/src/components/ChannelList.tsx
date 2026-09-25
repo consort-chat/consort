@@ -8,7 +8,7 @@ import {
   type Participant,
   type Space,
 } from "../lib/api";
-import { channelLabel } from "../lib/labels";
+import { channelLabel, joinLabel } from "../lib/labels";
 import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
 import { SidebarToggle } from "./SidebarToggle";
@@ -238,11 +238,6 @@ function UnreadBadge({ count, channel }: { count: number; channel: Channel }) {
 export interface Joining {
   roomId: string;
   problem: string | null;
-}
-
-/** What a row says on its way in, when it is not already in. */
-function joinLabel(channel: Channel, underway: boolean): string {
-  return `${underway ? "Joining" : "Join"} ${channelLabel(channel)}`;
 }
 
 function ChannelRow({
