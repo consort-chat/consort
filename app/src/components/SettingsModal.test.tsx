@@ -14,6 +14,8 @@ const notificationSettings = vi.hoisted(() => vi.fn());
 const setNotificationSettings = vi.hoisted(() => vi.fn());
 const appearanceSettings = vi.hoisted(() => vi.fn());
 const setAppearanceSettings = vi.hoisted(() => vi.fn());
+const cameras = vi.hoisted(() => vi.fn());
+const videoSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -29,6 +31,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setNotificationSettings,
   appearanceSettings,
   setAppearanceSettings,
+  cameras,
+  videoSettings,
 }));
 
 import { SettingsModal } from "./SettingsModal";
@@ -85,6 +89,10 @@ describe("SettingsModal", () => {
     audioSettings.mockReset().mockResolvedValue(settings);
     audioTestStart.mockReset().mockResolvedValue(undefined);
     audioTestStop.mockReset().mockResolvedValue(undefined);
+    cameras
+      .mockReset()
+      .mockResolvedValue({ cameras: [], selected: null, missing: null });
+    videoSettings.mockReset().mockResolvedValue({ camera: null });
     onAudio.mockReset().mockResolvedValue(() => {});
     logout.mockReset().mockResolvedValue(undefined);
     privacySettings.mockReset().mockResolvedValue({ publicReadReceipts: true });

@@ -24,6 +24,7 @@ mod state;
 #[cfg(test)]
 mod testing;
 mod tray;
+mod video;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -312,6 +313,10 @@ pub fn run() {
             commands::audio_devices,
             commands::audio_settings,
             commands::set_audio_settings,
+            commands::cameras,
+            commands::video_settings,
+            commands::set_video_settings,
+            commands::set_camera,
             commands::privacy_settings,
             commands::set_privacy_settings,
             commands::notification_settings,

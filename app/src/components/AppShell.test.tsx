@@ -68,7 +68,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { AppShell } from "./AppShell";
 import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
-import { HEARING } from "../lib/api";
+import { HEARING, NOT_FILMING } from "../lib/api";
 import type {
   AudioDeviceReport,
   AudioSettings,
@@ -79,6 +79,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfVideo,
   Thread,
   Timeline,
 } from "../lib/api";
@@ -141,12 +142,14 @@ function shell({
   rooms = EMPTY_HOME,
   call = { state: "disconnected" } as Call,
   selfAudio = HEARING,
+  selfVideo = NOT_FILMING,
   onSignedOut = vi.fn(),
   onJoinVoice = vi.fn(),
   onLeaveVoice = vi.fn(),
   onSetMuted = vi.fn(),
   onSetDeafened = vi.fn(),
   onSetAway = vi.fn(),
+  onSetCamera = vi.fn(),
   callRefused = null,
   onDismissRefusal = vi.fn(),
   showRoom = null,
@@ -155,12 +158,14 @@ function shell({
   rooms?: Rooms;
   call?: Call;
   selfAudio?: SelfAudio;
+  selfVideo?: SelfVideo;
   onSignedOut?: Mock<() => void>;
   onJoinVoice?: Mock<(roomId: string) => void>;
   onLeaveVoice?: Mock<() => void>;
   onSetMuted?: Mock<(muted: boolean) => void>;
   onSetDeafened?: Mock<(deafened: boolean) => void>;
   onSetAway?: Mock<(away: boolean) => void>;
+  onSetCamera?: Mock<(on: boolean) => void>;
   callRefused?: CallRefused | null;
   onDismissRefusal?: Mock<() => void>;
   showRoom?: { roomId: string } | null;
@@ -177,6 +182,7 @@ function shell({
       connection={{ state: "live" }}
       call={nextCall}
       selfAudio={selfAudio}
+      selfVideo={selfVideo}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}
@@ -188,6 +194,7 @@ function shell({
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
       onSetAway={onSetAway}
+      onSetCamera={onSetCamera}
       callRefused={callRefused}
       onDismissRefusal={onDismissRefusal}
       showRoom={nextShowRoom}

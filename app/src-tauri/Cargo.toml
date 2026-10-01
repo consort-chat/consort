@@ -44,6 +44,10 @@ consort-audio = { path = "../../crates/consort-audio" }
 # `consort-matrix`: only this binary pays for it.
 consort-call = { path = "../../crates/consort-call" }
 consort-matrix = { path = "../../crates/consort-matrix" }
+# Cameras and pixel formats. No libwebrtc and no Matrix in it, so it costs the
+# build almost nothing. Which camera is read and why it is read here at all:
+# docs/adr/0005-capture-the-camera-in-rust.md.
+consort-video = { path = "../../crates/consort-video" }
 # `tray-icon` for the icon in the system tray. It brings `tray-icon` and `muda`,
 # and on Linux it reaches libayatana-appindicator3 through `libloading` rather
 # than linking it, so it adds no DT_NEEDED entry and the Arch recipes have to

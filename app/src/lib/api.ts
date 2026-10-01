@@ -833,6 +833,62 @@ export interface AudioDeviceReport {
 }
 
 /**
+ * One camera this machine offers, mirrored from `consort_video::Camera`.
+ *
+ * `id` is the device node and is the identity a saved choice holds; `name` is
+ * the driver's label and is only for reading. Unlike a sound card, two
+ * identical webcams are told apart: see
+ * `docs/adr/0004-trust-no-device-list.md` for the problem a camera does not
+ * have.
+ */
+export interface CameraDevice {
+  /** The device node, e.g. "/dev/video0". */
+  id: string;
+  /** What the driver calls it. */
+  name: string;
+}
+
+/**
+ * What cameras there are, and which one will be opened.
+ *
+ * The same three facts an `AudioDeviceList` carries, and the third matters for
+ * the same reason: somebody whose chosen camera was unplugged has to be told
+ * rather than quietly filmed by a laptop lid.
+ */
+export interface CameraList {
+  /** Everything worth offering, in device order. Do not re-sort. */
+  cameras: CameraDevice[];
+  /** The camera that will be opened. Null only on a machine with none. */
+  selected: string | null;
+  /** The saved camera, when it is not plugged in any more. */
+  missing: string | null;
+}
+
+/** The saved camera choice, mirrored from `consort_video::VideoSettings`. */
+export interface VideoSettings {
+  /** The chosen camera by device node, or null for the first one found. */
+  camera: string | null;
+}
+
+/**
+ * What this session is doing with its own camera, mirrored from
+ * `consort_call::SelfVideo`.
+ *
+ * `trouble` is null when the camera is simply off, which is what lets a reader
+ * tell "I turned it off" from "it would not start" and draw only the second as
+ * a problem.
+ */
+export interface SelfVideo {
+  /** Whether this session's camera is reaching the call. */
+  camera: boolean;
+  /** Why it is not, when somebody asked for it and it is not. */
+  trouble: string | null;
+}
+
+/** Off and with nothing wrong, which is where every session starts. */
+export const NOT_FILMING: SelfVideo = { camera: false, trouble: null };
+
+/**
  * The voice gate's thresholds, mirrored from `consort_audio::gate`.
  *
  * Two thresholds rather than one on purpose. A single threshold chatters: a
@@ -997,6 +1053,46 @@ export function audioSettings(): Promise<AudioSettings> {
  */
 export function setAudioSettings(audio: AudioSettings): Promise<void> {
   return invoke<void>("set_audio_settings", { audio });
+}
+
+/**
+ * What cameras this machine has, and which one is in use.
+ *
+ * Ask on every open rather than caching, for the reason `audioDevices` says: a
+ * camera can be unplugged while the window is up.
+ */
+export function cameras(): Promise<CameraList> {
+  return invoke<CameraList>("cameras");
+}
+
+/** The saved camera choice, or the default on first run. */
+export function videoSettings(): Promise<VideoSettings> {
+  return invoke<VideoSettings>("video_settings");
+}
+
+/**
+ * Replace the saved camera choice.
+ *
+ * Does not reopen anything. The camera chosen here is the one the next
+ * switch-on opens: changing device mid-publication means a new size and so a
+ * new publication, which is a reconnect in everybody else's call for a setting
+ * somebody was only browsing.
+ */
+export function setVideoSettings(video: VideoSettings): Promise<void> {
+  return invoke<void>("set_video_settings", { video });
+}
+
+/**
+ * Listen to whether this session's camera is in the call.
+ *
+ * Its own channel rather than a field on `onSelfAudio`, because the two change
+ * independently: a reader given one value for both would redraw the mute
+ * button every time somebody touched their camera.
+ */
+export function onSelfVideo(
+  handler: (video: SelfVideo) => void,
+): Promise<UnlistenFn> {
+  return listen<SelfVideo>("self-video", (event) => handler(event.payload));
 }
 
 /**
@@ -2666,4 +2762,19 @@ export function callSetDeafened(deafened: boolean): Promise<void> {
  */
 export function callSetAway(away: boolean): Promise<void> {
   return invoke<void>("call_set_away", { away });
+}
+
+/**
+ * Switch this session's camera on or off.
+ *
+ * Answers with what happened, and the same answer also arrives on the
+ * `self-video` channel. Draw from the channel: a camera also goes down when the
+ * channel changes or the call ends, and a button drawn from the click would
+ * then claim a camera that is not running.
+ *
+ * Unlike the three above, the camera does not survive a channel switch. A
+ * camera is published into one call.
+ */
+export function callSetCamera(on: boolean): Promise<SelfVideo> {
+  return invoke<SelfVideo>("set_camera", { on });
 }
