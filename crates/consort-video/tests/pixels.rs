@@ -13,7 +13,7 @@ use std::io::Cursor;
 use image::ExtendedColorType;
 use image::codecs::jpeg::JpegEncoder;
 
-use consort_video::{FrameError, Picture, PixelFormat, decode};
+use consort_video::{FrameError, Picture, PixelFormat, decode, to_rgb};
 
 /// One YUYV macropixel: two pixels sharing a U and a V.
 fn macropixel(y0: u8, u: u8, y1: u8, v: u8) -> [u8; 4] {
@@ -291,5 +291,197 @@ mod planes {
         let picture = yuyv(2, 5, &rows).unwrap();
 
         assert_eq!(picture.u.len(), 3, "five rows rounds up to three");
+    }
+}
+
+/// A picture small enough to put in front of somebody, and a picture a webview
+/// can draw.
+///
+/// Both exist for the self view in the call card: the camera is a 1.38 MB I420
+/// frame thirty times a second and the card is a square a couple of hundred
+/// pixels wide, so what crosses the IPC is sampled down first and converted
+/// once, when something asks.
+mod a_picture_for_the_card {
+    use super::*;
+
+    /// A flat I420 picture, so a sample from anywhere in it is predictable.
+    fn flat(width: u32, height: u32, y: u8, u: u8, v: u8) -> Picture {
+        let (w, h) = (width as usize, height as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+
+        Picture {
+            width,
+            height,
+            y: vec![y; w * h],
+            u: vec![u; cw * ch],
+            v: vec![v; cw * ch],
+            timestamp_us: 0,
+        }
+    }
+
+    #[test]
+    fn a_thumbnail_keeps_the_shape_of_the_frame_it_came_from() {
+        // 16:9 in, 16:9 out. A self view that stretched would be the one thing
+        // somebody looking at their own face would notice immediately.
+        let picture = flat(1280, 720, 100, 110, 120);
+
+        let small = picture.thumbnail(320, 320);
+
+        assert_eq!((small.width, small.height), (320, 180));
+    }
+
+    #[test]
+    fn a_thumbnail_is_bounded_by_whichever_side_binds() {
+        // Taller than it is wide, so the height is the limit and the width has
+        // to come down with it rather than being left at the bound.
+        let picture = flat(480, 960, 100, 110, 120);
+
+        let small = picture.thumbnail(320, 180);
+
+        assert_eq!((small.width, small.height), (90, 180));
+    }
+
+    #[test]
+    fn a_frame_already_small_enough_is_not_enlarged() {
+        // Sampling up invents detail and costs bytes to carry it. A small
+        // camera is drawn at the size it is.
+        let picture = flat(160, 90, 100, 110, 120);
+
+        let small = picture.thumbnail(320, 180);
+
+        assert_eq!((small.width, small.height), (160, 90));
+    }
+
+    #[test]
+    fn a_thumbnail_has_even_sides_so_its_chroma_planes_are_exact() {
+        // I420 carries one chroma sample per 2x2 block. An odd side leaves a
+        // half block, and every reader of a `Picture` would need the same
+        // rounding rule for it to mean anything.
+        let picture = flat(1000, 999, 100, 110, 120);
+
+        let small = picture.thumbnail(101, 101);
+
+        assert!(small.width.is_multiple_of(2), "{} is odd", small.width);
+        assert!(small.height.is_multiple_of(2), "{} is odd", small.height);
+    }
+
+    #[test]
+    fn a_thumbnails_planes_are_tight() {
+        let picture = flat(640, 480, 100, 110, 120);
+
+        let small = picture.thumbnail(64, 64);
+
+        let (w, h) = (small.width as usize, small.height as usize);
+        assert_eq!(small.y.len(), w * h);
+        assert_eq!(small.u.len(), w.div_ceil(2) * h.div_ceil(2));
+        assert_eq!(small.v.len(), w.div_ceil(2) * h.div_ceil(2));
+    }
+
+    #[test]
+    fn a_thumbnail_of_one_flat_colour_is_that_colour() {
+        let picture = flat(640, 480, 81, 90, 240);
+
+        let small = picture.thumbnail(64, 64);
+
+        assert!(small.y.iter().all(|&y| y == 81), "the luma moved");
+        assert!(
+            small.u.iter().all(|&u| u == 90),
+            "the blue difference moved"
+        );
+        assert!(
+            small.v.iter().all(|&v| v == 240),
+            "the red difference moved"
+        );
+    }
+
+    #[test]
+    fn a_thumbnail_samples_the_part_of_the_frame_it_is_standing_in_for() {
+        // The left half of the picture is black and the right half is white, so
+        // a thumbnail that sampled the wrong column would come back flat or
+        // mirrored rather than merely approximate.
+        let mut picture = flat(640, 480, 16, 128, 128);
+        for row in 0..480usize {
+            for column in 320..640usize {
+                picture.y[row * 640 + column] = 235;
+            }
+        }
+
+        let small = picture.thumbnail(64, 64);
+
+        let width = small.width as usize;
+        let row = &small.y[..width];
+        assert!(
+            row[..width / 2].iter().all(|&y| y == 16),
+            "the left half is not black: {row:?}"
+        );
+        assert!(
+            row[width / 2..].iter().all(|&y| y == 235),
+            "the right half is not white: {row:?}"
+        );
+    }
+
+    #[test]
+    fn a_thumbnail_never_comes_back_empty() {
+        // The card asks for a square and a camera could be any shape. A plane
+        // of no bytes is something every reader would have to check for.
+        let picture = flat(1280, 720, 100, 110, 120);
+
+        let small = picture.thumbnail(1, 1);
+
+        assert_eq!((small.width, small.height), (2, 2));
+        assert_eq!(small.y.len(), 4);
+    }
+
+    #[test]
+    fn white_comes_back_white_and_black_comes_back_black() {
+        // Limited range: 16 is black and 235 is white, so a conversion that
+        // forgot the offset would come back dark grey and off-white.
+        let black = to_rgb(&flat(2, 2, 16, 128, 128));
+        let white = to_rgb(&flat(2, 2, 235, 128, 128));
+
+        assert_eq!(black, vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(white, vec![255; 12]);
+    }
+
+    #[test]
+    fn a_colour_survives_the_round_trip_through_i420() {
+        // Through the encoder the camera path uses, so this is the colour a
+        // person actually sees in the card rather than an isolated formula.
+        for colour in [[255, 0, 0], [0, 255, 0], [0, 0, 255], [128, 64, 32]] {
+            let jpeg = flat_jpeg(2, 2, colour);
+            let picture = decode(PixelFormat::Mjpeg, 2, 2, &jpeg).unwrap();
+
+            let rgb = to_rgb(&picture);
+
+            for (channel, (&got, &wanted)) in rgb[..3].iter().zip(&colour).enumerate() {
+                let drift = i16::from(got).abs_diff(i16::from(wanted));
+                assert!(
+                    drift <= 12,
+                    "channel {channel} of {colour:?} came back {got}, {drift} off"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rgb_is_three_tight_bytes_a_pixel() {
+        let picture = flat(4, 6, 100, 110, 120);
+
+        let rgb = to_rgb(&picture);
+
+        assert_eq!(rgb.len(), 4 * 6 * 3);
+    }
+
+    #[test]
+    fn an_out_of_range_colour_is_clamped_rather_than_wrapped() {
+        // The inverse of a limited-range conversion overshoots for chroma a
+        // camera can legally send, and a wrap turns a bright edge into a dark
+        // one. Two pictures, because no single one drives both ends: bright red
+        // takes red past 255, and black with no blue in it takes blue below 0.
+        let over = to_rgb(&flat(2, 2, 235, 128, 240));
+        let under = to_rgb(&flat(2, 2, 16, 16, 128));
+
+        assert_eq!(over[0], 255, "red wrapped instead of clamping");
+        assert_eq!(under[2], 0, "blue wrapped instead of clamping");
     }
 }

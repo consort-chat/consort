@@ -1469,6 +1469,16 @@ pub fn set_camera(state: State<'_, AppState>, on: bool) -> SelfVideo {
     state.set_camera(|| Box::new(CameraHost::default()), on)
 }
 
+/// The newest camera frame for the call card, as a `data:` URL.
+///
+/// Asked for rather than pushed, so the card's own cadence decides how often a
+/// frame is converted and nothing is encoded while nobody is drawing it. See
+/// `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+#[tauri::command]
+pub fn self_view(state: State<'_, AppState>) -> Option<String> {
+    state.self_view()
+}
+
 #[tauri::command]
 pub fn audio_test_start(state: State<'_, AppState>) {
     audio_test_start_for(&state, &CpalHost, cpal_backends);

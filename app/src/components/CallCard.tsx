@@ -7,6 +7,7 @@ import {
 import { NOBODY, type Call, type Participant } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import { useDraggable } from "../lib/useDraggable";
+import { useSelfView } from "../lib/useSelfView";
 import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
 import "./CallCard.css";
@@ -82,6 +83,13 @@ interface Props {
   onHide: () => void;
   /** Show a room, by ID. Passed to a person's card for its Message button. */
   onOpenRoom: (roomId: string) => void;
+  /**
+   * Whether this session's camera is reaching the call.
+   *
+   * Taken from the self-video channel rather than asked for here, so the picture
+   * and the camera button cannot disagree about whether a camera is on.
+   */
+  cameraOn?: boolean;
 }
 
 /**
@@ -105,8 +113,12 @@ export function CallCard({
   shown,
   onHide,
   onOpenRoom,
+  cameraOn = false,
 }: Props) {
   const drag = useDraggable();
+  // Only while it is being drawn: the hook asks Rust on a timer, and a card put
+  // away should not be converting a frame every tick for the rest of the call.
+  const selfView = useSelfView(cameraOn && shown);
   const [expanded, setExpanded] = useState(false);
   // Which face was clicked, and where to draw the card about them. One at a
   // time, for the reason the channel list keeps one.
@@ -126,7 +138,10 @@ export function CallCard({
     drag.keepInView();
     // The function and not the hook's whole answer, which is a fresh object
     // every render and would make this run after every one of them.
-  }, [expanded, shown, drag.keepInView]);
+    //
+    // Whether there is a self view is in here because it changes the card's
+    // height, and a card against the bottom edge grows straight off it.
+  }, [expanded, shown, selfView !== null, drag.keepInView]);
 
   // The same condition the call panel draws itself on. A second rule for when
   // there is a call is a second thing to keep in step with the first.
@@ -234,6 +249,30 @@ export function CallCard({
           &times;
         </button>
       </header>
+
+      {/*
+        What the camera is sending, while it is sending anything. A still that
+        is replaced several times a second rather than a `<video>`: there is no
+        stream for one to play, because the device is open in Rust and V4L2
+        gives it to one process. See
+        `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+      */}
+      {selfView !== null && (
+        <img
+          className="call-card__self"
+          src={selfView}
+          /*
+            Named rather than decorative. It is the one thing on the card that
+            reports something about the person reading it, and "is my camera
+            actually on" is the question it answers.
+          */
+          alt="Your camera"
+          /* Drawn at a known shape, so a frame arriving does not move the card. */
+          width={320}
+          height={180}
+          draggable={false}
+        />
+      )}
 
       {call.state === "connecting" ? (
         <p className="call-card__waiting">{callLabel(call)}</p>

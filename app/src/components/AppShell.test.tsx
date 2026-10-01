@@ -65,6 +65,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   threadOpen,
 }));
 
+const useSelfView = vi.hoisted(() => vi.fn());
+vi.mock("../lib/useSelfView", () => ({ useSelfView }));
+
 import { AppShell } from "./AppShell";
 import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
@@ -234,6 +237,7 @@ describe("AppShell", () => {
     resetAvatarCache();
     // jsdom has none, and a link followed to a message lands by calling it.
     Element.prototype.scrollIntoView = vi.fn();
+    useSelfView.mockReset().mockReturnValue(null);
     audioDevices.mockReset().mockResolvedValue(report);
     audioSettings.mockReset().mockResolvedValue(settings);
     audioTestStart.mockReset().mockResolvedValue(undefined);
@@ -923,6 +927,41 @@ describe("AppShell", () => {
       shell({ rooms: withVoice });
 
       expect(screen.queryByRole("region", { name: /^Call in/ })).toBeNull();
+    });
+
+    it("gives the card the camera state the camera button is drawn from", () => {
+      // One value, two readers. Asking Rust again here is how the picture and
+      // the button would come to disagree about whether a camera is on.
+      useSelfView.mockReturnValue("data:image/jpeg;base64,aaaa");
+
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+        selfVideo: { camera: true, trouble: null },
+      });
+
+      expect(useSelfView).toHaveBeenCalledWith(true);
+      expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
+    });
+
+    it("draws no camera on the card while the camera is off", () => {
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+      });
+
+      expect(useSelfView).toHaveBeenCalledWith(false);
+      expect(screen.queryByRole("img", { name: "Your camera" })).toBeNull();
     });
 
     describe("putting the card away and getting it back", () => {
