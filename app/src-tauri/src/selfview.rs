@@ -48,7 +48,7 @@ impl SelfView {
         Self::default()
     }
 
-    /// Take the newest frame, sampled down, replacing whatever was waiting.
+    /// Keep the newest frame, sampled down, replacing whatever was waiting.
     ///
     /// Runs on the capture thread, so it samples and nothing else: the colour
     /// conversion and the encode happen in [`latest`](Self::latest), which only
@@ -60,8 +60,8 @@ impl SelfView {
 
     /// The newest frame as a data URL, or the last one when none has arrived.
     ///
-    /// `None` only when no frame has arrived since the camera was switched on,
-    /// which is the moment between opening a device and its first frame.
+    /// `None` before the first frame of a camera that has just been opened, and
+    /// after one goes off and [`clear`](Self::clear) empties this.
     pub fn latest(&self) -> Option<String> {
         let mut held = self.held();
 
