@@ -6,6 +6,8 @@
 use consort_matrix::Participant;
 use serde::{Deserialize, Serialize};
 
+use crate::camera::PictureSize;
+
 /// What a session is doing with its own audio.
 ///
 /// Two switches over one state, because each is only meaningful next to the
@@ -80,6 +82,44 @@ pub struct SelfVideo {
     pub trouble: Option<String>,
 }
 
+/// What this session is putting on the call from its screen.
+///
+/// A third state channel beside [`SelfAudio`] and [`SelfVideo`], rather than a
+/// field on either. It is independent of both: a camera and a screen can be up
+/// at once, and a change to one must not redraw the other.
+///
+/// Carries the title rather than a flag, because of what the indicator has to
+/// do. Somebody sharing their screen must be able to see *what* is going out
+/// for as long as it is going out, and a boolean cannot say "DP-0" or
+/// "Bank statement.pdf". See issue #70.
+///
+/// Like [`SelfVideo`] and unlike [`SelfAudio`], this does not survive a channel
+/// switch: a share is published into one call.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfScreen {
+    /// What is being shared, named for a person, or `None` when nothing is.
+    pub sharing: Option<String>,
+    /// Why nothing is, when somebody asked and it did not start.
+    ///
+    /// `None` when a share is simply off, so a reader can tell "I stopped it"
+    /// from "it would not start".
+    pub trouble: Option<String>,
+}
+
+/// What to publish when a share is switched on.
+///
+/// The command's half of the pair above. Both the size and the title are
+/// settled before anything is published: the size because the transport builds
+/// its encoder from it, and the title because the indicator has to name what
+/// is going out from the moment it starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenShare {
+    pub size: PictureSize,
+    /// What the chosen screen or window is called.
+    pub title: String,
+}
+
 /// One thing that happened to this session's call.
 ///
 /// Serialised internally tagged, matching every other union that crosses the
@@ -144,6 +184,9 @@ pub enum CallEvent {
     SelfAudio(SelfAudio),
     /// What this session is doing with its own camera. See [`SelfVideo`].
     SelfVideo(SelfVideo),
+    /// What this session is putting on the call from its screen. See
+    /// [`SelfScreen`].
+    SelfScreen(SelfScreen),
     /// The join did not happen. The thread is still alive and can be asked
     /// again.
     Failed { room_id: String, error: String },
@@ -271,6 +314,10 @@ mod tests {
             "selfVideo"
         );
         assert_eq!(
+            tag(&CallEvent::SelfScreen(SelfScreen::default())),
+            "selfScreen"
+        );
+        assert_eq!(
             tag(&CallEvent::Failed {
                 room_id: room_id(),
                 error: "no".to_owned(),
@@ -307,6 +354,43 @@ mod tests {
     }
 
     #[test]
+    fn self_screen_puts_its_fields_beside_the_tag() {
+        // The same flattening as its two siblings, pinned for the same
+        // reason: the frontend reads `{state, sharing, trouble}` with no
+        // nesting and nothing in TypeScript would fail to build if it drifted.
+        let json = serde_json::to_value(CallEvent::SelfScreen(SelfScreen {
+            sharing: Some("DP-0 (2560x1440)".to_owned()),
+            trouble: None,
+        }))
+        .unwrap();
+
+        assert_eq!(json["state"], "selfScreen");
+        assert_eq!(json["sharing"], "DP-0 (2560x1440)");
+        assert!(json["trouble"].is_null());
+    }
+
+    #[test]
+    fn a_live_share_carries_what_is_being_shared_rather_than_only_that_one_is() {
+        // The whole reason this is a name and not a boolean. An indicator that
+        // says "sharing" without saying what is sharing is the failure mode
+        // #70 is about: somebody cannot tell their terminal from their inbox.
+        let sharing = SelfScreen {
+            sharing: Some("Bank statement.pdf".to_owned()),
+            trouble: None,
+        };
+
+        assert_eq!(sharing.sharing.as_deref(), Some("Bank statement.pdf"));
+    }
+
+    #[test]
+    fn a_share_that_is_simply_off_carries_no_trouble() {
+        let json = serde_json::to_value(CallEvent::SelfScreen(SelfScreen::default())).unwrap();
+
+        assert!(json["sharing"].is_null());
+        assert!(json["trouble"].is_null());
+    }
+
+    #[test]
     fn every_event_survives_a_round_trip() {
         let events = [
             CallEvent::Connecting {
@@ -320,6 +404,10 @@ mod tests {
             CallEvent::Disconnected,
             CallEvent::SelfVideo(SelfVideo {
                 camera: true,
+                trouble: None,
+            }),
+            CallEvent::SelfScreen(SelfScreen {
+                sharing: Some("DP-0".to_owned()),
                 trouble: None,
             }),
             CallEvent::Failed {

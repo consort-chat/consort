@@ -27,7 +27,9 @@
 use std::thread::JoinHandle;
 
 use consort_call::hearing::Ears;
-use consort_call::{CallEvent, CallThread, CallTransport, Camera, Microphone, PictureSize};
+use consort_call::{
+    CallEvent, CallThread, CallTransport, Camera, Microphone, PictureSize, ScreenShare,
+};
 
 /// A running call thread, with its events wired to the webview.
 pub struct CallBridge {
@@ -41,9 +43,9 @@ impl CallBridge {
     /// Start the call thread and the pump that forwards what it says.
     ///
     /// `microphone` is where this session's captured audio comes from, `camera`
-    /// is where its frames do, and `ears` is where everybody else's audio goes.
-    /// All three are handed in rather than built here, because every one of
-    /// them outlives any one call.
+    /// and `screen` are where its frames do, and `ears` is where everybody
+    /// else's audio goes. All of them are handed in rather than built here,
+    /// because every one of them outlives any one call.
     ///
     /// `report` is called once per event, on the pump thread. It does two jobs
     /// that have to happen in that order: give the microphone back when the
@@ -54,11 +56,12 @@ impl CallBridge {
         transport: T,
         microphone: Microphone,
         camera: Camera,
+        screen: Camera,
         ears: Ears,
         mut report: impl FnMut(CallEvent) + Send + 'static,
     ) -> Self {
         let (events, mut inbox) = tokio::sync::mpsc::unbounded_channel::<CallEvent>();
-        let thread = CallThread::spawn(transport, events, microphone, camera, ears);
+        let thread = CallThread::spawn(transport, events, microphone, camera, screen, ears);
 
         let pump = std::thread::Builder::new()
             .name("consort-call-events".to_owned())
@@ -122,6 +125,13 @@ impl CallBridge {
             thread.set_camera(size);
         }
     }
+
+    /// Publish this session's screen, or retract it with `None`.
+    pub fn set_screen(&self, share: Option<ScreenShare>) {
+        if let Some(thread) = &self.thread {
+            thread.set_screen(share);
+        }
+    }
 }
 
 impl Drop for CallBridge {
@@ -182,6 +192,7 @@ mod tests {
         let bridge = CallBridge::spawn(
             transport,
             Microphone::new(),
+            Camera::new(),
             Camera::new(),
             crate::ears::speakers(
                 voices.clone(),

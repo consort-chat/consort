@@ -88,6 +88,18 @@ pub enum FrameError {
     },
     /// The JPEG decoder refused the frame.
     Jpeg(String),
+    /// A captured frame's geometry and its buffer disagree.
+    ///
+    /// Its own variant rather than [`Short`](Self::Short), which names a
+    /// camera format. A capture reports its own stride, so this is the two
+    /// claims failing to agree rather than a device under-delivering, and the
+    /// numbers are what say which one was wrong.
+    Geometry {
+        width: u32,
+        height: u32,
+        stride: usize,
+        got: usize,
+    },
 }
 
 impl std::fmt::Display for FrameError {
@@ -103,6 +115,15 @@ impl std::fmt::Display for FrameError {
                 format,
             } => write!(f, "a {format} frame wants {wanted} bytes and got {got}"),
             Self::Jpeg(message) => write!(f, "the frame was not a usable JPEG: {message}"),
+            Self::Geometry {
+                width,
+                height,
+                stride,
+                got,
+            } => write!(
+                f,
+                "a {width}x{height} capture at {stride} bytes a row cannot be read out of {got} bytes"
+            ),
         }
     }
 }
@@ -123,6 +144,37 @@ pub fn decode(
         PixelFormat::Yuyv => from_yuyv(width, height, bytes),
         PixelFormat::Mjpeg => from_mjpeg(bytes),
     }
+}
+
+/// Read one captured screen frame of BGRA into I420.
+///
+/// `stride` is the bytes per row the capture reported, which is not
+/// `width * 4`: X11 pads rows, and the padding holds nothing a frame should
+/// read.
+pub fn from_bgra(
+    width: u32,
+    height: u32,
+    stride: usize,
+    bytes: &[u8],
+) -> Result<Picture, FrameError> {
+    if width == 0 || height == 0 {
+        return Err(FrameError::Empty);
+    }
+
+    let (w, h) = (width as usize, height as usize);
+    // Both halves. A stride narrower than the width would read the next row's
+    // pixels as this one's; a buffer shorter than the rows it claims would read
+    // off the end of the capture entirely.
+    if stride < w * BGRA_BYTES || bytes.len() < stride * h {
+        return Err(FrameError::Geometry {
+            width,
+            height,
+            stride,
+            got: bytes.len(),
+        });
+    }
+
+    Ok(from_packed(w, h, stride, BGRA_BYTES, BGRA_ORDER, bytes))
 }
 
 /// Unpack YUYV, averaging each pair of chroma rows.
@@ -236,12 +288,43 @@ fn from_mjpeg(bytes: &[u8]) -> Result<Picture, FrameError> {
     Ok(from_rgb(w, h, &rgb))
 }
 
-/// Convert packed RGB to I420, chroma from the mean of each 2x2 block.
+/// Convert packed RGB to I420. See [`from_packed`].
+fn from_rgb(w: usize, h: usize, rgb: &[u8]) -> Picture {
+    from_packed(w, h, w * RGB_BYTES, RGB_BYTES, RGB_ORDER, rgb)
+}
+
+/// Bytes per pixel of packed RGB, and where red, green and blue sit in one.
+const RGB_BYTES: usize = 3;
+const RGB_ORDER: [usize; 3] = [0, 1, 2];
+
+/// The same, for the BGRA a screen capture produces. The fourth byte is
+/// padding X11 does not fill, so nothing reads it.
+const BGRA_BYTES: usize = 4;
+const BGRA_ORDER: [usize; 3] = [2, 1, 0];
+
+/// Convert any packed byte order to I420, chroma from the mean of each 2x2
+/// block.
 ///
 /// Averaging the block's colour once beats converting four pixels and
 /// averaging the results: it is three quarters of the arithmetic and does not
 /// round four times.
-fn from_rgb(w: usize, h: usize, rgb: &[u8]) -> Picture {
+///
+/// `order` is where red, green and blue sit within one pixel, which is what
+/// keeps one piece of arithmetic serving both a decoded JPEG and a screen.
+fn from_packed(
+    w: usize,
+    h: usize,
+    stride: usize,
+    pixel: usize,
+    order: [usize; 3],
+    bytes: &[u8],
+) -> Picture {
+    let [red, green, blue] = order;
+    let channels = |row: usize, column: usize| {
+        let at = row * stride + column * pixel;
+        (bytes[at + red], bytes[at + green], bytes[at + blue])
+    };
+
     let chroma_w = w.div_ceil(2);
     let chroma_h = h.div_ceil(2);
     let mut y = vec![0u8; w * h];
@@ -250,8 +333,8 @@ fn from_rgb(w: usize, h: usize, rgb: &[u8]) -> Picture {
 
     for row in 0..h {
         for column in 0..w {
-            let at = (row * w + column) * 3;
-            y[row * w + column] = luma(rgb[at], rgb[at + 1], rgb[at + 2]);
+            let (r, g, b) = channels(row, column);
+            y[row * w + column] = luma(r, g, b);
         }
     }
 
@@ -261,10 +344,10 @@ fn from_rgb(w: usize, h: usize, rgb: &[u8]) -> Picture {
             let mut counted = 0u32;
             for row in block_row * 2..(block_row * 2 + 2).min(h) {
                 for column in block_column * 2..(block_column * 2 + 2).min(w) {
-                    let at = (row * w + column) * 3;
-                    totals[0] += u32::from(rgb[at]);
-                    totals[1] += u32::from(rgb[at + 1]);
-                    totals[2] += u32::from(rgb[at + 2]);
+                    let (r, g, b) = channels(row, column);
+                    totals[0] += u32::from(r);
+                    totals[1] += u32::from(g);
+                    totals[2] += u32::from(b);
                     counted += 1;
                 }
             }

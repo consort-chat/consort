@@ -18,6 +18,7 @@ mod media;
 mod notify;
 mod recent;
 mod renderer;
+mod screen;
 mod settings;
 mod sound;
 mod state;
@@ -317,6 +318,8 @@ pub fn run() {
             commands::video_settings,
             commands::set_video_settings,
             commands::set_camera,
+            commands::share_sources,
+            commands::set_share,
             commands::privacy_settings,
             commands::set_privacy_settings,
             commands::notification_settings,

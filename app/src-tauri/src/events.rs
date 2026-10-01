@@ -17,7 +17,7 @@
 use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
-use consort_call::{CallEvent, SelfAudio, SelfVideo};
+use consort_call::{CallEvent, SelfAudio, SelfScreen, SelfVideo};
 use consort_matrix::{
     CallReadiness, Connection, Flow, KeyBackup, Readers, Rooms, SessionVerification, Thread,
     Timeline, Typing,
@@ -101,6 +101,17 @@ pub enum AppEvent {
     /// that received one value for both would redraw the mute button every time
     /// somebody touched their camera.
     SelfVideo(SelfVideo),
+    /// What this session is putting on the call from its screen.
+    ///
+    /// A third channel beside the two above, for the reason they are separate
+    /// from each other: a camera and a share change independently and a reader
+    /// given one value for both would redraw the wrong control.
+    ///
+    /// Kept, and the kept value is what the indicator is drawn from. That is
+    /// the point: a webview that reloaded while sharing has to come back
+    /// knowing what is going out, because an indicator that forgets is an
+    /// indicator that stops being the answer to "what am I showing them".
+    SelfScreen(SelfScreen),
     /// Who in the current call is talking right now, by Matrix user ID.
     ///
     /// Its own channel for two reasons, and they pull in opposite directions
@@ -192,6 +203,8 @@ impl AppEvent {
     pub const SELF_AUDIO: &'static str = "self-audio";
     /// The channel carrying whether this session's camera is in the call.
     pub const SELF_VIDEO: &'static str = "self-video";
+    /// The channel carrying what this session is sharing from its screen.
+    pub const SELF_SCREEN: &'static str = "self-screen";
     /// The channel carrying who in the call is talking.
     pub const SPEAKING: &'static str = "speaking";
     /// The channel carrying the open room's messages.
@@ -221,6 +234,7 @@ impl AppEvent {
             Self::CallRefused(_) => Self::CALL_REFUSED,
             Self::SelfAudio(_) => Self::SELF_AUDIO,
             Self::SelfVideo(_) => Self::SELF_VIDEO,
+            Self::SelfScreen(_) => Self::SELF_SCREEN,
             Self::Speaking(_) => Self::SPEAKING,
             Self::Timeline(_) => Self::TIMELINE,
             Self::Thread(_) => Self::THREAD,
@@ -285,6 +299,11 @@ impl AppEvent {
             // webview that reloaded while publishing has to come back knowing
             // its camera is live.
             | Self::SelfVideo(_)
+            // State, and the off value matters more here than anywhere else:
+            // an indicator that is drawn from a stale "sharing" would tell
+            // somebody their screen is going out when it is not, and the
+            // reverse would be worse.
+            | Self::SelfScreen(_)
             | Self::Timeline(_)
             // Kept, and the empty one is the important half: it is what tells
             // a webview that reloaded mid-sentence that nobody is typing any
@@ -339,6 +358,7 @@ impl AppEvent {
             Self::CallRefused(refusal) => serde_json::to_value(refusal),
             Self::SelfAudio(audio) => serde_json::to_value(audio),
             Self::SelfVideo(video) => serde_json::to_value(video),
+            Self::SelfScreen(screen) => serde_json::to_value(screen),
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
             Self::Timeline(timeline) => serde_json::to_value(timeline),
             Self::Thread(thread) => serde_json::to_value(thread),

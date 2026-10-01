@@ -543,6 +543,23 @@ impl CallSession for LiveKitSession {
         Ok(CameraTrack(track))
     }
 
+    async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+        // `screen_share` rather than `camera`, which is the whole difference
+        // peers see: the stream arrives as `MediaStreamKind::ScreenShare`, so
+        // a client draws it large instead of in a face tile. Same simulcast,
+        // same `VideoSourceConfig`, same handle.
+        let track = self
+            .call
+            .publish(PublishOptions::screen_share(VideoSourceConfig {
+                width: size.width,
+                height: size.height,
+            }))
+            .await
+            .map_err(|error| classify(&error))?;
+
+        Ok(CameraTrack(track))
+    }
+
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
         let Some(track) = self.microphone.get() else {
             // Between joining and publishing. The call thread applies this

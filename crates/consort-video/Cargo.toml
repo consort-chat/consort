@@ -21,6 +21,7 @@ tracing = { workspace = true }
 # `v4l` or `nokhwa`: docs/adr/0005-capture-the-camera-in-rust.md.
 [target.'cfg(target_os = "linux")'.dependencies]
 moq-v4l = "0.1"
+x11rb = { version = "0.13", features = ["randr", "composite"] }
 
 [dev-dependencies]
 # Only the tests see the wire format. The crate hands settings to its caller as
