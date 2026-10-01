@@ -68,7 +68,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { AppShell } from "./AppShell";
 import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
-import { HEARING, NOT_FILMING } from "../lib/api";
+import { HEARING, NOT_FILMING, NOT_SHARING } from "../lib/api";
 import type {
   AudioDeviceReport,
   AudioSettings,
@@ -79,6 +79,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfScreen,
   SelfVideo,
   Thread,
   Timeline,
@@ -143,6 +144,7 @@ function shell({
   call = { state: "disconnected" } as Call,
   selfAudio = HEARING,
   selfVideo = NOT_FILMING,
+  selfScreen = NOT_SHARING,
   onSignedOut = vi.fn(),
   onJoinVoice = vi.fn(),
   onLeaveVoice = vi.fn(),
@@ -159,6 +161,7 @@ function shell({
   call?: Call;
   selfAudio?: SelfAudio;
   selfVideo?: SelfVideo;
+  selfScreen?: SelfScreen;
   onSignedOut?: Mock<() => void>;
   onJoinVoice?: Mock<(roomId: string) => void>;
   onLeaveVoice?: Mock<() => void>;
@@ -183,6 +186,8 @@ function shell({
       call={nextCall}
       selfAudio={selfAudio}
       selfVideo={selfVideo}
+      selfScreen={selfScreen}
+      onShare={vi.fn()}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}

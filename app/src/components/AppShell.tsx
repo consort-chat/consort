@@ -16,6 +16,7 @@ import {
   type Profile,
   type Rooms,
   type SelfAudio,
+  type SelfScreen,
   type SelfVideo,
   type TokenStorage,
   type Verification,
@@ -132,6 +133,8 @@ interface Props {
   selfAudio: SelfAudio;
   /** Whether this session's camera is in the call, and why it is not. */
   selfVideo: SelfVideo;
+  /** What this session is sharing from its screen, and why it is not. */
+  selfScreen: SelfScreen;
   /**
    * Who in the current call is talking, by Matrix user ID.
    *
@@ -157,6 +160,8 @@ interface Props {
   onSetDeafened: (deafened: boolean) => void;
   onSetAway: (away: boolean) => void;
   onSetCamera: (on: boolean) => void;
+  /** Start sharing this source, or stop sharing with null. */
+  onShare: (source: string | null) => void;
   /**
    * A voice channel that was clicked and not joined, or null.
    *
@@ -212,6 +217,7 @@ export function AppShell({
   call,
   selfAudio,
   selfVideo,
+  selfScreen,
   speaking = NOBODY,
   audioProblem = null,
   verification,
@@ -226,6 +232,7 @@ export function AppShell({
   onSetDeafened,
   onSetAway,
   onSetCamera,
+  onShare,
   callRefused,
   onDismissRefusal,
   showRoom = null,
@@ -548,12 +555,14 @@ export function AppShell({
           onToggleCard={toggleCard}
           selfAudio={selfAudio}
           selfVideo={selfVideo}
+          selfScreen={selfScreen}
           audioProblem={audioProblem}
           onDisconnect={onLeaveVoice}
           onSetMuted={onSetMuted}
           onSetDeafened={onSetDeafened}
           onSetAway={onSetAway}
           onSetCamera={onSetCamera}
+          onShare={onShare}
         />
         <UserPanel
           profile={profile}

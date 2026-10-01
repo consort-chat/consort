@@ -340,3 +340,80 @@
     transition: none;
   }
 }
+
+/*
+  The anchor the share picker floats off, so the card reads as belonging to
+  the control rather than to the window.
+*/
+.call-panel__sharing {
+  position: relative;
+  display: inline-flex;
+}
+
+/*
+  What is going out, for the whole time it is going out.
+
+  Spanning both columns, like the problem lines, because it is a name rather
+  than a label and a 240px column with a button beside it would break it over
+  four lines.
+
+  Not the danger surface: a live share is not a fault. Not the mint either,
+  which is voice and presence only. The violet it is, which is what every
+  other deliberate state in this interface is drawn in.
+*/
+.call-panel__sharing-now {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border-left: 2px solid var(--violet);
+  border-radius: var(--radius-sm);
+}
+
+.call-panel__sharing-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--violet);
+  box-shadow: 0 0 0 0.1875rem var(--violet-glow);
+}
+
+.call-panel__sharing-what {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-panel__stop-sharing {
+  flex: none;
+  /* WCAG 2.5.8 again: the words must not be what decides the target. */
+  min-height: 1.75rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease-out-expo),
+    border-color var(--duration-fast) var(--ease-out-expo);
+}
+
+.call-panel__stop-sharing:hover {
+  color: var(--text-primary);
+  border-color: var(--danger);
+}
+
+.call-panel__stop-sharing:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}

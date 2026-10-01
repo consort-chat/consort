@@ -14,9 +14,12 @@ them, who else has read a message drawn as faces against it, desktop
 notifications that honour the account's push rules, and `matrix.to` links that
 go where they point, editing a message, both sent and drawn, an opening screen
 offering the rooms you were last in, an icon in the system tray that brings the
-window back, and publishing a camera into a call from a webcam chosen in
-settings. Drawing somebody else's camera is not built yet: see
-docs/PLAN-webcam.md for the half that is and the half that is not. Deleting
+window back, publishing a camera into a call from a webcam chosen in
+settings, and sharing a screen or a window into a call, picked from a card
+that lists what this machine has. Drawing somebody else's camera is not built
+yet: see docs/PLAN-webcam.md for the half that is and the half that is not.
+Sharing system audio alongside a screen is not built either, and
+docs/PLAN-screen-share.md says what it would take. Deleting
 your own message is not built either, and neither is upload progress, a
 thumbnail for a clip somebody sends, or a count on the icon when something is
 unread.
@@ -87,6 +90,29 @@ When stopping the dev build, kill the Vite process too, not just the window.
 Vite holds port 1420 with `strictPort`, so a leftover one makes the next
 `pnpm tauri dev` abort with `Port 1420 is already in use` before it ever
 compiles. `ss -ltnp | grep 1420` names the process still holding it.
+
+### Screen sharing is X11 only, and the portal is not a fallback
+
+`consort_video::Screens` is `X11Host` on Linux and `NoScreens` elsewhere, the
+same shape `Host` has for the camera. There is no Wayland path, and the reason
+is not that nobody wrote one yet: the Wayland portal draws its own picker and
+never hands an application a window list, so #70's card cannot exist on that
+route. [ADR-0006](docs/adr/0006-share-a-screen-over-x11.md) has the argument
+and the measurements.
+
+Worth knowing before debugging a report of this: on an X11 desktop the portal
+is frequently absent rather than degraded. XFCE's `portals.conf` prefers `wlr`
+then `gtk` for ScreenCast, and `wlr` is wlroots-only while `gtk` does not
+implement the interface at all, so `org.freedesktop.portal.Desktop` exports no
+ScreenCast on a stock XFCE session. A fallback written against it would not run
+here either.
+
+One thing that is wired and worth not breaking: dropping a `ShareStream` joins
+its capture thread rather than only signalling it, and the capture loop re-reads
+its stop flag after a grab and before delivering the frame. Both halves are
+needed. A grab is slow enough that a stop lands inside one, and without them a
+picture of somebody's screen reaches the call after they pressed stop. There is
+a hand-run test for exactly that in `crates/consort-video/tests/screens.rs`.
 
 ### The matrix-sdk pin is load-bearing
 
