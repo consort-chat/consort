@@ -4,6 +4,7 @@ members = [
     "crates/consort-audio",
     "crates/consort-call",
     "crates/consort-matrix",
+    "crates/consort-video",
     "app/src-tauri",
 ]
 

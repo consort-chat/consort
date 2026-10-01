@@ -963,6 +963,7 @@ dependencies = [
  "consort-audio",
  "consort-call",
  "consort-matrix",
+ "consort-video",
  "image",
  "matrix-sdk",
  "notify-rust",
@@ -1033,6 +1034,18 @@ dependencies = [
  "tokio",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "consort-video"
+version = "0.8.0"
+dependencies = [
+ "image",
+ "moq-v4l",
+ "serde",
+ "serde_json",
+ "tracing",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -3033,6 +3046,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4416,6 +4431,16 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "moq-v4l"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afd90478f95ee20123eb3c7ee3745d6f819cdafd649339dedd4fc974609cc400"
+dependencies = [
+ "bitflags 2.13.1",
+ "libc",
 ]
 
 [[package]]
