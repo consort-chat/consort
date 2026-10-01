@@ -71,9 +71,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit dependencies
-        # Clean today. Fails on a vulnerability, which on a lockfile that is
-        # deliberately frozen is the only way anybody finds out. See
-        # docs/DEPENDENCIES.md.
+        # Fails on moderate and above; a low advisory prints and passes. On a
+        # lockfile this deliberately frozen the audit is the only way anybody
+        # finds out. #136 is what a real one looked like. docs/DEPENDENCIES.md.
         run: pnpm audit --audit-level=moderate
 
       - name: Type check
