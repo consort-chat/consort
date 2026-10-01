@@ -559,9 +559,9 @@ describe("your own camera on the card", () => {
     expect(screen.getByText("Ann")).toBeInTheDocument();
   });
 
-  it("is not asked for while the card is put away", () => {
-    // The hook polls Rust on a timer, and a hidden card has nothing to draw
-    // with it.
+  it("is not asked for at all while the card is put away", () => {
+    // Not merely asked for with the camera off: a hidden card draws nothing, so
+    // the component holding the timer is never mounted.
     render(
       card(inCall([person("@bob:example.org", "Bob")]), undefined, {
         cameraOn: true,
@@ -569,8 +569,9 @@ describe("your own camera on the card", () => {
       }),
     );
 
-    expect(selfView).toHaveBeenCalledWith(false);
+    expect(selfView).not.toHaveBeenCalled();
   });
+
 
   it("is asked for while the card is up and the camera is on", () => {
     render(

@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useLayoutEffect,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -47,6 +48,53 @@ function ExpandIcon({ expanded }: { expanded: boolean }) {
         </>
       )}
     </svg>
+  );
+}
+
+/**
+ * What the camera is sending, while it is sending anything.
+ *
+ * Its own component because the picture changes twelve times a second and the
+ * faces beside it do not: the card already keeps `speaking` out of its own
+ * state for this reason, and a frame arriving should redraw this and nothing
+ * else.
+ *
+ * A still replaced on a timer rather than a `<video>`: there is no stream for
+ * one to play, because the device is open in Rust and V4L2 gives it to one
+ * process. See `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+ */
+function SelfView({
+  active,
+  onDrawn,
+}: {
+  active: boolean;
+  /** Told when a picture appears or goes, because it changes the card's height. */
+  onDrawn: (drawn: boolean) => void;
+}) {
+  const picture = useSelfView(active);
+  const drawn = picture !== null;
+
+  useEffect(() => {
+    onDrawn(drawn);
+  }, [drawn, onDrawn]);
+
+  if (picture === null) return null;
+
+  return (
+    <img
+      className="call-card__self"
+      src={picture}
+      /*
+        Named rather than decorative. It is the one thing on the card that
+        reports something about the person reading it, and "is my camera
+        actually on" is the question it answers.
+      */
+      alt="Your camera"
+      /* Drawn at a known shape, so a frame arriving does not move the card. */
+      width={320}
+      height={180}
+      draggable={false}
+    />
   );
 }
 
@@ -116,10 +164,9 @@ export function CallCard({
   cameraOn = false,
 }: Props) {
   const drag = useDraggable();
-  // Only while it is being drawn: the hook asks Rust on a timer, and a card put
-  // away should not be converting a frame every tick for the rest of the call.
-  const selfView = useSelfView(cameraOn && shown);
   const [expanded, setExpanded] = useState(false);
+  /** Whether the self view has a picture, which is what changes the height. */
+  const [filming, setFilming] = useState(false);
   // Which face was clicked, and where to draw the card about them. One at a
   // time, for the reason the channel list keeps one.
   const [opened, setOpened] = useState<{
@@ -141,7 +188,7 @@ export function CallCard({
     //
     // Whether there is a self view is in here because it changes the card's
     // height, and a card against the bottom edge grows straight off it.
-  }, [expanded, shown, selfView !== null, drag.keepInView]);
+  }, [expanded, shown, filming, drag.keepInView]);
 
   // The same condition the call panel draws itself on. A second rule for when
   // there is a call is a second thing to keep in step with the first.
@@ -251,28 +298,10 @@ export function CallCard({
       </header>
 
       {/*
-        What the camera is sending, while it is sending anything. A still that
-        is replaced several times a second rather than a `<video>`: there is no
-        stream for one to play, because the device is open in Rust and V4L2
-        gives it to one process. See
-        `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+        A hidden card returns above before reaching this, so nothing is polled
+        for a picture nobody can see.
       */}
-      {selfView !== null && (
-        <img
-          className="call-card__self"
-          src={selfView}
-          /*
-            Named rather than decorative. It is the one thing on the card that
-            reports something about the person reading it, and "is my camera
-            actually on" is the question it answers.
-          */
-          alt="Your camera"
-          /* Drawn at a known shape, so a frame arriving does not move the card. */
-          width={320}
-          height={180}
-          draggable={false}
-        />
-      )}
+      <SelfView active={cameraOn} onDrawn={setFilming} />
 
       {call.state === "connecting" ? (
         <p className="call-card__waiting">{callLabel(call)}</p>
