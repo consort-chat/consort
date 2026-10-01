@@ -53,8 +53,13 @@ impl ScreenCapture for X11Host {
         // capture that starts and produces nothing.
         let (conn, root) = connect()?;
         let source = find(&conn, root, id)?;
-        let target = drawable(root, id)?;
-        let Resolution { width, height, .. } = geometry(&conn, target)?;
+        let Target {
+            drawable,
+            left,
+            top,
+            width,
+            height,
+        } = target(&conn, root, id)?;
 
         let stop = Arc::new(AtomicBool::new(false));
         let ours = Arc::clone(&stop);
@@ -69,7 +74,7 @@ impl ScreenCapture for X11Host {
                 let Ok((conn, _)) = connect() else { return };
                 while !ours.load(Ordering::Relaxed) {
                     let at = Instant::now();
-                    match grab(&conn, target, width, height, started) {
+                    match grab(&conn, drawable, left, top, width, height, started) {
                         // Asked again, because a grab takes long enough for a
                         // stop to land inside one. Delivering the frame it was
                         // already holding would put a picture of somebody's
@@ -317,20 +322,74 @@ fn geometry(conn: &RustConnection, target: Window) -> Result<Resolution, ShareEr
     })
 }
 
-/// Which drawable a source id names.
+/// What to read, and which rectangle of it.
 ///
-/// A screen is the root window, because RandR monitors are rectangles of it
-/// and `GetImage` on the root is how a region of one is read. A window is its
-/// own drawable.
-fn drawable(root: Window, id: &str) -> Result<Window, ShareError> {
-    if id.starts_with("screen:") {
-        return Ok(root);
+/// The offset is the whole reason this is not just a drawable. Every monitor is
+/// a rectangle of the one root window, so reading the root reads all of them:
+/// on two monitors, choosing one published both. A window is its own drawable
+/// and its offset is zero.
+struct Target {
+    drawable: Window,
+    left: i16,
+    top: i16,
+    width: u32,
+    height: u32,
+}
+
+/// Which drawable and rectangle a source id names.
+fn target(conn: &RustConnection, root: Window, id: &str) -> Result<Target, ShareError> {
+    let gone = || ShareError::Gone {
+        source: id.to_owned(),
+    };
+
+    if let Some(connector) = id.strip_prefix("screen:") {
+        return rectangle(conn, root, connector)?.ok_or_else(gone);
     }
-    id.strip_prefix("window:")
+
+    let drawable: Window = id
+        .strip_prefix("window:")
         .and_then(|number| number.parse().ok())
-        .ok_or_else(|| ShareError::Gone {
-            source: id.to_owned(),
-        })
+        .ok_or_else(gone)?;
+    let Resolution { width, height, .. } = geometry(conn, drawable)?;
+
+    Ok(Target {
+        drawable,
+        left: 0,
+        top: 0,
+        width,
+        height,
+    })
+}
+
+/// Where a named monitor sits in the root window, and how large it is.
+///
+/// `None` when RandR no longer reports a monitor by that name, which is a
+/// display unplugged while the picker was open.
+fn rectangle(
+    conn: &RustConnection,
+    root: Window,
+    connector: &str,
+) -> Result<Option<Target>, ShareError> {
+    let monitors = conn
+        .randr_get_monitors(root, true)
+        .map_err(backend)?
+        .reply()
+        .map_err(backend)?;
+
+    for monitor in &monitors.monitors {
+        if atom_name(conn, monitor.name)? != connector {
+            continue;
+        }
+        return Ok(Some(Target {
+            drawable: root,
+            left: monitor.x,
+            top: monitor.y,
+            width: u32::from(monitor.width),
+            height: u32::from(monitor.height),
+        }));
+    }
+
+    Ok(None)
 }
 
 /// The source `id` names, as it is right now.
@@ -363,7 +422,9 @@ impl X11Host {
 /// Read one frame and convert it.
 fn grab(
     conn: &RustConnection,
-    target: Window,
+    drawable: Window,
+    left: i16,
+    top: i16,
     width: u32,
     height: u32,
     started: Instant,
@@ -371,9 +432,9 @@ fn grab(
     let reply = conn
         .get_image(
             ImageFormat::Z_PIXMAP,
-            target,
-            0,
-            0,
+            drawable,
+            left,
+            top,
             width as u16,
             height as u16,
             ALL_PLANES,
@@ -381,7 +442,7 @@ fn grab(
         .map_err(backend)?
         .reply()
         .map_err(|_| ShareError::Gone {
-            source: format!("window:{target}"),
+            source: format!("window:{drawable}"),
         })?;
 
     // X pads each row to a four-byte boundary, and at 32 bits a pixel that is

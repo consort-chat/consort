@@ -297,10 +297,13 @@ mod against_a_real_display {
 
     #[test]
     #[ignore = "needs an X11 display"]
-    fn a_screen_capture_produces_frames_of_the_size_it_reported() {
-        // The one thing no fixture can check: that a real GetImage reply
-        // unpacks into a picture of the geometry the stream claimed. A stride
-        // read wrongly comes out here as a panic or a wrong size.
+    fn a_screen_capture_produces_frames_of_the_size_that_screen_was_offered_as() {
+        // Measured against the source the picker listed, not against whatever
+        // the stream reports about itself. Those two agreeing proves nothing:
+        // capturing the whole root window instead of the chosen monitor is
+        // self-consistent and shares every screen on the machine.
+        //
+        // That was the bug. On two monitors, choosing one published both.
         let (host, first) = a_screen();
 
         let frames = Arc::new(Mutex::new(Vec::new()));
@@ -316,18 +319,56 @@ mod against_a_real_display {
             )
             .expect("the screen would not open");
 
-        let wanted = share.resolution();
+        assert_eq!(
+            (share.resolution().width, share.resolution().height),
+            (first.width, first.height),
+            "{} was offered at one size and is capturing at another",
+            first.title
+        );
+
         wait_for(&frames, 1);
         drop(share);
 
         let captured = frames.lock().unwrap().clone();
         assert!(!captured.is_empty(), "no frames arrived in five seconds");
         for (width, height, luma) in &captured {
-            assert_eq!((*width, *height), (wanted.width, wanted.height));
+            assert_eq!(
+                (*width, *height),
+                (first.width, first.height),
+                "a frame arrived at a different size from the screen that was chosen"
+            );
             assert_eq!(
                 *luma,
                 (width * height) as usize,
                 "the luma plane is the wrong size"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "needs an X11 display"]
+    fn each_screen_captures_only_itself() {
+        // The multi-monitor case, and the reason the test above measures
+        // against the listing. Two monitors share one root window, so a
+        // capture that reads the root reads both of them.
+        let host = Screens::default();
+        let screens: Vec<_> = host
+            .sources()
+            .expect("no X11 display")
+            .into_iter()
+            .filter(|source| source.kind == ShareKind::Screen)
+            .collect();
+
+        for found in &screens {
+            let share = host
+                .open(&found.id, Box::new(|_| {}))
+                .expect("a listed screen would not open");
+
+            assert_eq!(
+                (share.resolution().width, share.resolution().height),
+                (found.width, found.height),
+                "{} captures a different rectangle from the one it was offered as",
+                found.title
             );
         }
     }
