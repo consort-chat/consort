@@ -107,6 +107,13 @@ implement the interface at all, so `org.freedesktop.portal.Desktop` exports no
 ScreenCast on a stock XFCE session. A fallback written against it would not run
 here either.
 
+Sharing a window rather than a screen has one caveat worth knowing before
+somebody reports it as a bug: `GetImage` against a window drawable returns what
+is on screen in that rectangle, so a window with something on top of it can
+capture the thing on top of it when no compositing manager is redirecting
+windows. The fix is `XCompositeNameWindowPixmap`, behind `x11rb`'s `composite`
+feature, which is not enabled yet because nothing reads through it.
+
 One thing that is wired and worth not breaking: dropping a `ShareStream` joins
 its capture thread rather than only signalling it, and the capture loop re-reads
 its stop flag after a grab and before delivering the frame. Both halves are

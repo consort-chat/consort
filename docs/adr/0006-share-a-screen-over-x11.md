@@ -72,10 +72,11 @@ Wayland refuses with a sentence that names what is missing rather than failing
 obscurely. A portal backend is a second implementation of the same trait, and
 is stage 3 of #70's plan.
 
-Use `x11rb` with the `randr` and `composite` features. It is already in
-`Cargo.lock` at 0.13.2 by way of `arboard`, which `tauri-plugin-clipboard-manager`
-pulls in, and enabling those features resolves no new crate: verified by diffing
-the lock before and after.
+Use `x11rb` with the `randr` feature, which is what enumerates monitors. It is
+already in `Cargo.lock` at 0.13.2 by way of `arboard`, which
+`tauri-plugin-clipboard-manager` pulls in, and enabling that feature resolves no
+new crate: verified by diffing the lock before and after, 866 packages either
+way.
 
 ## Alternatives Considered
 
@@ -164,10 +165,11 @@ the lock before and after.
 - **An occluded window may capture the wrong pixels.** `GetImage` against a
   window drawable returns what is on screen in that rectangle, so a window with
   something on top of it captures the thing on top of it unless a compositing
-  manager is redirecting windows. XFCE's compositor is a checkbox. The
-  `composite` feature is enabled against this, and reading through
-  `XCompositeNameWindowPixmap` is the fix; it is not wired up in stage 1 and is
-  the first thing to look at when somebody reports sharing the wrong content.
+  manager is redirecting windows. XFCE's compositor is a checkbox. The fix is
+  `XCompositeNameWindowPixmap`, behind `x11rb`'s `composite` feature, which is
+  deliberately not enabled yet: an enabled feature nothing reads is dead
+  weight. This is the first thing to look at when somebody reports sharing the
+  wrong content.
 - Consort owns the pixel conversion. BGRA to I420 is arithmetic and is tested as
   data, and it costs 66ms a frame for a 2560x1440 monitor in a release build,
   measured. That keeps the 15fps capture target with headroom. In a debug build
