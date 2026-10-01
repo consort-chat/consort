@@ -13,17 +13,21 @@ read receipts with the unread marks and the where-you-stopped line that go with
 them, who else has read a message drawn as faces against it, desktop
 notifications that honour the account's push rules, and `matrix.to` links that
 go where they point, editing a message, both sent and drawn, an opening screen
-offering the rooms you were last in, and an icon in the system tray that brings
-the window back. Deleting your own message is not built, and neither is upload
-progress, a thumbnail for a clip somebody sends, or a count on the icon when
-something is unread.
+offering the rooms you were last in, an icon in the system tray that brings the
+window back, and publishing a camera into a call from a webcam chosen in
+settings. Drawing somebody else's camera is not built yet: see
+docs/PLAN-webcam.md for the half that is and the half that is not. Deleting
+your own message is not built either, and neither is upload progress, a
+thumbnail for a clip somebody sends, or a count on the icon when something is
+unread.
 
 ## Layout
 
 ```
 crates/consort-matrix/   Matrix auth, session persistence, sync, rooms, timeline.
 crates/consort-audio/    Sound cards, the voice gate, the mixer. No Matrix.
-crates/consort-call/     Being in a MatrixRTC call. No sound backend.
+crates/consort-video/    Cameras and pixel formats. No Matrix and no SFU.
+crates/consort-call/     Being in a MatrixRTC call. No sound or camera backend.
 app/src-tauri/           Tauri v2 shell: commands, state, events, wiring.
 app/src/                 React 19 + TypeScript frontend, Vite.
 testing/synapse/         A throwaway homeserver for the tests a mock cannot cover.
