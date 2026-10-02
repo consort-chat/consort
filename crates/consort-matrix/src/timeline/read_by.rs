@@ -3,30 +3,12 @@
 
 //! Where each person in a room has read up to.
 //!
-//! Kept beside [`crate::timeline::history::History`] on the same terms as
-//! [`crate::timeline::reactions::Reactions`]: a receipt arrives for a message
-//! that may not be loaded, may be loaded later by a page, or may never be.
+//! Keyed by the person, which is the whole of it: a receipt names the newest
+//! event somebody has read, so a map of message to readers never takes the old
+//! entry away and accumulates a face against every message they have passed.
 //!
-//! ## Keyed by the person, which is the whole of it
-//!
-//! A receipt names the newest event somebody has read, and everything before
-//! it is implied. So the question this answers is "where is each person", not
-//! "who has read this message", and the state is one entry per person.
-//!
-//! Holding it the other way round is the bug the shape exists to prevent. A
-//! map of message to readers, added to as receipts arrive, never takes the old
-//! entry away: somebody who reads on down a room accumulates an avatar against
-//! every message they have passed, which is both wrong and unbounded. Keyed by
-//! the person there is nowhere for the old answer to survive, because writing
-//! the new one is what removes it.
-//!
-//! ## Two conversations, not one
-//!
-//! A thread has receipts of its own, and a receipt in one says nothing about
-//! the other. `m.read` with no `thread_id` and `m.read` with `main` are both
-//! about the room's own timeline, and every other value is about the thread it
-//! names. Clients differ over which of the first two they send, so a room that
-//! reads only one of them draws an empty answer for half the people in it.
+//! A thread has receipts of its own, so a receipt in one says nothing about
+//! the other: see [`About`].
 
 use std::collections::HashMap;
 
@@ -35,13 +17,8 @@ use matrix_sdk::ruma::events::receipt::ReceiptThread;
 use crate::timeline::dto::ReadOn;
 
 /// How many faces are drawn against one message before the rest become a
-/// count.
-///
-/// Five. This is a row of pictures beside a line of text rather than a list
-/// somebody scrolls, so the cap that suits it is the number that fits without
-/// pushing the conversation around, not the hundred a member list can afford.
-/// Beyond it the row says how many more, which is the same bargain a long
-/// member list makes and the same one Element makes here.
+/// count. A row of pictures beside a line of text rather than a list somebody
+/// scrolls, so the cap is what fits without pushing the conversation around.
 pub const SHOWN: usize = 5;
 
 /// Which conversation a receipt is about.
@@ -49,28 +26,23 @@ pub const SHOWN: usize = 5;
 pub enum About {
     /// The room's own timeline.
     ///
-    /// Both `ReceiptThread::Unthreaded` and `ReceiptThread::Main` land here.
-    /// The distinction is about what the sending client knew, not about what
-    /// was read: a client from before threads existed sends the first and a
-    /// current one sends the second, and both mean the room.
+    /// Both `ReceiptThread::Unthreaded` and `ReceiptThread::Main` land here:
+    /// a client from before threads sends the first and a current one the
+    /// second, and both mean the room.
     Room,
     /// One thread, named by the message it hangs from.
     Thread(String),
 }
 
 impl From<&ReceiptThread> for About {
-    /// Which conversation a receipt off the wire is about.
-    ///
-    /// The one place the three wire values become the two that matter. See
-    /// [`About::Room`] for why two of them collapse into one.
+    /// Which conversation a receipt off the wire is about: the one place the
+    /// three wire values become the two that matter.
     fn from(thread: &ReceiptThread) -> Self {
         match thread {
             ReceiptThread::Unthreaded | ReceiptThread::Main => Self::Room,
             ReceiptThread::Thread(root) => Self::Thread(root.to_string()),
-            // `ReceiptThread` is non-exhaustive: it is a wire enum and the
-            // specification can add to it. Anything this build has not heard
-            // of is not the room, because the room is the one value that is
-            // already spelled two ways and adding a third to it would draw
+            // `ReceiptThread` is non-exhaustive, so anything this build has
+            // not heard of is not the room: adding a third spelling would draw
             // somebody as having read a conversation they have not.
             unknown => Self::Thread(unknown.as_str().unwrap_or_default().to_owned()),
         }
@@ -87,15 +59,12 @@ struct Upto {
 /// Where everybody has read up to, for one room.
 #[derive(Debug)]
 pub struct ReadBy {
-    /// Keyed by the person. See the module docs: this is the collapse.
-    ///
+    /// Keyed by the person, which is the collapse the module header describes.
     /// One entry per person per conversation, because somebody reading in a
     /// thread has not moved where they are in the room.
     upto: HashMap<(String, About), Upto>,
-    /// Whoever is signed in, whose own receipts are never drawn.
-    ///
-    /// Held rather than passed to the reader, so that the two places a receipt
-    /// arrives from cannot disagree about it.
+    /// Whoever is signed in, whose own receipts are never drawn. Held rather
+    /// than passed in, so the two places a receipt arrives from agree.
     me: Option<String>,
 }
 
@@ -111,13 +80,8 @@ impl ReadBy {
     /// Take note that `user` has read up to `event_id`. Says whether anything
     /// changed.
     ///
-    /// The latest statement wins. A receipt is the sender's own claim about
-    /// where they are, and there is no older one worth keeping beside it.
-    ///
-    /// This account's own receipts are dropped here rather than filtered on
-    /// the way out. Nobody needs telling that they have read their own room,
-    /// and every client that has ever shown you your own face against your own
-    /// message looked broken.
+    /// The latest statement wins, and this account's own receipts are dropped
+    /// here rather than filtered on the way out.
     pub fn noted(&mut self, user: &str, event_id: &str, about: About) -> bool {
         if Some(user) == self.me.as_deref() {
             return false;
@@ -137,14 +101,9 @@ impl ReadBy {
 
     /// Who has read what, ready to draw, for one conversation.
     ///
-    /// Grouped by message, because that is what it is drawn against, and by
-    /// user ID within a message so that a row of faces does not rearrange
-    /// itself every time somebody else reads. Arrival order would be the
-    /// livelier answer and is not worth motion beside a message somebody is
-    /// reading.
-    ///
-    /// Messages are in no particular order. The interface asks for one at a
-    /// time by ID.
+    /// Grouped by message and sorted by user ID within one, so a row of faces
+    /// does not rearrange itself every time somebody else reads. The messages
+    /// themselves are in no particular order.
     pub fn on(&self, about: &About) -> Vec<ReadOn> {
         let mut by_event: HashMap<&str, Vec<&str>> = HashMap::new();
         for ((user, _), seen) in self.upto.iter().filter(|((_, at), _)| at == about) {
@@ -197,10 +156,9 @@ mod tests {
 
     #[test]
     fn reading_further_down_moves_the_face_rather_than_adding_one() {
-        // The whole of the collapse, and the thing a map of message to readers
-        // gets wrong while still looking right on a small fixture: the new
-        // avatar appears either way, and only the old one staying behind says
-        // the state is keyed by the wrong thing.
+        // The whole of the collapse. A map of message to readers looks right
+        // on a small fixture: the new avatar appears either way, and only the
+        // old one staying behind says the state is keyed wrongly.
         let mut read = empty();
         read.noted(ADA, OLDER, About::Room);
 
