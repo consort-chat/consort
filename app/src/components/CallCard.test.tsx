@@ -1190,9 +1190,7 @@ describe("the people tucked behind a shared screen", () => {
     }));
 
     await userEvent.click(
-      within(
-        screen.getByRole("list", { name: "Screens shared in Lounge" }),
-      ).getByRole("button"),
+      screen.getByRole("button", { name: /, fill the window$/ }),
     );
 
     expect(onScreen()).toHaveAttribute("data-peeking", "false");
