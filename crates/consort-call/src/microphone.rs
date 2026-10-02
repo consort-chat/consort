@@ -134,20 +134,16 @@ impl Microphone {
         self.0.dropped.load(Ordering::Relaxed)
     }
 
-    /// Whether the person has switched this microphone off.
-    ///
-    /// True for mute, for deafen and for away alike, because all three mean
-    /// the call carries nothing: see [`crate::SelfAudio::microphone_off`].
-    /// What the frames themselves are is not changed by it.
+    /// Whether the person has switched this microphone off: mute, deafen and
+    /// away alike, because all three mean the call carries nothing. See
+    /// [`crate::SelfAudio::microphone_off`]. The frames are unchanged by it.
     pub fn switched_off(&self) -> bool {
         self.0.switched_off.load(Ordering::Relaxed)
     }
 
-    /// Say whether the person has switched this microphone off.
-    ///
     /// Set by the call thread, which owns the answer, and read on the audio
-    /// thread. `Relaxed` because it orders nothing: the worst a frame read on
-    /// the old value can do is hold a ring one frame longer than it should.
+    /// thread. `Relaxed` because it orders nothing: a frame read on the stale
+    /// value holds a ring 10 ms too long, and nothing else.
     pub fn switch_off(&self, off: bool) {
         self.0.switched_off.store(off, Ordering::Relaxed);
     }
