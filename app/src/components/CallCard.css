@@ -50,25 +50,32 @@
 }
 
 /*
-  The whole window, which is where clicking a shared screen goes. The same
-  change one step further: bigger squares and room for more across, with
-  nothing rearranged, because the layout past this is deliberately not decided
-  yet. See docs/adr/0008-one-square-for-everything-in-a-call.md.
+  The whole window, which is where clicking the stage goes. See
+  docs/adr/0009-a-shared-screen-takes-the-stage.md.
 
-  `align-content`, or the rows stretch to fill a window far taller than the
-  card's contents and the squares come out rectangles.
+  A column rather than the grid above, so the stage can be handed the height
+  the header and the squares leave instead of asking for a height the window
+  may not have. `justify-content` is what keeps the squares their own size in a
+  window far taller than the card's contents.
 */
 .call-card[data-size="full"] {
   --avatar-size: 160px;
 
+  display: flex;
+  flex-direction: column;
   inset: 0;
   gap: var(--space-4);
-  align-content: start;
+  justify-content: start;
   width: auto;
   padding: var(--space-4);
   border: none;
   border-radius: 0;
   box-shadow: none;
+}
+
+/* Everything but the stage keeps the size it asked for. */
+.call-card[data-size="full"] > :not(.call-stage) {
+  flex: none;
 }
 
 .call-card__bar {
@@ -158,6 +165,27 @@
 }
 
 /*
+  The stage takes what is left rather than a shape of its own.
+
+  A 16:9 box as wide as the window is 9/16 of that again in height, which a
+  window shorter than it has nowhere to put: measured at 1280x800 the picture
+  came out 49px taller than the box clipping it, which is a cropped desktop.
+  Given the leftover height instead, the picture letterboxes into whatever
+  shape the window leaves. `min-height` because a flex item will not shrink
+  below its content without it.
+*/
+.call-card[data-size="full"] .call-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* No ratio of its own: the stage is the shape the window left it. */
+.call-card[data-size="full"] .call-stage__picture {
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+/*
   Reflowed by how many squares there are rather than by the width of the
   window, because the window is the size somebody made it and the card is a
   fixed thing floating on top of it.
@@ -169,9 +197,9 @@
   card.
 
   Two lists on the same grid, and deliberately the same one: a person and a
-  screen somebody is sharing are the same kind of thing here, which is the
-  whole point of #70's review. They are separate lists because only one of them
-  is a list of people, and that is what each one is announced as.
+  screen nobody is watching are the same kind of thing down here, something the
+  call is carrying. They are separate lists because only one of them is a list
+  of people, and that is what each one is announced as.
 */
 .call-card__screens,
 .call-card__people {

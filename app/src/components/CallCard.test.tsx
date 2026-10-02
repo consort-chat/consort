@@ -698,34 +698,41 @@ describe("screens being shared on the card", () => {
     return { id, name, muted: false, screen: true };
   }
 
-  /** The list of screens, which is announced as screens and not as people. */
-  function screens() {
-    return screen.queryByRole("list", { name: "Screens shared in Lounge" });
+  /** The screen filling the width of the card, announced by what it shows. */
+  function stage() {
+    return screen.queryByRole("button", { name: /, fill the window$/ });
+  }
+
+  /** The screens that did not get the stage, which is a list and not a roster. */
+  function strip() {
+    return screen.queryByRole("list", {
+      name: "Other screens shared in Lounge",
+    });
   }
 
   it("says nothing about screens while nobody is sharing one", () => {
-    // Which is most of every call. An empty list announced to a screen reader
+    // Which is most of every call. An empty stage announced to a screen reader
     // is furniture that says nothing.
     render(card(inCall([person("@bob:example.org", "Bob")])));
 
-    expect(screens()).toBe(null);
+    expect(stage()).toBe(null);
+    expect(strip()).toBe(null);
   });
 
-  it("gives this session's own screen a square, captioned with what is going out", () => {
-    // #70's requirement in the place #140's review asked for it: somebody
-    // sharing has to be able to tell their terminal from their inbox.
+  it("puts this session's own screen on the stage, captioned with what is going out", () => {
     usePicture.mockReturnValue(PICTURE);
 
     render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
       sharing: "DP-0 (2560x1440)",
     }));
 
-    const tile = within(screens()!).getByRole("button");
-    expect(tile).toHaveTextContent("DP-0 (2560x1440)");
-    expect(within(tile).getByRole("img", { name: "Your screen" })).toBeVisible();
+    expect(stage()).toHaveTextContent("DP-0 (2560x1440)");
+    expect(
+      within(stage()!).getByRole("img", { name: "Your screen" }),
+    ).toBeVisible();
   });
 
-  it("gives somebody else sharing a square of their own", () => {
+  it("puts somebody else's screen on the stage when theirs is the only one", () => {
     render(
       card(
         inCall([
@@ -735,14 +742,22 @@ describe("screens being shared on the card", () => {
       ),
     );
 
-    expect(
-      within(screens()!).getByRole("button", { name: "Ada's screen" }),
-    ).toBeVisible();
+    expect(stage()).toHaveTextContent("Ada's screen");
   });
 
-  it("draws a square each when two people share at once", () => {
+  it("leaves no strip behind while one screen is being shared", () => {
+    // The stage is the whole answer then. A list of one that is already on the
+    // stage is the same tile drawn twice.
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+    }));
+
+    expect(strip()).toBe(null);
+  });
+
+  it("sends every screen but the staged one to the strip", () => {
     // The requirement is a square per screen rather than a slot somebody wins.
-    // Two is the example; nothing here counts.
+    // Three is the example; nothing here counts.
     render(
       card(
         inCall([
@@ -755,45 +770,173 @@ describe("screens being shared on the card", () => {
       ),
     );
 
-    expect(within(screens()!).getAllByRole("listitem")).toHaveLength(3);
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(within(strip()!).getAllByRole("listitem")).toHaveLength(2);
+    expect(strip()!).toHaveTextContent("Ada's screen");
+    expect(strip()!).toHaveTextContent("Cyd's screen");
   });
 
   it("draws this session's own screen once, not twice", () => {
     // Our own publication comes back in the roster a moment after the screen
     // channel has already said so. Both read naively is one screen in two
-    // squares.
+    // places.
     render(
       card(inCall([sharer("@bob:example.org", "Bob")]), undefined, {
         sharing: "DP-0",
       }),
     );
 
-    expect(within(screens()!).getAllByRole("listitem")).toHaveLength(1);
-    expect(screens()!).toHaveTextContent("DP-0");
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()).toBe(null);
   });
 
   it("asks for no picture for anybody else's screen", () => {
     // One local capture, and no path from anybody else's into this window.
-    // A tile naming who is presenting is the honest half of this.
     render(card(inCall([sharer("@ada:example.org", "Ada")])));
 
     expect(usePicture).not.toHaveBeenCalled();
   });
 
   it("keeps the people out of the screens and the screens out of the people", () => {
-    // Two lists because only one of them is a list of people, and that is
+    // Separate lists because only one of them is a list of people, and that is
     // what each is announced as.
     render(
-      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
-        sharing: "DP-0",
-      }),
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
     );
 
-    expect(
-      within(screens()!).queryByText("Bob"),
-    ).toBeNull();
+    expect(within(strip()!).queryByText("Bob")).toBeNull();
     const people = screen.getByRole("list", { name: "People in Lounge" });
     expect(within(people).queryByText("DP-0")).toBeNull();
+    expect(within(people).queryByText("Ada's screen")).toBeNull();
+  });
+});
+
+describe("choosing which screen gets the stage", () => {
+  const PICTURE = "data:image/jpeg;base64,bbbb";
+
+  function sharer(id: string, name: string): Participant {
+    return { id, name, muted: false, screen: true };
+  }
+
+  function stage() {
+    return screen.queryByRole("button", { name: /, fill the window$/ });
+  }
+
+  function strip() {
+    return screen.queryByRole("list", {
+      name: "Other screens shared in Lounge",
+    });
+  }
+
+  /** This session sharing DP-0 while Ada shares hers, which is two screens. */
+  function two(extra: { sharing?: string | null } = {}) {
+    return card(
+      inCall([
+        person("@bob:example.org", "Bob"),
+        sharer("@ada:example.org", "Ada"),
+      ]),
+      undefined,
+      { sharing: extra.sharing === undefined ? "DP-0" : extra.sharing },
+    );
+  }
+
+  it("stages this session's own share before anybody else's", () => {
+    // It is the only share that can draw a picture: nothing carries a remote
+    // frame into this window yet. Staging a monitor glyph over a live desktop
+    // would be the card choosing the emptier of the two.
+    render(two());
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()!).toHaveTextContent("Ada's screen");
+  });
+
+  it("puts a tile on the stage when it is clicked", async () => {
+    render(two());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+
+  it("returns the screen that was on the stage to the strip", async () => {
+    // A promotion that left the old occupant nowhere would lose a share by
+    // clicking the other one.
+    render(two());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    expect(within(strip()!).getAllByRole("listitem")).toHaveLength(1);
+    expect(strip()!).toHaveTextContent("DP-0");
+  });
+
+  it("puts a tile on the stage from the keyboard", async () => {
+    render(two());
+
+    screen
+      .getByRole("button", { name: "Put Ada's screen on the stage" })
+      .focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+
+  it("hands the stage over when the screen on it stops", async () => {
+    // Nothing clicked and nothing left to click: a stage still captioned with
+    // a share that ended is a picture of something that is no longer going out.
+    const { rerender } = render(two());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+    expect(stage()).toHaveTextContent("Ada's screen");
+
+    rerender(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          person("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()).toBe(null);
+  });
+
+  it("empties the stage when the last share stops", () => {
+    const { rerender } = render(two({ sharing: null }));
+    expect(stage()).toHaveTextContent("Ada's screen");
+
+    rerender(card(inCall([person("@bob:example.org", "Bob")])));
+
+    expect(stage()).toBe(null);
+  });
+
+  it("keeps a chosen screen on the stage while it is still being shared", async () => {
+    // A re-render is every roster update and every frame the picture polls
+    // for. A choice that survived none of them would be a stage that sprang
+    // back the moment anything moved.
+    usePicture.mockReturnValue(PICTURE);
+    const { rerender } = render(two());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    rerender(two());
+
+    expect(stage()).toHaveTextContent("Ada's screen");
   });
 });
 
@@ -804,37 +947,38 @@ describe("filling the window with the card", () => {
     });
   }
 
-  /** The tile for a shared screen, which is what the review asked be clickable. */
-  function tile() {
-    return within(
-      screen.getByRole("list", { name: "Screens shared in Lounge" }),
-    ).getByRole("button");
+  /** The stage, which is what the review asked be clickable. */
+  function stage() {
+    return screen.getByRole("button", { name: /, fill the window$/ });
   }
 
-  it("fills the window when a shared screen is clicked", async () => {
-    // The whole reason the tile is a control: a desktop at seventy pixels
-    // across says who is presenting and nothing about what.
+  it("fills the window when the staged screen is clicked", async () => {
+    // The whole reason the stage is a control: a desktop in a floating card
+    // says which window layout is going out and nothing about what it says.
     render(sharing());
 
-    await userEvent.click(tile());
+    await userEvent.click(stage());
 
     expect(onScreen()).toHaveAttribute("data-size", "full");
   });
 
-  it("comes back to the floating card from the same tile", async () => {
+  it("comes back to the floating card from the same control", async () => {
     // A view somebody cannot leave is not finished, and the control that got
     // them there is the first place they will try.
     render(sharing());
-    await userEvent.click(tile());
+    await userEvent.click(stage());
+    // The way out is only worth testing from somewhere, and "card" is where
+    // this starts: without this the test passes on a stage that never opened.
+    expect(onScreen()).toHaveAttribute("data-size", "full");
 
-    await userEvent.click(tile());
+    await userEvent.click(stage());
 
     expect(onScreen()).toHaveAttribute("data-size", "card");
   });
 
   it("comes back from the card's own control", async () => {
     render(sharing());
-    await userEvent.click(tile());
+    await userEvent.click(stage());
 
     await userEvent.click(
       screen.getByRole("button", { name: "Expand the call card" }),
@@ -845,7 +989,8 @@ describe("filling the window with the card", () => {
 
   it("comes back on Escape", async () => {
     render(sharing());
-    await userEvent.click(tile());
+    await userEvent.click(stage());
+    expect(onScreen()).toHaveAttribute("data-size", "full");
 
     await userEvent.keyboard("{Escape}");
 
@@ -869,11 +1014,9 @@ describe("filling the window with the card", () => {
     // There is nothing to move: it is the window.
     render(sharing());
 
-    await userEvent.click(tile());
+    await userEvent.click(stage());
 
-    expect(
-      screen.getByRole("button", { name: /^Move the/ }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Move the/ })).toBeDisabled();
   });
 
   it("does not fill the window for the next call", async () => {
@@ -881,7 +1024,7 @@ describe("filling the window with the card", () => {
     // Left alone, a card that was full when a call ended would fill the window
     // again the moment the next one started, for a share nobody is making.
     const { rerender } = render(sharing());
-    await userEvent.click(tile());
+    await userEvent.click(stage());
     expect(onScreen()).toHaveAttribute("data-size", "full");
 
     rerender(card({ state: "disconnected" }));
@@ -917,7 +1060,7 @@ describe("filling the window with the card", () => {
     fireEvent.pointerUp(window);
     expect(onScreen()).toHaveStyle({ left: "400px" });
 
-    await userEvent.click(tile());
+    await userEvent.click(stage());
     expect(onScreen()?.style.left).toBe("");
     await userEvent.keyboard("{Escape}");
 

@@ -17,12 +17,15 @@ offering the rooms you were last in, an icon in the system tray that brings the
 window back, publishing a camera into a call from a webcam chosen in
 settings, and sharing a screen or a window into a call, picked from a card that
 lists what this machine has. The floating call card draws both of those back at
-you as squares: a camera fills its owner's own square, a share gets one of its
-own, and clicking a share fills the window with the card. Drawing somebody
-else's camera or screen is not built yet, so they get a square with their name
-and no picture: see docs/PLAN-webcam.md for the half that is and the half that
-is not, and docs/adr/0008-one-square-for-everything-in-a-call.md for why the
-card is squares. Sharing system audio alongside a screen is not built either,
+you: a camera fills its owner's own square, and a shared screen takes the stage
+across the width of the card, with every other screen and everybody in the call
+on a strip of squares beneath it. Clicking the stage fills the window; clicking
+a screen on the strip puts that one on the stage. Drawing somebody else's camera
+or screen is not built yet, so they get a square with their name and no picture:
+see docs/PLAN-webcam.md for the half that is and the half that is not,
+docs/adr/0008-one-square-for-everything-in-a-call.md for why the card is
+squares, and docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
+them is not. Sharing system audio alongside a screen is not built either,
 and docs/PLAN-screen-share.md says what it would take. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a
 clip somebody sends, or a count on the icon when something is unread.

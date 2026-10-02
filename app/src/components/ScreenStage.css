@@ -1,0 +1,78 @@
+/*
+  The screen the call is watching, filling the width of whatever holds it.
+
+  The anchor of the card rather than a bigger tile, which is why the border
+  radius, the caption and the type scale all differ from the squares below it.
+*/
+.call-stage {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  /* Both on the compositor, so nothing here reflows the card under it. */
+  transition:
+    box-shadow var(--duration-fast) var(--ease-out-expo),
+    transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.call-stage:hover {
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.call-stage:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/* Pressed, said by the stage moving rather than by anything about it resizing. */
+.call-stage:active {
+  transform: scale(0.995);
+}
+
+/*
+  16:9, because that is the shape of a desktop. The picture inside is `contain`
+  (see `SelfPicture.css`), so a 4:3 or 16:10 source letterboxes in here rather
+  than stretching or losing its edges.
+*/
+.call-stage__picture {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
+.call-stage__picture .call-screen-glyph {
+  width: 22%;
+  height: 22%;
+}
+
+/*
+  Over the picture rather than under it, so the stage is all picture, and on a
+  surface of its own so it stays readable over a bright desktop.
+
+  The mint, which is the colour reserved for voice and presence. A share is the
+  other live thing a call carries.
+*/
+.call-stage__what {
+  position: absolute;
+  bottom: var(--space-2);
+  left: var(--space-2);
+  max-width: calc(100% - var(--space-4));
+  overflow: hidden;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--mint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+}
