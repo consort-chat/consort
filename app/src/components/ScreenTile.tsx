@@ -1,38 +1,11 @@
+import { ScreenGlyph } from "./ScreenGlyph";
 import { SelfPicture } from "./SelfPicture";
 import "./ScreenTile.css";
-
-/**
- * A monitor, under whatever picture there is.
- *
- * Always drawn, so the square is never empty: this session's own picture
- * answers nothing until its first frame, and nobody else's arrives at all yet.
- */
-function ScreenGlyph() {
-  return (
-    <svg
-      className="call-screen__glyph"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.5" y="4" width="19" height="13" rx="2" />
-      <path d="M9 20h6" />
-      <path d="M12 17v3" />
-    </svg>
-  );
-}
 
 interface Props {
   /**
    * What to call it: what is being shared for this session's own screen, and
    * whose it is for anybody else's.
-   *
-   * The whole accessible name for somebody else's, which is why it reads as a
-   * phrase rather than a bare name.
    */
   label: string;
   /**
@@ -43,34 +16,31 @@ interface Props {
    * `docs/PLAN-screen-share.md`.
    */
   mine: boolean;
-  /** Whether the card is already filling the window. */
-  full: boolean;
-  /** Fill the window with the card, or put it back. */
-  onToggle: () => void;
+  /** Put this one on the stage, and whatever was there back in the strip. */
+  onPick: () => void;
 }
 
 /**
- * One screen somebody is sharing, as a square on the call card.
+ * One shared screen waiting its turn, as a square under the stage.
  *
- * Its own square rather than a strip across the card, so two people presenting
- * at once are two tiles and not an argument about which one gets the strip.
  * The same square a face sits in, because a shared screen and a person are the
- * same kind of thing here: something the call is carrying.
+ * same kind of thing down here: something the call is carrying that is not
+ * what the call is currently about.
  */
-export function ScreenTile({ label, mine, full, onToggle }: Props) {
+export function ScreenTile({ label, mine, onPick }: Props) {
   return (
     <li className="call-screen">
       {/*
-        A button, so the keyboard reaches it with focus, Enter and Space for
-        free. What it does is grow the card, which is the one thing on the card
-        that a picture of somebody's screen at seventy pixels across cannot do
-        without.
+        What it does rather than only whose it is. The label is drawn under the
+        square as well, so speech input has a name to press, but a control that
+        rearranges the card should say so to somebody who cannot see it move.
       */}
       <button
         type="button"
         className="call-screen__button"
-        title={full ? "Back to the card" : "Fill the window"}
-        onClick={onToggle}
+        aria-label={`Put ${label} on the stage`}
+        title="Put it on the stage"
+        onClick={onPick}
       >
         <span className="call-screen__stage">
           <ScreenGlyph />

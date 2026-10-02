@@ -11,26 +11,25 @@ const PICTURE = "data:image/jpeg;base64,aaaa";
 
 /** One tile in a list, because that is where the card puts it. */
 function draw(overrides: Partial<Parameters<typeof ScreenTile>[0]> = {}) {
-  const onToggle = vi.fn();
+  const onPick = vi.fn();
   render(
-    <ul aria-label="Screens shared in Lounge">
+    <ul aria-label="Other screens shared in Lounge">
       <ScreenTile
         label="DP-0 (2560x1440)"
         mine
-        full={false}
-        onToggle={onToggle}
+        onPick={onPick}
         {...overrides}
       />
     </ul>,
   );
-  return onToggle;
+  return onPick;
 }
 
 beforeEach(() => {
   usePicture.mockReset().mockReturnValue(PICTURE);
 });
 
-describe("a shared screen on the card", () => {
+describe("a shared screen waiting in the strip", () => {
   it("says what is being shared", () => {
     // The whole point of #70: somebody sharing has to be able to tell their
     // terminal from their inbox.
@@ -51,36 +50,42 @@ describe("a shared screen on the card", () => {
     // is, a tile saying who is presenting is the honest half of this.
     draw({ label: "Ada's screen", mine: false });
 
-    expect(screen.getByRole("button")).toHaveAccessibleName("Ada's screen");
+    expect(screen.getByRole("button")).toHaveTextContent("Ada's screen");
     expect(screen.queryByRole("img", { name: "Your screen" })).toBeNull();
     expect(usePicture).not.toHaveBeenCalled();
   });
 
-  it("fills the window when clicked", async () => {
-    const onToggle = draw();
+  it("says what pressing it does, not only whose screen it is", () => {
+    // The tile moved from filling the window to taking the stage. A name that
+    // is only the label leaves the one control that rearranges the card
+    // announced as a caption.
+    draw({ label: "Ada's screen", mine: false });
+
+    expect(screen.getByRole("button")).toHaveAccessibleName(
+      "Put Ada's screen on the stage",
+    );
+    expect(screen.getByRole("button")).toHaveAttribute(
+      "title",
+      "Put it on the stage",
+    );
+  });
+
+  it("takes the stage when clicked", async () => {
+    const onPick = draw();
 
     await userEvent.click(screen.getByRole("button"));
 
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onPick).toHaveBeenCalledTimes(1);
   });
 
-  it("offers the way back once the card fills the window", async () => {
-    // A view somebody cannot leave is not finished, and the control that got
-    // them there is the first place they will try.
-    draw({ full: true });
+  it("takes the stage from the keyboard", async () => {
+    // Promoting a tile is an interaction now, so it has to be reachable
+    // without a pointer.
+    const onPick = draw();
 
-    expect(screen.getByRole("button")).toHaveAttribute(
-      "title",
-      "Back to the card",
-    );
-  });
+    await userEvent.tab();
+    await userEvent.keyboard("{Enter}");
 
-  it("offers to fill the window while it is only a tile", () => {
-    draw();
-
-    expect(screen.getByRole("button")).toHaveAttribute(
-      "title",
-      "Fill the window",
-    );
+    expect(onPick).toHaveBeenCalledTimes(1);
   });
 });

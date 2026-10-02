@@ -985,10 +985,9 @@ describe("AppShell", () => {
         selfScreen: { sharing: "DP-0 (2560x1440)", trouble: null },
       });
 
-      const screens = screen.getByRole("list", {
-        name: "Screens shared in Lounge",
-      });
-      expect(screens).toHaveTextContent("DP-0 (2560x1440)");
+      expect(
+        screen.getByRole("button", { name: /, fill the window$/ }),
+      ).toHaveTextContent("DP-0 (2560x1440)");
     });
 
     it("draws no shared screen on the card while nothing is going out", () => {
@@ -1003,8 +1002,9 @@ describe("AppShell", () => {
       });
 
       expect(
-        screen.queryByRole("list", { name: /^Screens shared/ }),
+        screen.queryByRole("button", { name: /, fill the window$/ }),
       ).toBeNull();
+      expect(screen.queryByRole("list", { name: /screens shared/i })).toBeNull();
     });
 
     describe("putting the card away and getting it back", () => {

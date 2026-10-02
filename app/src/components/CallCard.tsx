@@ -10,6 +10,7 @@ import { callLabel } from "../lib/labels";
 import { useDraggable } from "../lib/useDraggable";
 import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
+import { ScreenStage } from "./ScreenStage";
 import { ScreenTile } from "./ScreenTile";
 import { SelfPicture } from "./SelfPicture";
 import "./CallCard.css";
@@ -192,6 +193,19 @@ export function CallCard({
     size === "expanded" ? PEEKING.expanded : PEEKING.card,
   );
   const leftOut = people.length - peekers.length;
+
+  /*
+    Which screen the stage is showing, and which are left waiting under it.
+
+    Ours by default, because it is the only share that can draw a picture:
+    nothing carries a remote frame into this window yet, so staging anybody
+    else's would put a monitor glyph where a live desktop could be. A tile that
+    was clicked wins until that share stops, and `find` is what hands the stage
+    back when it does.
+  */
+  const [picked, setPicked] = useState<string | null>(null);
+  const staged = screens.find((one) => one.key === picked) ?? screens[0] ?? null;
+  const waiting = screens.filter((one) => one !== staged);
 
   /*
     Expanding makes it wider, and a card parked against the right edge grows
@@ -422,20 +436,28 @@ export function CallCard({
         Above the faces, because a screen somebody is presenting is what the
         call is about and the people in it are who is present.
       */}
-      {screens.length > 0 && (
+      {staged !== null && (
+        <ScreenStage
+          label={staged.label}
+          mine={staged.mine}
+          full={full}
+          onToggle={() =>
+            setSize((current) => (current === "full" ? "card" : "full"))
+          }
+        />
+      )}
+
+      {waiting.length > 0 && (
         <ul
           className="call-card__screens"
-          aria-label={`Screens shared in ${where}`}
+          aria-label={`Other screens shared in ${where}`}
         >
-          {screens.map((shared) => (
+          {waiting.map((shared) => (
             <ScreenTile
               key={shared.key}
               label={shared.label}
               mine={shared.mine}
-              full={full}
-              onToggle={() =>
-                setSize((current) => (current === "full" ? "card" : "full"))
-              }
+              onPick={() => setPicked(shared.key)}
             />
           ))}
         </ul>
