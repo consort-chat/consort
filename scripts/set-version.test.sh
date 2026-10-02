@@ -62,10 +62,10 @@ rm -rf "$tmp"
 echo "Cargo.lock's workspace members follow, and nothing else in it moves"
 tmp=$(fixture)
 members=$(grep -c '^name = "consort-' "$tmp/Cargo.lock")
-[ "$members" -eq 4 ] || fail "expected four consort crates in Cargo.lock, found $members"
+[ "$members" -eq 5 ] || fail "expected five consort crates in Cargo.lock, found $members"
 cp "$tmp/Cargo.lock" "$tmp/before.lock"
 "$script" 9.9.9 "$tmp" >/dev/null
-# Every consort entry, and only those: a dependency list names these four
+# Every consort entry, and only those: a dependency list names these five
 # without a version, so the version on the line after the name is the whole of
 # what cargo would have rewritten.
 written=$(awk -v want='version = "9.9.9"' \

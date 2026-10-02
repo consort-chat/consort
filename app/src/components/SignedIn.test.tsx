@@ -12,10 +12,12 @@ const onRooms = vi.hoisted(() => vi.fn());
 const onCall = vi.hoisted(() => vi.fn());
 const onCallRefused = vi.hoisted(() => vi.fn());
 const onSelfAudio = vi.hoisted(() => vi.fn());
+const onSelfVideo = vi.hoisted(() => vi.fn());
 const onSpeaking = vi.hoisted(() => vi.fn());
 const onShowRoom = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 const callSetMuted = vi.hoisted(() => vi.fn());
+const callSetCamera = vi.hoisted(() => vi.fn());
 const callSetDeafened = vi.hoisted(() => vi.fn());
 const callSetAway = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
@@ -60,10 +62,12 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onCall,
   onCallRefused,
   onSelfAudio,
+  onSelfVideo,
   onSpeaking,
   onShowRoom,
   onAudio,
   callSetMuted,
+  callSetCamera,
   callSetDeafened,
   callSetAway,
   callConnect,
@@ -99,6 +103,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfVideo,
   Space,
   TokenStorage,
   Verification,
@@ -201,10 +206,14 @@ function resetApiMocks() {
   onCall.mockReset().mockResolvedValue(() => {});
   onCallRefused.mockReset().mockResolvedValue(() => {});
   onSelfAudio.mockReset().mockResolvedValue(() => {});
+  onSelfVideo.mockReset().mockResolvedValue(() => {});
   onSpeaking.mockReset().mockResolvedValue(() => {});
   onShowRoom.mockReset().mockResolvedValue(() => {});
   onAudio.mockReset().mockResolvedValue(() => {});
   callSetMuted.mockReset().mockResolvedValue(undefined);
+  callSetCamera
+    .mockReset()
+    .mockResolvedValue({ camera: false, trouble: null });
   callSetDeafened.mockReset().mockResolvedValue(undefined);
   callSetAway.mockReset().mockResolvedValue(undefined);
   callConnect.mockReset().mockResolvedValue(undefined);
@@ -707,6 +716,7 @@ describe("SignedIn verification state", () => {
         },
       ],
       [onSelfAudio, { muted: true, deafened: false }],
+      [onSelfVideo, { camera: true, trouble: null }],
       [onSpeaking, ["@ada:example.org"]],
       [onShowRoom, "!general:example.org"],
       [onAudio, { state: "callAudioFailed", error: "no output device" }],
@@ -1660,6 +1670,17 @@ describe("SignedIn voice calls", () => {
     return registered[0];
   }
 
+  /** The handler the component registered for the camera channel. */
+  function selfVideoHandler(): (video: SelfVideo) => void {
+    const registered = onSelfVideo.mock.calls.at(-1) as
+      | [(video: SelfVideo) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to its own camera");
+    }
+    return registered[0];
+  }
+
   /** Showing a call that is up, which is where the controls are drawn. */
   async function inACall() {
     await showing();
@@ -1707,6 +1728,72 @@ describe("SignedIn voice calls", () => {
     );
 
     expect(callSetMuted).toHaveBeenCalledWith(true);
+  });
+
+  it("asks for the camera from the connection panel", async () => {
+    await inACall();
+
+    await userEvent.click(screen.getByRole("button", { name: /share camera/i }));
+
+    expect(callSetCamera).toHaveBeenCalledWith(true);
+  });
+
+  it("shows nothing about the camera until the channel says so", async () => {
+    // The same rule the mute button follows. A press that never reached the
+    // call thread leaves the button where it was, which is the truth about
+    // whether anybody can see you.
+    await inACall();
+
+    await userEvent.click(screen.getByRole("button", { name: /share camera/i }));
+
+    expect(
+      screen.getByRole("button", { name: /share camera/i }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("draws the camera once the channel reports it", async () => {
+    await inACall();
+
+    act(() => selfVideoHandler()({ camera: true, trouble: null }));
+
+    expect(
+      screen.getByRole("button", { name: /share camera/i }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("puts the camera back when the channel says it went down", async () => {
+    // What a channel switch looks like from here: nobody pressed anything and
+    // the publication is gone, so the button has to follow.
+    await inACall();
+    act(() => selfVideoHandler()({ camera: true, trouble: null }));
+
+    act(() => selfVideoHandler()({ camera: false, trouble: null }));
+
+    expect(
+      screen.getByRole("button", { name: /share camera/i }),
+    ).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps the call on screen when the camera goes down", async () => {
+    // The reason the camera is on a channel of its own. Sent as a call state
+    // it would close the panel it was pressed in.
+    await inACall();
+
+    act(() => selfVideoHandler()({ camera: true, trouble: null }));
+
+    expect(
+      screen.getByRole("group", { name: /voice connection/i }),
+    ).toBeVisible();
+  });
+
+  it("shows why the camera would not start", async () => {
+    await inACall();
+
+    act(() =>
+      selfVideoHandler()({ camera: false, trouble: "the camera is busy" }),
+    );
+
+    expect(await screen.findByText(/the camera is busy/i)).toBeVisible();
   });
 
   it("asks to deafen from the connection panel", async () => {
@@ -1937,8 +2024,8 @@ describe("SignedIn voice calls", () => {
   /*
     The same rule as the successful press, and the case that makes it matter:
     the control reflects what the call thread did, so an ask that never got
-    there leaves the control alone. Three controls and one rule, so one table
-    rather than three copies free to drift apart.
+    there leaves the control alone. Four controls and one rule, so one table
+    rather than four copies free to drift apart.
 
     The third column is how the control is reached rather than anything about
     the control, because two of the three are behind the chevron and one is
@@ -1947,6 +2034,7 @@ describe("SignedIn voice calls", () => {
   */
   it.each([
     ["Mute microphone", callSetMuted, false],
+    ["Share camera", callSetCamera, false],
     ["Deafen", callSetDeafened, true],
     ["Away", callSetAway, true],
   ])(

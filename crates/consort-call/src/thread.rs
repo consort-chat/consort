@@ -39,11 +39,13 @@ use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::arrivals::Arrivals;
-use crate::event::{CallEvent, SelfAudio};
+use crate::camera::{Camera, PictureSize};
+use crate::event::{CallEvent, SelfAudio, SelfVideo};
 use crate::failure::CallFailure;
 use crate::hearing::{Cue, Ears};
 use crate::microphone::Microphone;
 use crate::publish::pump;
+use crate::showing::{self, PublishedVideo};
 use crate::transport::{CallSession, CallTransport, Roster};
 
 /// How long a join may take before it is abandoned.
@@ -96,6 +98,12 @@ enum Message {
     /// Stop or resume receiving everybody else's audio.
     SetDeafened(bool),
     SetAway(bool),
+    /// Publish this session's camera at this size, or retract it.
+    ///
+    /// The size rather than a bare switch, because the device is opened before
+    /// anything is published and the transport needs the negotiated size to
+    /// set its encoder up. See [`PictureSize`].
+    SetCamera(Option<PictureSize>),
     Shutdown,
 }
 
@@ -116,22 +124,24 @@ pub struct CallThread {
 impl CallThread {
     /// Start the thread. It idles until told to [`connect`](Self::connect).
     ///
-    /// `microphone` is where captured audio arrives from, and `ears` is where
-    /// everybody else's audio goes. Both are taken here rather than at each
-    /// connect because the audio thread has to be able to hold the other end of
-    /// them whether or not a call is up: the two threads are started once, and
-    /// what is between them outlives any one call.
+    /// `microphone` is where captured audio arrives from, `camera` is where
+    /// captured frames do, and `ears` is where everybody else's audio goes.
+    /// All three are taken here rather than at each connect because the threads
+    /// filling them have to be able to hold the other end whether or not a call
+    /// is up: they are started once, and what is between them outlives any one
+    /// call.
     pub fn spawn<T: CallTransport>(
         transport: T,
         events: UnboundedSender<CallEvent>,
         microphone: Microphone,
+        camera: Camera,
         ears: Ears,
     ) -> Self {
         let (commands, inbox) = unbounded_channel::<Message>();
 
         let join = std::thread::Builder::new()
             .name("consort-call".to_owned())
-            .spawn(move || run(transport, inbox, events, microphone, ears))
+            .spawn(move || run(transport, inbox, events, microphone, camera, ears))
             .expect("the operating system refused a thread");
 
         Self {
@@ -180,6 +190,15 @@ impl CallThread {
         self.send(Message::SetAway(away));
     }
 
+    /// Publish this session's camera at `size`, or retract it with `None`.
+    ///
+    /// Not remembered across calls, unlike mute and deafen. A camera belongs to
+    /// one call: see [`crate::SelfVideo`] for why moving channels starts with
+    /// it off.
+    pub fn set_camera(&self, size: Option<PictureSize>) {
+        self.send(Message::SetCamera(size));
+    }
+
     /// Post a command, ignoring a thread that has already gone.
     ///
     /// Nothing useful is done about it. The thread only ends when this handle
@@ -214,6 +233,7 @@ fn run<T: CallTransport>(
     inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
+    camera: Camera,
     ears: Ears,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -232,17 +252,36 @@ fn run<T: CallTransport>(
     };
 
     let local = tokio::task::LocalSet::new();
-    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone, ears)));
+    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone, camera, ears)));
 }
 
 /// A call this session is in, and the task carrying its microphone.
-struct Joined<S> {
+struct Joined<S: CallSession> {
     room_id: String,
     session: S,
     /// Ends when this is dropped. See [`AbortOnDrop`].
     publishing: AbortOnDrop,
     /// The task reporting who is in the call. Ends the same way.
     watching: AbortOnDrop,
+    /// The camera, while one is up. `None` for the whole of a call nobody
+    /// switched a camera on in, which is most of them.
+    showing: Option<Showing<S::Video>>,
+}
+
+/// A camera publication and the task feeding it.
+///
+/// The track is kept beside the task because retracting a publication and
+/// stopping the frames going into it are two different acts: dropping the
+/// handle ends the pump, and peers only drop the stream when something awaits
+/// [`PublishedVideo::unpublish`].
+struct Showing<V> {
+    track: V,
+    /// Ends when this is dropped. See [`AbortOnDrop`].
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which is what stops the frames; reading it                   would be reading a JoinHandle nobody awaits"
+    )]
+    pump: AbortOnDrop,
 }
 
 /// A task that ends when this handle is dropped.
@@ -268,10 +307,12 @@ async fn serve<T: CallTransport>(
     mut inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
+    camera: Camera,
     ears: Ears,
 ) {
     let mut current: Option<Joined<T::Session>> = None;
     let mut audio = SelfAudio::default();
+    let mut video = SelfVideo::default();
 
     // How the roster watcher asks for this session's own audio state to be
     // pushed at the call again.
@@ -314,6 +355,13 @@ async fn serve<T: CallTransport>(
                     &ears,
                 )
                 .await;
+                // A camera does not follow a call the way a mute does. The old
+                // publication went with the old session, and the new channel
+                // starts with nothing published, so what the button shows has
+                // to come back to off or it is claiming a camera that is not
+                // running.
+                video = show(&events, video, SelfVideo::default());
+                camera.clear();
                 // Re-applied rather than assumed. A new session starts unmuted
                 // and undeafened however this one was left, so a person who
                 // muted themselves in one channel and clicked another would
@@ -342,6 +390,8 @@ async fn serve<T: CallTransport>(
                     // silence after the call, or into the next one.
                     ears.silence();
                     leave(Some(joined), LEAVE_TIMEOUT).await;
+                    video = show(&events, video, SelfVideo::default());
+                    camera.clear();
                 }
             }
             Message::SetMuted(muted) => {
@@ -365,6 +415,9 @@ async fn serve<T: CallTransport>(
                 if returning {
                     ears.cue(Cue::Returned);
                 }
+            }
+            Message::SetCamera(size) => {
+                video = set_camera(&events, video, current.as_mut(), size, &camera).await;
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
@@ -392,6 +445,105 @@ fn announce(events: &UnboundedSender<CallEvent>, current: SelfAudio, next: SelfA
         emit(events, CallEvent::SelfAudio(next));
     }
     next
+}
+
+/// Move to `next`, saying so only if it is different.
+///
+/// [`announce`] for the camera, and separate from it because the two states are
+/// independent and a change to one must not redraw the other.
+fn show(events: &UnboundedSender<CallEvent>, current: SelfVideo, next: SelfVideo) -> SelfVideo {
+    if next != current {
+        emit(events, CallEvent::SelfVideo(next.clone()));
+    }
+    next
+}
+
+/// Put this session's camera up, or take it down, and say which happened.
+///
+/// Takes `&mut` on the call because this is the one command that changes what a
+/// call is publishing rather than how it is configured.
+///
+/// A camera needs a call to be published into. Asking for one outside a call is
+/// reported rather than remembered: the alternative is a button that latches on
+/// and then silently publishes the moment somebody joins a channel, which is a
+/// camera turning itself on.
+async fn set_camera<S: CallSession>(
+    events: &UnboundedSender<CallEvent>,
+    current: SelfVideo,
+    joined: Option<&mut Joined<S>>,
+    size: Option<PictureSize>,
+    camera: &Camera,
+) -> SelfVideo {
+    let Some(joined) = joined else {
+        // Switching off with no call is the ordinary way a call ends, so it is
+        // not worth a complaint. Switching on is.
+        let trouble = size.map(|_| "there is no call to put a camera in".to_owned());
+        return show(
+            events,
+            current,
+            SelfVideo {
+                camera: false,
+                trouble,
+            },
+        );
+    };
+
+    let Some(size) = size else {
+        if let Some(showing) = joined.showing.take()
+            && let Err(error) = showing.track.unpublish().await
+        {
+            // Logged and no more. The frames have already stopped, because
+            // dropping the handle aborted the pump, so the worst case is a
+            // publication peers see as stalled until the call ends.
+            tracing::warn!(%error, "could not retract the camera");
+        }
+        // So that switching the camera back on does not publish the last thing
+        // it saw before it stopped.
+        camera.clear();
+        return show(events, current, SelfVideo::default());
+    };
+
+    if joined.showing.is_some() {
+        // Already up. Re-announced rather than republished, because the
+        // interface may be asking because it lost track of what it is doing.
+        return show(
+            events,
+            current,
+            SelfVideo {
+                camera: true,
+                trouble: None,
+            },
+        );
+    }
+
+    let track = match joined.session.publish_camera(size).await {
+        Ok(track) => track,
+        Err(error) => {
+            return show(
+                events,
+                current,
+                SelfVideo {
+                    camera: false,
+                    trouble: Some(error.to_string()),
+                },
+            );
+        }
+    };
+
+    let pump = AbortOnDrop(tokio::task::spawn_local(showing::pump(
+        track.clone(),
+        camera.clone(),
+    )));
+    joined.showing = Some(Showing { track, pump });
+
+    show(
+        events,
+        current,
+        SelfVideo {
+            camera: true,
+            trouble: None,
+        },
+    )
 }
 
 /// Push this session's mute and deafen state at the call it is in.
@@ -548,6 +700,9 @@ async fn connect<T: CallTransport>(
         session,
         publishing,
         watching,
+        // A join publishes a microphone and never a camera. See
+        // `Message::SetCamera`.
+        showing: None,
     })
 }
 
@@ -624,6 +779,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
         session,
         publishing,
         watching,
+        showing,
     }) = current
     else {
         return false;
@@ -634,6 +790,10 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
     // and no roster is reported for a call that is on its way out.
     drop(publishing);
     drop(watching);
+    // Dropped rather than retracted. Leaving takes every publication in the
+    // call down with it, so an `unpublish` here would be a second request for
+    // something the leave is about to do, on the budget the leave needs.
+    drop(showing);
 
     leave_session(&room_id, session, budget).await;
     true
@@ -682,6 +842,7 @@ mod tests {
     use consort_matrix::Participant;
     use tokio::sync::watch;
 
+    use crate::camera::OutgoingPicture;
     use crate::hearing::Heard;
     use crate::publish::PublishedAudio;
 
@@ -717,6 +878,18 @@ mod tests {
         /// from it not.
         announced: Arc<Mutex<Option<SelfAudio>>>,
         announcements: Arc<AtomicUsize>,
+        /// Every camera publication asked for, by size.
+        cameras: Arc<Mutex<Vec<PictureSize>>>,
+        /// Camera publications not yet dropped, and how many were retracted.
+        ///
+        /// Both, because they are different acts: the pump stops when the
+        /// handle is dropped, and peers only drop the stream on a retraction.
+        /// A test that watched one could not tell a camera switched off from a
+        /// camera whose frames merely stopped.
+        live_cameras: Arc<AtomicUsize>,
+        retracted: Arc<AtomicUsize>,
+        /// Frames the camera publication was handed.
+        frames: Arc<AtomicUsize>,
         /// How many times the session was asked to play the call.
         ///
         /// Counted rather than recorded, because what matters is that it is
@@ -765,6 +938,22 @@ mod tests {
 
         fn listens(&self) -> usize {
             self.listens.load(Ordering::Relaxed)
+        }
+
+        fn cameras(&self) -> Vec<PictureSize> {
+            self.cameras.lock().unwrap().clone()
+        }
+
+        fn live_cameras(&self) -> usize {
+            self.live_cameras.load(Ordering::Relaxed)
+        }
+
+        fn retracted(&self) -> usize {
+            self.retracted.load(Ordering::Relaxed)
+        }
+
+        fn frames(&self) -> usize {
+            self.frames.load(Ordering::Relaxed)
         }
     }
 
@@ -825,6 +1014,60 @@ mod tests {
         }
     }
 
+    /// A camera publication that counts itself and the frames it takes.
+    ///
+    /// `Arc` inside, so a clone is a second handle on one publication, which
+    /// is what [`PublishedVideo`] requires and what the real one is.
+    #[derive(Clone)]
+    struct FakeCamera {
+        log: Log,
+        #[expect(
+            dead_code,
+            reason = "held so the publication is counted alive for as long as \
+                      any handle on it is; reading it would prove nothing"
+        )]
+        alive: Arc<Alive>,
+        /// Whether pushing a frame reports the publication gone.
+        accepts: bool,
+    }
+
+    /// Counts one publication, however many handles there are on it.
+    struct Alive(Log);
+
+    impl Drop for Alive {
+        fn drop(&mut self) {
+            self.0.live_cameras.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    impl PublishedVideo for FakeCamera {
+        fn send(&self, _picture: OutgoingPicture) -> Result<(), CallFailure> {
+            if !self.accepts {
+                return Err(CallFailure::NoTransport(
+                    "the publication is gone".to_owned(),
+                ));
+            }
+            self.log.frames.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn unpublish(&self) -> Result<(), CallFailure> {
+            self.log.retracted.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    /// What publishing a camera does.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Filming {
+        Succeeds,
+        /// The SFU took the microphone and refused the camera. A deployment
+        /// with video disabled, or one out of publishing slots.
+        Fails,
+        /// The publication comes up and then will not take a frame.
+        Stalls,
+    }
+
     /// What publishing the microphone does.
     #[derive(Clone, Copy, PartialEq)]
     enum Publishing {
@@ -849,6 +1092,7 @@ mod tests {
         joining: Joining,
         leaving: Leaving,
         publishing: Publishing,
+        filming: Filming,
         /// Held by the transport rather than made per session, so a test can
         /// reach the roster of a call the loop is holding.
         roster: watch::Sender<Standing>,
@@ -873,6 +1117,7 @@ mod tests {
                     joining,
                     leaving: Leaving::Succeeds,
                     publishing: Publishing::Succeeds,
+                    filming: Filming::Succeeds,
                     roster: watch::channel((Vec::new(), None)).0,
                 },
                 log,
@@ -888,6 +1133,12 @@ mod tests {
         fn whose_microphone_is_refused() -> (Self, Log) {
             let (mut transport, log) = Self::new(Joining::Succeeds);
             transport.publishing = Publishing::Fails;
+            (transport, log)
+        }
+
+        fn whose_camera(filming: Filming) -> (Self, Log) {
+            let (mut transport, log) = Self::new(Joining::Succeeds);
+            transport.filming = filming;
             (transport, log)
         }
 
@@ -911,6 +1162,7 @@ mod tests {
                     log: self.log.clone(),
                     leaving: self.leaving,
                     publishing: self.publishing,
+                    filming: self.filming,
                     roster: self.roster.clone(),
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
@@ -924,6 +1176,7 @@ mod tests {
         log: Log,
         leaving: Leaving,
         publishing: Publishing,
+        filming: Filming,
         /// The roster every view of this call reads from. A test pushes to the
         /// sender to make somebody arrive or leave.
         roster: watch::Sender<Standing>,
@@ -970,6 +1223,7 @@ mod tests {
 
     impl CallSession for FakeSession {
         type Track = FakeTrack;
+        type Video = FakeCamera;
         type Roster = FakeRoster;
 
         fn roster(&self) -> Self::Roster {
@@ -996,6 +1250,23 @@ mod tests {
                     "the focus refused the microphone".to_owned(),
                 )),
             }
+        }
+
+        async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+            self.log.cameras.lock().unwrap().push(size);
+
+            if self.filming == Filming::Fails {
+                return Err(CallFailure::NoTransport(
+                    "the focus refused the camera".to_owned(),
+                ));
+            }
+
+            self.log.live_cameras.fetch_add(1, Ordering::Relaxed);
+            Ok(FakeCamera {
+                log: self.log.clone(),
+                alive: Arc::new(Alive(self.log.clone())),
+                accepts: self.filming != Filming::Stalls,
+            })
         }
 
         async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
@@ -1071,6 +1342,16 @@ mod tests {
     /// sleep anywhere. `serve` owns the event sender and drops it on return,
     /// which is what lets the drain below terminate.
     async fn transcript(transport: FakeTransport, commands: Vec<Message>) -> Vec<CallEvent> {
+        filmed(transport, commands, Camera::new()).await
+    }
+
+    /// [`transcript`], with the camera queue handed in so a test can prefill it
+    /// or look at it afterwards.
+    async fn filmed(
+        transport: FakeTransport,
+        commands: Vec<Message>,
+        camera: Camera,
+    ) -> Vec<CallEvent> {
         let (to_loop, inbox) = unbounded_channel();
         for command in commands {
             to_loop.send(command).unwrap();
@@ -1088,6 +1369,7 @@ mod tests {
                 inbox,
                 events,
                 Microphone::new(),
+                camera,
                 Arc::new(Deaf::default()),
             ))
             .await;
@@ -1335,6 +1617,7 @@ mod tests {
                 inbox,
                 events,
                 Microphone::new(),
+                Camera::new(),
                 Arc::new(Deaf::default()),
             ))
             .await;
@@ -1393,6 +1676,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ),
                     watching
@@ -1452,6 +1736,7 @@ mod tests {
             transport,
             events,
             Microphone::new(),
+            Camera::new(),
             Arc::new(Deaf::default()),
         );
         thread.connect(GENERAL.to_owned());
@@ -1478,6 +1763,7 @@ mod tests {
             transport,
             events,
             Microphone::new(),
+            Camera::new(),
             Arc::new(Deaf::default()),
         );
 
@@ -1911,6 +2197,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
@@ -1941,6 +2228,350 @@ mod tests {
     }
 
     /// Who is in the call, and how that reaches the interface.
+    mod the_camera {
+        use super::*;
+
+        const SIZE: PictureSize = PictureSize {
+            width: 1280,
+            height: 720,
+        };
+
+        fn camera_on() -> Message {
+            Message::SetCamera(Some(SIZE))
+        }
+
+        fn camera_off() -> Message {
+            Message::SetCamera(None)
+        }
+
+        fn showing(camera: bool) -> SelfVideo {
+            SelfVideo {
+                camera,
+                trouble: None,
+            }
+        }
+
+        /// The `selfVideo` events out of a transcript, in order.
+        fn video(said: &[CallEvent]) -> Vec<SelfVideo> {
+            said.iter()
+                .filter_map(|event| match event {
+                    CallEvent::SelfVideo(video) => Some(video.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        fn frame() -> OutgoingPicture {
+            OutgoingPicture {
+                width: 2,
+                height: 2,
+                y: vec![1; 4],
+                u: vec![128],
+                v: vec![128],
+                timestamp_us: 1,
+            }
+        }
+
+        #[tokio::test]
+        async fn switching_it_on_publishes_a_camera_at_the_size_it_was_given() {
+            // The size matters: the transport sets its encoder and simulcast
+            // layers up from it, so a publication at the wrong size is a
+            // publication configured for frames that never arrive.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), camera_on()]).await;
+
+            assert_eq!(log.cameras(), vec![SIZE]);
+            assert_eq!(video(&said), vec![showing(true)]);
+        }
+
+        #[tokio::test]
+        async fn switching_it_off_retracts_the_publication() {
+            // Retracted, not muted. Peers drop the stream and draw an avatar,
+            // which is what `roster::camera_live` already reads.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), camera_off()],
+            )
+            .await;
+
+            assert_eq!(log.retracted(), 1);
+            assert_eq!(video(&said), vec![showing(true), showing(false)]);
+        }
+
+        #[tokio::test]
+        async fn asking_for_a_camera_outside_a_call_publishes_nothing_and_says_why() {
+            // Not latched. A button that remembered this would publish the
+            // moment somebody joined any channel, which is a camera turning
+            // itself on.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![camera_on()]).await;
+
+            assert_eq!(log.cameras(), Vec::new());
+            let reported = video(&said);
+            assert_eq!(reported.len(), 1);
+            assert!(!reported[0].camera);
+            assert!(
+                reported[0].trouble.is_some(),
+                "a camera that did not come on has to say so"
+            );
+        }
+
+        #[tokio::test]
+        async fn switching_it_off_outside_a_call_is_not_worth_a_complaint() {
+            // How every call ends: the interface puts the camera away, and
+            // there is nothing wrong.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![camera_off()]).await;
+
+            assert_eq!(video(&said), Vec::new(), "nothing changed, so nothing said");
+        }
+
+        #[tokio::test]
+        async fn a_refused_camera_reports_the_reason_and_leaves_nothing_publishing() {
+            let (transport, log) = FakeTransport::whose_camera(Filming::Fails);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), camera_on()]).await;
+
+            assert_eq!(log.live_cameras(), 0);
+            let reported = video(&said);
+            assert_eq!(reported.len(), 1);
+            assert!(!reported[0].camera);
+            assert_eq!(
+                reported[0].trouble.as_deref(),
+                Some("no voice server would take this call: the focus refused the camera")
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_twice_publishes_once() {
+            // The interface may ask because it lost track of what it is doing.
+            // A second publication would be a second camera in the call.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), camera_on()],
+            )
+            .await;
+
+            assert_eq!(log.cameras(), vec![SIZE]);
+            assert_eq!(video(&said), vec![showing(true)], "and said so once");
+        }
+
+        #[tokio::test]
+        async fn moving_to_another_channel_puts_the_camera_away() {
+            // A camera belongs to one call. The old publication went with the
+            // old session, so a button still showing "on" would be claiming a
+            // camera that is not running.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), connect_to(MUSIC)],
+            )
+            .await;
+
+            assert_eq!(video(&said), vec![showing(true), showing(false)]);
+            assert_eq!(
+                log.cameras(),
+                vec![SIZE],
+                "and nothing published in the new one"
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_the_call_puts_the_camera_away() {
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), Message::Disconnect],
+            )
+            .await;
+
+            assert_eq!(video(&said), vec![showing(true), showing(false)]);
+        }
+
+        #[tokio::test]
+        async fn leaving_the_call_stops_the_frames() {
+            // The publication is dropped rather than retracted on a leave,
+            // because leaving takes every publication down with it. What has
+            // to be true either way is that nothing is still pushing frames.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let _said = transcript(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), Message::Disconnect],
+            )
+            .await;
+
+            assert_eq!(log.live_cameras(), 0);
+        }
+
+        /// Yield until `reached` frames have been pushed, or give up.
+        ///
+        /// The pump is a `spawn_local` task, so it runs only when the loop
+        /// awaits. [`transcript`] queues every command up front and shuts the
+        /// loop down, which never gives the task a turn, so the two frame
+        /// tests below drive `set_camera` directly instead.
+        async fn pushed(log: &Log, reached: usize) {
+            for _ in 0..8 {
+                if log.frames() >= reached {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+
+        /// Join a call, with the plumbing the loop would otherwise own.
+        async fn joined(transport: &FakeTransport) -> Option<Joined<FakeSession>> {
+            let (events, _said) = unbounded_channel();
+            let (restate, _restated) = unbounded_channel();
+            connect(
+                transport,
+                None,
+                GENERAL.to_owned(),
+                &events,
+                &Microphone::new(),
+                &restate,
+                &(Arc::new(Deaf::default()) as Ears),
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn queued_frames_reach_the_publication() {
+            let local = tokio::task::LocalSet::new();
+            local
+                .run_until(async {
+                    let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                    let camera = Camera::new();
+                    camera.offer(frame());
+                    let mut call = joined(&transport).await;
+                    let (events, _said) = unbounded_channel();
+
+                    set_camera(
+                        &events,
+                        SelfVideo::default(),
+                        call.as_mut(),
+                        Some(SIZE),
+                        &camera,
+                    )
+                    .await;
+                    pushed(&log, 1).await;
+
+                    assert_eq!(log.frames(), 1);
+                })
+                .await;
+        }
+
+        #[tokio::test]
+        async fn switching_it_off_stops_the_frames() {
+            // Nothing else would. The pump waits on a slot, and a camera that
+            // has been closed stops filling it rather than closing it, so the
+            // task would sit there for the life of the application.
+            let local = tokio::task::LocalSet::new();
+            local
+                .run_until(async {
+                    let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                    let camera = Camera::new();
+                    let mut call = joined(&transport).await;
+                    let (events, _said) = unbounded_channel();
+
+                    set_camera(
+                        &events,
+                        SelfVideo::default(),
+                        call.as_mut(),
+                        Some(SIZE),
+                        &camera,
+                    )
+                    .await;
+                    assert_eq!(log.live_cameras(), 1, "nothing was publishing");
+
+                    set_camera(&events, showing(true), call.as_mut(), None, &camera).await;
+                    camera.offer(frame());
+                    pushed(&log, 1).await;
+
+                    assert_eq!(log.frames(), 0, "a retracted camera is still being fed");
+                    assert_eq!(log.live_cameras(), 0);
+                })
+                .await;
+        }
+
+        #[tokio::test]
+        async fn switching_it_off_and_on_again_does_not_publish_what_it_saw_before() {
+            // The privacy-relevant one. Somebody covers their camera and
+            // switches it off, and the frame that was waiting when they did is
+            // the one frame they least want sent when they switch it back on.
+            let local = tokio::task::LocalSet::new();
+            local
+                .run_until(async {
+                    let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                    let camera = Camera::new();
+                    let mut call = joined(&transport).await;
+                    let (events, _said) = unbounded_channel();
+
+                    // On, then a frame arrives, then off before the pump has
+                    // had a turn to take it.
+                    set_camera(
+                        &events,
+                        SelfVideo::default(),
+                        call.as_mut(),
+                        Some(SIZE),
+                        &camera,
+                    )
+                    .await;
+                    camera.offer(frame());
+                    set_camera(&events, showing(true), call.as_mut(), None, &camera).await;
+
+                    set_camera(
+                        &events,
+                        SelfVideo::default(),
+                        call.as_mut(),
+                        Some(SIZE),
+                        &camera,
+                    )
+                    .await;
+                    pushed(&log, 1).await;
+
+                    assert_eq!(
+                        log.frames(),
+                        0,
+                        "a frame from before the camera went off was sent"
+                    );
+                })
+                .await;
+        }
+
+        #[tokio::test]
+        async fn a_publication_that_stops_taking_frames_does_not_end_the_call() {
+            // The camera is the least important thing in a call. A publication
+            // the SFU has given up on must not take the conversation with it.
+            let (transport, log) = FakeTransport::whose_camera(Filming::Stalls);
+            let camera = Camera::new();
+            camera.offer(frame());
+
+            let said = filmed(
+                transport,
+                vec![connect_to(GENERAL), camera_on(), Message::SetMuted(true)],
+                camera.clone(),
+            )
+            .await;
+
+            assert_eq!(log.frames(), 0);
+            assert!(
+                said.contains(&connected(GENERAL)),
+                "the call should still be up: {said:?}"
+            );
+            assert!(log.muted(), "the loop stopped taking commands");
+        }
+    }
+
     mod roster {
         use super::*;
 
@@ -1968,6 +2599,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
@@ -2012,6 +2644,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Arc::new(heard),
                     ));
 
@@ -2407,6 +3040,7 @@ mod tests {
                     inbox,
                     events,
                     Microphone::new(),
+                    Camera::new(),
                     Arc::new(ears.clone()),
                 ))
                 .await;
@@ -2451,6 +3085,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
@@ -2541,6 +3176,7 @@ mod tests {
                     inbox,
                     events,
                     Microphone::new(),
+                    Camera::new(),
                     Arc::new(Deaf::default()),
                 ))
                 .await;

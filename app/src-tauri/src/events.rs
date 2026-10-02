@@ -17,7 +17,7 @@
 use std::sync::{Arc, Mutex};
 
 use consort_audio::AudioEvent;
-use consort_call::{CallEvent, SelfAudio};
+use consort_call::{CallEvent, SelfAudio, SelfVideo};
 use consort_matrix::{
     CallReadiness, Connection, Flow, KeyBackup, Readers, Rooms, SessionVerification, Thread,
     Timeline, Typing,
@@ -89,6 +89,18 @@ pub enum AppEvent {
     /// a webview that reloaded would come back believing it was in no channel
     /// while this process is very much publishing one.
     SelfAudio(SelfAudio),
+    /// This session switched its camera on, or off, or could not.
+    ///
+    /// A channel of its own for the reason [`SelfAudio`](Self::SelfAudio) has
+    /// one: only the latest event per channel is kept for a late subscriber, so
+    /// a camera sent as a call state would evict the call it was switched on
+    /// during.
+    ///
+    /// Not merged with `SelfAudio` either, although both are "what this session
+    /// is doing with its own media". They change independently and a reader
+    /// that received one value for both would redraw the mute button every time
+    /// somebody touched their camera.
+    SelfVideo(SelfVideo),
     /// Who in the current call is talking right now, by Matrix user ID.
     ///
     /// Its own channel for two reasons, and they pull in opposite directions
@@ -178,6 +190,8 @@ impl AppEvent {
     pub const CALL_REFUSED: &'static str = "call-refused";
     /// The channel carrying whether this session is muted or deafened.
     pub const SELF_AUDIO: &'static str = "self-audio";
+    /// The channel carrying whether this session's camera is in the call.
+    pub const SELF_VIDEO: &'static str = "self-video";
     /// The channel carrying who in the call is talking.
     pub const SPEAKING: &'static str = "speaking";
     /// The channel carrying the open room's messages.
@@ -206,6 +220,7 @@ impl AppEvent {
             Self::Call(_) => Self::CALL,
             Self::CallRefused(_) => Self::CALL_REFUSED,
             Self::SelfAudio(_) => Self::SELF_AUDIO,
+            Self::SelfVideo(_) => Self::SELF_VIDEO,
             Self::Speaking(_) => Self::SPEAKING,
             Self::Timeline(_) => Self::TIMELINE,
             Self::Thread(_) => Self::THREAD,
@@ -266,6 +281,10 @@ impl AppEvent {
             | Self::Rooms(_)
             | Self::Call(_)
             | Self::SelfAudio(_)
+            // State, and the off value matters as much as the on one: a
+            // webview that reloaded while publishing has to come back knowing
+            // its camera is live.
+            | Self::SelfVideo(_)
             | Self::Timeline(_)
             // Kept, and the empty one is the important half: it is what tells
             // a webview that reloaded mid-sentence that nobody is typing any
@@ -319,6 +338,7 @@ impl AppEvent {
             Self::Call(event) => serde_json::to_value(event),
             Self::CallRefused(refusal) => serde_json::to_value(refusal),
             Self::SelfAudio(audio) => serde_json::to_value(audio),
+            Self::SelfVideo(video) => serde_json::to_value(video),
             Self::Speaking(user_ids) => serde_json::to_value(user_ids),
             Self::Timeline(timeline) => serde_json::to_value(timeline),
             Self::Thread(thread) => serde_json::to_value(thread),

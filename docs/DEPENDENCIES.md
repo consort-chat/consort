@@ -98,8 +98,14 @@ fail the build on a vulnerability. On a dependency set this frozen that is the
 point: an advisory nobody can fix by moving a version is exactly the kind of
 thing that gets scrolled past when it is only a warning.
 
-`pnpm audit` is clean. One `cargo audit` advisory is ignored, in
-`.cargo/audit.toml`:
+`pnpm audit` ignores nothing, and has no ignore file to do it with. The gate is
+`--audit-level=moderate`, so a low advisory is reported and passes while
+anything above it fails. The frontend half of this dependency set is not frozen
+the way the Rust half is, so the first option below is almost always open there:
+eleven undici advisories (#136) went that way, on a jsdom bump inside the range
+`app/package.json` already allowed.
+
+One `cargo audit` advisory is ignored, in `.cargo/audit.toml`:
 
 | Advisory | Crate | Why it is ignored | What takes it out |
 |---|---|---|---|

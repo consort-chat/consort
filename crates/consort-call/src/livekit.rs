@@ -28,8 +28,9 @@ use std::time::Duration;
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
+    AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
+    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
+    VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -38,6 +39,7 @@ use livekit::DataPacket;
 
 use futures_util::StreamExt;
 
+use crate::camera::{OutgoingPicture, PictureSize};
 use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
@@ -46,6 +48,7 @@ use crate::hearing::{self, Ears};
 use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
 use crate::roster;
+use crate::showing::PublishedVideo;
 use crate::thread::AbortOnDrop;
 use crate::transport::{CallSession, CallTransport, Roster};
 use crate::trouble::{Faults, what_it_says};
@@ -510,6 +513,7 @@ async fn watch_notices(
 
 impl CallSession for LiveKitSession {
     type Track = Arc<dyn LocalTrackHandle>;
+    type Video = CameraTrack;
     type Roster = LiveKitRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
@@ -524,6 +528,19 @@ impl CallSession for LiveKitSession {
         // recoverable.
         let _ = self.microphone.set(track.clone());
         Ok(track)
+    }
+
+    async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+        let track = self
+            .call
+            .publish(PublishOptions::camera(VideoSourceConfig {
+                width: size.width,
+                height: size.height,
+            }))
+            .await
+            .map_err(|error| classify(&error))?;
+
+        Ok(CameraTrack(track))
     }
 
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
@@ -871,6 +888,49 @@ impl Roster for LiveKitRoster {
                 },
             }
         }
+    }
+}
+
+/// A camera publication.
+///
+/// A newtype rather than a second trait on `Arc<dyn LocalTrackHandle>`, which
+/// already carries [`PublishedAudio`]. One type implementing both would let a
+/// microphone publication be handed to the frame pump and a camera to the PCM
+/// pump, and the compiler would allow it.
+#[derive(Clone)]
+pub struct CameraTrack(Arc<dyn LocalTrackHandle>);
+
+impl PublishedVideo for CameraTrack {
+    fn send(&self, picture: OutgoingPicture) -> Result<(), CallFailure> {
+        let frame = VideoFrame {
+            buffer: I420Buffer {
+                width: picture.width,
+                height: picture.height,
+                // Tight strides, which is what `consort_video` produces. The
+                // transport copies honouring both sides' strides and refuses a
+                // plane too short for the size, so this is checked rather than
+                // trusted.
+                stride_y: picture.width,
+                stride_u: picture.width.div_ceil(2),
+                stride_v: picture.width.div_ceil(2),
+                data_y: picture.y,
+                data_u: picture.u,
+                data_v: picture.v,
+            },
+            rotation: VideoRotation::Deg0,
+            timestamp_us: picture.timestamp_us,
+        };
+
+        self.0
+            .capture_video(frame)
+            .map_err(|error| classify(&CallError::Media(error)))
+    }
+
+    async fn unpublish(&self) -> Result<(), CallFailure> {
+        self.0
+            .unpublish()
+            .await
+            .map_err(|error| classify(&CallError::Media(error)))
     }
 }
 

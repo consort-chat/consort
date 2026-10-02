@@ -5,13 +5,16 @@ import {
   callConnect,
   callDisconnect,
   callSetAway,
+  callSetCamera,
   callSetDeafened,
   callSetMuted,
   HEARING,
+  NOT_FILMING,
   onCall,
   onCallRefused,
   onAudio,
   onSelfAudio,
+  onSelfVideo,
   onSpeaking,
   onConnection,
   onKeyBackup,
@@ -28,6 +31,7 @@ import {
   type Profile,
   type Rooms,
   type SelfAudio,
+  type SelfVideo,
   type TokenStorage,
   type Verification,
   type VerificationFlow,
@@ -86,6 +90,9 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // which says nothing until something changes, so agreeing on the opening
   // value is what makes silence mean "neither" rather than "unknown".
   const [selfAudio, setSelfAudio] = useState<SelfAudio>(HEARING);
+  // Off, like Rust. A camera does not survive a channel switch, so the call
+  // thread puts this back for every new call rather than this screen guessing.
+  const [selfVideo, setSelfVideo] = useState<SelfVideo>(NOT_FILMING);
   // A join that was declined before it was attempted, until somebody dismisses
   // it. Kept here rather than in the shell because it is dismissed rather than
   // superseded: state owned lower down would be cleared by any re-render.
@@ -175,6 +182,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onCall((state) => setCall(state)).then(keep),
       onCallRefused((refusal) => setCallRefused(refusal)).then(keep),
       onSelfAudio((audio) => setSelfAudio(audio)).then(keep),
+      onSelfVideo((video) => setSelfVideo(video)).then(keep),
       onSpeaking((userIds) => setSpeaking(new Set(userIds))).then(keep),
       // A desktop notification somebody clicked. The window is already in
       // front by the time this arrives, because raising it is something only
@@ -283,6 +291,20 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     });
   }
 
+  /**
+   * Switch the camera on or off.
+   *
+   * The answer is dropped on purpose, like the three above: the same value
+   * arrives on the camera channel, and a camera that goes down for a reason
+   * nobody clicked arrives only that way. Drawing from the reply as well would
+   * be two writers for one button.
+   */
+  function setCamera(on: boolean) {
+    callSetCamera(on).catch((raw: unknown) => {
+      console.error("could not ask for the camera", asCommandError(raw).detail);
+    });
+  }
+
   const running = Object.values(flows);
 
   return (
@@ -298,6 +320,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       canStartVerification={!running.some(isRunning)}
       onDismissFlow={dismiss}
       selfAudio={selfAudio}
+      selfVideo={selfVideo}
       speaking={speaking}
       audioProblem={audioProblem}
       onJoinVoice={joinVoice}
@@ -305,6 +328,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onSetMuted={setMuted}
       onSetDeafened={setDeafened}
       onSetAway={setAway}
+      onSetCamera={setCamera}
       callRefused={callRefused}
       onDismissRefusal={() => setCallRefused(null)}
       showRoom={asked}

@@ -13,10 +13,13 @@ use consort_audio::{
     AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, GateConfig, catalogue,
     choose,
 };
-use consort_call::LiveKitTransport;
+use consort_call::{LiveKitTransport, SelfVideo};
 use consort_matrix::{
     BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
 };
+// `catalogue` is already taken by the audio one above, which resolves a
+// different question over a different list, so the camera side is qualified.
+use consort_video::{CameraDevices, CameraList, Host as CameraHost, VideoSettings};
 use serde::Serialize;
 use tauri::State;
 
@@ -1033,6 +1036,39 @@ fn audio_devices_for(host: &dyn AudioDevices, settings: &AudioSettings) -> Audio
     AudioDeviceReport::of(host, settings.input.as_deref(), settings.output.as_deref())
 }
 
+/// What cameras this machine has, and which of them is in use.
+///
+/// Asked for whenever the settings screen opens and after every change, for
+/// the reason the audio report is: a camera can be unplugged while the window
+/// is open, and the only honest way to draw a picker is to have just asked.
+///
+/// Takes the saved choice rather than the state it came from, because the
+/// command runs this on a blocking pool and what crosses to another thread has
+/// to own what it needs.
+fn cameras_for(host: &dyn CameraDevices, saved: Option<String>) -> CameraList {
+    CameraList::of(consort_video::catalogue(host), saved.as_deref())
+}
+
+/// The saved camera settings, or the defaults on first run.
+fn video_settings_for(state: &AppState) -> VideoSettings {
+    state.settings().load().video
+}
+
+/// Replace the saved camera settings.
+///
+/// Does not reopen anything. A camera chosen here is the one the next switch-on
+/// opens: changing device mid-publication would mean a new size, so a new
+/// publication, which is a reconnect in everybody else's call for a setting
+/// somebody was browsing.
+fn set_video_settings_for(
+    state: &AppState,
+    video: VideoSettings,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.video = video;
+    state.settings().save(&settings)
+}
+
 /// The saved audio settings, or the defaults on first run.
 fn audio_settings_for(state: &AppState) -> AudioSettings {
     state.settings().load().audio
@@ -1397,6 +1433,50 @@ pub fn set_audio_settings(
     audio: AudioSettings,
 ) -> Result<(), CommandError> {
     set_audio_settings_for(&state, audio).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub async fn cameras(state: State<'_, AppState>) -> Result<CameraList, CommandError> {
+    // The settings half is a file read and is cheap; only the enumeration goes
+    // to the pool, and it probes every video node, which is several ioctls per
+    // device.
+    let saved = video_settings_for(&state).camera;
+    let list = tokio::task::spawn_blocking(move || cameras_for(&CameraHost::default(), saved))
+        .await
+        .map_err(|error| CommandError {
+            message: "Consort could not read this machine's cameras.".to_owned(),
+            detail: format!("enumerating cameras: {error}"),
+        })?;
+
+    Ok(list)
+}
+
+#[tauri::command]
+pub fn video_settings(state: State<'_, AppState>) -> VideoSettings {
+    video_settings_for(&state)
+}
+
+#[tauri::command]
+pub fn set_video_settings(
+    state: State<'_, AppState>,
+    video: VideoSettings,
+) -> Result<(), CommandError> {
+    set_video_settings_for(&state, video).map_err(CommandError::from)
+}
+
+#[tauri::command]
+pub fn set_camera(state: State<'_, AppState>, on: bool) -> SelfVideo {
+    state.set_camera(|| Box::new(CameraHost::default()), on)
+}
+
+/// The newest camera frame for the call card, as a `data:` URL.
+///
+/// Asked for rather than pushed, so the card's own cadence decides how often a
+/// frame is converted and nothing is encoded while nobody is drawing it. See
+/// `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+#[tauri::command]
+pub fn self_view(state: State<'_, AppState>) -> Option<String> {
+    state.self_view()
 }
 
 #[tauri::command]
@@ -2946,6 +3026,7 @@ mod tests {
             let (_dir, state, _) = state();
             let stored = crate::settings::Settings {
                 audio: AudioSettings::default(),
+                video: VideoSettings::default(),
                 calls: crate::settings::CallSettings {
                     fallback_dialect: consort_call::Dialect::State,
                     service_url_fallback: Some("https://example.org/sfu".to_owned()),

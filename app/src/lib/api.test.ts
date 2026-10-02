@@ -31,8 +31,14 @@ import {
   callRoomId,
   callSetAway,
   callSetDeafened,
+  callSetCamera,
+  selfView,
   callSetMuted,
+  cameras,
   onCallReadiness,
+  onSelfVideo,
+  setVideoSettings,
+  videoSettings,
   onCall,
   onSelfAudio,
   HEARING,
@@ -96,6 +102,7 @@ import {
   type AudioDeviceReport,
   type Call,
   type SelfAudio,
+  type SelfVideo,
   type AudioSettings,
   type CallReadiness,
   type Connection,
@@ -1237,6 +1244,88 @@ describe("the call commands", () => {
     await callSetAway(true);
 
     expect(invoke).toHaveBeenCalledWith("call_set_away", { away: true });
+  });
+
+  it("asks for the camera and asks to put it away by the same command", async () => {
+    invoke.mockResolvedValue({ camera: true, trouble: null });
+
+    await callSetCamera(true);
+    await callSetCamera(false);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "set_camera", { on: true });
+    expect(invoke).toHaveBeenNthCalledWith(2, "set_camera", { on: false });
+  });
+
+  it("asks Rust for the newest camera frame", async () => {
+    invoke.mockResolvedValue("data:image/jpeg;base64,aaaa");
+
+    const picture = await selfView();
+
+    expect(invoke).toHaveBeenCalledWith("self_view");
+    expect(picture).toBe("data:image/jpeg;base64,aaaa");
+  });
+
+  it("passes on having no frame to draw", async () => {
+    // No camera running, or one that has not produced a frame yet. Null rather
+    // than a failure, because the card draws its faces either way.
+    invoke.mockResolvedValue(null);
+
+    expect(await selfView()).toBe(null);
+  });
+
+  it("hands back what happened to the camera", async () => {
+    // Answered as well as announced, so a caller that wants to log a refusal
+    // does not have to subscribe to find out about its own press.
+    invoke.mockResolvedValue({ camera: false, trouble: "the camera is busy" });
+
+    const said = await callSetCamera(true);
+
+    expect(said).toEqual({ camera: false, trouble: "the camera is busy" });
+  });
+
+  it("does not put the camera on the channel the microphone is on", async () => {
+    // Two channels because the two change independently. One value for both
+    // would redraw the mute button every time somebody touched their camera.
+    listen.mockResolvedValue(() => {});
+
+    await onSelfAudio(() => {});
+    await onSelfVideo(() => {});
+
+    expect(listen).toHaveBeenNthCalledWith(1, "self-audio", expect.any(Function));
+    expect(listen).toHaveBeenNthCalledWith(
+      2,
+      "self-video",
+      expect.any(Function),
+    );
+  });
+
+  it("hands the camera state to the handler unwrapped", async () => {
+    const seen: SelfVideo[] = [];
+    listen.mockImplementation(
+      (_channel: string, handler: (event: { payload: SelfVideo }) => void) => {
+        handler({ payload: { camera: true, trouble: null } });
+        return Promise.resolve(() => {});
+      },
+    );
+
+    await onSelfVideo((video) => seen.push(video));
+
+    expect(seen).toEqual([{ camera: true, trouble: null }]);
+  });
+
+  it("asks for the camera list and the saved camera by their own commands", async () => {
+    invoke.mockResolvedValue({ cameras: [], selected: null, missing: null });
+    await cameras();
+    invoke.mockResolvedValue({ camera: null });
+    await videoSettings();
+    invoke.mockResolvedValue(undefined);
+    await setVideoSettings({ camera: "/dev/video2" });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "cameras");
+    expect(invoke).toHaveBeenNthCalledWith(2, "video_settings");
+    expect(invoke).toHaveBeenNthCalledWith(3, "set_video_settings", {
+      video: { camera: "/dev/video2" },
+    });
   });
 
   it("subscribes to the channel saying whether a call can be joined", async () => {

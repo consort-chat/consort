@@ -71,9 +71,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Audit dependencies
-        # Clean today. Fails on a vulnerability, which on a lockfile that is
-        # deliberately frozen is the only way anybody finds out. See
-        # docs/DEPENDENCIES.md.
+        # Fails on moderate and above; a low advisory prints and passes. On a
+        # lockfile this deliberately frozen the audit is the only way anybody
+        # finds out. #136 is what a real one looked like. docs/DEPENDENCIES.md.
         run: pnpm audit --audit-level=moderate
 
       - name: Type check
@@ -173,7 +173,7 @@ jobs:
         run: |
           cargo install cargo-llvm-cov --locked
           cargo llvm-cov --workspace \
-            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
+            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
             --fail-under-lines 90 \
             --lcov --output-path lcov.info
 
