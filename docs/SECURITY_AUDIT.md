@@ -17,22 +17,26 @@ was checked and found clean.
 
 ## Summary
 
-| | Finding | Severity |
-|---|---|---|
-| E1 | Room keys go to devices nobody vouched for, so a homeserver that adds a device reads the room | High |
-| E2 | A message body reaches the notification daemon's markup parser unescaped | Low to medium |
-| H1 | `timeline_attach_file` reads any path the page names, which turns one XSS into file exfiltration | Hardening |
-| H2 | An SFU advertised over `http://` is accepted, and the identity token goes with it | Hardening |
-| H3 | The Arch recipes build from a mutable git tag with no checksum and no signature | Hardening |
-| H4 | The release workflow holds `contents: write` beside third party actions pinned by tag | Hardening |
-| H5 | `unsafe impl Send` on the audio streams rests on call site discipline, not on a type | Hardening |
-| H6 | No signed artifacts and no update mechanism, so a fix reaches only whoever notices | Hardening |
-| H7 | A call participant can draw the deafened or away icon beside somebody else | Hardening |
-| H8 | The SQLite store key is never zeroized | Hardening |
+| | Finding | Severity | Status |
+|---|---|---|---|
+| E1 | Room keys go to devices nobody vouched for, so a homeserver that adds a device reads the room | High | Open, needs a decision |
+| E2 | A message body reaches the notification daemon's markup parser unescaped | Low to medium | Closed in #155 |
+| H1 | `timeline_attach_file` reads any path the page names, which turns one XSS into file exfiltration | Hardening | Open, needs a decision |
+| H2 | An SFU advertised over `http://` is accepted, and the identity token goes with it | Hardening | Closed in #155 |
+| H3 | The Arch recipes build from a mutable git tag with no checksum and no signature | Hardening | Open, needs a decision |
+| H4 | The release workflow holds `contents: write` beside third party actions pinned by tag | Hardening | Open, needs a decision |
+| H5 | `unsafe impl Send` on the audio streams rests on call site discipline, not on a type | Hardening | Open, needs a decision |
+| H6 | No signed artifacts and no update mechanism, so a fix reaches only whoever notices | Hardening | Open, a project |
+| H7 | A call participant can draw the deafened or away icon beside somebody else | Hardening | Closed in #155 |
+| H8 | The SQLite store key is never zeroized | Hardening | Closed in #155 |
 
-Three things were fixed here, under [Changed in this pull
-request](#changed-in-this-pull-request). Everything else is written up and left
-alone, because it needs a decision that is not an auditor's to take.
+Three things were fixed in #153, the pull request that added this document,
+under [Changed in #153](#changed-in-153). Four more were fixed in #155, under
+[Changed in #155](#changed-in-155).
+
+The six still open each carry a **The question** line at the end of their
+section: the one thing somebody has to decide before the fix can be written.
+None of them is blocked on more auditing.
 
 The short version of the good news: the IPC surface is 76 commands, and exactly
 one of them takes a filesystem path. Nothing shells out. The rest take
@@ -55,7 +59,9 @@ could be audited.
 141 and 142 did; 135 is still open, and so is 140. `main` has moved further than
 the brief expected: #147 merged after 142 and is the tip.
 
-**There is no `crates/consort-video`.** It arrives with #135. The brief asks for
+**There is no `crates/consort-video`.** (It merged with #135 on 2 October,
+after this was written. The camera and screen paths are on `main` now and
+have still not been audited.) It arrives with #135. The brief asks for
 the call path "in crates/consort-call, consort-audio and consort-video" and for
 anything Linux-only to follow that crate's `cfg` gating. On `main` the crate does
 not exist and the workspace does not list it (`Cargo.toml:3-7`), so the camera
@@ -127,7 +133,35 @@ backup is a separate copy with separate reach, and the direction of the mistake
 is asymmetric, since being too strict costs somebody a verification prompt and
 being too loose costs them the room.
 
+**The shape of the fix.** One argument in `base_builder`:
+`.with_room_key_recipient_strategy(CollectStrategy::IdentityBasedStrategy)`.
+That file is the right place because its own doc comment says settings must
+not drift between login and restore. It is a one line change and the smallest
+thing in this document to write.
+
+**What it costs.** Anybody in a shared room whose own client is not
+cross-signed stops being able to read new messages, and the failure lands on
+them rather than on whoever changed the setting. It protects nothing already
+sent, and the key backup is a separate copy with separate reach. Element ships
+the same choice as "exclude insecure devices" and makes it a setting, which is
+the third option: neither default, but a switch and a line of UI, which is
+more work than either.
+
+**The question.** Is this a default, a setting, or not yet? If it is a
+setting, what is it called and what does the failure look like to the person
+it lands on, who will see messages they cannot read and will not know why.
+
+**Collision.** #148 is in this area and open.
+
 ### E2. A message body reaches the notification daemon's markup parser unescaped
+
+> **Closed in #155.** Both halves are escaped before the call, behind the
+> backend gate notify-rust itself uses, and `compose` is split out of `draw`
+> so a test can read what reaches the daemon. The three answers below were
+> resolved in favour of escaping unconditionally on the XDG backend: the
+> capability query is a D-Bus round trip per notification on a per-message
+> path, and the cost of being wrong is an entity drawn literally on an
+> unusual daemon.
 
 **Severity: low to medium**, and the ceiling depends on the notification daemon
 rather than on Consort.
@@ -210,7 +244,31 @@ says why in as many words. Doing the same for a picked file, keeping the path in
 `AppState` and giving the page a token, removes the primitive. It changes the
 command's signature, so it is written up rather than done.
 
+**The shape of the fix.** The module already holds it. A pasted screenshot is
+held in `AppState` and addressed rather than handed over, and
+`attaching.rs:98-101` says why in as many words. `attachment_pick` would keep
+the chosen path in `AppState` and answer with a token, and
+`timeline_attach_file` would take the token instead of a `String` path.
+
+**What it costs.** The command's signature, the `Chosen` type and the
+frontend call site, so it is a change across the IPC seam rather than inside
+one function. Nothing user-visible moves. There is also a lifetime question
+the screenshot path already had to answer: when a staged path is forgotten, so
+that picking a file and never sending it does not leave a token good forever.
+
+**The question.** Does a staged pick expire, and on what? Dropped on send, on
+the next pick, or on a timer.
+
 ### H2. An SFU advertised over `http://` is accepted
+
+> **Closed in #155**, having been written up here rather than applied. The
+> reason given below for not applying it does not hold: the demo backend it
+> names does not exist. `testing/` holds a Synapse container and nothing
+> else, and no LiveKit stack is shipped or described anywhere in the tree. A
+> developer's local stack is on loopback and keeps working, and one reached
+> over a network is still reachable through `service_url_fallback`, which is
+> read from the settings file and never passes through this check. So the
+> compromise costs a configuration nobody has.
 
 `discovery.rs:114` accepts `http://` as well as `https://` for the LiveKit
 service URL read out of a server's discovery document, and the comment argues
@@ -252,6 +310,19 @@ every later `makepkg` builds what they point at.
 `scripts/set-version.sh` already rewrites and could rewrite one more field in, or
 sign the tags and add `validpgpkeys`.
 
+**The shape of the fix.** Either `#commit=<sha>` in
+`packaging/arch/PKGBUILD`, which `scripts/set-version.sh` already rewrites the
+version in and could rewrite one more field in, or signed tags plus
+`validpgpkeys`. The `-git` recipe is not a finding and does not change.
+
+**What it costs.** The commit pin costs a second field in the release script
+and nothing else. Signing costs a key, somewhere to keep it, and a release
+step that cannot be done from a machine without it. The pin is the cheaper
+half of the same guarantee and does not rule the other out later.
+
+**The question.** Pin the commit, or sign the tags? They are not exclusive,
+and only the first is free.
+
 ### H4. The release workflow holds `contents: write` beside third party actions
 
 `release.yml:81-84` grants `contents: write` for the whole workflow, and the job
@@ -268,6 +339,20 @@ those is deliberate and must stay that way. No `run:` step anywhere interpolates
 `github.event.*`.
 
 **Recommendation.** Pin the two third party actions by commit SHA.
+
+**The shape of the fix.** Replace `dtolnay/rust-toolchain@stable` and
+`Swatinem/rust-cache@v2` with the commit SHA each tag currently points at,
+with the tag kept beside it in a comment so the next reader knows what it was.
+
+**What it costs.** Upkeep. A pinned action stops receiving fixes until
+somebody moves the pin, and Dependabot has to be told to watch
+`github-actions` or the pins rot quietly. The alternative, narrowing
+`contents: write` to the job that needs it, is a smaller diff and does not
+address the same thing: the upload job is the job that needs the token.
+
+**The question.** Pin and enable Dependabot for `github-actions`, or accept
+the tags? Not editing the workflow at all is also an answer, given that the
+release path is manual and rarely run.
 
 ### H5. `unsafe impl Send` rests on call site discipline, not on a type
 
@@ -293,6 +378,21 @@ today.
 current arrangement has to change, because the streams never cross a thread
 boundary anyway. It is a change to two public traits, so it is written up.
 
+**The shape of the fix.** Drop `: Send` from `CaptureStream` (`capture.rs:68`)
+and `PlaybackStream` (`playback.rs:79`). The boxes become `!Send`, the
+compiler enforces what the comment claims, and the two `unsafe impl Send` in
+`cpal_host.rs` go with them. Nothing in the current arrangement has to move,
+because the streams never cross a thread boundary anyway.
+
+**What it costs.** Two public traits change, so anything later wanting to hand
+a stream to another thread has to say so explicitly rather than inheriting the
+permission. That is the point, and it is also the risk: if the audio path is
+ever restructured around a thread pool, this is the bound that has to be
+argued with first.
+
+**The question.** Is the audio path settled enough to nail the streams to one
+thread? If a restructure is coming, this is cheaper after it than before.
+
 ### H6. No signed artifacts and no update mechanism
 
 There is no updater. `tauri-plugin-updater` is not a dependency, `tauri.conf.json`
@@ -311,7 +411,36 @@ This is not an attack. It is the thing that decides how much every other finding
 costs, and it argues for pinning the release recipe (H3) before it argues for
 anything else.
 
+**The shape of the fix.** Not a pull request. The smallest useful version is a
+checksum file published with each release and a line in the README saying how
+to check it, which needs no key and no updater. The next step up is signing,
+and the one after that is `tauri-plugin-updater` with a public key in
+`tauri.conf.json` and an endpoint to serve the manifest.
+
+**What it costs.** Each step costs more than the last, and the updater costs
+most: a signing key with somewhere safe to keep it, somewhere to host the
+manifest, and a promise to keep both working for as long as anybody is running
+the application. Until one of them exists, the honest position is the current
+one, which the release workflow and the README already state.
+
+**The question.** Who is this shipped to, and is that number going to grow? A
+handful of friends who can be told to re-download is a different answer from
+anybody who finds the AUR package, and it is the only input that decides how
+far up this ladder to go.
+
 ### H7. A call participant can draw an icon beside somebody else
+
+> **Closed in #155.** The claimed `member_id` is no longer read at all: what
+> a notice arrives under is, and `roster::spoken_for` resolves that against
+> the server's own participant list. Both gaps below close with it, including
+> the Element Call one, because a claim no longer needs opposing.
+>
+> The last sentence of this section was wrong. Closing it did not need an
+> `identity` on `matrix_rtc_media`'s `Participant`: MSC4195 derives the
+> identity from `[user_id, device_id, member_id]`, the fork exports that
+> derivation as `identity::pseudonymous_identity` and already uses it to
+> address media keys, and all three inputs are on `Participant` today.
+> `contested` is deleted, two participants being unable to share an identity.
 
 `notices.rs` carries deafen and away over the call's own LiveKit data channel,
 and a notice names its own sender in a `member_id` field it also writes. The code
@@ -329,6 +458,12 @@ in Informational because the attack is real, the impact is merely small, and the
 fix is identified upstream already.
 
 ### H8. The SQLite store key is never zeroized
+
+> **Closed in #155.** `Drop` on both, plus a third place this section did not
+> name: `StoreKey::decode` decoded into a `Vec`, copied 32 bytes out and
+> handed the buffer back still holding them. It now decodes into a fixed
+> buffer. The dependency question answers itself, `zeroize` already being in
+> the graph under rustls, so this is an edge rather than a build.
 
 `store_key.rs:41` holds the key in a plain `[u8; 32]` with no `Drop`. The file
 goes to the trouble of a hand-written `Debug` so the key cannot reach a log
@@ -658,7 +793,7 @@ missing library panics rather than failing to link. No crate sets
 - Permissions are `contents: write` and `actions: read` and nothing broader. No
   `id-token`, no `packages`.
 
-## Changed in this pull request
+## Changed in #153
 
 Three changes. The first two were written test first, watched failing for the
 right reason, and mutation checked. The third is a lockfile pin, which has no
@@ -700,6 +835,48 @@ thing the root manifest warns a bare `cargo update` would break. There is no
 unit test to write for a lockfile pin, so the check that failed before and
 passes after is `cargo audit` itself, and `cargo build -p consort-app` compiles
 the new version in the real graph.
+
+## Changed in #155
+
+Four findings, one commit each. Every test was written first, watched failing
+for the right reason, and mutation checked by breaking the thing it guards.
+
+**E2, the notification body.** `for_the_daemon` escapes `&`, `<` and `>` in
+the body and in the summary, behind `all(unix, not(target_os = "macos"))`,
+which is the gate notify-rust itself uses for the XDG backend rather than the
+`cfg(unix)` this document suggested: macOS is unix and takes no markup.
+`compose` is split out of `draw` so that what reaches the daemon is a value a
+test can read, which is the half of the path the bug was in. Escaping is
+unconditional on that backend; see the note on the section above.
+
+**H7, the forged icon.** Covered in the section above. The pure half is
+`roster::roll` and `roster::spoken_for`, both tested; `livekit.rs` only hands
+them the membership snapshot it already borrows. It fails closed: a
+membership with no attributable device has no derived identity, so no notice
+can be matched to it and its owner draws no icon. That is a cosmetic feature
+degrading rather than a claim being believed. Not exercised against a live
+SFU, CI having none.
+
+**H8, the unzeroized key.** `Drop` on `StoreKey` and on `Credentials`, and
+`StoreKey::decode` moved off the heap. The test is a global allocator that
+reads each block as it is freed, which is the last moment the bytes are there
+and the memory is still ours to read; its own binary, because the watch is one
+global, and a mutex inside it, because the tests share threads. One test
+proves the watch is not deaf by freeing a secret nobody wiped. The decode case
+is counted rather than watched, a decode buffer having a tail nothing wrote.
+
+**H2, the plaintext SFU.** `https` anywhere, `http` only to `localhost`,
+127.0.0.0/8 or `[::1]`. The address is parsed rather than prefix-matched, so
+`127.0.0.1.evil.example` is a name. Userinfo is not parsed out, so
+`evil.example@127.0.0.1` is refused along with everything else that is not a
+bare host.
+
+Two tests in this work were rewritten because a mutation showed they did not
+guard what their names claimed, which is the argument for mutation checking
+rather than reading. `decoding_a_key_...` was watching the `Box` and never the
+decode buffer, whose capacity put it outside the size filter. And the H8 tests
+shared the watch across threads, so one test's password was visible to
+another.
 
 ## Collisions with open work
 
