@@ -20,6 +20,7 @@ out, and stops it in one press. No audio.
 | The publication and its lifecycle | `consort-call`: `thread.rs`, `transport.rs` |
 | Capture ownership, and the order of the two acts | `app/src-tauri/src/screen.rs` |
 | The picker, the control, the indicator | `SharePicker.tsx`, `CallPanel.tsx` |
+| The square on the call card, and the picture in it | `ScreenTile.tsx`, `SelfPicture.tsx` |
 
 ## Decisions worth knowing before reading the diff
 
@@ -52,6 +53,14 @@ channel switch, a call ending, and a quit. None of them is a click, which is
 why the capture is released by whatever hears the call thread rather than by the
 button. `leave_call_on_quit` stops the capture before the network leave: the
 leave is a round trip on a budget, and this is local and immediate.
+
+**A shared screen is a square on the call card, and so is everybody.** The
+review of #140 asked for it and
+[ADR-0008](adr/0008-one-square-for-everything-in-a-call.md) records the shape: a
+second newest-wins slot feeding a second command, polled by the same hook the
+camera uses, drawn in the same square a face sits in. Somebody else sharing gets
+a square with their name and no picture, because nothing carries a remote frame
+into this window yet.
 
 **Dropping a capture joins its thread.** Not just signals it. A grab takes long
 enough that a stop lands inside one, so without the join a frame captured before

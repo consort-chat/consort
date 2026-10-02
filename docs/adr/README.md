@@ -18,3 +18,4 @@ imperfect for now and the terms on which it would be revisited.
 | [0005](0005-capture-the-camera-in-rust.md) | Capture the camera in Rust over V4L2, not in the webview | accepted |
 | [0006](0006-share-a-screen-over-x11.md) | Share a screen over X11, not through the desktop portal | accepted |
 | [0007](0007-draw-the-self-view-from-a-still.md) | Draw the self view from a still the card asks for | accepted |
+| [0008](0008-one-square-for-everything-in-a-call.md) | One square for everything in a call, and a second still to fill one | accepted |

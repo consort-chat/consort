@@ -15,14 +15,17 @@ notifications that honour the account's push rules, and `matrix.to` links that
 go where they point, editing a message, both sent and drawn, an opening screen
 offering the rooms you were last in, an icon in the system tray that brings the
 window back, publishing a camera into a call from a webcam chosen in
-settings, your own camera drawn in the floating call card, and sharing a screen
-or a window into a call, picked from a card that lists what this machine has.
-Drawing somebody else's camera is not built yet: see docs/PLAN-webcam.md for
-the half that is and the half that is not. Sharing system audio alongside a
-screen is not built either, and docs/PLAN-screen-share.md says what it would
-take. Deleting your own message is not built either, and neither is upload
-progress, a thumbnail for a clip somebody sends, or a count on the icon when
-something is unread.
+settings, and sharing a screen or a window into a call, picked from a card that
+lists what this machine has. The floating call card draws both of those back at
+you as squares: a camera fills its owner's own square, a share gets one of its
+own, and clicking a share fills the window with the card. Drawing somebody
+else's camera or screen is not built yet, so they get a square with their name
+and no picture: see docs/PLAN-webcam.md for the half that is and the half that
+is not, and docs/adr/0008-one-square-for-everything-in-a-call.md for why the
+card is squares. Sharing system audio alongside a screen is not built either,
+and docs/PLAN-screen-share.md says what it would take. Deleting your own
+message is not built either, and neither is upload progress, a thumbnail for a
+clip somebody sends, or a count on the icon when something is unread.
 
 ## Layout
 
