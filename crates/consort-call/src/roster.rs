@@ -47,6 +47,18 @@ pub fn camera_live(member: &MediaParticipant) -> bool {
         .any(|stream| stream.kind == MediaStreamKind::Camera && !stream.muted)
 }
 
+/// Whether this membership is putting a screen or a window into the call.
+///
+/// [`camera_live`] with the other video stream in it. A separate question
+/// rather than a second reading of the same one: somebody can share their
+/// slides with their camera off, and the two end up in different squares.
+pub fn screen_live(member: &MediaParticipant) -> bool {
+    member
+        .streams
+        .iter()
+        .any(|stream| stream.kind == MediaStreamKind::ScreenShare && !stream.muted)
+}
+
 /// When this membership joined the call, `ours` standing in for our own.
 ///
 /// The transport reports arrivals, and an arrival is something somebody else
@@ -108,6 +120,27 @@ pub fn with_cameras(people: Vec<Participant>, memberships: &[(String, bool)]) ->
                 .iter()
                 .any(|(user_id, live)| *user_id == person.id && *live);
             person.with_camera(live)
+        })
+        .collect()
+}
+
+/// Attach whether each named person is sharing a screen, given one entry per
+/// membership.
+///
+/// `memberships` is `(user_id, screen_live)` in roster order, matching
+/// [`with_mutes`].
+///
+/// Sharing if *any* of their memberships is, which is [`with_cameras`]'s fold
+/// and chosen for its reason: the answer must never claim less is going out
+/// than is.
+pub fn with_screens(people: Vec<Participant>, memberships: &[(String, bool)]) -> Vec<Participant> {
+    people
+        .into_iter()
+        .map(|person| {
+            let live = memberships
+                .iter()
+                .any(|(user_id, live)| *user_id == person.id && *live);
+            person.with_screen(live)
         })
         .collect()
 }
@@ -500,6 +533,98 @@ mod tests {
 
         assert!(people[0].muted);
         assert!(!people[1].muted);
+    }
+}
+
+#[cfg(test)]
+mod screens {
+    use super::*;
+    use matrix_rtc_media::{MediaStreamKind, StreamState};
+
+    fn ada() -> Participant {
+        Participant::named("@ada:example.org", "Ada")
+    }
+
+    fn seen(user_id: &str, streams: Vec<StreamState>) -> MediaParticipant {
+        MediaParticipant {
+            member_id: format!("{user_id}:AAAA"),
+            user_id: user_id.to_owned(),
+            device_id: None,
+            is_local: false,
+            reachable: true,
+            hand_raised_at_ms: None,
+            joined_at_ms: None,
+            streams,
+        }
+    }
+
+    fn desktop(muted: bool) -> StreamState {
+        StreamState {
+            kind: MediaStreamKind::ScreenShare,
+            muted,
+        }
+    }
+
+    #[test]
+    fn a_live_screen_share_is_a_screen_share() {
+        assert!(screen_live(&seen("@ada:example.org", vec![desktop(false)])));
+    }
+
+    #[test]
+    fn a_muted_screen_share_is_not() {
+        // The same state a camera switched off mid-call is in: the track stays
+        // published and is muted rather than torn down.
+        assert!(!screen_live(&seen("@ada:example.org", vec![desktop(true)])));
+    }
+
+    #[test]
+    fn publishing_no_screen_at_all_is_not_a_screen_share() {
+        // Which is almost everybody, almost always. A tile drawn for this
+        // would be an empty square per person in the call.
+        assert!(!screen_live(&seen("@ada:example.org", vec![])));
+    }
+
+    #[test]
+    fn a_camera_is_not_a_screen() {
+        // Two publications of video from one person, answering different
+        // questions: one fills their own square, the other gets a square of
+        // its own. Reading either as the other is a tile in the wrong place.
+        let filming = seen(
+            "@ada:example.org",
+            vec![StreamState {
+                kind: MediaStreamKind::Camera,
+                muted: false,
+            }],
+        );
+
+        assert!(camera_live(&filming));
+        assert!(!screen_live(&filming));
+    }
+
+    #[test]
+    fn somebody_on_two_devices_is_sharing_if_either_is() {
+        // The camera's fold rather than the microphone's, and for the camera's
+        // reason: the answer should never claim less is going out than is.
+        let one_of_them = vec![
+            ("@ada:example.org".to_owned(), false),
+            ("@ada:example.org".to_owned(), true),
+        ];
+        let neither = vec![
+            ("@ada:example.org".to_owned(), false),
+            ("@ada:example.org".to_owned(), false),
+        ];
+
+        assert!(with_screens(vec![ada()], &one_of_them)[0].screen);
+        assert!(!with_screens(vec![ada()], &neither)[0].screen);
+    }
+
+    #[test]
+    fn somebody_no_membership_matches_is_not_sharing() {
+        // Room state lists who is in a channel and says nothing else. A tile
+        // for somebody listed from there would be an invention.
+        let people = with_screens(vec![ada()], &[("@bob:example.org".to_owned(), true)]);
+
+        assert!(!people[0].screen);
     }
 }
 

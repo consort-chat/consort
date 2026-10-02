@@ -757,6 +757,7 @@ struct Seen {
     user_id: String,
     muted: bool,
     camera: bool,
+    screen: bool,
     since: Option<u64>,
 }
 
@@ -818,6 +819,7 @@ impl Roster for LiveKitRoster {
                 user_id: member.user_id.clone(),
                 muted: roster::microphone_muted(member),
                 camera: roster::camera_live(member),
+                screen: roster::screen_live(member),
                 since: roster::arrived_at(member, self.joined_at),
             })
             .collect();
@@ -832,6 +834,10 @@ impl Roster for LiveKitRoster {
         let cameras: Vec<(String, bool)> = seen
             .iter()
             .map(|one| (one.user_id.clone(), one.camera))
+            .collect();
+        let screens: Vec<(String, bool)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.screen))
             .collect();
         let arrivals: Vec<(String, Option<u64>)> = seen
             .iter()
@@ -849,6 +855,7 @@ impl Roster for LiveKitRoster {
 
         let named = roster::with_mutes(named, &mutes);
         let named = roster::with_cameras(named, &cameras);
+        let named = roster::with_screens(named, &screens);
         let named = roster::with_since(named, &arrivals);
         let named = roster::with_deafened(named, &whose, &flags.deafened);
         roster::with_away(named, &whose, &flags.away)
