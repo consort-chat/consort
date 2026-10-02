@@ -95,11 +95,17 @@
   white-space: nowrap;
 }
 
+/*
+  The padding is zeroed because `place-items` centres on the content box, and a
+  button left to WebKitGTK's own `2px 6px 3px 6px` has a 10px one for a 13px
+  glyph, which put the arrows a pixel and a half right of the middle (#137).
+*/
 .call-card__control {
   display: grid;
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   font-size: var(--text-base);
   line-height: 1;
   color: var(--text-muted);
