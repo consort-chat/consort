@@ -439,13 +439,29 @@ A clean result is a result. These were looked at and no path was found.
   `open_link` (`commands.rs:2111`), which receives `Url::as_str()` of an
   already-parsed URL whose scheme is one of three, so there is no leading dash
   and no argument to inject.
-- Every other command is parameterless, takes a bool or a bounded number, or
-  takes an identifier. Identifiers are parsed, never interpolated:
-  `RoomId::parse`, `EventId::parse` and `UserId::parse` appear 29 times in
-  `consort-matrix` and `room_of` at `membership.rs:235` is the shape they all
-  follow. No API URL is built by string formatting anywhere. The one formatted
-  URL in the tree is `discovery.rs:72`, whose input is the authenticated user's
-  own ruma-validated server name.
+- Identifiers are parsed, never interpolated. `room_id`, `event_id`, `user_id`,
+  `root_id`, `in_reply_to`, `reply_to`, `flow_id` and `reaction_id` are the
+  commonest arguments in the surface and every one of them goes through
+  `RoomId::parse`, `EventId::parse` or `UserId::parse`, which appear 29 times in
+  `consort-matrix`; `room_of` at `membership.rs:235` is the shape they all
+  follow. `room_at`'s `address` is one of the same, parsed as a room id and then
+  as a room alias (`rooms/link.rs`). No API URL is built by string formatting
+  anywhere in the tree. The one formatted URL is `discovery.rs:72`, whose input
+  is the authenticated user's own ruma-validated server name.
+- The rest of the arguments were enumerated rather than assumed, and this is all
+  of them. Four bools (`muted`, `deafened`, `away`, `typing`). Three numbers,
+  each bounded on the way in: `tone` is a `u8` the picker reads, `percent` is a
+  `u8` clamped at `commands.rs:1098` with a comment that reasons explicitly about
+  a command being reachable from anything in the webview, and `scale` is clamped
+  by `application_scale_within_range`. Four settings structs, deserialised by
+  serde into named types and clamped by the store. The login triple `server`,
+  `username` and `password`, which is what somebody typed and goes to the SDK.
+  Message content: `body`, `caption` and a reaction `key`, which become the event
+  this account sends. A recovery `key`, which goes to the SDK and is never stored
+  or echoed. An emoji `key`, which lands in the settings file through a list
+  truncated to eighteen (`settings.rs:176-180`). `source`, which is the opaque
+  media handle. And `path` and `name`, which are H1 and the filename fix.
+  Nothing else reaches a filesystem path, a process argument or a URL.
 - `preview_application_scale` clamps through
   `settings::application_scale_within_range` (`settings.rs:212`) before the zoom.
 
