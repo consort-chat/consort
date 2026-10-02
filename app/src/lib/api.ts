@@ -171,6 +171,17 @@ export interface Participant {
    */
   camera?: boolean;
   /**
+   * Whether a screen or window of theirs is going out.
+   *
+   * Folded like `camera`: sharing if any of their devices is. A different
+   * question from `camera` and never derived from it, because a camera fills
+   * this person's own square and a shared screen earns a square of its own.
+   *
+   * Known only for the call this session is sitting in, with the same caveat
+   * `camera` carries: room state says nothing about publications.
+   */
+  screen?: boolean;
+  /**
    * When they joined the call, in milliseconds since the Unix epoch.
    *
    * The SFU's own record rather than the moment this session noticed them, so
@@ -1162,6 +1173,16 @@ export function onSelfScreen(
  */
 export function selfView(): Promise<string | null> {
   return invoke<string | null>("self_view");
+}
+
+/**
+ * The newest frame of what this session is sharing, as a `data:` URL.
+ *
+ * `selfView`'s twin, null on the same terms: nothing being shared, or a capture
+ * whose first frame has not arrived.
+ */
+export function screenView(): Promise<string | null> {
+  return invoke<string | null>("screen_view");
 }
 
 /**

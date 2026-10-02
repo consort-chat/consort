@@ -33,6 +33,7 @@ import {
   callSetDeafened,
   callSetCamera,
   selfView,
+  screenView,
   callSetMuted,
   cameras,
   onCallReadiness,
@@ -1271,6 +1272,23 @@ describe("the call commands", () => {
     invoke.mockResolvedValue(null);
 
     expect(await selfView()).toBe(null);
+  });
+
+  it("asks Rust for the newest frame of what is being shared", async () => {
+    // Its own command rather than a parameter on the camera's. Both can be
+    // going out at once, so one command would have to say which it meant.
+    invoke.mockResolvedValue("data:image/jpeg;base64,bbbb");
+
+    const picture = await screenView();
+
+    expect(invoke).toHaveBeenCalledWith("screen_view");
+    expect(picture).toBe("data:image/jpeg;base64,bbbb");
+  });
+
+  it("passes on having no shared screen to draw", async () => {
+    invoke.mockResolvedValue(null);
+
+    expect(await screenView()).toBe(null);
   });
 
   it("hands back what happened to the camera", async () => {

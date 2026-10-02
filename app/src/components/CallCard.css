@@ -37,16 +37,38 @@
 }
 
 /*
-  Expanded is one change said twice: bigger faces, and room for more of them
+  Expanded is one change said twice: bigger squares, and room for more of them
   across. Nothing appears that was not there and nothing moves anywhere else,
   which is what keeps a double-click reversible by another double-click.
 */
-.call-card[data-expanded="true"] {
+.call-card[data-size="expanded"] {
   --avatar-size: 72px;
 
   gap: var(--space-3);
   width: 420px;
   padding: var(--space-3);
+}
+
+/*
+  The whole window, which is where clicking a shared screen goes. The same
+  change one step further: bigger squares and room for more across, with
+  nothing rearranged, because the layout past this is deliberately not decided
+  yet. See docs/adr/0008-one-square-for-everything-in-a-call.md.
+
+  `align-content`, or the rows stretch to fill a window far taller than the
+  card's contents and the squares come out rectangles.
+*/
+.call-card[data-size="full"] {
+  --avatar-size: 160px;
+
+  inset: 0;
+  gap: var(--space-4);
+  align-content: start;
+  width: auto;
+  padding: var(--space-4);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .call-card__bar {
@@ -76,8 +98,13 @@
   cursor: grabbing;
 }
 
-.call-card__grip:hover {
+.call-card__grip:hover:enabled {
   background: var(--surface-overlay);
+}
+
+/* Nothing floats while the card fills the window, so nothing offers to move. */
+.call-card__grip:disabled {
+  cursor: default;
 }
 
 .call-card__grip:focus-visible {
@@ -131,14 +158,22 @@
 }
 
 /*
-  Reflowed by how many people are in the call rather than by the width of the
+  Reflowed by how many squares there are rather than by the width of the
   window, because the window is the size somebody made it and the card is a
   fixed thing floating on top of it.
 
-  `auto-fill` against the face's own size, so the number across follows how big
-  a face is: three to a row while the card is its usual size, four once it has
-  been expanded and the faces have grown with it.
+  `auto-fill` against a square's own size, so the number across follows how big
+  one is: three to a row while the card is its usual size, four once it has
+  been expanded and they have grown with it. `auto-fill` rather than `auto-fit`
+  so one person in a call gets one square rather than a square the width of the
+  card.
+
+  Two lists on the same grid, and deliberately the same one: a person and a
+  screen somebody is sharing are the same kind of thing here, which is the
+  whole point of #70's review. They are separate lists because only one of them
+  is a list of people, and that is what each one is announced as.
 */
+.call-card__screens,
 .call-card__people {
   display: grid;
   grid-template-columns: repeat(
@@ -163,24 +198,3 @@
   color: var(--amber);
 }
 
-/*
-  What the camera is sending, between the bar and the faces.
-
-  Mirrored, which is what every self view does and what people expect of
-  anything standing in for a mirror: raising your left hand should raise the
-  hand on the left. Only the preview is flipped. What the call receives is the
-  frame as the camera read it.
-
-  A fixed shape, so the first frame arriving does not move the card, and
-  `cover` so a camera that negotiated 4:3 fills it rather than letterboxing.
-*/
-.call-card__self {
-  display: block;
-  width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
-  object-fit: cover;
-  background: var(--surface-void);
-  border-radius: var(--radius-md);
-  transform: scaleX(-1);
-}

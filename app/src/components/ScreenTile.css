@@ -1,0 +1,84 @@
+/*
+  One shared screen, drawn as the square a face sits in.
+
+  Everything about the size comes from `--avatar-size` at the call site, the
+  way `CallFace` does it, so a screen and a person are the same size on the
+  card and grow together when it is expanded.
+*/
+.call-screen {
+  display: block;
+  min-width: 0;
+}
+
+/*
+  The same flex-wrapped column a face uses in tile layout: a square, then a
+  line for the name under it. Written here rather than shared, because the two
+  differ in what the square holds and in nothing else.
+*/
+.call-screen__button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: center;
+  width: 100%;
+  padding: var(--space-2) var(--space-1);
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+}
+
+.call-screen__button:hover {
+  background: var(--surface-overlay);
+}
+
+.call-screen__button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  The square, holding the glyph and whatever picture covers it. `relative`
+  because the picture is laid over the glyph: see `SelfPicture.css`.
+*/
+.call-screen__stage {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  overflow: hidden;
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+}
+
+/*
+  Dimmer than the name under it. A square with a monitor in it is what a share
+  looks like before its first frame and for everybody else's, so it should read
+  as a placeholder rather than as an icon somebody is meant to act on.
+*/
+.call-screen__glyph {
+  width: 55%;
+  height: 55%;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+/*
+  The mint, which is the colour reserved for voice and presence. A share is the
+  other live thing a call carries, and this is the one place on the card where
+  something is going out rather than merely being somebody.
+*/
+.call-screen__what {
+  flex: 0 0 100%;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--mint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

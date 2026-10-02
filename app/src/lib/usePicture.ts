@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { asCommandError, selfView } from "./api";
+import { asCommandError, screenView, selfView } from "./api";
 
 /**
  * How long to wait between frames, in milliseconds.
@@ -11,39 +11,53 @@ import { asCommandError, selfView } from "./api";
  */
 const EVERY = 80;
 
+/** Which of the things this session can be sending to draw. */
+export type Sending = "camera" | "screen";
+
+/** Where each picture comes from. Both are one slot in Rust, newest wins. */
+const ASK: Record<Sending, () => Promise<string | null>> = {
+  camera: selfView,
+  screen: screenView,
+};
+
 /**
- * The newest frame from this session's camera, while `active`.
+ * The newest frame of what this session is sending, for as long as this is
+ * mounted.
  *
- * Null when the camera is off, before its first frame, and after a poll fails.
- * A caller draws whatever it draws without a camera, so there is no error state
- * to hold: the camera's own is on the self-video channel, with the sentence that
- * says why.
+ * Null before the first frame and after a poll fails. A caller draws whatever
+ * it draws without one, so there is no error state to hold: what is actually
+ * running is reported on the self-video and self-screen channels, with the
+ * sentence that says why.
+ *
+ * Being mounted is the switch, rather than a flag to pass. Nothing draws a
+ * square for a camera that is off, so there is nowhere for this to live and be
+ * idle, and unmounting forgets the last frame for free.
+ *
+ * `of` names the source rather than being a function to call, so the one
+ * argument is a value and a caller cannot restart the poll every render by
+ * passing a fresh closure.
  *
  * Chained rather than on an interval, so an answer slower than `EVERY` delays
  * the next ask instead of queueing one behind it.
  */
-export function useSelfView(active: boolean): string | null {
+export function usePicture(of: Sending): string | null {
   const [picture, setPicture] = useState<string | null>(null);
 
   useEffect(() => {
-    // Cleared rather than left, so the card goes back to faces at the click
-    // rather than whenever a poll would next have said so.
-    if (!active) {
-      setPicture(null);
-      return;
-    }
-
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function draw() {
       try {
-        const next = await selfView();
+        const next = await ASK[of]();
         if (stopped) return;
         setPicture(next);
       } catch (raw) {
         // Once, and then stop. Twelve of these a second is not a report.
-        console.error("could not read the self view", asCommandError(raw).detail);
+        console.error(
+          `could not read the ${of} picture`,
+          asCommandError(raw).detail,
+        );
         return;
       }
       timer = setTimeout(draw, EVERY);
@@ -55,7 +69,7 @@ export function useSelfView(active: boolean): string | null {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [active]);
+  }, [of]);
 
   return picture;
 }

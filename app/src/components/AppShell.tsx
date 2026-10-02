@@ -726,6 +726,8 @@ export function AppShell({
           and the button cannot disagree about whether a camera is on.
         */
         cameraOn={selfVideo.camera}
+        /* The same, for the square a shared screen gets: one source of truth. */
+        sharing={selfScreen.sharing}
       />
       
       {/*
