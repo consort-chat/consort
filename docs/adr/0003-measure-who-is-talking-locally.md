@@ -61,8 +61,8 @@ reason: it mutes, and nothing more.
 
 So `Microphone::switch_off` carries that one fact from the call thread, which
 owns `SelfAudio`, across to the sink that measures the ring. It is the rule in
-"Alternative 2" below held to rather than bent: a lit ring means this is
-reaching people, and for a few hundred milliseconds a mute at a time it did not.
+"Alternative 2" below held to rather than bent: a lit ring means this is reaching
+people, and for as long as somebody muted kept making noise it did not.
 
 It changes nothing about the frames themselves. Silence is still published
 rather than withheld, which is `consort_call::publish`'s own rule, and the tally
