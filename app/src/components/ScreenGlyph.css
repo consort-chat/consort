@@ -1,0 +1,10 @@
+/*
+  Dimmer than the name beside it. A monitor is what a share looks like before
+  its first frame and for everybody else's, so it should read as a placeholder
+  rather than as an icon somebody is meant to act on. How big it is belongs to
+  whatever is holding it, which is a square on the strip or the stage.
+*/
+.call-screen-glyph {
+  color: var(--text-muted);
+  opacity: 0.55;
+}

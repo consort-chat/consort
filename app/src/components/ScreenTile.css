@@ -1,9 +1,9 @@
 /*
-  One shared screen, drawn as the square a face sits in.
+  One shared screen waiting its turn, drawn as the square a face sits in.
 
   Everything about the size comes from `--avatar-size` at the call site, the
   way `CallFace` does it, so a screen and a person are the same size on the
-  card and grow together when it is expanded.
+  strip and grow together when the card is expanded.
 */
 .call-screen {
   display: block;
@@ -29,10 +29,17 @@
   background: none;
   border: none;
   border-radius: var(--radius-sm);
+  /* On the compositor, so promoting a tile never reflows the strip beside it. */
+  transition: transform var(--duration-fast) var(--ease-out-expo);
 }
 
 .call-screen__button:hover {
   background: var(--surface-overlay);
+}
+
+/* Pressed, and the press is what sends this one to the stage. */
+.call-screen__button:active {
+  transform: scale(0.96);
 }
 
 .call-screen__button:focus-visible {
@@ -57,22 +64,16 @@
   border-radius: var(--radius-md);
 }
 
-/*
-  Dimmer than the name under it. A square with a monitor in it is what a share
-  looks like before its first frame and for everybody else's, so it should read
-  as a placeholder rather than as an icon somebody is meant to act on.
-*/
-.call-screen__glyph {
+/* Its colour is `ScreenGlyph.css`; the square it sits in owns how big it is. */
+.call-screen__stage .call-screen-glyph {
   width: 55%;
   height: 55%;
-  color: var(--text-muted);
-  opacity: 0.55;
 }
 
 /*
   The mint, which is the colour reserved for voice and presence. A share is the
-  other live thing a call carries, and this is the one place on the card where
-  something is going out rather than merely being somebody.
+  other live thing a call carries. Smaller than the stage's own caption, which
+  is the half of the hierarchy the type scale carries.
 */
 .call-screen__what {
   flex: 0 0 100%;
