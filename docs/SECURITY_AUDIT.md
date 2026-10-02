@@ -184,8 +184,9 @@ a judgement about a hot path. One line of the three is yours to pick.
 
 ## Hardening
 
-No attack path today. Each of these is the code depending on something it
-should not.
+Each of these is the code depending on something it should not, with no attack
+path today. H7 is the exception and is here anyway: the attack is real and what
+it buys is an icon.
 
 ### H1. `timeline_attach_file` reads any path the page names
 
