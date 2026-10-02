@@ -115,7 +115,47 @@ describe("CallFace", () => {
     });
 
     expect(screen.getByLabelText("Ada is away")).toBeVisible();
-    expect(screen.queryByLabelText("Ada is muted")).toBeNull();
+  });
+
+  it("says somebody is away as well as muted, not instead of it", () => {
+    // Being away mutes, so the two arrive together and one slot cannot hold
+    // both. Where somebody went and what they switched off are two facts.
+    draw({
+      person: { ...person("@ada:example.org", "Ada"), muted: true, away: true },
+    });
+
+    expect(screen.getByLabelText("Ada is muted")).toBeVisible();
+    expect(screen.getByLabelText("Ada is away")).toBeVisible();
+  });
+
+  it("says somebody is away as well as deafened", () => {
+    // Headphones off on the way out of the room. Both are true and the clock
+    // is the one that says not to wait for an answer.
+    draw({
+      person: {
+        ...person("@ada:example.org", "Ada"),
+        muted: true,
+        deafened: true,
+        away: true,
+      },
+    });
+
+    expect(screen.getByLabelText("Ada is deafened")).toBeVisible();
+    expect(screen.getByLabelText("Ada is away")).toBeVisible();
+  });
+
+  it("puts the clock at the end of the row, past every other glyph", () => {
+    // #144 asked for it there by name. It is the one flag worth noticing, so
+    // it sits where the eye stops rather than in the middle of the others.
+    draw({
+      live: true,
+      person: { ...person("@ada:example.org", "Ada"), muted: true, away: true },
+    });
+
+    const row = screen.getByRole("listitem");
+    const glyphs = [...row.querySelectorAll("svg")];
+
+    expect(glyphs.at(-1)).toBe(screen.getByLabelText("Ada is away"));
   });
 
   it("says nothing about a camera unless the roster is live", () => {

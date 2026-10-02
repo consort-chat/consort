@@ -23,14 +23,11 @@
 .call-face__button {
   display: grid;
   /*
-    Two trailing columns that are only there when they are. `auto` collapses to
-    nothing for a row with no icon in it, so the names stay on one line and
-    neither column appears as an empty gutter down the whole list.
-
-    Two rather than one because they answer different questions. Muted and on
-    camera are both ordinary at once, so they cannot share a slot.
+    Three trailing columns, only there when they are: `auto` collapses for a
+    row with no icon in it. Three rather than one because muted, on camera and
+    away are all ordinary at once, so none of them can share a slot.
   */
-  grid-template-columns: var(--avatar-size, 32px) minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--avatar-size, 32px) minmax(0, 1fr) auto auto auto;
   gap: var(--space-2);
   align-items: center;
   width: 100%;
@@ -91,6 +88,37 @@
 .call-face__flag {
   width: 12px;
   height: 12px;
+}
+
+/*
+  Somebody who is not at their computer, undimmed and in the amber that idle
+  already takes in the card this row opens. Being away mutes, so the rule above
+  dimmed the one glyph meant to be noticed using the very state it reports.
+  That is #144.
+*/
+.call-face__away {
+  width: 13px;
+  height: 13px;
+  color: var(--amber);
+  animation: call-face-away-pulse 2.4s ease-in-out infinite;
+}
+
+/* Opacity only, so the pulse stays on the compositor. */
+@keyframes call-face-away-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still the brightest thing in the row, just no longer moving. */
+  .call-face__away {
+    animation: none;
+  }
 }
 
 .call-face__avatar {
