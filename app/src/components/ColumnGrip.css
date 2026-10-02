@@ -1,0 +1,42 @@
+/*
+  The grip on a resizable column's edge.
+
+  Wider than the lines it draws, because a hairline is not a target. Each
+  sidebar positions its own with a second class.
+*/
+.grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 8px;
+  color: var(--line-strong);
+  /* No surface until the pointer is on it. The lines are what it shows at rest. */
+  background: transparent;
+  cursor: col-resize;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.grip:hover,
+.grip:focus-visible {
+  outline: none;
+  color: var(--text-secondary);
+  background: var(--violet-glow);
+}
+
+/*
+  Two hairlines either side of a one pixel gap, in `currentcolor` so the rule
+  above is the only place the grip's colour is written down. Drawn at rest:
+  a grip that appears on hover announces itself only to somebody who has
+  already guessed it is there (#138).
+*/
+.grip__lines {
+  width: 3px;
+  height: 24px;
+  border-left: 1px solid;
+  border-right: 1px solid;
+}

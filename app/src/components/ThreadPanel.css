@@ -17,27 +17,12 @@
 }
 
 /*
-  The edge, as something to take hold of. Wider than the rule it sits on,
-  because a one pixel target is one nobody can hit, and pulled half of that
-  width into the room so the hand lands on the line rather than beside it.
+  Placement only. The look is `ColumnGrip.css`, shared with the channel list.
+  Pulled half its width into the room so the hand lands on the line rather
+  than beside it, which this panel can do because nothing clips it.
 */
 .thread__grip {
-  position: absolute;
-  top: 0;
-  bottom: 0;
   left: -4px;
-  z-index: 1;
-  width: 8px;
-  cursor: col-resize;
-  /* Invisible until it is wanted, which is the whole of a good splitter. */
-  background: transparent;
-  transition: background var(--duration-fast) ease;
-}
-
-.thread__grip:hover,
-.thread__grip:focus-visible {
-  outline: none;
-  background: var(--violet-glow);
 }
 
 /* The room's own header height, so the two line up across the rule. */
