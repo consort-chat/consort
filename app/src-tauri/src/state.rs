@@ -23,6 +23,7 @@ use crate::call::CallBridge;
 use crate::ears::speakers;
 use crate::events::{AppEvent, CallRefused, EventSink, LatestSink};
 use crate::notify::{Front, Notifier, worth_drawing};
+use crate::selfview::SelfView;
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
 use crate::video::{CameraTrouble, VideoBridge};
@@ -262,6 +263,12 @@ pub struct AppState {
     /// The microphone's opposite number for video, built once and cloned for
     /// the same reason. One frame deep: see `consort_call::camera`.
     camera: ConsortCamera,
+    /// The newest camera frame, for the call card to draw.
+    ///
+    /// Beside the queue above rather than inside the bridge, because the bridge
+    /// is `None` until somebody switches a camera on and the command that draws
+    /// this has to have somewhere to ask either way.
+    self_view: SelfView,
     /// The camera device, once anything has wanted one.
     ///
     /// `None` until then, on the same terms as the audio thread in
@@ -475,6 +482,7 @@ impl AppState {
             settings,
             microphone: Microphone::new(),
             camera: ConsortCamera::new(),
+            self_view: SelfView::new(),
             video: Arc::new(std::sync::Mutex::new(None)),
             voices,
             chiming,
@@ -773,7 +781,8 @@ impl AppState {
 
         let size = {
             let mut slot = self.locked_video();
-            let bridge = slot.get_or_insert_with(|| VideoBridge::new(backend()));
+            let bridge =
+                slot.get_or_insert_with(|| VideoBridge::new(backend(), self.self_view.clone()));
             bridge
                 .start(device.as_deref(), self.camera.clone())
                 .map_err(CameraTrouble::Device)?
@@ -835,6 +844,14 @@ impl AppState {
         if let Some(bridge) = self.locked_call().as_ref() {
             bridge.set_camera(None);
         }
+    }
+
+    /// The newest camera frame as a data URL, for the call card to draw.
+    ///
+    /// `None` when no camera is running, and in the moment between opening one
+    /// and its first frame. The card draws its faces either way.
+    pub fn self_view(&self) -> Option<String> {
+        self.self_view.latest()
     }
 
     /// Whether a camera is open right now. Test-only.
@@ -1615,12 +1632,14 @@ mod tests {
         // crate's.
         use consort_video::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
 
-        /// A camera backend a test can refuse from.
+        /// A camera backend a test can refuse from, or push a frame through.
         #[derive(Clone, Default)]
         struct Backend {
             opens: Arc<AtomicUsize>,
             closes: Arc<AtomicUsize>,
             busy: bool,
+            /// Whatever sink the last `open` was given.
+            sink: Arc<std::sync::Mutex<Option<FrameSink>>>,
         }
 
         impl Backend {
@@ -1633,6 +1652,25 @@ mod tests {
 
             fn opens(&self) -> usize {
                 self.opens.load(Ordering::Relaxed)
+            }
+
+            /// Hand one frame over the way a device would.
+            fn capture(&self) {
+                if let Some(sink) = self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_mut()
+                {
+                    sink(consort_video::Picture {
+                        width: 2,
+                        height: 2,
+                        y: vec![120; 4],
+                        u: vec![128],
+                        v: vec![128],
+                        timestamp_us: 1,
+                    });
+                }
             }
         }
 
@@ -1665,7 +1703,7 @@ mod tests {
                 &self,
                 _camera: Option<&str>,
                 _want: Resolution,
-                _on_frame: FrameSink,
+                on_frame: FrameSink,
             ) -> Result<Box<dyn CameraStream>, CaptureError> {
                 self.opens.fetch_add(1, Ordering::Relaxed);
                 if self.busy {
@@ -1673,6 +1711,10 @@ mod tests {
                         camera: "/dev/video0".to_owned(),
                     });
                 }
+                *self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on_frame);
                 Ok(Box::new(Stream {
                     closes: Arc::clone(&self.closes),
                 }))
@@ -1748,6 +1790,62 @@ mod tests {
             );
             assert!(!state.camera_running());
             assert_eq!(last_video(&sink), Some(said));
+        }
+
+        #[test]
+        fn there_is_nothing_for_the_card_to_draw_before_a_camera_is_on() {
+            let (_dir, state, _sink) = state();
+
+            assert_eq!(state.self_view(), None);
+        }
+
+        #[test]
+        fn a_captured_frame_reaches_the_card() {
+            // What pins the wiring: the slot the capture thread fills and the
+            // one this command answers from have to be the same slot. A fresh
+            // one here would answer nothing forever, with every other camera
+            // test still passing.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+
+            backend.capture();
+
+            assert!(state.self_view().is_some(), "the card has nothing to draw");
+        }
+
+        #[test]
+        fn switching_the_camera_off_takes_the_card_picture_down() {
+            // Camera off, card back to faces. Without this it keeps showing the
+            // last frame the camera saw.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+            backend.capture();
+            assert!(
+                state.self_view().is_some(),
+                "nothing was drawn to take down"
+            );
+
+            state.set_camera(|| Box::new(Backend::default()), false);
+
+            assert_eq!(state.self_view(), None);
         }
 
         #[test]

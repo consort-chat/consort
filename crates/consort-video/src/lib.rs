@@ -18,7 +18,7 @@ pub mod v4l_host;
 
 pub use capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
 pub use devices::{Camera, CameraDevices, CameraList, NoCameras, Selection, catalogue, choose};
-pub use pixels::{FrameError, Picture, PixelFormat, decode};
+pub use pixels::{FrameError, Picture, PixelFormat, decode, to_rgb};
 pub use settings::VideoSettings;
 
 /// The camera backend for this build.

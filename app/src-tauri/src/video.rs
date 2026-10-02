@@ -12,6 +12,8 @@ use std::sync::Mutex;
 use consort_call::{Camera, OutgoingPicture, PictureSize};
 use consort_video::{CameraStream, CaptureError, Picture, Resolution, VideoCapture, capture};
 
+use crate::selfview::SelfView;
+
 /// Why a camera is not in the call.
 ///
 /// Two cases rather than one, because only one of them is about the camera. A
@@ -40,14 +42,17 @@ pub struct VideoBridge {
     backend: Box<dyn VideoCapture>,
     /// The open device, while there is one. Dropping it releases the camera.
     open: Mutex<Option<Box<dyn CameraStream>>>,
+    /// The newest frame, for the call card to draw.
+    mirror: SelfView,
 }
 
 impl VideoBridge {
-    /// Hold `backend` without opening anything.
-    pub fn new(backend: Box<dyn VideoCapture>) -> Self {
+    /// Hold `backend` and `mirror` without opening anything.
+    pub fn new(backend: Box<dyn VideoCapture>, mirror: SelfView) -> Self {
         Self {
             backend,
             open: Mutex::new(None),
+            mirror,
         }
     }
 
@@ -57,10 +62,14 @@ impl VideoBridge {
     /// be set up for. Replaces whatever was open: switching camera is one act
     /// here rather than a stop and a start that could leave both devices held.
     pub fn start(&self, camera: Option<&str>, queue: Camera) -> Result<PictureSize, CaptureError> {
+        let mirror = self.mirror.clone();
         let stream = self.backend.open(
             camera,
             capture::WANTED,
             Box::new(move |picture| {
+                // Sampled down before the frame is moved on, which is the only
+                // moment both readers can be served from one capture.
+                mirror.offer(&picture);
                 queue.offer(outgoing(picture));
             }),
         )?;
@@ -75,9 +84,22 @@ impl VideoBridge {
         Ok(PictureSize { width, height })
     }
 
-    /// Release the camera, if one is open.
+    /// Release the camera, if one is open, and drop the card's picture.
+    ///
+    /// Both here, because every way out of filming comes through this: the
+    /// button, a call ending, and the channel changing under it.
     pub fn stop(&self) {
         self.open().take();
+        self.mirror.clear();
+    }
+
+    /// The newest frame, for the card to draw. Test-only.
+    ///
+    /// The application reaches the same slot through `AppState`, which is the
+    /// one the command answers from.
+    #[cfg(test)]
+    pub fn mirror(&self) -> &SelfView {
+        &self.mirror
     }
 
     /// Whether a camera is open right now.
@@ -164,14 +186,7 @@ mod tests {
         /// Push one frame through whatever sink is currently installed.
         fn capture(&self, nth: u8) {
             if let Some(sink) = self.sink.lock().unwrap().as_mut() {
-                sink(Picture {
-                    width: 2,
-                    height: 2,
-                    y: vec![nth; 4],
-                    u: vec![128],
-                    v: vec![128],
-                    timestamp_us: i64::from(nth),
-                });
+                sink(picture(nth));
             }
         }
     }
@@ -222,8 +237,23 @@ mod tests {
         }
     }
 
+    /// One captured frame, at the smallest size a thumbnail keeps.
+    fn picture(nth: u8) -> Picture {
+        Picture {
+            width: 2,
+            height: 2,
+            y: vec![nth; 4],
+            u: vec![128],
+            v: vec![128],
+            timestamp_us: i64::from(nth),
+        }
+    }
+
     fn bridge(backend: Fake) -> (VideoBridge, Fake) {
-        (VideoBridge::new(Box::new(backend.clone())), backend)
+        (
+            VideoBridge::new(Box::new(backend.clone()), SelfView::new()),
+            backend,
+        )
     }
 
     #[test]
@@ -274,6 +304,33 @@ mod tests {
     }
 
     #[test]
+    fn frames_reach_the_card_as_well_as_the_call() {
+        // Both, from the one capture. The card draws what is being published
+        // rather than opening a second device, which on V4L2 it could not do.
+        let (bridge, backend) = bridge(Fake::default());
+
+        bridge.start(None, Camera::new()).unwrap();
+        backend.capture(7);
+
+        assert!(bridge.mirror().latest().is_some());
+    }
+
+    #[test]
+    fn stopping_takes_the_card_picture_down_with_the_device() {
+        // Every path out of filming goes through `stop`, which is why the
+        // picture is dropped here rather than beside each caller. A card still
+        // showing a camera that is off is the one picture somebody who just
+        // covered theirs did not want left on screen.
+        let (bridge, _) = bridge(Fake::default());
+        bridge.start(None, Camera::new()).unwrap();
+        bridge.mirror().offer(&picture(7));
+
+        bridge.stop();
+
+        assert_eq!(bridge.mirror().latest(), None);
+    }
+
+    #[test]
     fn a_camera_that_will_not_open_leaves_nothing_running() {
         // The ordinary failure, not an edge one: another application has the
         // camera, which on Linux means exactly one process can.
@@ -297,11 +354,14 @@ mod tests {
         // Dropping the working device first would turn their video off to find
         // out that the other camera is busy.
         let working = Fake::default();
-        let bridge = VideoBridge::new(Box::new(Switching {
-            good: working.clone(),
-            bad: Fake::refusing(),
-            calls: Arc::new(AtomicUsize::new(0)),
-        }));
+        let bridge = VideoBridge::new(
+            Box::new(Switching {
+                good: working.clone(),
+                bad: Fake::refusing(),
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            SelfView::new(),
+        );
 
         bridge.start(None, Camera::new()).unwrap();
         let refused = bridge.start(Some("/dev/video9"), Camera::new());

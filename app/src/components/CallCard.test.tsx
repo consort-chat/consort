@@ -16,6 +16,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPersonVolume,
 }));
 
+const selfView = vi.hoisted(() => vi.fn());
+vi.mock("../lib/useSelfView", () => ({ useSelfView: selfView }));
+
 import { CallCard } from "./CallCard";
 import type { Call, Participant } from "../lib/api";
 import { resetAvatarCache } from "../lib/avatars";
@@ -52,7 +55,7 @@ function inCall(participants: Participant[]): Call {
 function card(
   call: Call,
   speaking?: ReadonlySet<string>,
-  away: { shown?: boolean; onHide?: () => void } = {},
+  away: { shown?: boolean; onHide?: () => void; cameraOn?: boolean } = {},
 ) {
   return (
     <CallCard
@@ -62,6 +65,7 @@ function card(
       shown={away.shown ?? true}
       onHide={away.onHide ?? vi.fn()}
       onOpenRoom={vi.fn()}
+      cameraOn={away.cameraOn ?? false}
       {...(speaking === undefined ? {} : { speaking })}
     />
   );
@@ -93,6 +97,7 @@ function stubLayout(box: { left: number; top: number; width?: number }) {
 
 beforeEach(() => {
   resetAvatarCache();
+  selfView.mockReset().mockReturnValue(null);
   memberAvatar.mockReset().mockResolvedValue(null);
   audioSettings.mockReset().mockResolvedValue(SETTINGS);
   setPersonVolume.mockReset().mockResolvedValue(undefined);
@@ -492,5 +497,106 @@ describe("CallCard", () => {
         screen.queryByRole("button", { name: /disconnect|hang up|leave/i }),
       ).toBeNull();
     });
+  });
+});
+
+describe("your own camera on the card", () => {
+  const PICTURE = "data:image/jpeg;base64,aaaa";
+
+  /** The self view, which is the one picture on the card with a name. */
+  function preview() {
+    return screen.queryByRole("img", { name: "Your camera" });
+  }
+
+  it("is not drawn while the camera is off", () => {
+    // The card as it was. Nothing appears and nothing moves for somebody who
+    // never switches a camera on, which is most of every call.
+    render(card(inCall([person("@bob:example.org", "Bob")])));
+
+    expect(preview()).toBe(null);
+  });
+
+  it("is drawn once the camera has a frame", () => {
+    selfView.mockReturnValue(PICTURE);
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+
+    expect(preview()).not.toBe(null);
+    expect(preview()).toHaveAttribute("src", PICTURE);
+  });
+
+  it("is not drawn before the first frame arrives", () => {
+    // Between opening a device and its first frame. A card drawing an empty
+    // picture there would flash an empty box every time the camera came on.
+    selfView.mockReturnValue(null);
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+
+    expect(preview()).toBe(null);
+  });
+
+  it("goes away again when the camera does", () => {
+    selfView.mockReturnValue(PICTURE);
+    const { rerender } = render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }),
+    );
+    expect(preview()).not.toBe(null);
+
+    selfView.mockReturnValue(null);
+    rerender(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: false }));
+
+    expect(preview()).toBe(null);
+  });
+
+  it("keeps the faces beside it", () => {
+    // The camera is added to the card rather than replacing what it was for.
+    // Who else is in the call is the thing the card exists to say.
+    selfView.mockReturnValue(PICTURE);
+
+    render(card(inCall([person("@ann:example.org", "Ann")]), undefined, { cameraOn: true }));
+
+    expect(preview()).not.toBe(null);
+    expect(screen.getByText("Ann")).toBeInTheDocument();
+  });
+
+  it("is not asked for at all while the card is put away", () => {
+    // Not merely asked for with the camera off: a hidden card draws nothing, so
+    // the component holding the timer is never mounted.
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+        shown: false,
+      }),
+    );
+
+    expect(selfView).not.toHaveBeenCalled();
+  });
+
+
+  it("is asked for while the card is up and the camera is on", () => {
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }),
+    );
+
+    expect(selfView).toHaveBeenCalledWith(true);
+  });
+
+  it("survives being dragged", () => {
+    // The picture is inside the card, so moving the card moves it. What this
+    // pins is that a drag does not remount it and lose the frame.
+    selfView.mockReturnValue(PICTURE);
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+    const before = preview();
+    stubLayout({ left: 100, top: 100 });
+
+    const grip = screen.getByRole("button", {
+      name: "Move the Lounge call card with the arrow keys",
+    });
+    fireEvent.pointerDown(grip, { clientX: 150, clientY: 150, pointerId: 1 });
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 220, pointerId: 1 });
+    fireEvent.pointerUp(window, { clientX: 200, clientY: 220, pointerId: 1 });
+
+    expect(preview()).toBe(before);
+    expect(preview()).toHaveAttribute("src", PICTURE);
   });
 });

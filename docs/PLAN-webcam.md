@@ -57,6 +57,14 @@ See `consort_video::capture::choose_offer`.
 What is true at the end: the picture appears where the icon is now, and the
 floating card shows it.
 
+**The local half is done.** Your own camera is drawn in the floating card, and
+the question below about how a frame reaches the webview is settled for it by
+[ADR-0007](adr/0007-draw-the-self-view-from-a-still.md): sampled down on the
+capture thread, converted and encoded when the card asks, carried as a `data:`
+URL. The measurement that decided it is in the ADR. What is left of phase 2 is
+other people's cameras, where the bytes are multiplied by a roster and the answer
+may well be different.
+
 The problem phase 2 solves is not signalling, it is transport. Decoded frames
 arrive in Rust, where the SFU connection is, and have to be drawn in the
 webview, where the interface is. That crossing is the one video crossing this
@@ -68,7 +76,9 @@ Still open, and to be settled in phase 2 rather than guessed at now:
 
 - Whether a frame is served over that scheme, pushed over an IPC channel, or
   encoded once per visible tile and polled. The answer depends on measurement
-  rather than taste.
+  rather than taste. Settled for the self view, which is polled: see
+  [ADR-0007](adr/0007-draw-the-self-view-from-a-still.md). Still open for remote
+  tiles, and the ADR says why the answer there may not be the same one.
 - What the card shows when several people have a camera on. The issue asks for
   the active speaker's, and that question is already answered here:
   [ADR-0003](adr/0003-measure-who-is-talking-locally.md) rejected the SFU's

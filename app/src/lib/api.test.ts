@@ -32,6 +32,7 @@ import {
   callSetAway,
   callSetDeafened,
   callSetCamera,
+  selfView,
   callSetMuted,
   cameras,
   onCallReadiness,
@@ -1253,6 +1254,23 @@ describe("the call commands", () => {
 
     expect(invoke).toHaveBeenNthCalledWith(1, "set_camera", { on: true });
     expect(invoke).toHaveBeenNthCalledWith(2, "set_camera", { on: false });
+  });
+
+  it("asks Rust for the newest camera frame", async () => {
+    invoke.mockResolvedValue("data:image/jpeg;base64,aaaa");
+
+    const picture = await selfView();
+
+    expect(invoke).toHaveBeenCalledWith("self_view");
+    expect(picture).toBe("data:image/jpeg;base64,aaaa");
+  });
+
+  it("passes on having no frame to draw", async () => {
+    // No camera running, or one that has not produced a frame yet. Null rather
+    // than a failure, because the card draws its faces either way.
+    invoke.mockResolvedValue(null);
+
+    expect(await selfView()).toBe(null);
   });
 
   it("hands back what happened to the camera", async () => {
