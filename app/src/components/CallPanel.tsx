@@ -106,17 +106,17 @@ function CameraIcon({ off }: { off: boolean }) {
 }
 
 /**
- * A monitor with an arrow leaving it, struck through when nothing is going
- * out.
+ * A monitor with an arrow leaving it, for the press that starts a share.
  *
  * Deliberately not the camera's rectangle: the two controls sit beside each
  * other and publish different things, and a shape that read as a second
  * camera would be pressed by somebody looking for one.
  */
-function ScreenIcon({ off }: { off: boolean }) {
+function ScreenIcon() {
   return (
     <svg
       className="call-panel__glyph"
+      data-glyph="screen"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -128,7 +128,31 @@ function ScreenIcon({ off }: { off: boolean }) {
       <path d="M3 5h18v11H3z" />
       <path d="M9 20h6" />
       <path d="M12 13V8m0 0-2.5 2.5M12 8l2.5 2.5" />
-      {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
+/**
+ * A cross, for the press that stops the share that is running.
+ *
+ * A shape of its own rather than the monitor struck through: a strike-through
+ * is this row's way of saying a thing is off, and here the thing is on.
+ */
+function StopShareIcon() {
+  return (
+    <svg
+      className="call-panel__glyph"
+      data-glyph="stop"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 6l12 12" />
+      <path d="M18 6 6 18" />
     </svg>
   );
 }
@@ -707,12 +731,13 @@ function Connected({
   onShare,
 }: Props) {
   /*
-    Whether the picker is on screen. Not derived from `selfScreen`: a picker is
-    open because somebody asked for one, and a share is running because one
-    started, and the gap between those two is the whole of what the picker is
-    for.
+    Where the picker is, and null when it is not up. Not derived from
+    `selfScreen`: a picker is open because somebody asked for one, and a share
+    is running because one started, and the gap between those two is the whole
+    of what the picker is for.
   */
-  const [picking, setPicking] = useState(false);
+  const [picking, setPicking] = useState<{ x: number; y: number } | null>(null);
+  const strip = useRef<HTMLDivElement | null>(null);
   const sharing = selfScreen.sharing !== null;
 
   // Deafening mutes, and so does being away, so the microphone button reads as
@@ -730,6 +755,7 @@ function Connected({
       data-state={call.state}
       role="group"
       aria-label="Voice connection"
+      ref={strip}
     >
       <div className="call-panel__where">
         {/*
@@ -825,26 +851,35 @@ function Connected({
           <button
             type="button"
             className="call-panel__control"
-            onClick={() => {
+            onClick={(event) => {
               if (sharing) {
                 onShare(null);
                 return;
               }
-              setPicking((open) => !open);
+              if (picking !== null) {
+                setPicking(null);
+                return;
+              }
+              // Beside the column rather than over it, where the person card
+              // goes: this one clips, and WebKitGTK draws its scrollbar on top.
+              const control = event.currentTarget.getBoundingClientRect();
+              const column = strip.current?.getBoundingClientRect();
+              setPicking({ x: column?.right ?? control.right, y: control.bottom });
             }}
             aria-pressed={sharing}
             aria-label="Share your screen"
             title={sharing ? "Stop sharing your screen" : "Share your screen"}
           >
-            <ScreenIcon off={!sharing} />
+            {sharing ? <StopShareIcon /> : <ScreenIcon />}
           </button>
-          {picking && !sharing && (
+          {picking !== null && !sharing && (
             <SharePicker
+              at={picking}
               onPick={(source) => {
-                setPicking(false);
+                setPicking(null);
                 onShare(source);
               }}
-              onClose={() => setPicking(false)}
+              onClose={() => setPicking(null)}
             />
           )}
         </span>

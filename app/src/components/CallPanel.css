@@ -334,6 +334,11 @@
   height: 16px;
 }
 
+/* Reinforcing the cross, never carrying the message on its own. */
+.call-panel__glyph[data-glyph="stop"] {
+  color: var(--danger);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .call-panel__leave,
   .call-panel__more-toggle .call-panel__glyph {
@@ -342,11 +347,11 @@
 }
 
 /*
-  The anchor the share picker floats off, so the card reads as belonging to
-  the control rather than to the window.
+  What holds the control and the card it opens, so the two stay next to each
+  other for focus and for the press that closes one from outside. Not an
+  anchor: the card is `fixed` and placed from measured coordinates.
 */
 .call-panel__sharing {
-  position: relative;
   display: inline-flex;
 }
 

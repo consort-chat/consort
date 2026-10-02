@@ -1,13 +1,12 @@
 /*
  * The card for choosing what to share.
  *
- * Floats above the voice strip it is opened from, so it reads as belonging to
- * that control rather than to the window.
+ * Fixed, and placed from viewport coordinates the component works out. The
+ * sidebar it opens from clips what leaves it, so an absolute card is cut off
+ * at the column's edge whatever its `z-index` says. See `SharePicker.tsx`.
  */
 .share-picker {
-  position: absolute;
-  bottom: calc(100% + var(--space-2));
-  left: var(--space-2);
+  position: fixed;
   z-index: 40;
   width: 20rem;
   display: flex;
