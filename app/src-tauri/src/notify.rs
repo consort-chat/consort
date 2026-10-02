@@ -149,6 +149,52 @@ pub fn wording(one: &Notification) -> (String, String) {
     (heading, one.body.clone())
 }
 
+/// Escape what a notification daemon's markup parser would read as markup.
+///
+/// `&` first, or the replacements escape one another.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn for_the_daemon(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Only the XDG backend parses markup. A Windows toast and a macOS
+/// notification take none, and would draw the entities instead.
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn for_the_daemon(text: &str) -> String {
+    text.to_owned()
+}
+
+/// The notification handed to the desktop, built but not yet shown.
+///
+/// Separate from [`Notifier::draw`] so that what reaches the daemon can be
+/// read by a test. Showing one needs a desktop; deciding what it says does
+/// not.
+fn compose(one: &Notification, sound: bool) -> notify_rust::Notification {
+    let (heading, body) = wording(one);
+    // Both halves are written by other people: the body is the sender's, and
+    // the heading is their display name beside the room's.
+    let heading = for_the_daemon(&heading);
+    let body = for_the_daemon(&body);
+
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .appname(APP_NAME)
+        .summary(&heading)
+        .body(&body)
+        // Without this a click closes the notification and nothing
+        // else. It is what makes the body itself clickable.
+        .action(CLICKED, "Open");
+    if sound {
+        notification.sound_name(SOUND);
+    }
+    #[cfg(windows)]
+    notification.app_id(APP_ID);
+
+    notification
+}
+
 /// Bringing the window to the front.
 ///
 /// A trait for the reason [`EventSink`] is one: the only implementation needs
@@ -203,24 +249,11 @@ impl Notifier {
     /// notification daemon refused this" to, and the message itself is already
     /// in the room, marked unread.
     pub fn draw(&self, one: Notification, sound: bool) {
-        let (heading, body) = wording(&one);
         let events = self.events.clone();
         let front = self.front.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut notification = notify_rust::Notification::new();
-            notification
-                .appname(APP_NAME)
-                .summary(&heading)
-                .body(&body)
-                // Without this a click closes the notification and nothing
-                // else. It is what makes the body itself clickable.
-                .action(CLICKED, "Open");
-            if sound {
-                notification.sound_name(SOUND);
-            }
-            #[cfg(windows)]
-            notification.app_id(APP_ID);
+            let notification = compose(&one, sound);
 
             let handle = match notification.show() {
                 Ok(handle) => handle,
@@ -443,5 +476,55 @@ mod tests {
         assert!(settings.enabled);
         assert!(!settings.mentions_only);
         assert!(settings.sound);
+    }
+
+    /// The daemon's markup parser, and what a sender can put in front of it.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    mod markup {
+        use super::*;
+
+        /// What a sender would write to forge a notification.
+        const FORGERY: &str = r#"<b>Session expired.</b> <a href="https://x.example/">Sign in</a>"#;
+
+        #[test]
+        fn the_daemon_is_handed_no_tag_a_sender_wrote() {
+            let said = Notification {
+                body: FORGERY.to_owned(),
+                ..arrived()
+            };
+
+            let composed = compose(&said, false);
+
+            assert!(!composed.body.contains('<'), "{}", composed.body);
+            assert!(composed.body.starts_with("&lt;b&gt;"), "{}", composed.body);
+        }
+
+        #[test]
+        fn the_heading_is_escaped_too_because_both_halves_are_written_by_others() {
+            let said = Notification {
+                sender_name: "<i>Admin</i>".to_owned(),
+                room_name: "<b>ops</b>".to_owned(),
+                ..arrived()
+            };
+
+            let composed = compose(&said, false);
+
+            assert!(!composed.summary.contains('<'), "{}", composed.summary);
+        }
+
+        #[test]
+        fn an_ampersand_is_escaped_once_and_not_twice() {
+            let said = Notification {
+                body: "Tom & Jerry <3".to_owned(),
+                ..arrived()
+            };
+
+            assert_eq!(compose(&said, false).body, "Tom &amp; Jerry &lt;3");
+        }
+
+        #[test]
+        fn ordinary_words_are_left_exactly_as_they_were_written() {
+            assert_eq!(compose(&arrived(), false).body, "are you about?");
+        }
     }
 }
