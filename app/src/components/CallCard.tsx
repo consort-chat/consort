@@ -195,6 +195,15 @@ export function CallCard({
   }, [size, full, shown, screens.length, drag.keepInView]);
 
   /*
+    Filling the window is about one call, the way putting the card away is.
+    The size somebody chose for the card itself outlives one, and did before
+    any of this, so only the window-filling view is given back.
+  */
+  useEffect(() => {
+    if (gone) setSize((current) => (current === "full" ? "card" : current));
+  }, [gone]);
+
+  /*
     Escape, out of the full-screen view and nowhere else. A floating card has
     nothing Escape should take away, and one that closed on it would vanish
     every time somebody dismissed something else.

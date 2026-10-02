@@ -876,6 +876,34 @@ describe("filling the window with the card", () => {
     ).toBeDisabled();
   });
 
+  it("does not fill the window for the next call", async () => {
+    // Filling the window is about one call, the way putting the card away is.
+    // Left alone, a card that was full when a call ended would fill the window
+    // again the moment the next one started, for a share nobody is making.
+    const { rerender } = render(sharing());
+    await userEvent.click(tile());
+    expect(onScreen()).toHaveAttribute("data-size", "full");
+
+    rerender(card({ state: "disconnected" }));
+    rerender(sharing());
+
+    expect(onScreen()).toHaveAttribute("data-size", "card");
+  });
+
+  it("keeps a card that was only expanded", async () => {
+    // The size somebody chose for the card itself outlives a call, and did
+    // before any of this. Only the window-filling view is about one call.
+    const { rerender } = render(sharing());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand the call card" }),
+    );
+
+    rerender(card({ state: "disconnected" }));
+    rerender(sharing());
+
+    expect(onScreen()).toHaveAttribute("data-size", "expanded");
+  });
+
   it("puts a dragged card back where it was", async () => {
     // Filling the window makes the card as big as the screen, and the rule
     // that keeps a floating card on screen would read that as a card hanging
