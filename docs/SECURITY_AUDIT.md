@@ -407,8 +407,16 @@ A clean result is a result. These were looked at and no path was found.
   only, which React's inline styles need. `base-uri 'self'` and
   `form-action 'none'` are both set. `object-src` and `frame-src` are not named
   and fall to `default-src 'self'`.
-- `data:` in `img-src` is load bearing, not slack: `LoginScreen.css:47` and
-  `OpeningPane.css:35` draw the grain texture from an inline SVG.
+- `data:` in `img-src` is load bearing, not slack. Every avatar is one:
+  `rooms/avatar.rs:151-170` fetches a thumbnail, bounds its size, sniffs its type
+  and builds `data:{mime};base64,...` where the mime is one of the four
+  `&'static str` values `image_type` can return. No part of that string comes off
+  the wire, so the scheme cannot be made to carry `text/html`. `LoginScreen.css:47`
+  and `OpeningPane.css:35` are the other use, a grain texture as an inline SVG.
+- Every `href` and every `src` in the frontend was enumerated. The five `href`s
+  are `reachable()`'s output twice, `linkify`'s output once, and a constant. The
+  seven `src`s are `mediaUrl` or `mxcUrl` output, or an avatar data URL from the
+  paragraph above. There is no unfiltered one.
 - No dangerous option is set anywhere.
   `dangerousDisableAssetCspModification`, `withGlobalTauri`, `pattern`,
   `assetProtocol` and `freezePrototype` are all absent, so each takes its
