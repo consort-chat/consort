@@ -1,20 +1,13 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The message a reply is answering, when it is not one of the loaded ones.
+//! The message a reply is answering, when it is not one of the loaded ones:
+//! one event, by ID, read as a message.
 //!
-//! A room draws a window of history and a reply can name anything older than
-//! it, so the row above a reply is regularly pointing at something that is not
-//! on screen and cannot be looked up in what is. This is the lookup for that
-//! case: one event, by ID, read as a message.
-//!
-//! ## Why not the whole window
-//!
-//! Because drawing the row and going to the message are different asks.
-//! [`around`](super::around) is the second one and costs a `/context` request
-//! and a timeline the reader did not ask to be moved to. This one answers who
-//! wrote it and what it said, which is all a reply row draws, and for a
-//! message the SDK has already stored it costs no request at all.
+//! Not the whole window, because drawing the row and going to the message are
+//! different asks. [`around`](super::around) is the second one and moves the
+//! reader; this answers who wrote it and what it said, and for a message the
+//! SDK has already stored it costs no request at all.
 
 use matrix_sdk::Room;
 
@@ -23,10 +16,9 @@ use crate::timeline::facts;
 
 /// Read one event as a message, or `None` when there is nothing to draw.
 ///
-/// `None` covers a redaction, a message this session has no key for, and a
-/// homeserver that will not hand the event over, which is what an account that
-/// was not in the room at the time gets. All three are the same answer to the
-/// only question being asked, and the row says so rather than guessing.
+/// `None` covers a redaction, a message with no key, and a homeserver that
+/// will not hand the event over, which is what an account that was not in the
+/// room at the time gets. All three are the same answer to the row.
 pub async fn answered(room: &Room, event_id: &str) -> Option<Message> {
     let parsed = super::event_id_of(event_id).ok()?;
 

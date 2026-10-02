@@ -3,24 +3,13 @@
 
 //! Fetching the picture or the clip hanging off one message.
 //!
-//! On the same terms as an avatar and for the same reason: a timeline is
-//! re-sent in full whenever anything in it changes, so it carries handles and
-//! not bytes, and the interface asks for the ones it is about to draw. The
-//! SDK keeps what it fetches in the same SQLite directory as everything else,
-//! so scrolling back past a picture a second time costs nothing.
+//! A timeline is re-sent in full whenever anything in it changes, so it
+//! carries handles and not bytes. The SDK keeps what it fetches, so scrolling
+//! past a picture a second time costs nothing.
 //!
-//! ## Two ways out, because there are two things to do with an attachment
-//!
-//! [`media`] is for drawing one, and it sniffs: the type an event claims is
-//! written by whoever sent it, so what comes back is decided by the bytes and
-//! anything that is neither a picture nor a clip is refused. [`bytes`] is for
-//! saving one, and it does not sniff, because a spreadsheet is a perfectly
-//! good thing to write to disk and refusing it would be refusing the only
-//! thing Consort offers to do with it.
-//!
-//! Both are bounded by [`MAX_BYTES`], and the bound is here rather than in the
-//! webview because this is where the bytes are: nothing downstream can decline
-//! what it has already been handed.
+//! [`media`] draws and sniffs; [`bytes`] saves and does not. Both are bounded
+//! by [`MAX_BYTES`], here rather than in the webview because nothing
+//! downstream can decline what it has already been handed.
 
 use matrix_sdk::Client;
 use matrix_sdk::media::{MediaFormat, MediaRequestParameters};
@@ -32,26 +21,17 @@ use crate::media::{image_type, video_type};
 /// The most attachment data worth holding at once.
 ///
 /// matrix-sdk has no range-aware download, so one of these arrives whole and
-/// is held whole while it is being served or written. That is affordable for
-/// anything anybody pastes into a conversation and it is not affordable
-/// without a bound, which is what this is.
+/// is held whole while it is served or written. A ceiling on the absurd rather
+/// than a judgement about what a clip weighs.
 ///
-/// Far larger than the 32 MiB this carried in 0.1.3, because the bytes no
-/// longer cross the IPC boundary as one message and no longer become a second
-/// copy in the webview. It is a ceiling on the absurd rather than a judgement
-/// about what a clip weighs.
-///
-/// The same number bounds the send side, where an attachment is held whole
-/// while it is uploaded for the same reason. Exported so that the shell can
-/// refuse a file by its length before reading it: a bound applied after the
-/// read has already cost the memory it exists to protect.
+/// The same number bounds the send side. Exported so the shell can refuse a
+/// file by its length before reading it, since a bound applied after the read
+/// has already cost the memory it exists to protect.
 pub const MAX_BYTES: usize = 512 * 1024 * 1024;
 
-/// One attachment, and what its bytes actually are.
-///
-/// The type is sniffed rather than repeated off the event, so it is safe to
-/// serve as a content type: a sender who called their upload `text/html`
-/// cannot have a page treat it as one.
+/// One attachment, and what its bytes actually are. The type is sniffed rather
+/// than repeated off the event, so a sender who called their upload
+/// `text/html` cannot have a page treat it as one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attachment {
     /// A media type from the short list in [`crate::media`], never the
@@ -62,10 +42,8 @@ pub struct Attachment {
 
 /// One attachment as something to draw, by the handle its message carried.
 ///
-/// The handle is the event's own `MediaSource`, which is why this works the
-/// same for an encrypted room: the SDK decrypts the file with the key that
-/// travelled inside the handle, and nothing here has to know which kind it
-/// was holding.
+/// The handle is the event's own `MediaSource`, which is why an encrypted room
+/// needs nothing special: the key travelled inside the handle.
 pub async fn media(client: &Client, handle: &str) -> Result<Attachment> {
     drawable(bytes(client, handle).await?)
 }
@@ -130,10 +108,9 @@ mod tests {
     #[test]
     fn media_source_of_a_plain_mxc() {
         // The other half of `mxcUrl` in `app/src/lib/api.ts`, which builds
-        // this exact string for a custom emoji because a pack has no
-        // attachment handle to hand out. The literal is the contract: if ruma
-        // ever changes how a plain source is written, this fails here rather
-        // than becoming a broken picture in every message that has one.
+        // this exact string for a custom emoji. The literal is the contract:
+        // if ruma changes how a plain source is written, this fails here
+        // rather than becoming a broken picture in every message.
         let handle = r#"{"url":"mxc://example.org/abc"}"#;
 
         let source: MediaSource =
