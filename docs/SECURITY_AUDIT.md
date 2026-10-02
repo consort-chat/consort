@@ -586,8 +586,11 @@ A clean result is a result. These were looked at and no path was found.
   passwords are `hunter2`, and `testing/synapse/up.sh:13` is a throwaway
   Synapse bound to `127.0.0.1:8008` whose own header says never to reuse it
   (`docker-compose.yml:1-8,24-26`). Its generated state is gitignored.
-- No secret reaches a log. All 150 `tracing` call sites were read; the fields are
-  errors, identifiers, enum states and fixed strings. `Credentials` and
+- No secret reaches a log. There are 150 `tracing` call sites across both crates
+  and the shell, all enumerated; the fields are errors, identifiers, enum states
+  and fixed strings. A grep for a field capturing a `body`, `text`, `name`,
+  `token`, `key`, `password`, `secret` or `message` value returns three hits and
+  all three are audio device names (`cpal_host.rs:166,304,354`). `Credentials` and
   `StoreKey` have hand-written redacting `Debug` impls, `MatrixSession` and
   `SessionTokens` redact upstream, and a test asserts a rendered `StoredSession`
   never contains a token. No `panic!`, `expect` or `assert!` message
