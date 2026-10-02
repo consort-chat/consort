@@ -414,17 +414,18 @@ impl LiveKitSession {
 }
 
 /// Who this session is, to the two systems that name it differently.
-#[derive(Clone)]
 ///
 /// Both are fixed for the life of a call, and carrying them together keeps the
 /// pairing in one place: filing our own notice under the wrong identity would
 /// hide it behind somebody else's.
+#[derive(Clone)]
 struct Us {
     /// How the SFU names this session. The key our own notice is filed under,
     /// alongside everybody else's, so that one map answers the whole question.
     identity: String,
     /// How MatrixRTC names it. What a notice carries, and what the roster
-    /// matches a person against.
+    /// matches a person against. Paired with the identity above in the roll,
+    /// so our own icon never waits on a derivation agreeing with the SFU.
     member_id: String,
 }
 
