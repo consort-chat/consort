@@ -608,8 +608,9 @@ A clean result is a result. These were looked at and no path was found.
 
 ### `unsafe` and FFI
 
-Five occurrences in first-party code, two of them test-only. All five carry a
-stated invariant; four establish it and the fifth is H5.
+Ten occurrences of the keyword in first-party code, five of them test-only, in
+the five groups below. Every group carries a stated invariant. Three establish
+it; the two `unsafe impl Send` are H5.
 
 | Where | What | Invariant |
 |---|---|---|
