@@ -384,6 +384,16 @@ Worth knowing. No action implied.
   reachability argument reads correctly and was not independently proved, which
   would mean enumerating every type that reaches an imbl collection.
 - **`pnpm audit`: clean** at every level, not just `moderate`.
+- **GitHub and `cargo audit` disagree about one advisory, and both are right.**
+  Pushing to this repository prints one open Dependabot alert, moderate. It is
+  `GHSA-wrw7-89jp-8q8g`, the `glib 0.18.5` `VariantStrIter` unsoundness, which is
+  `RUSTSEC-2024-0429` under the other name. `cargo audit` reports it too, as a
+  warning rather than a vulnerability, because RustSec files unsoundness as
+  informational and the job is set to fail only on the other kind. So the
+  Advisories job passing does not mean the repository's security tab is empty,
+  and that is the gap in it worth knowing rather than a misconfiguration. glib
+  arrives under Tauri's GTK3 bindings and the fix is `glib 0.20`, which is not
+  this project's version to move.
 
 ## Checked and found clean
 
