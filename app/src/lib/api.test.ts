@@ -1550,3 +1550,35 @@ describe("the content security policy and the media URL agree", () => {
     expect(directives.get("media-src")).toContain(source);
   });
 });
+
+describe("the content security policy admits nothing the app cannot produce", () => {
+  // Tauri's `asset:` protocol serves nothing unless `assetProtocol.enable`
+  // turns it on, so a policy naming it while the config does not is a
+  // permission granted to a scheme no part of this application can reach.
+
+  /** The CSP the bundle ships, by directive, each as a source list. */
+  const directives = new Map(
+    tauriConfig.app.security.csp
+      .split(";")
+      .map((directive) => directive.trim().split(/\s+/))
+      .filter(([name]) => name !== "")
+      .map(([name, ...sources]) => [name, sources] as const),
+  );
+
+  /** The sources naming the asset protocol, in either form it takes. */
+  const assetSources = (sources: readonly string[]): string[] =>
+    sources.filter((source) =>
+      source.replace("http://", "").startsWith("asset"),
+    );
+
+  it("names the asset protocol only where the config enables it", () => {
+    const security: Record<string, unknown> = tauriConfig.app.security;
+    const asset = security.assetProtocol as { enable?: boolean } | undefined;
+    // Naming it is correct once it is on, so there is nothing to check then.
+    if (asset?.enable === true) return;
+
+    for (const [name, sources] of directives) {
+      expect(assetSources(sources), `${name} names it`).toStrictEqual([]);
+    }
+  });
+});

@@ -418,12 +418,14 @@ impl LiveKitSession {
 /// Both are fixed for the life of a call, and carrying them together keeps the
 /// pairing in one place: filing our own notice under the wrong identity would
 /// hide it behind somebody else's.
+#[derive(Clone)]
 struct Us {
     /// How the SFU names this session. The key our own notice is filed under,
     /// alongside everybody else's, so that one map answers the whole question.
     identity: String,
     /// How MatrixRTC names it. What a notice carries, and what the roster
-    /// matches a person against.
+    /// matches a person against. Paired with the identity above in the roll,
+    /// so our own icon never waits on a derivation agreeing with the SFU.
     member_id: String,
 }
 
@@ -726,7 +728,7 @@ impl CallSession for LiveKitSession {
         let watching = AbortOnDrop(tokio::task::spawn_local(watch_notices(
             self.call.session().room().subscribe(),
             self.saying.subscribe(),
-            me,
+            me.clone(),
             announcing,
         )));
 
@@ -738,6 +740,7 @@ impl CallSession for LiveKitSession {
             client: self.client.clone(),
             room_id: self.room_id.clone(),
             announced,
+            me,
             _watching: watching,
         }
     }
@@ -785,6 +788,12 @@ pub struct LiveKitRoster {
     /// Consort clients talking to each other over the call's data channel, and
     /// nothing in MatrixRTC or LiveKit reports it. See [`crate::notices`].
     announced: watch::Receiver<notices::Flags>,
+    /// This session's own identity and membership, known rather than derived.
+    ///
+    /// Everybody else's pairing is worked out from the server's list; ours is
+    /// already in hand, and taking the long way round would make our own icon
+    /// depend on a derivation agreeing with the SFU.
+    me: Us,
     /// The task filling it in. Ends when this roster is dropped.
     _watching: AbortOnDrop,
 }
@@ -810,21 +819,34 @@ impl Roster for LiveKitRoster {
         // The mute travels with the user id rather than being looked up again
         // afterwards, because between the two reads somebody can leave and the
         // pairing would silently shift by one.
-        let seen: Vec<Seen> = self
-            .memberships
-            .borrow()
-            .iter()
-            .map(|member| Seen {
-                member_id: member.member_id.clone(),
-                user_id: member.user_id.clone(),
-                muted: roster::microphone_muted(member),
-                camera: roster::camera_live(member),
-                screen: roster::screen_live(member),
-                since: roster::arrived_at(member, self.joined_at),
-            })
-            .collect();
+        //
+        // The roll comes out of the same borrow for the same reason: it says
+        // which membership each SFU identity belongs to, and reading it from
+        // a later snapshot would pair notices against a call that has moved.
+        let (seen, roll) = {
+            let memberships = self.memberships.borrow();
+            let seen: Vec<Seen> = memberships
+                .iter()
+                .map(|member| Seen {
+                    member_id: member.member_id.clone(),
+                    user_id: member.user_id.clone(),
+                    muted: roster::microphone_muted(member),
+                    camera: roster::camera_live(member),
+                    screen: roster::screen_live(member),
+                    since: roster::arrived_at(member, self.joined_at),
+                })
+                .collect();
+
+            let mut roll = roster::roll(&memberships);
+            roll.insert(self.me.identity.clone(), self.me.member_id.clone());
+            (seen, roll)
+        };
 
         let flags = self.announced.borrow().clone();
+        // Who each notice was actually from. See `roster::spoken_for`: the
+        // membership a notice names is the sender's to write.
+        let deafened = roster::spoken_for(&flags.deafened, &roll);
+        let away = roster::spoken_for(&flags.away, &roll);
 
         let user_ids: Vec<String> = seen.iter().map(|one| one.user_id.clone()).collect();
         let mutes: Vec<(String, bool)> = seen
@@ -857,8 +879,8 @@ impl Roster for LiveKitRoster {
         let named = roster::with_cameras(named, &cameras);
         let named = roster::with_screens(named, &screens);
         let named = roster::with_since(named, &arrivals);
-        let named = roster::with_deafened(named, &whose, &flags.deafened);
-        roster::with_away(named, &whose, &flags.away)
+        let named = roster::with_deafened(named, &whose, &deafened);
+        roster::with_away(named, &whose, &away)
     }
 
     async fn changed(&mut self) -> Option<()> {
