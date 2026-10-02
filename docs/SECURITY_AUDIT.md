@@ -597,13 +597,22 @@ missing library panics rather than failing to link. No crate sets
 
 ### Packaging
 
-- No maintainer script anywhere. No `postinst`, `preinst`, `prerm`, `postrm`,
-  and no Arch `.install`. Nothing runs as root at install time.
-- Every installed file is `0644` except the binary at `0755`, all of them under
-  `/usr`, none setuid, setgid or world-writable
-  (`packaging/arch/PKGBUILD:94-110`, `packaging/aur/PKGBUILD:192-211`). Nothing
-  is written to `/etc`, `/opt`, `/var` or a home directory at build or install
-  time; the build keeps its cargo and pnpm caches under `$srcdir` on purpose.
+- No maintainer script anywhere, and not by luck. The tree holds none, and
+  neither package can generate one: Arch needs an `install=` line and the recipes
+  have no such line and no `.install` file, while Tauri's deb bundler writes
+  `preinst`, `postinst`, `prerm` and `postrm` only when the four
+  `bundle.linux.deb` script keys name a file. `tauri.conf.json:42-55` sets two
+  keys, `depends` and `desktopTemplate`, and none of those four. Nothing runs as
+  root at install time.
+- Nothing is installed outside the package's own prefix. The Arch recipes install
+  the binary `0755` and everything else `0644`, all under `/usr`, none setuid,
+  setgid or world-writable (`packaging/arch/PKGBUILD:94-110`,
+  `packaging/aur/PKGBUILD:192-211`), and nothing reaches `/etc`, `/opt`, `/var` or
+  a home directory at build or install time; the build keeps its cargo and pnpm
+  caches under `$srcdir` on purpose. The deb's own layout is the bundler's, and
+  `files`, the key that would put something anywhere else, is also unset.
+  The modes the bundler writes were not read, so that one line is Tauri's
+  assurance rather than this tree's.
 - No systemd unit, timer, socket, udev rule, polkit policy, D-Bus service file
   or PAM config is shipped or installed.
 - No step pipes a download into a shell.
