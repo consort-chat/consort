@@ -501,15 +501,17 @@ A clean result is a result. These were looked at and no path was found.
 ### Rendering untrusted content
 
 - `formatted_body` is parsed into an inert `DOMParser` document and rebuilt from
-  an allowlist of 22 tags (`FormattedBody.tsx:20-52,232-241`). Nothing off the
-  wire returns to the parser that owns the page. There is no
-  `dangerouslySetInnerHTML`, `innerHTML`, `insertAdjacentHTML`, `eval`,
-  `new Function`, `document.write`, `iframe` or `srcdoc` anywhere in
-  `app/src`.
-- Four attributes are read by name and each is checked. An anchor's `href` must
+  an allowlist of 31 accepted tag names mapping onto 27 output elements
+  (`FormattedBody.tsx:20-52,232-241`). Nothing off the wire returns to the parser
+  that owns the page. There is no `dangerouslySetInnerHTML`, `innerHTML`,
+  `insertAdjacentHTML`, `eval`, `new Function`, `document.write`, `iframe` or
+  `srcdoc` anywhere in `app/src`.
+- Five attributes are read by name and no others survive. An anchor's `href` must
   parse as `http`, `https` or `mailto` (`FormattedBody.tsx:61-73`); an image's
-  `src` must be an `mxc://` (`api.ts:2602-2605`); `alt` and `title` are escaped
-  by React like any text.
+  `src` must be an `mxc://` (`api.ts:2602-2605`); `alt` and `title` are escaped by
+  React like any text; `data-mx-emoticon` is read as a flag and its value is
+  never used. Every other attribute is dropped on the floor, because the elements
+  are built here rather than copied.
 - An unknown tag is dropped and its children kept, which is the safe half: a
   `<script>` becomes its own text, visible and inert.
 - Plain text linkifying requires a scheme and matches only `https?://`
