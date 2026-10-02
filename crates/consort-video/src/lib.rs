@@ -22,7 +22,7 @@ pub mod x11_host;
 
 pub use capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
 pub use devices::{Camera, CameraDevices, CameraList, NoCameras, Selection, catalogue, choose};
-pub use pixels::{FrameError, Picture, PixelFormat, decode, from_bgra};
+pub use pixels::{FrameError, Picture, PixelFormat, decode, from_bgra, to_rgb};
 pub use screens::{
     NoScreens, ScreenCapture, SeenWindow, ShareError, ShareKind, ShareSource, ShareStream, screen,
     shareable,

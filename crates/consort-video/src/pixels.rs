@@ -73,6 +73,120 @@ pub struct Picture {
     pub timestamp_us: i64,
 }
 
+/// The smallest side a thumbnail can have, so its chroma planes are exact.
+const SMALLEST: u32 = 2;
+
+impl Picture {
+    /// A copy sampled down to fit inside `max_width` by `max_height`.
+    ///
+    /// Nearest neighbour, because the one reader is a self view a couple of
+    /// hundred pixels wide and the cost is paid on the capture thread. A frame
+    /// already inside the bound is copied at the size it is.
+    pub fn thumbnail(&self, max_width: u32, max_height: u32) -> Self {
+        let (width, height) = fitted(self.width, self.height, max_width, max_height);
+        let (w, h) = (width as usize, height as usize);
+        let (source_w, source_h) = (self.width as usize, self.height as usize);
+        let (chroma_w, chroma_h) = (w.div_ceil(2), h.div_ceil(2));
+        let (source_chroma_w, source_chroma_h) = (source_w.div_ceil(2), source_h.div_ceil(2));
+
+        let mut y = vec![0u8; w * h];
+        for row in 0..h {
+            let from = row * source_h / h;
+            for column in 0..w {
+                y[row * w + column] = self.y[from * source_w + column * source_w / w];
+            }
+        }
+
+        let mut u = vec![0u8; chroma_w * chroma_h];
+        let mut v = vec![0u8; chroma_w * chroma_h];
+        for row in 0..chroma_h {
+            let from = row * source_chroma_h / chroma_h;
+            for column in 0..chroma_w {
+                let at = from * source_chroma_w + column * source_chroma_w / chroma_w;
+                u[row * chroma_w + column] = self.u[at];
+                v[row * chroma_w + column] = self.v[at];
+            }
+        }
+
+        Self {
+            width,
+            height,
+            y,
+            u,
+            v,
+            timestamp_us: self.timestamp_us,
+        }
+    }
+}
+
+/// The largest even size inside the bound that keeps `width` by `height`'s shape.
+///
+/// Rounded down to even and never below [`SMALLEST`], so a chroma plane is a
+/// whole number of 2x2 blocks whatever was asked for.
+fn fitted(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
+    let scaled =
+        |side: u64, by: u64, over: u64| u32::try_from(side * by / over).unwrap_or(u32::MAX) & !1;
+    let even = |side: u32| (side & !1).max(SMALLEST);
+
+    if width <= max_width && height <= max_height {
+        return (even(width), even(height));
+    }
+
+    // Whichever bound binds harder, compared as one fraction rather than two
+    // divisions so a narrow frame is not rounded to nothing.
+    let (w, h) = (u64::from(width), u64::from(height));
+    if w * u64::from(max_height) > h * u64::from(max_width) {
+        (even(max_width), even(scaled(h, u64::from(max_width), w)))
+    } else {
+        (even(scaled(w, u64::from(max_height), h)), even(max_height))
+    }
+}
+
+/// Convert planar I420 to packed RGB, three tight bytes a pixel.
+///
+/// The inverse of [`luma`], [`blue_difference`] and [`red_difference`]: limited
+/// range BT.601, so 16 comes back black and 235 comes back white. For putting a
+/// frame in front of somebody, which wants RGB whatever carries it.
+pub fn to_rgb(picture: &Picture) -> Vec<u8> {
+    let (w, h) = (picture.width as usize, picture.height as usize);
+    let chroma_w = w.div_ceil(2);
+    let mut rgb = vec![0u8; w * h * 3];
+
+    for row in 0..h {
+        for column in 0..w {
+            let chroma = (row / 2) * chroma_w + column / 2;
+            let (r, g, b) = colour(
+                picture.y[row * w + column],
+                picture.u[chroma],
+                picture.v[chroma],
+            );
+            let at = (row * w + column) * 3;
+            rgb[at] = r;
+            rgb[at + 1] = g;
+            rgb[at + 2] = b;
+        }
+    }
+
+    rgb
+}
+
+/// One pixel back out of limited-range BT.601.
+fn colour(y: u8, u: u8, v: u8) -> (u8, u8, u8) {
+    let luma = 298 * (i32::from(y) - 16);
+    let (blue, red) = (i32::from(u) - 128, i32::from(v) - 128);
+
+    (
+        clamp(luma + 409 * red + 128),
+        clamp(luma - 100 * blue - 208 * red + 128),
+        clamp(luma + 516 * blue + 128),
+    )
+}
+
+/// One fixed-point channel, back into a byte.
+fn clamp(value: i32) -> u8 {
+    (value >> 8).clamp(0, 255) as u8
+}
+
 /// Why a frame could not be made sense of.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FrameError {

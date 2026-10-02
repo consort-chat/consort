@@ -721,6 +721,11 @@ export function AppShell({
         shown={cardShown}
         onHide={hideCard}
         onOpenRoom={openRoom}
+        /*
+          From the same value the camera button is drawn from, so the picture
+          and the button cannot disagree about whether a camera is on.
+        */
+        cameraOn={selfVideo.camera}
       />
       
       {/*

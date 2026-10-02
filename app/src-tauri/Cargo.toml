@@ -60,7 +60,7 @@ base64 = "0.22"
 # pixels rather than a file, so the PNG has to be made here. No new crate on
 # this target: arboard, which the clipboard plugin already brings, depends on
 # this same version with this same feature.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # One Consort per machine. Two would share one SQLite crypto store and one
 # session file, and the cross-process lock means the second simply fails. See
 # the comment at the plugin registration in lib.rs.

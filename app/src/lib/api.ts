@@ -1150,6 +1150,21 @@ export function onSelfScreen(
 }
 
 /**
+ * The newest frame from this session's camera, as a `data:` URL.
+ *
+ * Null when no camera is running, and in the moment between opening one and its
+ * first frame, so a caller draws whatever it draws without a camera.
+ *
+ * Asked for rather than pushed. A 720p frame is 1.38 MB and the card showing it
+ * is a couple of hundred pixels wide, so Rust keeps the newest one and samples
+ * it down when something asks: see
+ * `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+ */
+export function selfView(): Promise<string | null> {
+  return invoke<string | null>("self_view");
+}
+
+/**
  * Set how loud one person should be, as a percentage, and remember it.
  *
  * Its own call rather than part of `setAudioSettings`, because it is set from
