@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { asCommandError, shareSources, type ShareSource } from "../lib/api";
+import { keptOnScreen } from "../lib/floating";
 import "./SharePicker.css";
 
 /** Which tab is showing. The two the issue asked for and no more. */
@@ -72,11 +73,23 @@ function WindowGlyph() {
  * Nothing is captured by opening this. The list is property reads, the
  * thumbnails are drawings, and the first frame of anybody's screen is read
  * when a row is clicked and not before.
+ *
+ * It floats in the window rather than off the control that opens it, on the
+ * same terms as [`PersonMenu`]: the sidebar clips what leaves it, so a card
+ * anchored inside that column is cut off at its edge however it is stacked.
  */
 export function SharePicker({
+  at,
   onPick,
   onClose,
 }: {
+  /**
+   * The bottom left corner to grow from, in viewport coordinates.
+   *
+   * Upwards, because the control is the last row of the sidebar and there is
+   * nothing below it to open into.
+   */
+  at: { x: number; y: number };
   /** Start sharing this source id. */
   onPick: (id: string) => void;
   /** Put the picker away without sharing anything. */
@@ -87,6 +100,7 @@ export function SharePicker({
   const [trouble, setTrouble] = useState<string | null>(null);
   const card = useRef<HTMLDivElement | null>(null);
   const first = useRef<HTMLButtonElement | null>(null);
+  const [placement, setPlacement] = useState({ left: at.x, top: at.y });
 
   /*
     Read once, when the picker opens. Not polled: a list that reordered itself
@@ -117,6 +131,16 @@ export function SharePicker({
   useEffect(() => {
     first.current?.focus();
   }, []);
+
+  // Measured rather than assumed. The card's height follows what is in it, so
+  // it grows when the list lands and when a tab is switched, and a constant
+  // would be a guess that goes stale. Before paint, so it is never drawn low.
+  useLayoutEffect(() => {
+    const node = card.current;
+    if (node === null) return;
+    const box = node.getBoundingClientRect();
+    setPlacement(keptOnScreen({ left: at.x, top: at.y - box.height }, box));
+  }, [at.x, at.y, sources, tab, trouble]);
 
   useEffect(() => {
     function onEscape(event: KeyboardEvent) {
@@ -153,6 +177,7 @@ export function SharePicker({
       ref={card}
       role="dialog"
       aria-label="Choose what to share"
+      style={{ left: placement.left, top: placement.top }}
     >
       <div className="share-picker__tabs" role="tablist" aria-label="What to share">
         {TABS.map(({ kind, label }, nth) => (

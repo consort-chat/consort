@@ -38,11 +38,14 @@ function windowOf(id: number, title: string, fullscreen = false): ShareSource {
   };
 }
 
+/** The corner a card opened from the voice strip grows from. */
+const AT = { x: 344, y: 700 };
+
 /** Draw the picker and wait for the list it asks for on mount. */
-async function open(sources: ShareSource[], onPick = vi.fn()) {
+async function open(sources: ShareSource[], onPick = vi.fn(), at = AT) {
   listed.mockResolvedValue(sources);
   const onClose = vi.fn();
-  render(<SharePicker onPick={onPick} onClose={onClose} />);
+  render(<SharePicker at={at} onPick={onPick} onClose={onClose} />);
   await waitFor(() => expect(listed).toHaveBeenCalled());
   return { onPick, onClose };
 }
@@ -177,7 +180,7 @@ describe("when there is nothing to offer", () => {
       message: "sharing a screen needs an X11 session",
       detail: "listing what can be shared: no display",
     });
-    render(<SharePicker onPick={vi.fn()} onClose={vi.fn()} />);
+    render(<SharePicker at={AT} onPick={vi.fn()} onClose={vi.fn()} />);
 
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent(/X11/),
@@ -188,7 +191,7 @@ describe("when there is nothing to offer", () => {
     // A refusal must not leave a stale list behind to click.
     listed.mockRejectedValue({ message: "no display", detail: "no display" });
     const onPick = vi.fn();
-    render(<SharePicker onPick={onPick} onClose={vi.fn()} />);
+    render(<SharePicker at={AT} onPick={onPick} onClose={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
 
@@ -216,5 +219,57 @@ describe("reaching it without a mouse", () => {
         screen.getByRole("tab", { name: /applications/i }),
       ).toHaveFocus(),
     );
+  });
+});
+
+describe("where it opens", () => {
+  /** Big enough that a placement worked out from the card's own box shows. */
+  const CARD = { width: 320, height: 290 };
+
+  /*
+    jsdom lays nothing out, so the card measures zero and the only placement
+    it could ever be caught making is the one that ignores its own height.
+  */
+  function sized(box: { width: number; height: number }) {
+    const measured = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function () {
+      return new DOMRect(0, 0, box.width, box.height);
+    };
+    return () => {
+      Element.prototype.getBoundingClientRect = measured;
+    };
+  }
+
+  it("rises from the corner it is given", async () => {
+    // Viewport coordinates rather than an offset from the control, because
+    // the sidebar clips what leaves it and a card placed inside that subtree
+    // is cut off at the column's edge however it is stacked.
+    const restore = sized(CARD);
+    try {
+      await open([windowOf(1, "Firefox")], vi.fn(), { x: 344, y: 700 });
+
+      expect(screen.getByRole("dialog")).toHaveStyle({
+        left: "344px",
+        top: `${700 - CARD.height}px`,
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("stays on screen when the corner it is given leaves no room", async () => {
+    // A narrow or short window puts the strip close enough to an edge that
+    // the card would open past it, which is the one place it cannot be read.
+    const restore = sized(CARD);
+    try {
+      await open([windowOf(1, "Firefox")], vi.fn(), { x: 1000, y: 100 });
+
+      expect(screen.getByRole("dialog")).toHaveStyle({
+        left: `${window.innerWidth - CARD.width - 8}px`,
+        top: "8px",
+      });
+    } finally {
+      restore();
+    }
   });
 });

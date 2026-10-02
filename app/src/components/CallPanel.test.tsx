@@ -1105,6 +1105,13 @@ describe("sharing a screen", () => {
     return screen.getByRole("button", { name: /share your screen/i });
   }
 
+  /** The glyph on the share control, which is the whole of what it says. */
+  function shareGlyph() {
+    const glyph = shareButton().querySelector("svg");
+    if (glyph === null) throw new Error("the share control drew no glyph");
+    return glyph;
+  }
+
   it("offers a way to start sharing while in a call", async () => {
     panel(CONNECTED);
 
@@ -1219,5 +1226,34 @@ describe("sharing a screen", () => {
 
     expect(said).toContain("the camera is in use");
     expect(said).toContain("that window has gone");
+  });
+
+  it("offers the screen plainly while nothing is going out", async () => {
+    // The control was struck through whenever a share was not running, which
+    // is almost all of a call, so the one thing it ever said was unavailable.
+    panel(CONNECTED);
+
+    expect(shareGlyph()).toHaveAttribute("data-glyph", "screen");
+  });
+
+  it("draws a stop cross while a screen is going out", async () => {
+    // So the way to stop is the control that started it and is readable as a
+    // stop without the colour, which carries nothing on its own.
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("DP-0"));
+
+    expect(shareGlyph()).toHaveAttribute("data-glyph", "stop");
+  });
+
+  it("opens the picker beside the column rather than over it", async () => {
+    // The sidebar clips what leaves it, so a card anchored to this control
+    // came out cut off at the column's edge whatever its z-index said.
+    const { container } = panel(CONNECTED);
+    const column = container.querySelector(".call-panel");
+    if (column === null) throw new Error("no voice strip to measure");
+    column.getBoundingClientRect = () => new DOMRect(0, 0, 272, 96);
+
+    await userEvent.click(shareButton());
+
+    expect(screen.getByRole("dialog")).toHaveStyle({ left: "272px" });
   });
 });
