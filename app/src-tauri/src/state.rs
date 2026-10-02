@@ -100,6 +100,10 @@ pub struct CallAudio {
 /// gate then reports every frame open, and a ring drawn from the verdict would
 /// simply stay lit.
 ///
+/// It does ask the queue whether the microphone is switched off, because a mute
+/// is applied to the publication downstream of this and these frames would
+/// otherwise light a ring for audio nobody receives.
+///
 /// It is also the tick. Frames arrive every 10 ms for as long as a call has
 /// the microphone, whether or not anybody is saying anything, so this is the
 /// one clock in the building that can put a ring out again. Nothing here
@@ -114,7 +118,15 @@ fn speaking_sink(
         // Before the tally, because this is the frame's reason for existing.
         queue.offer(samples, open);
 
-        talking.heard(&us, samples);
+        // Not while the microphone is switched off. Mute, deafen and away are
+        // all applied to the publication, which is downstream of here, so
+        // these frames are real audio on its way to nobody: #132.
+        if !queue.switched_off() {
+            talking.heard(&us, samples);
+        }
+
+        // Outside the switch, because this is the clock. Everybody else's ring
+        // goes out on our tick, and a muted session still has to draw the call.
         if let Some(user_ids) = talking.advance() {
             events.emit(AppEvent::Speaking(user_ids));
         }
@@ -2444,6 +2456,71 @@ mod rings {
         let (mut sink, _talking, _recorder, queue) = sink();
 
         sink(&loud(), true);
+
+        assert_eq!(queue.next().await.samples, loud());
+    }
+
+    #[test]
+    fn a_switched_off_microphone_lights_nothing() {
+        // #132. Mute, deafen and away are all applied to the publication,
+        // which is downstream of this: the frames keep arriving and reach
+        // nobody, so measuring them would light a ring the room cannot hear.
+        let (mut sink, _talking, recorder, queue) = sink();
+        queue.switch_off(true);
+
+        sink(&loud(), true);
+
+        assert!(
+            told(&recorder).is_empty(),
+            "a muted session reported itself speaking"
+        );
+    }
+
+    #[test]
+    fn muting_mid_sentence_puts_the_ring_out() {
+        // The complaint on #132, from the other end: somebody still making
+        // noise in front of a microphone the call has stopped carrying.
+        let (mut sink, _talking, recorder, queue) = sink();
+        sink(&loud(), true);
+        queue.switch_off(true);
+
+        for _ in 0..consort_audio::HOLD_FRAMES {
+            sink(&loud(), true);
+        }
+
+        assert_eq!(
+            told(&recorder),
+            vec![vec![US.to_owned()], Vec::new()],
+            "the ring stayed lit through the mute"
+        );
+    }
+
+    #[test]
+    fn somebody_else_still_lights_while_our_microphone_is_off() {
+        // The switch takes our own frames out of the tally and nothing else.
+        // This is still the one clock in the building, and every other ring in
+        // the call goes out on it.
+        let (mut sink, talking, recorder, queue) = sink();
+        queue.switch_off(true);
+        talking.heard("@bob:example.org", &loud());
+
+        sink(&loud(), true);
+
+        assert_eq!(told(&recorder), vec![vec!["@bob:example.org".to_owned()]]);
+    }
+
+    #[tokio::test]
+    async fn the_frames_still_reach_the_call_while_switched_off() {
+        // Silence is published rather than withheld, and the mute that matters
+        // is the publication's. Nothing here withholds a frame.
+        let (mut sink, _talking, _recorder, queue) = sink();
+        queue.switch_off(true);
+
+        sink(&loud(), true);
+        // A distinguishable frame behind it, so a swallowed first frame fails
+        // the assertion rather than hanging on a queue nothing will fill.
+        queue.switch_off(false);
+        sink(&shut(), false);
 
         assert_eq!(queue.next().await.samples, loud());
     }
