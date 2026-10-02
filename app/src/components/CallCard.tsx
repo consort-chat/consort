@@ -23,6 +23,12 @@ import "./CallCard.css";
 type Size = "card" | "expanded" | "full";
 
 /**
+ * How many faces peek out from behind a shared screen before the rest become a
+ * count. What the card is wide enough for at each size it floats at.
+ */
+const PEEKING: Record<"card" | "expanded", number> = { card: 4, expanded: 7 };
+
+/**
  * Arrows into the corners, or back out of them.
  *
  * One glyph that turns around rather than two controls, because growing and
@@ -176,6 +182,18 @@ export function CallCard({
   ];
 
   /*
+    Behind the screen rather than beside it: a card 240px across has room for
+    one of the two, and the screen is what the call is about while one is going
+    out. Nothing to tuck behind, or nobody to tuck, means neither happens.
+  */
+  const peeking = !full && screens.length > 0 && people.length > 0;
+  const peekers = people.slice(
+    0,
+    size === "expanded" ? PEEKING.expanded : PEEKING.card,
+  );
+  const leftOut = people.length - peekers.length;
+
+  /*
     Expanding makes it wider, and a card parked against the right edge grows
     straight off it. The hook follows a window that shrank; this is the other
     half of the same problem and nothing else would ever bring it back.
@@ -221,6 +239,47 @@ export function CallCard({
 
   if (!drawn) return null;
 
+  // Taken off the narrowed `call` here because `face` below is a closure, and
+  // the narrowing the guard above does cannot reach inside one.
+  const { roomId } = call;
+
+  /**
+   * One person, drawn the way the card is drawing people at the moment.
+   *
+   * One call site for both arrangements, because a square and a face peeking
+   * out from behind a screen differ in nothing but the word.
+   */
+  function face(participant: Participant, layout: "tile" | "peek") {
+    return (
+      <CallFace
+        key={participant.id}
+        person={participant}
+        roomId={roomId}
+        speaking={speaking.has(participant.id)}
+        /*
+          Always, unlike the sidebar. This card is only ever about the call this
+          session is in, so its roster is the live one and a camera that is off
+          is a reading rather than a silence.
+        */
+        live
+        layout={layout}
+        /*
+          The camera in the square the avatar is in, and only in our own: there
+          is one local capture and no path from anybody else's into this window
+          yet. Passed as a node rather than a URL so that a frame arriving
+          redraws it alone, which is the trap #142 found by holding the picture
+          here.
+        */
+        picture={
+          participant.id === selfId && cameraOn ? (
+            <SelfPicture of="camera" />
+          ) : undefined
+        }
+        onOpen={(at) => setOpened({ person: participant, at })}
+      />
+    );
+  }
+
   /** Back to the floating card, or out to the size beyond it. */
   function resize() {
     setSize((current) => (current === "card" ? "expanded" : "card"));
@@ -253,6 +312,7 @@ export function CallCard({
       ref={drag.ref}
       data-state={call.state}
       data-size={size}
+      data-peeking={peeking}
       aria-label={`Call in ${where}`}
       onDoubleClick={toggle}
       style={
@@ -331,6 +391,34 @@ export function CallCard({
       </header>
 
       {/*
+        Before the screens in the markup as well as above them on the card,
+        because that is what lets a screen paint over the faces behind it. The
+        same list under the same name as the squares, not a second roster.
+      */}
+      {peeking && (
+        <ul
+          className="call-card__peek"
+          aria-label={
+            leftOut > 0
+              ? `People in ${where}, and ${leftOut} more`
+              : `People in ${where}`
+          }
+        >
+          {peekers.map((participant) => face(participant, "peek"))}
+          {/*
+            Hidden from a screen reader because the list's own name already
+            carries the number, the way the read receipts under a message do
+            it. The sidebar's roster is the one that leaves nobody out.
+          */}
+          {leftOut > 0 && (
+            <li className="call-card__more" aria-hidden="true">
+              +{leftOut}
+            </li>
+          )}
+        </ul>
+      )}
+
+      {/*
         Above the faces, because a screen somebody is presenting is what the
         call is about and the people in it are who is present.
       */}
@@ -356,36 +444,11 @@ export function CallCard({
       {call.state === "connecting" ? (
         <p className="call-card__waiting">{callLabel(call)}</p>
       ) : (
-        <ul className="call-card__people" aria-label={`People in ${where}`}>
-          {people.map((participant) => (
-            <CallFace
-              key={participant.id}
-              person={participant}
-              roomId={call.roomId}
-              speaking={speaking.has(participant.id)}
-              /*
-                Always, unlike the sidebar. This card is only ever about the
-                call this session is in, so its roster is the live one and a
-                camera that is off is a reading rather than a silence.
-              */
-              live
-              layout="tile"
-              /*
-                The camera in the square the avatar is in, and only in our own:
-                there is one local capture and no path from anybody else's into
-                this window yet. Passed as a node rather than a URL so that a
-                frame arriving redraws it alone, which is the trap #142 found
-                by holding the picture here.
-              */
-              picture={
-                participant.id === selfId && cameraOn ? (
-                  <SelfPicture of="camera" />
-                ) : undefined
-              }
-              onOpen={(at) => setOpened({ person: participant, at })}
-            />
-          ))}
-        </ul>
+        !peeking && (
+          <ul className="call-card__people" aria-label={`People in ${where}`}>
+            {people.map((participant) => face(participant, "tile"))}
+          </ul>
+        )
       )}
 
       {/*

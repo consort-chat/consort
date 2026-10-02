@@ -147,14 +147,14 @@ export interface CallFaceProps {
    */
   live: boolean;
   /**
-   * A row in a list, or a tile in a grid.
+   * A row in a list, a tile in a grid, or a face peeking out from behind a
+   * shared screen.
    *
-   * Two arrangements of one face rather than two components, because they are
-   * the same subject and #69 is about to put video in both. Size is not part
-   * of this: that comes from `--avatar-size` at the call site, which is what
-   * that variable is for.
+   * Arrangements of one face rather than components of their own, because they
+   * are the same subject and #69 is about to put video in all of them. Size is
+   * not part of this: that comes from `--avatar-size` at the call site.
    */
-  layout?: "row" | "tile";
+  layout?: "row" | "tile" | "peek";
   /**
    * A picture to draw over this face, filling the square it sits in.
    *
