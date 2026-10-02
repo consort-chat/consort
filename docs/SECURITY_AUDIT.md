@@ -69,8 +69,10 @@ rather than one.
 
 ### E1. Room keys go to devices nobody vouched for
 
-**Severity: high.** The attacker has to be the homeserver, or hold an account in
-the room. That is the attacker end to end encryption exists to survive.
+**Severity: high.** The attacker has to be the homeserver, or hold the
+credentials of somebody already in the room, because what they need is a device
+on a member's account that the member never authorised. That is the attacker end
+to end encryption exists to survive.
 
 `auth.rs:328-378` builds every client, for both login and restore, and never
 calls `ClientBuilder::with_room_key_recipient_strategy`. That method exists at
@@ -95,7 +97,9 @@ The path from input to impact:
    that follows MSC4153 would send it a room key.
 3. Consort sends it the room key anyway, with the next message it writes.
 4. The holder decrypts every message Consort sends under that megolm session,
-   which is to say until the session rotates.
+   and under every session after it, because a rotation redistributes to the same
+   recipients. It ends when the device leaves the member's device list, not when
+   the session changes.
 
 The sharp part is that Consort already holds its **voice** path to the standard
 it does not hold text to. Media keys are distributed with
@@ -149,8 +153,10 @@ The path from input to impact:
 2. The push rules call it worth a notification and Consort is not the window in
    front, so `draw` runs (`notify.rs:205`).
 3. The freedesktop notification specification allows a body to carry markup
-   when the server advertises `body-markup`, which the common daemons do. The
-   sender therefore decides how the notification reads.
+   when the daemon advertises `body-markup`, and the daemon decides that, not
+   Consort. Which daemons do was not checked here, because checking means asking
+   a running one and this audit touched nothing outside the tree. On any daemon
+   that does, the sender decides how the notification reads.
 
 What that is worth: the certain part is that a sender controls the formatting
 and can make a notification misrepresent what was said. The escalations are
@@ -253,7 +259,7 @@ Whoever can move those refs runs code in a job that can write releases.
 
 Worth saying what the workflow already does right, because it is unusual: git
 cliff is fetched as a binary and verified against a pinned SHA512
-(`release.yml:134-146`) rather than taken as an action, no workflow uses
+(`release.yml:134-147`) rather than taken as an action, no workflow uses
 `pull_request_target` or `workflow_run`, and `ci.yml:23-25` says the first of
 those is deliberate and must stay that way. No `run:` step anywhere interpolates
 `github.event.*`.
@@ -367,13 +373,16 @@ Worth knowing. No action implied.
   not leave, which is what the comment claims and what matters; the remote server
   does learn the media was wanted. Standard for Matrix and not specific to this
   client.
-- **`cargo audit`: no vulnerabilities.** 864 crates, 12 warnings, all
-  unmaintained, unsound or yanked, almost all of them Tauri's GTK3 bindings. One
+- **`cargo audit`: no vulnerabilities.** 864 crates. Thirteen warnings before
+  the `chacha20` bump below and twelve after it, all of them now unmaintained or
+  unsound rather than yanked, and almost all of them Tauri's GTK3 bindings. One
   advisory is ignored, `RUSTSEC-2026-0292`, and `.cargo/audit.toml:14-38` carries
   a reason, the reachability argument, why a version bump cannot fix it, and what
-  clears it. That reasoning was checked and holds: `imbl-sized-chunks 0.1.3` is
-  still what the graph resolves, and the advisory needs a `Drop` that panics,
-  which nothing in an `ObservableVector<Arc<TimelineItem>>` has.
+  clears it. The version claim was verified against the lockfile:
+  `imbl-sized-chunks 0.1.3` is still what the graph resolves, and no imbl version
+  the pinned matrix-sdk fork accepts asks for the patched `0.2`. The
+  reachability argument reads correctly and was not independently proved, which
+  would mean enumerating every type that reaches an imbl collection.
 - **`pnpm audit`: clean** at every level, not just `moderate`.
 
 ## Checked and found clean
@@ -417,7 +426,7 @@ A clean result is a result. These were looked at and no path was found.
   allowlisted by `checked_link`. One takes a filename, and that is what this PR
   fixed.
 - Nothing shells out. The only process spawn is `open::that_detached` in
-  `open_link` (`commands.rs:2114`), which receives `Url::as_str()` of an
+  `open_link` (`commands.rs:2111`), which receives `Url::as_str()` of an
   already-parsed URL whose scheme is one of three, so there is no leading dash
   and no argument to inject.
 - Every other command is parameterless, takes a bool or a bounded number, or
@@ -447,7 +456,7 @@ A clean result is a result. These were looked at and no path was found.
   fixed list of image, video and audio types (`consort-matrix/src/media.rs:21-121`).
   Anything unrecognised becomes an error and a 404 (`timeline/media.rs:109`).
   The sender's own `mime` is kept only when it starts with `image/` or `video/`
-  (`timeline/facts.rs:770-773`) and is a frontend hint, never the served header.
+  (`timeline/facts.rs:769-774`) and is a frontend hint, never the served header.
 - The range parser is bounds-correct and every arm is tested
   (`media.rs:97-157`). The cache is bounded by count and by weight
   (`media.rs:60-67`).
@@ -572,7 +581,7 @@ stated invariant; four establish it and the fifth is H5.
 `#[no_mangle]`, no `libloading`, no bindgen and no raw pointer dereference in
 first-party code. The one FFI declaration is the test-only `umask`. The
 appindicator library that `tray-icon` opens with `libloading` is a dependency's
-business and `tray.rs` wraps the tray construction in `catch_unwind` because a
+business and `tray.rs:113` wraps the tray construction in `catch_unwind` because a
 missing library panics rather than failing to link. No crate sets
 `forbid(unsafe_code)` and there is no `[lints]` table in any manifest.
 
@@ -592,15 +601,16 @@ missing library panics rather than failing to link. No crate sets
 ### Release
 
 - Artifacts are a Windows NSIS installer, a `.deb` and an Arch package. They are
-  unsigned and uncheckummed, which the workflow says in its own header. That is
+  unsigned and unchecksummed, which the workflow says in its own header. That is
   H6, and it is a known position rather than an oversight.
 - Permissions are `contents: write` and `actions: read` and nothing broader. No
   `id-token`, no `packages`.
 
 ## Changed in this pull request
 
-Three changes. Each was written test first, watched failing for the right
-reason, and mutation checked.
+Three changes. The first two were written test first, watched failing for the
+right reason, and mutation checked. The third is a lockfile pin, which has no
+unit test to write and is checked by the tool that reported it.
 
 **The Save As dialog no longer opens on a name a stranger wrote.**
 `timeline_media_save` passed the attachment's name straight to
@@ -642,7 +652,7 @@ the new version in the real graph.
 ## Collisions with open work
 
 None. PRs #135 and #140 both touch `Cargo.lock` and `app/src/lib/api.test.ts`,
-which are two of the three files changed here, and the hunks do not overlap:
+which are two of the files changed here, and the hunks do not overlap:
 theirs are at `Cargo.lock` 963, 1035, 1045, 3033 and 4418 and in the test file at
 lines 31 to 33 and 1240 to 1275, and these are at `Cargo.lock` 806 and 5707 and
 at the end of the test file. No open PR touches `tauri.conf.json`,
