@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use consort_call::{
-    CallEvent, CallTransport, Camera as ConsortCamera, Microphone, PictureSize, SelfVideo,
+    CallEvent, CallTransport, Camera as ConsortCamera, Microphone, PictureSize, ScreenShare,
+    SelfScreen, SelfVideo,
 };
 use consort_matrix::{
     CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, Typing, backup,
@@ -23,11 +24,12 @@ use crate::call::CallBridge;
 use crate::ears::speakers;
 use crate::events::{AppEvent, CallRefused, EventSink, LatestSink};
 use crate::notify::{Front, Notifier, worth_drawing};
+use crate::screen::{ScreenBridge, ShareTrouble};
 use crate::selfview::SelfView;
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
 use crate::video::{CameraTrouble, VideoBridge};
-use consort_video::VideoCapture;
+use consort_video::{ScreenCapture, ShareSource, VideoCapture};
 
 /// One background task's handle.
 ///
@@ -279,6 +281,24 @@ pub struct AppState {
     /// driven by call events rather than by the click, for the reason the
     /// microphone is: a call ends for reasons that are not a button.
     video: Arc<std::sync::Mutex<Option<VideoBridge>>>,
+    /// The slot carrying captured screen frames to the call.
+    ///
+    /// Its own queue rather than the camera's, because both can be publishing
+    /// at once: somebody presenting usually wants their face in the call as
+    /// well as their slides.
+    screen: ConsortCamera,
+    /// The newest shared-screen frame, for the call card to draw.
+    ///
+    /// Its own slot rather than the camera's, because both can be going out at
+    /// once and a card drawing one picture for both would show whichever
+    /// arrived last.
+    screen_view: SelfView,
+    /// The screen capture, once anything has wanted one.
+    ///
+    /// `None` until then, on the same terms as `video`. An `Arc` because the
+    /// call pump holds one too: a share has to stop when the call ends, and
+    /// the call ends for reasons that are not a click.
+    screens: Arc<std::sync::Mutex<Option<ScreenBridge>>>,
     /// The mixer carrying everybody else's audio from the call to the audio
     /// thread.
     ///
@@ -484,6 +504,9 @@ impl AppState {
             camera: ConsortCamera::new(),
             self_view: SelfView::new(),
             video: Arc::new(std::sync::Mutex::new(None)),
+            screen: ConsortCamera::new(),
+            screen_view: SelfView::new(),
+            screens: Arc::new(std::sync::Mutex::new(None)),
             voices,
             chiming,
             speaking,
@@ -587,6 +610,7 @@ impl AppState {
                 transport(),
                 self.microphone.clone(),
                 self.camera.clone(),
+                self.screen.clone(),
                 speakers(
                     self.voices.clone(),
                     self.chiming.clone(),
@@ -704,6 +728,13 @@ impl AppState {
     /// and there is no interface left to correct: the window has gone and the
     /// process is going with it.
     pub fn leave_call_on_quit(&self, budget: Duration) -> bool {
+        // The capture first, and before the leave rather than with it. The
+        // leave is a network round trip on a budget; this is local and
+        // immediate, and until it has run a thread is still reading the
+        // screen of somebody whose window has already gone. Dropping the
+        // capture waits for that thread, bounded by one frame interval.
+        self.stop_share();
+
         let Some(bridge) = self.locked_call().take() else {
             return true;
         };
@@ -846,12 +877,129 @@ impl AppState {
         }
     }
 
+    /// Everything on this machine that could be shared.
+    ///
+    /// Read fresh on every call, because windows open and close while a picker
+    /// is on screen. `backend` is a closure for the reason
+    /// [`start_camera`](Self::start_camera)'s is: most sessions never open the
+    /// picker at all.
+    pub fn share_sources(
+        &self,
+        backend: impl FnOnce() -> Box<dyn ScreenCapture>,
+    ) -> Result<Vec<ShareSource>, consort_video::ShareError> {
+        let mut slot = self.locked_screens();
+        slot.get_or_insert_with(|| ScreenBridge::new(backend(), self.screen_view.clone()))
+            .sources()
+    }
+
+    /// Start capturing a screen or window and publish it into the call.
+    ///
+    /// The capture first and the publication second, for the reason
+    /// [`start_camera`](Self::start_camera) opens the device first: a
+    /// publication with nothing behind it is a black rectangle in everybody
+    /// else's call.
+    pub fn start_share(
+        &self,
+        backend: impl FnOnce() -> Box<dyn ScreenCapture>,
+        source: &str,
+    ) -> Result<ScreenShare, ShareTrouble> {
+        // Asked before anything is captured, so no frame of somebody's screen
+        // is ever read for a publication there is nowhere to make.
+        if self.locked_call().is_none() {
+            return Err(ShareTrouble::NoCall);
+        }
+
+        let share = {
+            let mut slot = self.locked_screens();
+            let bridge =
+                slot.get_or_insert_with(|| ScreenBridge::new(backend(), self.screen_view.clone()));
+            bridge
+                .start(source, self.screen.clone())
+                .map_err(ShareTrouble::Display)?
+        };
+
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_screen(Some(share.clone()));
+        }
+
+        Ok(share)
+    }
+
+    /// Start sharing `source`, or stop sharing, and say what happened.
+    ///
+    /// The twin of [`set_camera`](Self::set_camera), and reported the same way:
+    /// the answer goes on the screen channel as well as back to the caller, so
+    /// a share that stops for a reason nobody clicked is reported exactly like
+    /// one that would not start.
+    pub fn set_share(
+        &self,
+        backend: impl FnOnce() -> Box<dyn ScreenCapture>,
+        source: Option<String>,
+    ) -> SelfScreen {
+        let Some(source) = source else {
+            self.stop_share();
+            return SelfScreen::default();
+        };
+
+        match self.start_share(backend, &source) {
+            Ok(share) => SelfScreen {
+                sharing: Some(share.title),
+                trouble: None,
+            },
+            Err(trouble) => {
+                let said = SelfScreen {
+                    sharing: None,
+                    trouble: Some(trouble.user_message()),
+                };
+                self.events.emit(AppEvent::SelfScreen(said.clone()));
+                said
+            }
+        }
+    }
+
+    /// Stop sharing, releasing the capture.
+    ///
+    /// The capture first. "Stop showing them my screen" is what the button
+    /// promises, and the retraction that follows is a message to everybody
+    /// else. Dropping the capture also waits for its thread, so no frame
+    /// captured before this is delivered after it.
+    pub fn stop_share(&self) {
+        if let Some(bridge) = self.locked_screens().as_ref() {
+            bridge.stop();
+        }
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_screen(None);
+        }
+    }
+
+    /// What is being shared right now. Test-only.
+    #[cfg(test)]
+    pub fn sharing(&self) -> Option<String> {
+        self.locked_screens()
+            .as_ref()
+            .and_then(ScreenBridge::sharing)
+    }
+
+    fn locked_screens(&self) -> std::sync::MutexGuard<'_, Option<ScreenBridge>> {
+        self.screens
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// The newest camera frame as a data URL, for the call card to draw.
     ///
     /// `None` when no camera is running, and in the moment between opening one
     /// and its first frame. The card draws its faces either way.
     pub fn self_view(&self) -> Option<String> {
         self.self_view.latest()
+    }
+
+    /// The newest shared-screen frame as a data URL, for the card to draw.
+    ///
+    /// `None` when nothing is being shared, and in the moment between a
+    /// capture starting and its first frame.
+    pub fn screen_view(&self) -> Option<String> {
+        self.screen_view.latest()
     }
 
     /// Whether a camera is open right now. Test-only.
@@ -888,6 +1036,7 @@ impl AppState {
         let called = self.called.clone();
         let talking = self.talking.clone();
         let video_bridge = self.video.clone();
+        let screen_bridge = self.screens.clone();
 
         move |event| {
             match &event {
@@ -948,6 +1097,21 @@ impl AppState {
                         bridge.stop();
                     }
                     events.emit(AppEvent::SelfVideo(video.clone()));
+                    return;
+                }
+                // And the share follows the call, for the same reason and a
+                // sharper one: a channel switch or a dropped call must not
+                // leave a capture of somebody's screen still running.
+                CallEvent::SelfScreen(screen) => {
+                    if screen.sharing.is_none()
+                        && let Some(bridge) = screen_bridge
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .as_ref()
+                    {
+                        bridge.stop();
+                    }
+                    events.emit(AppEvent::SelfScreen(screen.clone()));
                     return;
                 }
             }
@@ -1622,6 +1786,323 @@ mod tests {
         let sink = Arc::new(RecordingSink::new());
         let settings = SettingsStore::at(dir.path());
         (dir, AppState::new(store, settings, sink.clone()), sink)
+    }
+
+    mod the_screen {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use consort_video::{
+            FrameSink, Resolution, ScreenCapture, ShareError, ShareKind, ShareSource, ShareStream,
+        };
+
+        /// A screen capture backend a test can refuse from, count, or push a
+        /// frame through.
+        #[derive(Clone, Default)]
+        struct Backend {
+            opens: Arc<AtomicUsize>,
+            closes: Arc<AtomicUsize>,
+            gone: bool,
+            /// Whatever sink the last `open` was given.
+            sink: Arc<std::sync::Mutex<Option<FrameSink>>>,
+        }
+
+        impl Backend {
+            fn gone() -> Self {
+                Self {
+                    gone: true,
+                    ..Self::default()
+                }
+            }
+
+            fn opens(&self) -> usize {
+                self.opens.load(Ordering::Relaxed)
+            }
+
+            fn closes(&self) -> usize {
+                self.closes.load(Ordering::Relaxed)
+            }
+
+            /// Hand one frame over the way a display would.
+            fn capture(&self) {
+                if let Some(sink) = self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_mut()
+                {
+                    sink(consort_video::Picture {
+                        width: 2,
+                        height: 2,
+                        y: vec![120; 4],
+                        u: vec![128],
+                        v: vec![128],
+                        timestamp_us: 1,
+                    });
+                }
+            }
+        }
+
+        struct Stream {
+            source: ShareSource,
+            closes: Arc<AtomicUsize>,
+        }
+
+        impl Drop for Stream {
+            fn drop(&mut self) {
+                self.closes.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        impl ShareStream for Stream {
+            fn source(&self) -> &ShareSource {
+                &self.source
+            }
+
+            fn resolution(&self) -> Resolution {
+                Resolution {
+                    width: 2560,
+                    height: 1440,
+                    fps: 15,
+                }
+            }
+        }
+
+        impl ScreenCapture for Backend {
+            fn sources(&self) -> Result<Vec<ShareSource>, ShareError> {
+                Ok(vec![consort_video::screen("DP-0", 2560, 1440)])
+            }
+
+            fn open(
+                &self,
+                id: &str,
+                on_frame: FrameSink,
+            ) -> Result<Box<dyn ShareStream>, ShareError> {
+                self.opens.fetch_add(1, Ordering::Relaxed);
+                if self.gone {
+                    return Err(ShareError::Gone {
+                        source: id.to_owned(),
+                    });
+                }
+                *self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on_frame);
+                Ok(Box::new(Stream {
+                    source: ShareSource {
+                        id: id.to_owned(),
+                        title: "DP-0 (2560x1440)".to_owned(),
+                        kind: ShareKind::Screen,
+                        fullscreen: false,
+                        width: 2560,
+                        height: 1440,
+                    },
+                    closes: Arc::clone(&self.closes),
+                }))
+            }
+        }
+
+        /// The most recent thing said on the screen channel.
+        fn last_screen(sink: &Arc<RecordingSink>) -> Option<SelfScreen> {
+            sink.events().iter().rev().find_map(|event| match event {
+                AppEvent::SelfScreen(screen) => Some(screen.clone()),
+                _ => None,
+            })
+        }
+
+        fn backing(backend: &Backend) -> impl FnOnce() -> Box<dyn ScreenCapture> + use<> {
+            let backend = backend.clone();
+            || Box::new(backend)
+        }
+
+        #[test]
+        fn starting_outside_a_call_captures_nothing_and_says_why() {
+            // Asked before the display is touched, so not one frame of
+            // somebody's screen is read for a publication there is nowhere to
+            // make.
+            let (_dir, state, sink) = state();
+            let backend = Backend::default();
+
+            let said = state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            assert_eq!(said.sharing, None);
+            assert_eq!(
+                said.trouble.as_deref(),
+                Some("join a voice channel before sharing your screen")
+            );
+            assert_eq!(backend.opens(), 0, "the screen was captured for nothing");
+            assert_eq!(last_screen(&sink), Some(said), "and it reached the webview");
+        }
+
+        #[test]
+        fn starting_in_a_call_captures_and_names_what_is_going_out() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+
+            let said = state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            assert_eq!(said.sharing.as_deref(), Some("DP-0 (2560x1440)"));
+            assert_eq!(said.trouble, None);
+            assert_eq!(backend.opens(), 1);
+            assert_eq!(state.sharing().as_deref(), Some("DP-0 (2560x1440)"));
+        }
+
+        #[test]
+        fn a_source_that_has_gone_is_reported_and_captures_nothing() {
+            // The ordinary race: a window closes while the picker is open.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::gone();
+
+            let said = state.set_share(backing(&backend), Some("window:7".to_owned()));
+
+            assert_eq!(said.sharing, None);
+            assert!(said.trouble.is_some(), "a refusal has to carry a reason");
+            assert_eq!(state.sharing(), None);
+            assert_eq!(last_screen(&sink), Some(said), "and it reached the webview");
+        }
+
+        #[test]
+        fn stopping_releases_the_capture() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            let said = state.set_share(backing(&backend), None);
+
+            assert_eq!(said.sharing, None);
+            assert_eq!(said.trouble, None);
+            assert_eq!(backend.closes(), 1, "the capture is still running");
+            assert_eq!(state.sharing(), None);
+        }
+
+        #[test]
+        fn there_is_nothing_for_the_card_to_draw_before_a_share_starts() {
+            let (_dir, state, _sink) = state();
+
+            assert_eq!(state.screen_view(), None);
+        }
+
+        #[test]
+        fn a_captured_frame_reaches_the_card() {
+            // What pins the wiring: the slot the capture thread fills and the
+            // one this command answers from have to be the same slot. A fresh
+            // one here would answer nothing forever, with every other share
+            // test still passing.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            backend.capture();
+
+            assert!(
+                state.screen_view().is_some(),
+                "the card has nothing to draw"
+            );
+        }
+
+        #[test]
+        fn the_screen_and_the_camera_are_two_pictures_rather_than_one() {
+            // Both can be going out at once: somebody presenting usually wants
+            // their face in the call as well as their slides. One slot for both
+            // would put whichever frame arrived last in both squares.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            backend.capture();
+
+            assert!(state.screen_view().is_some());
+            assert_eq!(state.self_view(), None, "the camera square took a screen");
+        }
+
+        #[test]
+        fn stopping_takes_the_card_picture_down() {
+            // Share off, square gone. Without this somebody who just stopped
+            // sharing is still looking at the last frame of it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+            backend.capture();
+            assert!(
+                state.screen_view().is_some(),
+                "nothing was drawn to take down"
+            );
+
+            state.set_share(backing(&backend), None);
+
+            assert_eq!(state.screen_view(), None);
+        }
+
+        #[test]
+        fn leaving_the_call_releases_the_capture() {
+            // Driven by the call channel rather than by the click, on the same
+            // terms as the camera and the microphone: a call ends for reasons
+            // that are not a button, and a capture of somebody's screen must
+            // not outlive the call it was going into.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            state.disconnect_call();
+
+            wait_for(
+                "the screen capture to be released",
+                || backend.closes() == 1,
+                || format!("{} closes", backend.closes()),
+            );
+        }
+
+        #[test]
+        fn quitting_stops_the_share_rather_than_leaving_it_reading_the_screen() {
+            // Issue #110's class of bug, one step worse. Tauri exits the
+            // process from inside its own event loop, so nothing is dropped;
+            // a share that is not stopped here is a capture thread still
+            // reading somebody's screen while the window is gone.
+            let (_dir, state, sink) = state();
+            let transport = FakeCallTransport::joining();
+            state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            let left = state.leave_call_on_quit(PATIENCE);
+
+            assert!(left, "the leave did not finish inside the budget");
+            assert_eq!(
+                backend.closes(),
+                1,
+                "the capture outlived the call and is still reading the screen"
+            );
+            assert_eq!(state.sharing(), None);
+        }
+
+        #[test]
+        fn what_can_be_shared_is_read_fresh_rather_than_remembered() {
+            // Windows open and close while a picker is on screen, so the list
+            // is a question rather than a value.
+            let (_dir, state, _sink) = state();
+            let backend = Backend::default();
+
+            let first = state.share_sources(backing(&backend)).unwrap();
+            let again = state.share_sources(backing(&backend)).unwrap();
+
+            assert_eq!(first.len(), 1);
+            assert_eq!(first, again);
+        }
     }
 
     mod the_camera {

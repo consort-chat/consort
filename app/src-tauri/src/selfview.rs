@@ -1,11 +1,12 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Your own camera, small enough to put in the call card.
+//! What you are sending, small enough to put in the call card.
 //!
 //! The capture thread leaves the newest frame here sampled down, and the card
-//! asks for it. Why a still that is asked for rather than frames pushed at the
-//! webview: `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+//! asks for it. One slot per thing being sent: see
+//! `docs/adr/0007-draw-the-self-view-from-a-still.md` for why a still that is
+//! asked for, and `0008` for why the shared screen gets a second one.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -14,20 +15,25 @@ use base64::engine::general_purpose::STANDARD;
 use consort_video::{Picture, to_rgb};
 use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder};
 
-/// The largest self view that will be made, in pixels.
+/// The largest picture that will be made, in pixels.
 ///
-/// The card is a couple of hundred pixels wide and twice that expanded, so this
-/// is generous for it and still a fiftieth of a 720p frame.
+/// A tile is around seventy pixels square on the card and twice that expanded,
+/// so this is generous for either of them and still a fiftieth of a 720p
+/// frame.
 const BOUND: (u32, u32) = (320, 320);
 
-/// How hard to compress it. A camera frame has no edges that artefact badly.
+/// How hard to compress it. Neither a face nor a desktop at this size has
+/// edges that artefact badly.
 const QUALITY: u8 = 70;
 
-/// The newest camera frame, and whatever was last drawn from one.
+/// The newest frame of one thing being sent, and whatever was last drawn.
 ///
 /// Cheap to clone: every clone is the same slot, the way
 /// `consort_call::Camera` is. One goes to the capture thread, which only
 /// [`offer`](Self::offer)s, and one stays in `AppState` for the command to ask.
+///
+/// One of these per thing being sent. The camera and the shared screen each
+/// have their own, because both can be going out at once.
 #[derive(Clone, Default)]
 pub struct SelfView(Arc<Mutex<Held>>);
 
@@ -74,8 +80,9 @@ impl SelfView {
 
     /// Throw away the picture and the frame behind it.
     ///
-    /// Called when the camera goes off, so the card stops showing the last
-    /// thing it saw. The same reason `consort_call::Camera::clear` exists.
+    /// Called when the camera or the share goes off, so the card stops
+    /// showing the last thing it saw. The same reason
+    /// `consort_call::Camera::clear` exists.
     pub fn clear(&self) {
         *self.held() = Held::default();
     }
@@ -88,8 +95,8 @@ impl SelfView {
 /// One picture as a `data:` URL.
 ///
 /// `data:` rather than a scheme of its own because `img-src` in the policy
-/// already allows it, and a self view is kilobytes rather than the megabytes
-/// `crate::media` exists to stream.
+/// already allows it, and a picture this size is kilobytes rather than the
+/// megabytes `crate::media` exists to stream.
 fn encode(picture: &Picture) -> Option<String> {
     let rgb = to_rgb(picture);
     let mut jpeg = Vec::new();
@@ -274,6 +281,67 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("no frame");
         println!("captured {}x{}", frame.width, frame.height);
+
+        let view = SelfView::new();
+        let sampling = Instant::now();
+        for _ in 0..200 {
+            view.offer(&frame);
+        }
+        println!("offer (sample down): {:?}", sampling.elapsed() / 200);
+
+        view.offer(&frame);
+        let encoding = Instant::now();
+        let url = view.latest().unwrap();
+        println!(
+            "encode: {:?}, url {} B, jpeg ~{} B",
+            encoding.elapsed(),
+            url.len(),
+            url.len() * 3 / 4
+        );
+        println!(
+            "the frame itself: {} B",
+            frame.y.len() + frame.u.len() + frame.v.len()
+        );
+    }
+
+    /// What one picture of a real screen costs.
+    ///
+    /// The camera's numbers are in
+    /// `docs/adr/0007-draw-the-self-view-from-a-still.md` and this one's in
+    /// `0008`. A desktop is the hard case for a JPEG: text has edges where a
+    /// face has none.
+    ///
+    /// Prints sizes and timings only. Nothing captured is written anywhere.
+    ///
+    /// ```sh
+    /// cargo test -p consort-app --lib selfview -- --ignored --nocapture measure_a_real_screen
+    /// ```
+    #[test]
+    #[ignore = "needs an X11 display"]
+    fn measure_a_real_screen() {
+        use std::sync::mpsc::channel;
+        use std::time::{Duration, Instant};
+
+        use consort_video::{ScreenCapture, Screens};
+
+        let backend = Screens::default();
+        let sources = backend.sources().expect("no X11 display");
+        let first = sources.first().expect("nothing shareable");
+        println!("sharing {}x{}", first.width, first.height);
+
+        let (frames, inbox) = channel();
+        let _stream = backend
+            .open(
+                &first.id,
+                Box::new(move |picture| {
+                    let _ = frames.send(picture);
+                }),
+            )
+            .expect("the source would not open");
+
+        let frame = inbox
+            .recv_timeout(Duration::from_secs(5))
+            .expect("no frame");
 
         let view = SelfView::new();
         let sampling = Instant::now();

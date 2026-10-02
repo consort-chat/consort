@@ -65,13 +65,13 @@ vi.mock("../lib/api", async (importOriginal) => ({
   threadOpen,
 }));
 
-const useSelfView = vi.hoisted(() => vi.fn());
-vi.mock("../lib/useSelfView", () => ({ useSelfView }));
+const usePicture = vi.hoisted(() => vi.fn());
+vi.mock("../lib/usePicture", () => ({ usePicture }));
 
 import { AppShell } from "./AppShell";
 import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
-import { HEARING, NOT_FILMING } from "../lib/api";
+import { HEARING, NOT_FILMING, NOT_SHARING } from "../lib/api";
 import type {
   AudioDeviceReport,
   AudioSettings,
@@ -82,6 +82,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfScreen,
   SelfVideo,
   Thread,
   Timeline,
@@ -146,6 +147,7 @@ function shell({
   call = { state: "disconnected" } as Call,
   selfAudio = HEARING,
   selfVideo = NOT_FILMING,
+  selfScreen = NOT_SHARING,
   onSignedOut = vi.fn(),
   onJoinVoice = vi.fn(),
   onLeaveVoice = vi.fn(),
@@ -162,6 +164,7 @@ function shell({
   call?: Call;
   selfAudio?: SelfAudio;
   selfVideo?: SelfVideo;
+  selfScreen?: SelfScreen;
   onSignedOut?: Mock<() => void>;
   onJoinVoice?: Mock<(roomId: string) => void>;
   onLeaveVoice?: Mock<() => void>;
@@ -186,6 +189,8 @@ function shell({
       call={nextCall}
       selfAudio={selfAudio}
       selfVideo={selfVideo}
+      selfScreen={selfScreen}
+      onShare={vi.fn()}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}
@@ -237,7 +242,7 @@ describe("AppShell", () => {
     resetAvatarCache();
     // jsdom has none, and a link followed to a message lands by calling it.
     Element.prototype.scrollIntoView = vi.fn();
-    useSelfView.mockReset().mockReturnValue(null);
+    usePicture.mockReset().mockReturnValue(null);
     audioDevices.mockReset().mockResolvedValue(report);
     audioSettings.mockReset().mockResolvedValue(settings);
     audioTestStart.mockReset().mockResolvedValue(undefined);
@@ -932,20 +937,20 @@ describe("AppShell", () => {
     it("gives the card the camera state the camera button is drawn from", () => {
       // One value, two readers. Asking Rust again here is how the picture and
       // the button would come to disagree about whether a camera is on.
-      useSelfView.mockReturnValue("data:image/jpeg;base64,aaaa");
+      usePicture.mockReturnValue("data:image/jpeg;base64,aaaa");
 
       shell({
         rooms: withVoice,
         call: {
           state: "connected",
           roomId: LOUNGE,
-          participants: [],
+          participants: [{ id: "@ada:example.org", name: "Ada", muted: false }],
           trouble: null,
         },
         selfVideo: { camera: true, trouble: null },
       });
 
-      expect(useSelfView).toHaveBeenCalledWith(true);
+      expect(usePicture).toHaveBeenCalledWith("camera");
       expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
     });
 
@@ -955,13 +960,51 @@ describe("AppShell", () => {
         call: {
           state: "connected",
           roomId: LOUNGE,
-          participants: [],
+          participants: [{ id: "@ada:example.org", name: "Ada", muted: false }],
           trouble: null,
         },
       });
 
-      expect(useSelfView).toHaveBeenCalledWith(false);
+      expect(usePicture).not.toHaveBeenCalled();
       expect(screen.queryByRole("img", { name: "Your camera" })).toBeNull();
+    });
+
+    it("gives the card what it is sharing, from the same value the indicator is", () => {
+      // The same one value, two readers. A card that asked Rust separately is
+      // a card that can claim a screen the panel says has stopped.
+      usePicture.mockReturnValue("data:image/jpeg;base64,bbbb");
+
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [{ id: "@ada:example.org", name: "Ada", muted: false }],
+          trouble: null,
+        },
+        selfScreen: { sharing: "DP-0 (2560x1440)", trouble: null },
+      });
+
+      expect(
+        screen.getByRole("button", { name: /, fill the window$/ }),
+      ).toHaveTextContent("DP-0 (2560x1440)");
+    });
+
+    it("draws no shared screen on the card while nothing is going out", () => {
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [{ id: "@ada:example.org", name: "Ada", muted: false }],
+          trouble: null,
+        },
+      });
+
+      expect(
+        screen.queryByRole("button", { name: /, fill the window$/ }),
+      ).toBeNull();
+      expect(screen.queryByRole("list", { name: /screens shared/i })).toBeNull();
     });
 
     describe("putting the card away and getting it back", () => {

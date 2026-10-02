@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 
-import { microphoneOff, type Call, type SelfAudio, type SelfVideo } from "../lib/api";
+import {
+  microphoneOff,
+  type Call,
+  type SelfAudio,
+  type SelfScreen,
+  type SelfVideo,
+} from "../lib/api";
 import { callLabel } from "../lib/labels";
+import { SharePicker } from "./SharePicker";
 import "./CallPanel.css";
 
 /**
@@ -94,6 +101,58 @@ function CameraIcon({ off }: { off: boolean }) {
       <path d="M3 7.5h11v9H3z" />
       <path d="m14 12 6-3.5v7z" />
       {off && <path d="m3.5 3.5 17 17" />}
+    </svg>
+  );
+}
+
+/**
+ * A monitor with an arrow leaving it, for the press that starts a share.
+ *
+ * Deliberately not the camera's rectangle: the two controls sit beside each
+ * other and publish different things, and a shape that read as a second
+ * camera would be pressed by somebody looking for one.
+ */
+function ScreenIcon() {
+  return (
+    <svg
+      className="call-panel__glyph"
+      data-glyph="screen"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 5h18v11H3z" />
+      <path d="M9 20h6" />
+      <path d="M12 13V8m0 0-2.5 2.5M12 8l2.5 2.5" />
+    </svg>
+  );
+}
+
+/**
+ * A cross, for the press that stops the share that is running.
+ *
+ * A shape of its own rather than the monitor struck through: a strike-through
+ * is this row's way of saying a thing is off, and here the thing is on.
+ */
+function StopShareIcon() {
+  return (
+    <svg
+      className="call-panel__glyph"
+      data-glyph="stop"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 6l12 12" />
+      <path d="M18 6 6 18" />
     </svg>
   );
 }
@@ -554,6 +613,14 @@ interface Props {
    */
   selfVideo: SelfVideo;
   /**
+   * What this session is putting on the call from its screen.
+   *
+   * Carried in and read from the screen channel rather than from the click,
+   * which is what keeps the indicator honest: a share also stops when the
+   * channel changes or the call ends, and nobody pressed anything then.
+   */
+  selfScreen: SelfScreen;
+  /**
    * Why this session cannot play the call, if it cannot.
    *
    * A separate sentence from `call.trouble`, which is about whether the audio
@@ -581,6 +648,8 @@ interface Props {
   onSetDeafened: (deafened: boolean) => void;
   onSetAway: (away: boolean) => void;
   onSetCamera: (on: boolean) => void;
+  /** Start sharing this source, or stop sharing with null. */
+  onShare: (source: string | null) => void;
 }
 
 /**
@@ -604,6 +673,7 @@ export function CallPanel({
   channelName,
   selfAudio,
   selfVideo,
+  selfScreen,
   audioProblem = null,
   cardShown,
   onToggleCard,
@@ -612,8 +682,63 @@ export function CallPanel({
   onSetDeafened,
   onSetAway,
   onSetCamera,
+  onShare,
 }: Props) {
   if (call.state === "disconnected" || call.state === "failed") return null;
+
+  return (
+    <Connected
+      call={call}
+      channelName={channelName}
+      selfAudio={selfAudio}
+      selfVideo={selfVideo}
+      selfScreen={selfScreen}
+      audioProblem={audioProblem}
+      cardShown={cardShown}
+      onToggleCard={onToggleCard}
+      onDisconnect={onDisconnect}
+      onSetMuted={onSetMuted}
+      onSetDeafened={onSetDeafened}
+      onSetAway={onSetAway}
+      onSetCamera={onSetCamera}
+      onShare={onShare}
+    />
+  );
+}
+
+/**
+ * The strip, once there is a call to draw one for.
+ *
+ * Split from [`CallPanel`] because the picker is state belonging to the row,
+ * and `CallPanel` returns null before it does anything when there is no call,
+ * so a hook could not be held above that line. The same reason
+ * [`MoreActions`] is its own component.
+ */
+function Connected({
+  call,
+  channelName,
+  selfAudio,
+  selfVideo,
+  selfScreen,
+  audioProblem,
+  cardShown,
+  onToggleCard,
+  onDisconnect,
+  onSetMuted,
+  onSetDeafened,
+  onSetAway,
+  onSetCamera,
+  onShare,
+}: Props) {
+  /*
+    Where the picker is, and null when it is not up. Not derived from
+    `selfScreen`: a picker is open because somebody asked for one, and a share
+    is running because one started, and the gap between those two is the whole
+    of what the picker is for.
+  */
+  const [picking, setPicking] = useState<{ x: number; y: number } | null>(null);
+  const strip = useRef<HTMLDivElement | null>(null);
+  const sharing = selfScreen.sharing !== null;
 
   // Deafening mutes, and so does being away, so the microphone button reads as
   // off in all three cases. It stays pressable: unmuting while deafened or away
@@ -630,6 +755,7 @@ export function CallPanel({
       data-state={call.state}
       role="group"
       aria-label="Voice connection"
+      ref={strip}
     >
       <div className="call-panel__where">
         {/*
@@ -715,6 +841,49 @@ export function CallPanel({
           <CameraIcon off={!selfVideo.camera} />
         </button>
 
+        {/*
+          One control, both directions, like the mute beside it. Pressing it
+          while a share is running stops it rather than opening a second
+          picker: a control that meant two things depending on state is a
+          control somebody presses to stop and accidentally re-aims.
+        */}
+        <span className="call-panel__sharing">
+          <button
+            type="button"
+            className="call-panel__control"
+            onClick={(event) => {
+              if (sharing) {
+                onShare(null);
+                return;
+              }
+              if (picking !== null) {
+                setPicking(null);
+                return;
+              }
+              // Beside the column rather than over it, where the person card
+              // goes: this one clips, and WebKitGTK draws its scrollbar on top.
+              const control = event.currentTarget.getBoundingClientRect();
+              const column = strip.current?.getBoundingClientRect();
+              setPicking({ x: column?.right ?? control.right, y: control.bottom });
+            }}
+            aria-pressed={sharing}
+            aria-label="Share your screen"
+            title={sharing ? "Stop sharing your screen" : "Share your screen"}
+          >
+            {sharing ? <StopShareIcon /> : <ScreenIcon />}
+          </button>
+          {picking !== null && !sharing && (
+            <SharePicker
+              at={picking}
+              onPick={(source) => {
+                setPicking(null);
+                onShare(source);
+              }}
+              onClose={() => setPicking(null)}
+            />
+          )}
+        </span>
+
         <MoreActions
           deafened={deafened}
           away={away}
@@ -743,6 +912,38 @@ export function CallPanel({
         it is a sentence rather than a label and a 240px column with a button
         beside it would break it over four lines.
       */}
+      {/*
+        The indicator, and it is deliberately not only the button's pressed
+        state. #70 asks that somebody sharing can see *what* is going out, at
+        a glance, for the whole time it is going out, and an icon cannot say
+        "Bank statement.pdf". The strip is in the part of the sidebar that
+        never scrolls, so this is on screen for the whole of a call.
+
+        `role="status"` rather than `alert`: it is a standing fact about this
+        session rather than something that just went wrong, and an alert would
+        interrupt a screen reader every time the name changed.
+
+        The stop beside it is the second way out, and the reason it is here
+        rather than only on the control above: this is the thing somebody is
+        looking at when they decide to stop.
+      */}
+      {sharing && (
+        <p
+          className="call-panel__sharing-now"
+          role="status"
+          aria-label="Sharing your screen"
+        >
+          <i className="call-panel__sharing-dot" aria-hidden="true" />
+          <span className="call-panel__sharing-what">{selfScreen.sharing}</span>
+          <button
+            type="button"
+            className="call-panel__stop-sharing"
+            onClick={() => onShare(null)}
+          >
+            Stop sharing
+          </button>
+        </p>
+      )}
       {call.state === "connected" && call.trouble !== null && (
         <p className="call-panel__problem" role="alert">
           {call.trouble}
@@ -767,6 +968,16 @@ export function CallPanel({
       {selfVideo.trouble !== null && (
         <p className="call-panel__problem" role="alert">
           {selfVideo.trouble}
+        </p>
+      )}
+      {/*
+        A fourth, and independent of the other three. A share that would not
+        start says nothing about the camera, the speakers or whether the call
+        decrypts.
+      */}
+      {selfScreen.trouble !== null && (
+        <p className="call-panel__problem" role="alert">
+          {selfScreen.trouble}
         </p>
       )}
     </div>

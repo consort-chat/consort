@@ -1,8 +1,8 @@
 /**
  * How far to keep a floating thing from the edge of the window.
  *
- * One number for everything that floats. Two things do: the card a name in a
- * call opens, and the call card itself, which the first of those opens from.
+ * One number for everything that floats. Three things do: the card a name in
+ * a call opens, the call card it opens from, and the share picker.
  * A card that stopped a different distance from the edge than the menu it
  * opens would read as a mistake rather than as two decisions.
  */

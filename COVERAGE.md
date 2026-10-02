@@ -27,7 +27,7 @@ Run them:
 ```sh
 # Rust, with the same exclusions CI uses
 cargo llvm-cov --workspace \
-  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
+  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|x11_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
   --summary-only
 
 # Frontend, thresholds enforced from vitest.config.ts
@@ -101,6 +101,23 @@ against an actual keyring on a developer machine:
 
 ```sh
 cargo test -p consort-matrix -- --ignored keyring
+```
+
+**`crates/consort-video/src/x11_host.rs`.** The same shape again, with a
+display server instead of a camera, and a CI container has no X server at all.
+
+Thin on the same terms, and what is kept out of it is the whole of #70's
+interface: which windows may be offered and in what order is `shareable` in
+`screens.rs`, and reading a `GetImage` reply back is `from_bgra` in
+`pixels.rs`. Both are at 100% and both are tested as data.
+
+Five `#[ignore]` tests drive a real display, and two of them are the coverage
+for the part no fixture can reach: that a real reply unpacks at the geometry
+the stream claimed, and that dropping a share stops the frames before the drop
+returns. The second one found a live bug.
+
+```sh
+cargo test -p consort-video --test screens -- --ignored
 ```
 
 **`crates/consort-call/src/livekit.rs`.** The same shape as `cpal_host.rs`, one

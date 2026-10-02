@@ -13,11 +13,13 @@ const onCall = vi.hoisted(() => vi.fn());
 const onCallRefused = vi.hoisted(() => vi.fn());
 const onSelfAudio = vi.hoisted(() => vi.fn());
 const onSelfVideo = vi.hoisted(() => vi.fn());
+const onSelfScreen = vi.hoisted(() => vi.fn());
 const onSpeaking = vi.hoisted(() => vi.fn());
 const onShowRoom = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
 const callSetMuted = vi.hoisted(() => vi.fn());
 const callSetCamera = vi.hoisted(() => vi.fn());
+const callSetShare = vi.hoisted(() => vi.fn());
 const callSetDeafened = vi.hoisted(() => vi.fn());
 const callSetAway = vi.hoisted(() => vi.fn());
 const callConnect = vi.hoisted(() => vi.fn());
@@ -63,11 +65,13 @@ vi.mock("../lib/api", async (importOriginal) => ({
   onCallRefused,
   onSelfAudio,
   onSelfVideo,
+  onSelfScreen,
   onSpeaking,
   onShowRoom,
   onAudio,
   callSetMuted,
   callSetCamera,
+  callSetShare,
   callSetDeafened,
   callSetAway,
   callConnect,
@@ -103,6 +107,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfScreen,
   SelfVideo,
   Space,
   TokenStorage,
@@ -207,6 +212,7 @@ function resetApiMocks() {
   onCallRefused.mockReset().mockResolvedValue(() => {});
   onSelfAudio.mockReset().mockResolvedValue(() => {});
   onSelfVideo.mockReset().mockResolvedValue(() => {});
+  onSelfScreen.mockReset().mockResolvedValue(() => {});
   onSpeaking.mockReset().mockResolvedValue(() => {});
   onShowRoom.mockReset().mockResolvedValue(() => {});
   onAudio.mockReset().mockResolvedValue(() => {});
@@ -214,6 +220,7 @@ function resetApiMocks() {
   callSetCamera
     .mockReset()
     .mockResolvedValue({ camera: false, trouble: null });
+  callSetShare.mockReset().mockResolvedValue({ sharing: null, trouble: null });
   callSetDeafened.mockReset().mockResolvedValue(undefined);
   callSetAway.mockReset().mockResolvedValue(undefined);
   callConnect.mockReset().mockResolvedValue(undefined);
@@ -717,6 +724,7 @@ describe("SignedIn verification state", () => {
       ],
       [onSelfAudio, { muted: true, deafened: false }],
       [onSelfVideo, { camera: true, trouble: null }],
+      [onSelfScreen, { sharing: "DP-0", trouble: null }],
       [onSpeaking, ["@ada:example.org"]],
       [onShowRoom, "!general:example.org"],
       [onAudio, { state: "callAudioFailed", error: "no output device" }],
@@ -1681,6 +1689,17 @@ describe("SignedIn voice calls", () => {
     return registered[0];
   }
 
+  /** The handler the component registered for the screen channel. */
+  function selfScreenHandler(): (screen: SelfScreen) => void {
+    const registered = onSelfScreen.mock.calls.at(-1) as
+      | [(screen: SelfScreen) => void]
+      | undefined;
+    if (!registered) {
+      throw new Error("the component never subscribed to its own screen");
+    }
+    return registered[0];
+  }
+
   /** Showing a call that is up, which is where the controls are drawn. */
   async function inACall() {
     await showing();
@@ -1794,6 +1813,73 @@ describe("SignedIn voice calls", () => {
     );
 
     expect(await screen.findByText(/the camera is busy/i)).toBeVisible();
+  });
+
+  it("draws what is being shared once the channel reports it", async () => {
+    // The whole plumbing in one: the Rust side names the source, the channel
+    // carries the name, and the indicator is drawn from that rather than from
+    // the click that started it.
+    await inACall();
+
+    act(() =>
+      selfScreenHandler()({ sharing: "Bank statement.pdf", trouble: null }),
+    );
+
+    expect(
+      await screen.findByRole("status", { name: /sharing your screen/i }),
+    ).toHaveTextContent("Bank statement.pdf");
+  });
+
+  it("takes the indicator down when the channel says the share stopped", async () => {
+    // What a channel switch or a dropped call looks like from here: nobody
+    // pressed anything and the publication is gone. An indicator that stayed
+    // would be telling somebody their screen is going out when it is not.
+    await inACall();
+    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null }));
+
+    act(() => selfScreenHandler()({ sharing: null, trouble: null }));
+
+    expect(
+      screen.queryByRole("status", { name: /sharing your screen/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks to stop sharing from the indicator", async () => {
+    await inACall();
+    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null }));
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: /stop sharing/i }),
+    );
+
+    expect(callSetShare).toHaveBeenCalledWith(null);
+  });
+
+  it("shows nothing as shared until the channel says so", async () => {
+    // Same rule as the camera and the mute. The press reaches Rust and the
+    // indicator waits for the publication, so a refused share never draws one.
+    await inACall();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /share your screen/i }),
+    );
+
+    expect(
+      screen.queryByRole("status", { name: /sharing your screen/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows why a share would not start", async () => {
+    await inACall();
+
+    act(() =>
+      selfScreenHandler()({
+        sharing: null,
+        trouble: "sharing a screen needs an X11 session",
+      }),
+    );
+
+    expect(await screen.findByText(/needs an X11 session/i)).toBeVisible();
   });
 
   it("asks to deafen from the connection panel", async () => {

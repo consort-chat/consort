@@ -93,6 +93,19 @@ pub trait CallSession {
     /// already be gone by the time anything takes it down.
     async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
 
+    /// Publish this session's screen and hand back somewhere to push frames.
+    ///
+    /// The same shape as [`publish_camera`](Self::publish_camera) and a
+    /// separate method rather than a parameter on it, because peers read the
+    /// two as different streams: `MediaStreamKind::ScreenShare` is what a
+    /// client draws large and a camera is what it draws in a tile. A session
+    /// may have both up at once.
+    ///
+    /// `size` is what the capture is actually producing, which for a window is
+    /// whatever size that window happens to be rather than one of a device's
+    /// negotiated modes.
+    async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
+
     /// Mute or unmute this session's own microphone at the transport.
     ///
     /// Not a description of the audio, and nothing on the frame path may ever

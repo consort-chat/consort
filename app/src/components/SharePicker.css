@@ -1,0 +1,173 @@
+/*
+ * The card for choosing what to share.
+ *
+ * Fixed, and placed from viewport coordinates the component works out. The
+ * sidebar it opens from clips what leaves it, so an absolute card is cut off
+ * at the column's edge whatever its `z-index` says. See `SharePicker.tsx`.
+ */
+.share-picker {
+  position: fixed;
+  z-index: 40;
+  width: 20rem;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-overlay);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+}
+
+.share-picker__tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) 0;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.share-picker__tab {
+  flex: 1;
+  min-height: 2rem;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out-expo);
+}
+
+.share-picker__tab:hover {
+  color: var(--text-primary);
+}
+
+.share-picker__tab[aria-selected="true"] {
+  color: var(--text-primary);
+  /* The violet, not the mint: mint is voice and presence only. */
+  box-shadow: inset 0 -2px 0 var(--violet);
+}
+
+.share-picker__tab:focus-visible,
+.share-picker__source:focus-visible,
+.share-picker__cancel:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.share-picker__body {
+  max-height: 17rem;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.share-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.share-picker__source {
+  width: 100%;
+  /* WCAG 2.5.8: 24 CSS pixels of target, before the words decide anything. */
+  min-height: 2.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out-expo);
+}
+
+.share-picker__source:hover {
+  background: var(--surface-raised);
+}
+
+.share-picker__source:active {
+  background: var(--surface-base);
+}
+
+/*
+ * The fullscreen window, which the acceptance criteria calls the game. Given
+ * the surface rather than a badge: it is a hint about which row to look at
+ * first, not a label worth reading.
+ */
+.share-picker__source[data-fullscreen="true"] {
+  background: var(--surface-raised);
+  box-shadow: inset 2px 0 0 var(--violet);
+}
+
+.share-picker__preview {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 1.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-void);
+  color: var(--text-muted);
+}
+
+.share-picker__glyph {
+  width: 1rem;
+  height: 1rem;
+}
+
+.share-picker__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-picker__size {
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.share-picker__empty,
+.share-picker__trouble {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.share-picker__trouble {
+  color: var(--danger);
+}
+
+.share-picker__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2);
+  border-top: 1px solid var(--line-subtle);
+}
+
+.share-picker__cancel {
+  min-height: 2rem;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.share-picker__cancel:hover {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}

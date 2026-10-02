@@ -16,8 +16,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPersonVolume,
 }));
 
-const selfView = vi.hoisted(() => vi.fn());
-vi.mock("../lib/useSelfView", () => ({ useSelfView: selfView }));
+const usePicture = vi.hoisted(() => vi.fn());
+vi.mock("../lib/usePicture", () => ({ usePicture }));
 
 import { CallCard } from "./CallCard";
 import type { Call, Participant } from "../lib/api";
@@ -55,7 +55,12 @@ function inCall(participants: Participant[]): Call {
 function card(
   call: Call,
   speaking?: ReadonlySet<string>,
-  away: { shown?: boolean; onHide?: () => void; cameraOn?: boolean } = {},
+  away: {
+    shown?: boolean;
+    onHide?: () => void;
+    cameraOn?: boolean;
+    sharing?: string | null;
+  } = {},
 ) {
   return (
     <CallCard
@@ -66,6 +71,7 @@ function card(
       onHide={away.onHide ?? vi.fn()}
       onOpenRoom={vi.fn()}
       cameraOn={away.cameraOn ?? false}
+      sharing={away.sharing ?? null}
       {...(speaking === undefined ? {} : { speaking })}
     />
   );
@@ -76,28 +82,40 @@ function onScreen() {
   return screen.queryByRole("region", { name: "Call in Lounge" });
 }
 
-/** What the card would measure, if jsdom measured anything. */
+/**
+ * What the card would measure, if jsdom measured anything.
+ *
+ * Reports the whole window once the card is filling it, because that is the
+ * one size change the card measures itself back after.
+ */
 function stubLayout(box: { left: number; top: number; width?: number }) {
   const node = onScreen();
   if (node === null) throw new Error("no card to measure");
   const width = box.width ?? 240;
-  node.getBoundingClientRect = () =>
-    ({
-      left: box.left,
-      top: box.top,
-      width,
-      height: 160,
-      right: box.left + width,
-      bottom: box.top + 160,
-      x: box.left,
-      y: box.top,
+  node.getBoundingClientRect = () => {
+    const at =
+      node.dataset.size === "full"
+        ? {
+            left: 0,
+            top: 0,
+            width: window.innerWidth,
+            height: window.innerHeight,
+          }
+        : { left: box.left, top: box.top, width, height: 160 };
+    return {
+      ...at,
+      right: at.left + at.width,
+      bottom: at.top + at.height,
+      x: at.left,
+      y: at.top,
       toJSON: () => ({}),
-    }) as DOMRect;
+    } as DOMRect;
+  };
 }
 
 beforeEach(() => {
   resetAvatarCache();
-  selfView.mockReset().mockReturnValue(null);
+  usePicture.mockReset().mockReturnValue(null);
   memberAvatar.mockReset().mockResolvedValue(null);
   audioSettings.mockReset().mockResolvedValue(SETTINGS);
   setPersonVolume.mockReset().mockResolvedValue(undefined);
@@ -270,10 +288,10 @@ describe("CallCard", () => {
       render(card(inCall([person("@ada:example.org", "Ada")])));
 
       await userEvent.dblClick(screen.getByRole("list", { name: "People in Lounge" }));
-      expect(onScreen()).toHaveAttribute("data-expanded", "true");
+      expect(onScreen()).toHaveAttribute("data-size", "expanded");
 
       await userEvent.dblClick(screen.getByRole("list", { name: "People in Lounge" }));
-      expect(onScreen()).toHaveAttribute("data-expanded", "false");
+      expect(onScreen()).toHaveAttribute("data-size", "card");
     });
 
     it("does not expand when the double-click was on a face", async () => {
@@ -283,7 +301,7 @@ describe("CallCard", () => {
 
       await userEvent.dblClick(screen.getByRole("button", { name: /Ada/ }));
 
-      expect(onScreen()).toHaveAttribute("data-expanded", "false");
+      expect(onScreen()).toHaveAttribute("data-size", "card");
     });
 
     it("expands from a button as well", async () => {
@@ -295,12 +313,12 @@ describe("CallCard", () => {
       await userEvent.click(
         screen.getByRole("button", { name: "Expand the call card" }),
       );
-      expect(onScreen()).toHaveAttribute("data-expanded", "true");
+      expect(onScreen()).toHaveAttribute("data-size", "expanded");
 
       await userEvent.click(
         screen.getByRole("button", { name: "Expand the call card" }),
       );
-      expect(onScreen()).toHaveAttribute("data-expanded", "false");
+      expect(onScreen()).toHaveAttribute("data-size", "card");
     });
 
     it("pulls a card at the edge back in when it grows", async () => {
@@ -341,7 +359,7 @@ describe("CallCard", () => {
       fireEvent.pointerUp(people);
       fireEvent.doubleClick(people);
 
-      expect(onScreen()).toHaveAttribute("data-expanded", "true");
+      expect(onScreen()).toHaveAttribute("data-size", "expanded");
     });
 
     it("does not expand when the pointer was dragging", () => {
@@ -365,7 +383,7 @@ describe("CallCard", () => {
       if (drawn === null) throw new Error("no card");
       fireEvent.doubleClick(drawn);
 
-      expect(onScreen()).toHaveAttribute("data-expanded", "false");
+      expect(onScreen()).toHaveAttribute("data-size", "card");
     });
   });
 
@@ -503,9 +521,14 @@ describe("CallCard", () => {
 describe("your own camera on the card", () => {
   const PICTURE = "data:image/jpeg;base64,aaaa";
 
-  /** The self view, which is the one picture on the card with a name. */
+  /** The camera, which is the one picture of a face that has a name. */
   function preview() {
     return screen.queryByRole("img", { name: "Your camera" });
+  }
+
+  /** Somebody's square, by the control that opens their card. */
+  function face(name: string) {
+    return screen.getByRole("button", { name: new RegExp(name) });
   }
 
   it("is not drawn while the camera is off", () => {
@@ -516,34 +539,87 @@ describe("your own camera on the card", () => {
     expect(preview()).toBe(null);
   });
 
-  it("is drawn once the camera has a frame", () => {
-    selfView.mockReturnValue(PICTURE);
+  it("is drawn in your own square rather than in a strip of its own", () => {
+    // #140's review, and the reason the avatar became a square: a camera is
+    // what that person looks like right now, so it belongs where their face
+    // was and not in a band above the call.
+    usePicture.mockReturnValue(PICTURE);
 
-    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
+    );
 
-    expect(preview()).not.toBe(null);
-    expect(preview()).toHaveAttribute("src", PICTURE);
+    expect(within(face("Bob")).getByRole("img", { name: "Your camera" })).toHaveAttribute(
+      "src",
+      PICTURE,
+    );
+  });
+
+  it("is never drawn in somebody else's square", () => {
+    // There is one local capture. Drawing it against another name would be
+    // this client telling a room that somebody else is on camera.
+    usePicture.mockReturnValue(PICTURE);
+
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          person("@ann:example.org", "Ann"),
+        ]),
+        undefined,
+        { cameraOn: true },
+      ),
+    );
+
+    expect(
+      within(face("Ann")).queryByRole("img", { name: "Your camera" }),
+    ).toBeNull();
   });
 
   it("is not drawn before the first frame arrives", () => {
     // Between opening a device and its first frame. A card drawing an empty
     // picture there would flash an empty box every time the camera came on.
-    selfView.mockReturnValue(null);
+    usePicture.mockReturnValue(null);
 
-    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
+    );
 
     expect(preview()).toBe(null);
   });
 
+  it("leaves the face underneath while it waits for one", () => {
+    // Which is what makes the line above safe. An avatar taken away to make
+    // room would leave an empty square for however long a device takes.
+    usePicture.mockReturnValue(null);
+
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
+    );
+
+    expect(face("Bob")).toHaveTextContent("Bob");
+  });
+
   it("goes away again when the camera does", () => {
-    selfView.mockReturnValue(PICTURE);
+    usePicture.mockReturnValue(PICTURE);
     const { rerender } = render(
-      card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }),
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
     );
     expect(preview()).not.toBe(null);
 
-    selfView.mockReturnValue(null);
-    rerender(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: false }));
+    rerender(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: false,
+      }),
+    );
 
     expect(preview()).toBe(null);
   });
@@ -551,17 +627,26 @@ describe("your own camera on the card", () => {
   it("keeps the faces beside it", () => {
     // The camera is added to the card rather than replacing what it was for.
     // Who else is in the call is the thing the card exists to say.
-    selfView.mockReturnValue(PICTURE);
+    usePicture.mockReturnValue(PICTURE);
 
-    render(card(inCall([person("@ann:example.org", "Ann")]), undefined, { cameraOn: true }));
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          person("@ann:example.org", "Ann"),
+        ]),
+        undefined,
+        { cameraOn: true },
+      ),
+    );
 
     expect(preview()).not.toBe(null);
     expect(screen.getByText("Ann")).toBeInTheDocument();
   });
 
   it("is not asked for at all while the card is put away", () => {
-    // Not merely asked for with the camera off: a hidden card draws nothing, so
-    // the component holding the timer is never mounted.
+    // Not merely asked for with the camera off: a hidden card draws nothing,
+    // so the component holding the timer is never mounted.
     render(
       card(inCall([person("@bob:example.org", "Bob")]), undefined, {
         cameraOn: true,
@@ -569,23 +654,28 @@ describe("your own camera on the card", () => {
       }),
     );
 
-    expect(selfView).not.toHaveBeenCalled();
+    expect(usePicture).not.toHaveBeenCalled();
   });
-
 
   it("is asked for while the card is up and the camera is on", () => {
     render(
-      card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }),
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
     );
 
-    expect(selfView).toHaveBeenCalledWith(true);
+    expect(usePicture).toHaveBeenCalledWith("camera");
   });
 
   it("survives being dragged", () => {
     // The picture is inside the card, so moving the card moves it. What this
     // pins is that a drag does not remount it and lose the frame.
-    selfView.mockReturnValue(PICTURE);
-    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, { cameraOn: true }));
+    usePicture.mockReturnValue(PICTURE);
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
+    );
     const before = preview();
     stubLayout({ left: 100, top: 100 });
 
@@ -598,5 +688,382 @@ describe("your own camera on the card", () => {
 
     expect(preview()).toBe(before);
     expect(preview()).toHaveAttribute("src", PICTURE);
+  });
+});
+
+describe("screens being shared on the card", () => {
+  const PICTURE = "data:image/jpeg;base64,bbbb";
+
+  function sharer(id: string, name: string): Participant {
+    return { id, name, muted: false, screen: true };
+  }
+
+  /** The screen filling the width of the card, announced by what it shows. */
+  function stage() {
+    return screen.queryByRole("button", { name: /, fill the window$/ });
+  }
+
+  /** The screens that did not get the stage, which is a list and not a roster. */
+  function strip() {
+    return screen.queryByRole("list", {
+      name: "Other screens shared in Lounge",
+    });
+  }
+
+  it("says nothing about screens while nobody is sharing one", () => {
+    // Which is most of every call. An empty stage announced to a screen reader
+    // is furniture that says nothing.
+    render(card(inCall([person("@bob:example.org", "Bob")])));
+
+    expect(stage()).toBe(null);
+    expect(strip()).toBe(null);
+  });
+
+  it("puts this session's own screen on the stage, captioned with what is going out", () => {
+    usePicture.mockReturnValue(PICTURE);
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0 (2560x1440)",
+    }));
+
+    expect(stage()).toHaveTextContent("DP-0 (2560x1440)");
+    expect(
+      within(stage()!).getByRole("img", { name: "Your screen" }),
+    ).toBeVisible();
+  });
+
+  it("puts somebody else's screen on the stage when theirs is the only one", () => {
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+
+  it("leaves no strip behind while one screen is being shared", () => {
+    // The stage is the whole answer then. A list of one that is already on the
+    // stage is the same tile drawn twice.
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+    }));
+
+    expect(strip()).toBe(null);
+  });
+
+  it("sends every screen but the staged one to the strip", () => {
+    // The requirement is a square per screen rather than a slot somebody wins.
+    // Three is the example; nothing here counts.
+    render(
+      card(
+        inCall([
+          sharer("@ada:example.org", "Ada"),
+          sharer("@cyd:example.org", "Cyd"),
+          person("@bob:example.org", "Bob"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(within(strip()!).getAllByRole("listitem")).toHaveLength(2);
+    expect(strip()!).toHaveTextContent("Ada's screen");
+    expect(strip()!).toHaveTextContent("Cyd's screen");
+  });
+
+  it("draws this session's own screen once, not twice", () => {
+    // Our own publication comes back in the roster a moment after the screen
+    // channel has already said so. Both read naively is one screen in two
+    // places.
+    render(
+      card(inCall([sharer("@bob:example.org", "Bob")]), undefined, {
+        sharing: "DP-0",
+      }),
+    );
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()).toBe(null);
+  });
+
+  it("asks for no picture for anybody else's screen", () => {
+    // One local capture, and no path from anybody else's into this window.
+    render(card(inCall([sharer("@ada:example.org", "Ada")])));
+
+    expect(usePicture).not.toHaveBeenCalled();
+  });
+
+  it("keeps the people out of the screens and the screens out of the people", () => {
+    // Separate lists because only one of them is a list of people, and that is
+    // what each is announced as.
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+
+    expect(within(strip()!).queryByText("Bob")).toBeNull();
+    const people = screen.getByRole("list", { name: "People in Lounge" });
+    expect(within(people).queryByText("DP-0")).toBeNull();
+    expect(within(people).queryByText("Ada's screen")).toBeNull();
+  });
+});
+
+describe("choosing which screen gets the stage", () => {
+  const PICTURE = "data:image/jpeg;base64,bbbb";
+
+  function sharer(id: string, name: string): Participant {
+    return { id, name, muted: false, screen: true };
+  }
+
+  function stage() {
+    return screen.queryByRole("button", { name: /, fill the window$/ });
+  }
+
+  function strip() {
+    return screen.queryByRole("list", {
+      name: "Other screens shared in Lounge",
+    });
+  }
+
+  /** This session sharing DP-0 while Ada shares hers, which is two screens. */
+  function two(extra: { sharing?: string | null } = {}) {
+    return card(
+      inCall([
+        person("@bob:example.org", "Bob"),
+        sharer("@ada:example.org", "Ada"),
+      ]),
+      undefined,
+      { sharing: extra.sharing === undefined ? "DP-0" : extra.sharing },
+    );
+  }
+
+  it("stages this session's own share before anybody else's", () => {
+    // It is the only share that can draw a picture: nothing carries a remote
+    // frame into this window yet. Staging a monitor glyph over a live desktop
+    // would be the card choosing the emptier of the two.
+    render(two());
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()!).toHaveTextContent("Ada's screen");
+  });
+
+  it("puts a tile on the stage when it is clicked", async () => {
+    render(two());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+
+  it("returns the screen that was on the stage to the strip", async () => {
+    // A promotion that left the old occupant nowhere would lose a share by
+    // clicking the other one.
+    render(two());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    expect(within(strip()!).getAllByRole("listitem")).toHaveLength(1);
+    expect(strip()!).toHaveTextContent("DP-0");
+  });
+
+  it("puts a tile on the stage from the keyboard", async () => {
+    render(two());
+
+    screen
+      .getByRole("button", { name: "Put Ada's screen on the stage" })
+      .focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+
+  it("hands the stage over when the screen on it stops", async () => {
+    // Nothing clicked and nothing left to click: a stage still captioned with
+    // a share that ended is a picture of something that is no longer going out.
+    const { rerender } = render(two());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+    expect(stage()).toHaveTextContent("Ada's screen");
+
+    rerender(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          person("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+
+    expect(stage()).toHaveTextContent("DP-0");
+    expect(strip()).toBe(null);
+  });
+
+  it("empties the stage when the last share stops", () => {
+    const { rerender } = render(two({ sharing: null }));
+    expect(stage()).toHaveTextContent("Ada's screen");
+
+    rerender(card(inCall([person("@bob:example.org", "Bob")])));
+
+    expect(stage()).toBe(null);
+  });
+
+  it("keeps a chosen screen on the stage while it is still being shared", async () => {
+    // A re-render is every roster update and every frame the picture polls
+    // for. A choice that survived none of them would be a stage that sprang
+    // back the moment anything moved.
+    usePicture.mockReturnValue(PICTURE);
+    const { rerender } = render(two());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Put Ada's screen on the stage" }),
+    );
+
+    rerender(two());
+
+    expect(stage()).toHaveTextContent("Ada's screen");
+  });
+});
+
+describe("filling the window with the card", () => {
+  function sharing(extra: { sharing?: string | null } = {}) {
+    return card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: extra.sharing ?? "DP-0",
+    });
+  }
+
+  /** The stage, which is what the review asked be clickable. */
+  function stage() {
+    return screen.getByRole("button", { name: /, fill the window$/ });
+  }
+
+  it("fills the window when the staged screen is clicked", async () => {
+    // The whole reason the stage is a control: a desktop in a floating card
+    // says which window layout is going out and nothing about what it says.
+    render(sharing());
+
+    await userEvent.click(stage());
+
+    expect(onScreen()).toHaveAttribute("data-size", "full");
+  });
+
+  it("comes back to the floating card from the same control", async () => {
+    // A view somebody cannot leave is not finished, and the control that got
+    // them there is the first place they will try.
+    render(sharing());
+    await userEvent.click(stage());
+    // The way out is only worth testing from somewhere, and "card" is where
+    // this starts: without this the test passes on a stage that never opened.
+    expect(onScreen()).toHaveAttribute("data-size", "full");
+
+    await userEvent.click(stage());
+
+    expect(onScreen()).toHaveAttribute("data-size", "card");
+  });
+
+  it("comes back from the card's own control", async () => {
+    render(sharing());
+    await userEvent.click(stage());
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand the call card" }),
+    );
+
+    expect(onScreen()).toHaveAttribute("data-size", "card");
+  });
+
+  it("comes back on Escape", async () => {
+    render(sharing());
+    await userEvent.click(stage());
+    expect(onScreen()).toHaveAttribute("data-size", "full");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onScreen()).toHaveAttribute("data-size", "card");
+  });
+
+  it("leaves Escape alone while it is only a card", async () => {
+    // Escape belongs to whatever was opened most recently. A card that closed
+    // itself on it would vanish every time somebody dismissed a menu.
+    render(sharing());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand the call card" }),
+    );
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(onScreen()).toHaveAttribute("data-size", "expanded");
+  });
+
+  it("stops offering to move the card while it fills the window", async () => {
+    // There is nothing to move: it is the window.
+    render(sharing());
+
+    await userEvent.click(stage());
+
+    expect(screen.getByRole("button", { name: /^Move the/ })).toBeDisabled();
+  });
+
+  it("does not fill the window for the next call", async () => {
+    // Filling the window is about one call, the way putting the card away is.
+    // Left alone, a card that was full when a call ended would fill the window
+    // again the moment the next one started, for a share nobody is making.
+    const { rerender } = render(sharing());
+    await userEvent.click(stage());
+    expect(onScreen()).toHaveAttribute("data-size", "full");
+
+    rerender(card({ state: "disconnected" }));
+    rerender(sharing());
+
+    expect(onScreen()).toHaveAttribute("data-size", "card");
+  });
+
+  it("keeps a card that was only expanded", async () => {
+    // The size somebody chose for the card itself outlives a call, and did
+    // before any of this. Only the window-filling view is about one call.
+    const { rerender } = render(sharing());
+    await userEvent.click(
+      screen.getByRole("button", { name: "Expand the call card" }),
+    );
+
+    rerender(card({ state: "disconnected" }));
+    rerender(sharing());
+
+    expect(onScreen()).toHaveAttribute("data-size", "expanded");
+  });
+
+  it("puts a dragged card back where it was", async () => {
+    // Filling the window makes the card as big as the screen, and the rule
+    // that keeps a floating card on screen would read that as a card hanging
+    // off every edge and pin it to the corner. There is nothing to keep in
+    // view while it is the window.
+    render(sharing());
+    stubLayout({ left: 300, top: 200 });
+    const grip = screen.getByRole("button", { name: /^Move the/ });
+    fireEvent.pointerDown(grip, { clientX: 320, clientY: 210 });
+    fireEvent.pointerMove(window, { clientX: 420, clientY: 210 });
+    fireEvent.pointerUp(window);
+    expect(onScreen()).toHaveStyle({ left: "400px" });
+
+    await userEvent.click(stage());
+    expect(onScreen()?.style.left).toBe("");
+    await userEvent.keyboard("{Escape}");
+
+    expect(onScreen()).toHaveStyle({ left: "400px" });
   });
 });
