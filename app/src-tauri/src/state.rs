@@ -287,6 +287,12 @@ pub struct AppState {
     /// at once: somebody presenting usually wants their face in the call as
     /// well as their slides.
     screen: ConsortCamera,
+    /// The newest shared-screen frame, for the call card to draw.
+    ///
+    /// Its own slot rather than the camera's, because both can be going out at
+    /// once and a card drawing one picture for both would show whichever
+    /// arrived last.
+    screen_view: SelfView,
     /// The screen capture, once anything has wanted one.
     ///
     /// `None` until then, on the same terms as `video`. An `Arc` because the
@@ -499,6 +505,7 @@ impl AppState {
             self_view: SelfView::new(),
             video: Arc::new(std::sync::Mutex::new(None)),
             screen: ConsortCamera::new(),
+            screen_view: SelfView::new(),
             screens: Arc::new(std::sync::Mutex::new(None)),
             voices,
             chiming,
@@ -881,7 +888,7 @@ impl AppState {
         backend: impl FnOnce() -> Box<dyn ScreenCapture>,
     ) -> Result<Vec<ShareSource>, consort_video::ShareError> {
         let mut slot = self.locked_screens();
-        slot.get_or_insert_with(|| ScreenBridge::new(backend()))
+        slot.get_or_insert_with(|| ScreenBridge::new(backend(), self.screen_view.clone()))
             .sources()
     }
 
@@ -904,7 +911,8 @@ impl AppState {
 
         let share = {
             let mut slot = self.locked_screens();
-            let bridge = slot.get_or_insert_with(|| ScreenBridge::new(backend()));
+            let bridge =
+                slot.get_or_insert_with(|| ScreenBridge::new(backend(), self.screen_view.clone()));
             bridge
                 .start(source, self.screen.clone())
                 .map_err(ShareTrouble::Display)?
@@ -984,6 +992,14 @@ impl AppState {
     /// and its first frame. The card draws its faces either way.
     pub fn self_view(&self) -> Option<String> {
         self.self_view.latest()
+    }
+
+    /// The newest shared-screen frame as a data URL, for the card to draw.
+    ///
+    /// `None` when nothing is being shared, and in the moment between a
+    /// capture starting and its first frame.
+    pub fn screen_view(&self) -> Option<String> {
+        self.screen_view.latest()
     }
 
     /// Whether a camera is open right now. Test-only.
@@ -1780,12 +1796,15 @@ mod tests {
             FrameSink, Resolution, ScreenCapture, ShareError, ShareKind, ShareSource, ShareStream,
         };
 
-        /// A screen capture backend a test can refuse from and count.
+        /// A screen capture backend a test can refuse from, count, or push a
+        /// frame through.
         #[derive(Clone, Default)]
         struct Backend {
             opens: Arc<AtomicUsize>,
             closes: Arc<AtomicUsize>,
             gone: bool,
+            /// Whatever sink the last `open` was given.
+            sink: Arc<std::sync::Mutex<Option<FrameSink>>>,
         }
 
         impl Backend {
@@ -1802,6 +1821,25 @@ mod tests {
 
             fn closes(&self) -> usize {
                 self.closes.load(Ordering::Relaxed)
+            }
+
+            /// Hand one frame over the way a display would.
+            fn capture(&self) {
+                if let Some(sink) = self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_mut()
+                {
+                    sink(consort_video::Picture {
+                        width: 2,
+                        height: 2,
+                        y: vec![120; 4],
+                        u: vec![128],
+                        v: vec![128],
+                        timestamp_us: 1,
+                    });
+                }
             }
         }
 
@@ -1838,7 +1876,7 @@ mod tests {
             fn open(
                 &self,
                 id: &str,
-                _on_frame: FrameSink,
+                on_frame: FrameSink,
             ) -> Result<Box<dyn ShareStream>, ShareError> {
                 self.opens.fetch_add(1, Ordering::Relaxed);
                 if self.gone {
@@ -1846,6 +1884,10 @@ mod tests {
                         source: id.to_owned(),
                     });
                 }
+                *self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on_frame);
                 Ok(Box::new(Stream {
                     source: ShareSource {
                         id: id.to_owned(),
@@ -1937,6 +1979,70 @@ mod tests {
             assert_eq!(said.trouble, None);
             assert_eq!(backend.closes(), 1, "the capture is still running");
             assert_eq!(state.sharing(), None);
+        }
+
+        #[test]
+        fn there_is_nothing_for_the_card_to_draw_before_a_share_starts() {
+            let (_dir, state, _sink) = state();
+
+            assert_eq!(state.screen_view(), None);
+        }
+
+        #[test]
+        fn a_captured_frame_reaches_the_card() {
+            // What pins the wiring: the slot the capture thread fills and the
+            // one this command answers from have to be the same slot. A fresh
+            // one here would answer nothing forever, with every other share
+            // test still passing.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            backend.capture();
+
+            assert!(
+                state.screen_view().is_some(),
+                "the card has nothing to draw"
+            );
+        }
+
+        #[test]
+        fn the_screen_and_the_camera_are_two_pictures_rather_than_one() {
+            // Both can be going out at once: somebody presenting usually wants
+            // their face in the call as well as their slides. One slot for both
+            // would put whichever frame arrived last in both squares.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+
+            backend.capture();
+
+            assert!(state.screen_view().is_some());
+            assert_eq!(state.self_view(), None, "the camera square took a screen");
+        }
+
+        #[test]
+        fn stopping_takes_the_card_picture_down() {
+            // Share off, square gone. Without this somebody who just stopped
+            // sharing is still looking at the last frame of it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+            backend.capture();
+            assert!(
+                state.screen_view().is_some(),
+                "nothing was drawn to take down"
+            );
+
+            state.set_share(backing(&backend), None);
+
+            assert_eq!(state.screen_view(), None);
         }
 
         #[test]

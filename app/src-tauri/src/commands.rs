@@ -1511,6 +1511,14 @@ pub fn self_view(state: State<'_, AppState>) -> Option<String> {
     state.self_view()
 }
 
+/// The newest shared-screen frame for the call card, as a `data:` URL.
+///
+/// The twin of [`self_view`], asked for the same way and for the same reasons.
+#[tauri::command]
+pub fn screen_view(state: State<'_, AppState>) -> Option<String> {
+    state.screen_view()
+}
+
 #[tauri::command]
 pub fn audio_test_start(state: State<'_, AppState>) {
     audio_test_start_for(&state, &CpalHost, cpal_backends);
