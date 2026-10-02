@@ -57,6 +57,29 @@ impl SelfAudio {
     }
 }
 
+/// What a session is doing with its own camera.
+///
+/// Its own event rather than fields on [`CallEvent::Connected`], matching
+/// [`SelfAudio`] and for the first of its two reasons: `Connected` carries a
+/// roster, which costs a member-store read per person to name, and a button
+/// should not pay that.
+///
+/// Unlike mute and deafen it does **not** survive a channel switch. A camera
+/// is published into one call, and a new call starts with it off: somebody who
+/// moves channels has not asked to be filmed in the new one. See
+/// `docs/PLAN-webcam.md`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfVideo {
+    /// Whether this session's camera is reaching the call.
+    pub camera: bool,
+    /// Why it is not, when somebody asked for it and it is not.
+    ///
+    /// `None` when the camera is simply off, so a reader can tell "I turned it
+    /// off" from "it would not start". One sentence, written for a person.
+    pub trouble: Option<String>,
+}
+
 /// One thing that happened to this session's call.
 ///
 /// Serialised internally tagged, matching every other union that crosses the
@@ -119,6 +142,8 @@ pub enum CallEvent {
     ///
     /// [`Connected`]: Self::Connected
     SelfAudio(SelfAudio),
+    /// What this session is doing with its own camera. See [`SelfVideo`].
+    SelfVideo(SelfVideo),
     /// The join did not happen. The thread is still alive and can be asked
     /// again.
     Failed { room_id: String, error: String },
@@ -242,12 +267,43 @@ mod tests {
             "selfAudio"
         );
         assert_eq!(
+            tag(&CallEvent::SelfVideo(SelfVideo::default())),
+            "selfVideo"
+        );
+        assert_eq!(
             tag(&CallEvent::Failed {
                 room_id: room_id(),
                 error: "no".to_owned(),
             }),
             "failed"
         );
+    }
+
+    #[test]
+    fn self_video_puts_its_fields_beside_the_tag() {
+        // Same flattening as `selfAudio`, and pinned for the same reason: the
+        // frontend reads `{state, camera, trouble}` with no nesting, and
+        // nothing in TypeScript would fail to build if that drifted.
+        let json = serde_json::to_value(CallEvent::SelfVideo(SelfVideo {
+            camera: false,
+            trouble: Some("the camera is in use".to_owned()),
+        }))
+        .unwrap();
+
+        assert_eq!(json["state"], "selfVideo");
+        assert_eq!(json["camera"], false);
+        assert_eq!(json["trouble"], "the camera is in use");
+    }
+
+    #[test]
+    fn a_camera_that_is_simply_off_carries_no_trouble() {
+        // The distinction the field exists for. "I turned it off" and "it
+        // would not start" draw differently, and collapsing them would put an
+        // error on the screen every time somebody switched their camera off.
+        let json = serde_json::to_value(CallEvent::SelfVideo(SelfVideo::default())).unwrap();
+
+        assert_eq!(json["camera"], false);
+        assert!(json["trouble"].is_null());
     }
 
     #[test]
@@ -262,6 +318,10 @@ mod tests {
                 trouble: Some("nobody can hear you".to_owned()),
             },
             CallEvent::Disconnected,
+            CallEvent::SelfVideo(SelfVideo {
+                camera: true,
+                trouble: None,
+            }),
             CallEvent::Failed {
                 room_id: "!a:example.org".to_owned(),
                 error: "the homeserver said no".to_owned(),

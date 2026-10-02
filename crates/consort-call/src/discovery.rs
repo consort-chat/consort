@@ -32,6 +32,8 @@
 //! is the same as if the key had been absent, which is the case upstream
 //! already handles.
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 /// The most of a discovery document worth reading.
 ///
 /// A client discovery document is a handful of keys: a homeserver base URL,
@@ -103,20 +105,47 @@ pub fn livekit_focus(document: &str) -> Option<String> {
     })
 }
 
-/// Whether a string is an absolute HTTP URL, and so somewhere a token request
-/// can be sent.
+/// Whether a string is an absolute HTTP URL this token request may be sent to.
 ///
-/// `http` as well as `https` because a LiveKit stack brought up on a developer
-/// machine is reached over plain HTTP, and refusing that would make the demo
-/// backend in this repository undiscoverable. The document itself still
-/// arrives over TLS from the server's own domain, so this is the same trust as
-/// the homeserver, not less.
+/// `http` only to this machine. The URL is where a Matrix OpenID token is
+/// exchanged for an SFU token, so in the clear anybody on the path takes both:
+/// proof of this Matrix identity to a third party, and admission to the call.
+/// That the document arrived over TLS says nothing about where it points.
 fn is_http_url(candidate: &str) -> bool {
-    let rest = candidate
-        .strip_prefix("https://")
-        .or_else(|| candidate.strip_prefix("http://"));
+    if let Some(rest) = candidate.strip_prefix("https://") {
+        return !rest.is_empty();
+    }
 
-    rest.is_some_and(|host| !host.is_empty())
+    // A stack brought up on a developer machine is still reachable, and so is
+    // a hand-configured `service_url_fallback`, which never comes through here.
+    candidate
+        .strip_prefix("http://")
+        .map(authority_of)
+        .is_some_and(is_loopback)
+}
+
+/// The host and port of a URL whose scheme has already been taken off.
+fn authority_of(rest: &str) -> &str {
+    rest.split(['/', '?', '#']).next().unwrap_or_default()
+}
+
+/// Whether an authority names this machine and nowhere else.
+///
+/// Userinfo is not parsed out, so `evil.example@127.0.0.1` is refused along
+/// with everything else that is not a bare host. Refusing it is the safe half.
+fn is_loopback(authority: &str) -> bool {
+    if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed, so the colons inside are the address and not a port.
+        return rest.split_once(']').is_some_and(|(address, _port)| {
+            address.parse::<Ipv6Addr>().is_ok_and(|ip| ip.is_loopback())
+        });
+    }
+
+    let host = authority
+        .split_once(':')
+        .map_or(authority, |(host, _port)| host);
+
+    host == "localhost" || host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]
@@ -351,6 +380,45 @@ mod tests {
         assert_eq!(
             livekit_focus(&advertising("http://localhost:8080")),
             Some("http://localhost:8080".to_owned())
+        );
+    }
+
+    #[test]
+    fn plain_http_to_anywhere_else_is_refused() {
+        for reachable in [
+            "http://sfu.example.org",
+            "http://sfu.example.org:8080/path",
+            "http://198.51.100.7",
+            "http://[2001:db8::1]:8080",
+            // The host is `evil.example`, not the loopback name in front of it.
+            "http://localhost@evil.example/",
+            // `127.0.0.1.evil.example` is a name, not an address.
+            "http://127.0.0.1.evil.example/",
+        ] {
+            assert_eq!(livekit_focus(&advertising(reachable)), None, "{reachable}");
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_loopback_interface_counts_too() {
+        for local in [
+            "http://127.0.0.1:8080",
+            "http://127.1.2.3:8080",
+            "http://[::1]:8080",
+        ] {
+            assert_eq!(
+                livekit_focus(&advertising(local)),
+                Some(local.to_owned()),
+                "{local}"
+            );
+        }
+    }
+
+    #[test]
+    fn https_anywhere_is_still_what_a_deployment_advertises() {
+        assert_eq!(
+            livekit_focus(&advertising("https://sfu.example.org")),
+            Some("https://sfu.example.org".to_owned())
         );
     }
 

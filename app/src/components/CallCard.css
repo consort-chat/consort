@@ -162,3 +162,25 @@
   font-size: var(--text-sm);
   color: var(--amber);
 }
+
+/*
+  What the camera is sending, between the bar and the faces.
+
+  Mirrored, which is what every self view does and what people expect of
+  anything standing in for a mirror: raising your left hand should raise the
+  hand on the left. Only the preview is flipped. What the call receives is the
+  frame as the camera read it.
+
+  A fixed shape, so the first frame arriving does not move the card, and
+  `cover` so a camera that negotiated 4:3 fills it rather than letterboxing.
+*/
+.call-card__self {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--surface-void);
+  border-radius: var(--radius-md);
+  transform: scaleX(-1);
+}
