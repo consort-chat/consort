@@ -19,6 +19,7 @@ import { Confirm } from "./Confirm";
 import { EmojiPicker, OPENS_A_PICKER } from "./EmojiPicker";
 import { ReadBy } from "./ReadBy";
 import { RoomAvatar } from "./RoomAvatar";
+import { UntrustedMark } from "./UntrustedMark";
 
 /**
  * How long a gap before two messages from the same person stop being one
@@ -1092,7 +1093,18 @@ export function MessageGroups({
                         {...(message.mentions?.includes(selfId)
                           ? { "data-mentions-me": "true" }
                           : {})}
+                        {...(message.senderTrust === undefined
+                          ? {}
+                          : { "data-untrusted": "true" })}
                       >
+                        {/*
+                          Before the words rather than in the avatar's gutter,
+                          which already holds the time below the picture and
+                          has no room left at the height of the first line.
+                        */}
+                        {message.senderTrust !== undefined && (
+                          <UntrustedMark trust={message.senderTrust} />
+                        )}
                         {/*
                           The time, for everything the byline above does not
                           speak for. A group is one person talking without

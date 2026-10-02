@@ -31,6 +31,7 @@ import {
   systemMessageText,
   timeOf,
 } from "./MessageGroups";
+import { senderTrustLabel } from "../lib/labels";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import { mediaUrl } from "../lib/api";
@@ -1646,5 +1647,53 @@ describe("deleting a message", () => {
     ]);
 
     expect(screen.getAllByText("Message deleted").length).toBeGreaterThan(1);
+  });
+});
+
+describe("a sender who could not be vouched for", () => {
+  it("is marked, with the reason as the mark's accessible name", () => {
+    draw([said("$1", ADA, "trust me", NOON, { senderTrust: "unsignedDevice" })]);
+
+    expect(
+      screen.getByRole("img", {
+        name: senderTrustLabel("unsignedDevice"),
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves every other message unmarked", () => {
+    draw([said("$1", ADA, "ordinary")]);
+
+    expect(screen.queryByRole("img", { name: /device|sender/i })).toBeNull();
+  });
+
+  it("marks the row as well, which is what shifts the words clear of it", () => {
+    const { container } = draw([
+      said("$1", ADA, "trust me", NOON, { senderTrust: "unknownDevice" }),
+    ]);
+
+    expect(
+      container.querySelector('[data-message-id="$1"]'),
+    ).toHaveAttribute("data-untrusted", "true");
+  });
+
+  it("leaves the row of a message with nothing wrong alone", () => {
+    const { container } = draw([said("$1", ADA, "ordinary")]);
+
+    expect(
+      container.querySelector('[data-message-id="$1"]'),
+    ).not.toHaveAttribute("data-untrusted");
+  });
+
+  it("marks only the message it is about, in a group of several", () => {
+    draw([
+      said("$1", ADA, "first"),
+      said("$2", ADA, "second", NOON + 1000, {
+        senderTrust: "mismatchedSender",
+      }),
+      said("$3", ADA, "third", NOON + 2000),
+    ]);
+
+    expect(screen.getAllByRole("img", { name: /does not own the device/i })).toHaveLength(1);
   });
 });

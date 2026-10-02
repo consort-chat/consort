@@ -1287,6 +1287,20 @@ export type MessageKind =
   | "deleted";
 
 /**
+ * Why a message's sender could not be vouched for.
+ *
+ * Mirrors `consort_matrix::SenderTrust`, one name per `ShieldStateCode`. Rust
+ * decides which reach here: a sender nobody verified is not one of them.
+ */
+export type SenderTrust =
+  | "authenticityNotGuaranteed"
+  | "unknownDevice"
+  | "unsignedDevice"
+  | "unverifiedIdentity"
+  | "verificationViolation"
+  | "mismatchedSender";
+
+/**
  * Where an attachment's bytes are, and what shape they will be drawn at.
  *
  * Mirrors `consort_matrix::Media`. The bytes are not here: a timeline is
@@ -1439,6 +1453,13 @@ export interface Message {
    * than guessing.
    */
   deletedBy?: string;
+  /**
+   * Why this message's sender could not be vouched for, when they could not.
+   *
+   * Absent covers more than "verified": a sender nobody verified is also
+   * absent. Off the crypto machine in Rust, and inferred here from nothing.
+   */
+  senderTrust?: SenderTrust;
   kind: MessageKind;
 }
 

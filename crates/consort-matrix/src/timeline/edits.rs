@@ -25,6 +25,9 @@
 
 use std::collections::HashMap;
 
+use crate::timeline::dto::SenderTrust;
+use crate::timeline::facts::Replacement;
+
 /// One `m.replace` event, unpacked and held.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
@@ -38,6 +41,8 @@ pub struct Edit {
     pub body: String,
     /// What it now says as HTML, or `None` for an edit that carried none.
     pub html: Option<String>,
+    /// Why the device that sent the edit could not be vouched for.
+    pub sender_trust: Option<SenderTrust>,
 }
 
 /// The corrections currently known, for one room.
@@ -64,33 +69,32 @@ impl Edits {
     /// comparison can actually be made. An edit that never matches is dead
     /// weight in a map, which is the same dead weight a reaction on an
     /// unloaded message already is.
-    pub fn added(
-        &mut self,
-        event_id: &str,
-        target: &str,
-        sender: &str,
-        at: u64,
-        body: String,
-        html: Option<String>,
-    ) -> bool {
-        if self.held.contains_key(event_id) {
+    pub fn added(&mut self, one: Replacement) -> bool {
+        let Replacement {
+            event_id,
+            target,
+            sender,
+            at,
+            body,
+            html,
+            sender_trust,
+        } = one;
+        if self.held.contains_key(&event_id) {
             return false;
         }
 
         self.held.insert(
-            event_id.to_owned(),
+            event_id.clone(),
             Edit {
-                target: target.to_owned(),
-                sender: sender.to_owned(),
+                target: target.clone(),
+                sender,
                 at,
                 body,
                 html,
+                sender_trust,
             },
         );
-        self.on
-            .entry(target.to_owned())
-            .or_default()
-            .push(event_id.to_owned());
+        self.on.entry(target).or_default().push(event_id);
         true
     }
 
@@ -145,8 +149,22 @@ mod tests {
     const BOB: &str = "@bob:example.org";
     const SAID: &str = "$said";
 
+    /// One edit on `SAID` from `ADA`, which is the ordinary case.
     fn edited(edits: &mut Edits, id: &str, at: u64, body: &str) -> bool {
-        edits.added(id, SAID, ADA, at, body.to_owned(), None)
+        edits.added(replacing(id, SAID, ADA, at, body))
+    }
+
+    /// One `m.replace` as `facts::replacement` would have unpacked it.
+    fn replacing(id: &str, target: &str, sender: &str, at: u64, body: &str) -> Replacement {
+        Replacement {
+            event_id: id.to_owned(),
+            target: target.to_owned(),
+            sender: sender.to_owned(),
+            at,
+            body: body.to_owned(),
+            html: None,
+            sender_trust: None,
+        }
     }
 
     fn showing(edits: &Edits) -> Option<&str> {
@@ -175,14 +193,13 @@ mod tests {
         // everything is held and the fold asks.
         let mut edits = Edits::new();
 
-        assert!(edits.added(
+        assert!(edits.added(replacing(
             "$a",
             "$nothing has heard of this",
             ADA,
             2_000,
-            "corrected".to_owned(),
-            None,
-        ));
+            "corrected",
+        )));
 
         assert_eq!(
             edits
@@ -217,7 +234,7 @@ mod tests {
         // Without this, anybody in a room can rewrite anybody else's words in
         // Consort and every other client in the room shows the original.
         let mut edits = Edits::new();
-        edits.added("$a", SAID, BOB, 2_000, "not what was said".to_owned(), None);
+        edits.added(replacing("$a", SAID, BOB, 2_000, "not what was said"));
 
         assert_eq!(edits.latest_on(SAID, ADA), None);
     }
@@ -228,7 +245,7 @@ mod tests {
         // would have let it take the fold.
         let mut edits = Edits::new();
         edited(&mut edits, "$real", 2_000, "corrected");
-        edits.added("$forged", SAID, BOB, 9_000, "rewritten".to_owned(), None);
+        edits.added(replacing("$forged", SAID, BOB, 9_000, "rewritten"));
 
         assert_eq!(showing(&edits), Some("corrected"));
     }
@@ -296,7 +313,7 @@ mod tests {
     #[test]
     fn an_edit_of_one_message_says_nothing_about_another() {
         let mut edits = Edits::new();
-        edits.added("$a", "$one", ADA, 2_000, "corrected".to_owned(), None);
+        edits.added(replacing("$a", "$one", ADA, 2_000, "corrected"));
 
         assert_eq!(edits.latest_on("$two", ADA), None);
     }
@@ -307,15 +324,11 @@ mod tests {
         // text has to lose its HTML, or the fold draws the sentence that was
         // corrected.
         let mut edits = Edits::new();
-        edits.added(
-            "$a",
-            SAID,
-            ADA,
-            2_000,
-            "plain now".to_owned(),
-            Some("<em>formatted</em>".to_owned()),
-        );
-        edits.added("$b", SAID, ADA, 3_000, "plain now".to_owned(), None);
+        edits.added(Replacement {
+            html: Some("<em>formatted</em>".to_owned()),
+            ..replacing("$a", SAID, ADA, 2_000, "plain now")
+        });
+        edits.added(replacing("$b", SAID, ADA, 3_000, "plain now"));
 
         assert_eq!(edits.latest_on(SAID, ADA).expect("an edit").html, None);
     }

@@ -8,7 +8,7 @@
  * reloaded by React Fast Refresh, which silently turns every edit into a full
  * page reload.
  */
-import type { Call, Channel, Connection, Presence } from "./api";
+import type { Call, Channel, Connection, Presence, SenderTrust } from "./api";
 
 /**
  * One short phrase per connection state.
@@ -163,6 +163,29 @@ export function presenceLabel(presence: Presence): string {
       return "Offline";
     case "unknown":
       return "Status unknown";
+  }
+}
+
+/**
+ * Why a message's sender could not be vouched for, in a sentence.
+ *
+ * Every state the wire can carry, including the two the lax mapping in Rust
+ * cannot currently raise: the type says they are possible, so they get words.
+ */
+export function senderTrustLabel(trust: SenderTrust): string {
+  switch (trust) {
+    case "authenticityNotGuaranteed":
+      return "There is not enough information to confirm who sent this message.";
+    case "unknownDevice":
+      return "This came from a device Consort cannot find.";
+    case "unsignedDevice":
+      return "The sender never verified the device this came from.";
+    case "unverifiedIdentity":
+      return "You have not verified the sender of this message.";
+    case "verificationViolation":
+      return "The sender's identity has changed since you verified them.";
+    case "mismatchedSender":
+      return "The sender named on this message does not own the device it came from.";
   }
 }
 

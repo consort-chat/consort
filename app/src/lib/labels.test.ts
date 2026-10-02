@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   elapsedLabel,
   presenceLabel,
+  senderTrustLabel,
   sizeLabel,
   typingLabel,
 } from "./labels";
+import type { SenderTrust } from "./api";
 
 /** An arbitrary fixed "now", so nothing here depends on the clock. */
 const NOW = 1_700_000_000_000;
@@ -48,6 +50,29 @@ describe("presenceLabel", () => {
     expect(presenceLabel("idle")).toBe("Idle");
     expect(presenceLabel("offline")).toBe("Offline");
     expect(presenceLabel("unknown")).toBe("Status unknown");
+  });
+});
+
+describe("senderTrustLabel", () => {
+  const EVERY: SenderTrust[] = [
+    "authenticityNotGuaranteed",
+    "unknownDevice",
+    "unsignedDevice",
+    "unverifiedIdentity",
+    "verificationViolation",
+    "mismatchedSender",
+  ];
+
+  it("says something different about every state the wire can carry", () => {
+    const said = EVERY.map((trust) => senderTrustLabel(trust));
+
+    expect(new Set(said).size).toBe(EVERY.length);
+    for (const sentence of said) expect(sentence.length).toBeGreaterThan(20);
+  });
+
+  it("names the device, not the person, when the device is what is wrong", () => {
+    // #133's own case. The sender is not being accused of anything.
+    expect(senderTrustLabel("unsignedDevice")).toMatch(/device/i);
   });
 });
 
