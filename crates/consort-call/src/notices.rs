@@ -150,6 +150,22 @@ impl Announced {
         Self::default()
     }
 
+    /// The record a call's roster starts with: our own notice and nobody
+    /// else's.
+    ///
+    /// Ours because nothing will tell us. LiveKit does not deliver a data
+    /// message back to whoever published it, so a session that was already
+    /// away or deafened when the roster was built has nothing to wait for, and
+    /// what a roster cannot wait for it has to be given.
+    ///
+    /// Nobody else's because everybody re-announces on every roster change,
+    /// which fills the rest in without anything here having to guess.
+    pub fn starting_with(identity: &str, notice: Notice) -> Self {
+        let mut known = Self::new();
+        known.note(identity, notice);
+        known
+    }
+
     /// Record what `identity` just said. Says whether anything changed.
     ///
     /// The answer is what decides whether to redraw. Everybody re-announces on
@@ -292,6 +308,29 @@ mod tests {
         let future = br#"{"v":99,"memberId":"ada-laptop","deafened":true}"#;
 
         assert_eq!(Notice::decode(future), None);
+    }
+
+    #[test]
+    fn a_record_starts_knowing_what_this_session_has_already_said() {
+        // The roster reads its flags the instant it is built, so what this
+        // session has already said has to be in them by then. Remembering it
+        // without reporting it is a clock that never appears beside your own
+        // name until somebody else moves.
+        let known = Announced::starting_with("ours", Notice::new("ada-laptop", true, true));
+
+        assert_eq!(known.flags().away, vec!["ada-laptop".to_owned()]);
+        assert_eq!(known.flags().deafened, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn a_record_starts_with_nobody_else_in_it() {
+        // Everybody re-announces on every roster change, so the rest of the
+        // call fills itself in. Inventing a flag for somebody who has not
+        // spoken would draw a headphone icon nobody asked for.
+        let known = Announced::starting_with("ours", Notice::new("ada-laptop", false, false));
+
+        assert!(known.flags().deafened.is_empty());
+        assert!(known.flags().away.is_empty());
     }
 
     #[test]
