@@ -1931,7 +1931,8 @@ pub async fn timeline_media_save(
     let (chosen, wait) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .set_file_name(&name)
+        // Never the name as it arrived. See `attaching::suggested_name`.
+        .set_file_name(attaching::suggested_name(&name))
         .save_file(move |path| {
             let _ = chosen.send(path);
         });

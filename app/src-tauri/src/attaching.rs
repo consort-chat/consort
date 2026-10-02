@@ -93,6 +93,27 @@ pub fn read(path: &str) -> Result<Vec<u8>, CommandError> {
     std::fs::read(&path).map_err(|error| unreadable(&path, &error))
 }
 
+/// What to call an attachment whose own name is not usable.
+pub const FALLBACK_NAME: &str = "attachment";
+
+/// The name to open a Save As window on, from the name a message carried.
+///
+/// The sender writes that name and nothing has checked it. It arrives here as
+/// the dialog's starting filename, and a filename entry resolves a relative
+/// path, so a message called `../../.bashrc` would offer to save somewhere
+/// nobody chose. Only the last component survives, separators of either
+/// platform, because the sender's is unknown.
+pub fn suggested_name(raw: &str) -> String {
+    let last = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+    let cleaned: String = last.chars().filter(|c| !c.is_control()).collect();
+    let cleaned = cleaned.trim();
+
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return FALLBACK_NAME.to_owned();
+    }
+    cleaned.to_owned()
+}
+
 /// A screenshot waiting in the composer, before it is sent.
 ///
 /// The counterpart of [`Chosen`] for something with no path, and carrying no
@@ -189,6 +210,40 @@ fn unreadable(path: &Path, error: &std::io::Error) -> CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod saving {
+        use super::*;
+
+        #[test]
+        fn an_ordinary_name_is_left_alone() {
+            assert_eq!(suggested_name("holiday.jpg"), "holiday.jpg");
+            assert_eq!(suggested_name(".bashrc"), ".bashrc");
+        }
+
+        #[test]
+        fn a_name_that_is_a_path_keeps_only_its_last_component() {
+            // What a sender writes in `filename` reaches the Save As window as
+            // the name it opens on, and a name entry resolves a relative path.
+            assert_eq!(suggested_name("../../.bashrc"), ".bashrc");
+            assert_eq!(suggested_name("/etc/passwd"), "passwd");
+            assert_eq!(suggested_name(r"..\..\autorun.inf"), "autorun.inf");
+        }
+
+        #[test]
+        fn control_characters_are_dropped() {
+            assert_eq!(suggested_name("cat\n.png"), "cat.png");
+            assert_eq!(suggested_name("cat\u{7f}.png"), "cat.png");
+        }
+
+        #[test]
+        fn a_name_with_nothing_left_in_it_falls_back() {
+            assert_eq!(suggested_name(""), FALLBACK_NAME);
+            assert_eq!(suggested_name("   "), FALLBACK_NAME);
+            assert_eq!(suggested_name("/"), FALLBACK_NAME);
+            assert_eq!(suggested_name(".."), FALLBACK_NAME);
+            assert_eq!(suggested_name("."), FALLBACK_NAME);
+        }
+    }
 
     #[test]
     fn a_file_is_named_and_measured() {
