@@ -34,9 +34,11 @@ Three things were fixed here, under [Changed in this pull
 request](#changed-in-this-pull-request). Everything else is written up and left
 alone, because it needs a decision that is not an auditor's to take.
 
-The short version of the good news: the IPC surface is 76 commands and all but
-one of them are either parameterless or take an identifier that ruma parses. The
-webview has `core:default` and nothing else. The content security policy is real
+The short version of the good news: the IPC surface is 76 commands, and exactly
+one of them takes a filesystem path. Nothing shells out. The rest take
+identifiers ruma parses, message content that becomes an event, a bounded number
+or a settings struct, and every one of those was enumerated rather than sampled.
+The webview has `core:default` and nothing else. The content security policy is real
 and restrictive. `formatted_body` is never handed back to an HTML parser. The
 access token and the store key are in the platform keyring, the fallback is
 `0600`, and the SQLite stores are encrypted. There is no telemetry, no panic
