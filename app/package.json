@@ -34,7 +34,7 @@
     "@vitejs/plugin-react": "^5",
     "@vitest/coverage-v8": "^4.1.11",
     "emojibase": "17.0.0",
-    "jsdom": "^30.0.1",
+    "jsdom": "^30.1.1",
     "typescript": "^5.9.0",
     "vite": "^7",
     "vitest": "^4.1.11"
