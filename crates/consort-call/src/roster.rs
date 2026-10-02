@@ -8,6 +8,8 @@
 //! `Client` and no SFU behind it, so it lives here where a test can reach it
 //! rather than in [`crate::livekit`] where nothing can.
 
+use std::collections::HashMap;
+
 use consort_matrix::Participant;
 use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
 
@@ -136,6 +138,43 @@ pub fn with_since(
                 .min();
             person.with_since(since)
         })
+        .collect()
+}
+
+/// Which membership each SFU participant identity belongs to.
+///
+/// MSC4195 derives a LiveKit identity from the user, the device that sent the
+/// membership event and the membership id, and the server's own participant
+/// list carries all three. So the name a notice arrives under can be looked
+/// up here rather than taken from what the notice says about itself.
+///
+/// A membership with no attributable device has no identity to expect, so it
+/// is absent and nothing can be said about it. See `spoken_for`.
+pub fn roll(memberships: &[MediaParticipant]) -> HashMap<String, String> {
+    memberships
+        .iter()
+        .filter_map(|member| {
+            let device_id = member.device_id.as_deref()?;
+            let identity = matrix_rtc_livekit::identity::pseudonymous_identity(
+                &member.user_id,
+                device_id,
+                &member.member_id,
+            );
+            Some((identity, member.member_id.clone()))
+        })
+        .collect()
+}
+
+/// The memberships these identities speak for.
+///
+/// A notice carries a membership id and anybody in the call can write
+/// somebody else's into it, so the field is not read: what a notice arrives
+/// under is, and that is the SFU's word rather than the sender's. An identity
+/// the server's list does not account for speaks for nobody.
+pub fn spoken_for(identities: &[String], roll: &HashMap<String, String>) -> Vec<String> {
+    identities
+        .iter()
+        .filter_map(|identity| roll.get(identity).cloned())
         .collect()
 }
 
@@ -607,5 +646,79 @@ mod cameras {
 
         assert!(microphone_muted(&member));
         assert!(camera_live(&member));
+    }
+}
+
+/// H7: a notice speaks for whoever sent it and for nobody else.
+#[cfg(test)]
+mod speaking_for {
+    use super::*;
+
+    fn joined(user_id: &str, device_id: &str, member_id: &str) -> MediaParticipant {
+        MediaParticipant {
+            member_id: member_id.to_owned(),
+            user_id: user_id.to_owned(),
+            device_id: Some(device_id.to_owned()),
+            is_local: false,
+            reachable: true,
+            hand_raised_at_ms: None,
+            joined_at_ms: None,
+            streams: Vec::new(),
+        }
+    }
+
+    fn ada() -> MediaParticipant {
+        joined("@ada:example.org", "LAPTOP", "ada-laptop")
+    }
+
+    fn mallory() -> MediaParticipant {
+        joined("@mallory:example.org", "DESKTOP", "mallory-desktop")
+    }
+
+    /// How the SFU names a membership, which is what a notice arrives under.
+    fn identity_of(member: &MediaParticipant) -> String {
+        matrix_rtc_livekit::identity::pseudonymous_identity(
+            &member.user_id,
+            member.device_id.as_deref().expect("a device"),
+            &member.member_id,
+        )
+    }
+
+    #[test]
+    fn a_notice_speaks_for_the_membership_the_server_says_sent_it() {
+        let call = [ada(), mallory()];
+
+        let spoken = spoken_for(&[identity_of(&ada())], &roll(&call));
+
+        assert_eq!(spoken, vec!["ada-laptop".to_owned()]);
+    }
+
+    #[test]
+    fn a_claim_about_somebody_else_speaks_only_for_its_sender() {
+        // The forgery H7 names: Mallory announces, naming Ada's membership.
+        // The claim is not read, so it buys a headphone icon beside Mallory.
+        let call = [ada(), mallory()];
+
+        let spoken = spoken_for(&[identity_of(&mallory())], &roll(&call));
+
+        assert_eq!(spoken, vec!["mallory-desktop".to_owned()]);
+        assert!(!spoken.contains(&"ada-laptop".to_owned()));
+    }
+
+    #[test]
+    fn an_identity_the_server_never_listed_speaks_for_nobody() {
+        let call = [ada()];
+
+        assert!(spoken_for(&[identity_of(&mallory())], &roll(&call)).is_empty());
+    }
+
+    #[test]
+    fn a_membership_with_no_attributable_device_speaks_for_nobody() {
+        // Without a device there is no identity to expect, so there is no
+        // claim that can be checked. Drawing nothing is the safe half.
+        let mut headless = ada();
+        headless.device_id = None;
+
+        assert!(roll(&[headless]).is_empty());
     }
 }
