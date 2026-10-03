@@ -417,7 +417,8 @@ async fn serve<T: CallTransport>(
                     // one thing deafen must never do, let somebody through, is
                     // exactly what happens to whoever walks in next.
                     FromRoster::Moved => {
-                        apply_and_chase(current.as_mut(), audio, &ears, &chase).await
+                        apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase)
+                            .await
                     }
                     FromRoster::Gone { room_id }
                         if ended_the_current_call(current.as_ref(), &room_id) =>
@@ -480,7 +481,7 @@ async fn serve<T: CallTransport>(
                 // state whose other half is already drawn, and repeating it as
                 // part of joining would make it look like something a call
                 // decides.
-                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -505,11 +506,11 @@ async fn serve<T: CallTransport>(
             }
             Message::SetMuted(muted) => {
                 audio = announce(&events, audio, SelfAudio { muted, ..audio });
-                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
             }
             Message::SetDeafened(deafened) => {
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
-                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
             }
             Message::SetAway(away) => {
                 // Only on the way back, and only from having actually been
@@ -520,7 +521,7 @@ async fn serve<T: CallTransport>(
                 // broken.
                 let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
-                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
                 if returning {
                     ears.cue(Cue::Returned);
                 }
@@ -657,8 +658,8 @@ async fn set_camera<S: CallSession>(
 
 /// Push this session's mute and deafen state at the call it is in.
 ///
-/// Nothing to do when there is no call, and that is not a failure: the buttons
-/// work outside one, and what they set is applied at the next join.
+/// Nothing to push at a call when there is none, and that is not a failure: the
+/// buttons work outside one, and what they set is applied at the next join.
 ///
 /// A failure here is logged and no more. Both of these are indicators as much
 /// as they are switches, and the honest thing to show is what was asked for:
@@ -668,8 +669,14 @@ async fn set_camera<S: CallSession>(
 async fn apply<S: CallSession>(
     current: Option<&Joined<S>>,
     audio: SelfAudio,
+    microphone: &Microphone,
     ears: &Ears,
 ) -> Attached {
+    // Before the call, and before the early return. Every mute below here is
+    // applied to the publication, which is downstream of the frames this
+    // session's own green ring is measured from: #132.
+    microphone.switch_off(audio.microphone_off());
+
     let Some(joined) = current else {
         return Attached::default();
     };
@@ -725,15 +732,17 @@ pub fn chasing(attached: Attached, spent: u32, limit: u32) -> Option<u32> {
 async fn apply_and_chase<S: CallSession>(
     current: Option<&mut Joined<S>>,
     audio: SelfAudio,
+    microphone: &Microphone,
     ears: &Ears,
     chase: &UnboundedSender<()>,
 ) {
-    let Some(joined) = current else {
-        return;
-    };
-
-    let attached = apply(Some(&*joined), audio, ears).await;
-    joined.chase(attached, chase);
+    // Applied with or without a call, because `apply` reaches the microphone
+    // itself and the buttons work outside one: #132. Only the chase needs a
+    // call to belong to.
+    let attached = apply(current.as_deref(), audio, microphone, ears).await;
+    if let Some(joined) = current {
+        joined.chase(attached, chase);
+    }
 }
 
 /// Attach the audio of everybody in `current` whose track has arrived.
@@ -1575,7 +1584,7 @@ mod tests {
     /// sleep anywhere. `serve` owns the event sender and drops it on return,
     /// which is what lets the drain below terminate.
     async fn transcript(transport: FakeTransport, commands: Vec<Message>) -> Vec<CallEvent> {
-        filmed(transport, commands, Camera::new()).await
+        transcript_into(transport, commands, Microphone::new(), Camera::new()).await
     }
 
     /// [`transcript`], with the camera queue handed in so a test can prefill it
@@ -1583,6 +1592,17 @@ mod tests {
     async fn filmed(
         transport: FakeTransport,
         commands: Vec<Message>,
+        camera: Camera,
+    ) -> Vec<CallEvent> {
+        transcript_into(transport, commands, Microphone::new(), camera).await
+    }
+
+    /// [`transcript`], with the microphone and the camera handed in so a test
+    /// can read what the loop left switched on them.
+    async fn transcript_into(
+        transport: FakeTransport,
+        commands: Vec<Message>,
+        microphone: Microphone,
         camera: Camera,
     ) -> Vec<CallEvent> {
         let (to_loop, inbox) = unbounded_channel();
@@ -1601,7 +1621,7 @@ mod tests {
                 transport,
                 inbox,
                 events,
-                Microphone::new(),
+                microphone,
                 camera,
                 Arc::new(Deaf::default()),
             ))
@@ -2165,6 +2185,72 @@ mod tests {
             let (transport, log) = FakeTransport::new(Joining::Succeeds);
             let said = transcript(transport, commands).await;
             (log, said)
+        }
+
+        /// Run `commands` and report whether they left the microphone switched
+        /// off, which is what decides this session's own green ring.
+        async fn left_switched_off(commands: Vec<Message>) -> bool {
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+            let microphone = Microphone::new();
+            transcript_into(transport, commands, microphone.clone(), Camera::new()).await;
+            microphone.switched_off()
+        }
+
+        #[tokio::test]
+        async fn muting_switches_the_microphone_off() {
+            // #132. The ring is measured from the frames this microphone
+            // produces, and the mute is applied to the publication downstream
+            // of them, so the measurement has to be told separately.
+            assert!(
+                left_switched_off(vec![connect_to(GENERAL), Message::SetMuted(true)]).await,
+                "a muted session still had a live microphone to measure"
+            );
+        }
+
+        #[tokio::test]
+        async fn being_away_switches_the_microphone_off() {
+            // Away mutes, so it owes the ring the same answer. #132 was
+            // reported from exactly this state: away, muted, and still lit.
+            assert!(
+                left_switched_off(vec![connect_to(GENERAL), Message::SetAway(true)]).await,
+                "an away session still had a live microphone to measure"
+            );
+        }
+
+        #[tokio::test]
+        async fn unmuting_switches_the_microphone_back_on() {
+            assert!(
+                !left_switched_off(vec![
+                    connect_to(GENERAL),
+                    Message::SetMuted(true),
+                    Message::SetMuted(false),
+                ])
+                .await,
+                "the ring would never light again"
+            );
+        }
+
+        #[tokio::test]
+        async fn coming_back_from_away_while_still_muted_leaves_it_off() {
+            // All three stay independent underneath and the stronger one
+            // decides. Somebody who muted before walking away is still muted
+            // when they sit back down.
+            assert!(
+                left_switched_off(vec![
+                    connect_to(GENERAL),
+                    Message::SetMuted(true),
+                    Message::SetAway(true),
+                    Message::SetAway(false),
+                ])
+                .await
+            );
+        }
+
+        #[tokio::test]
+        async fn switching_off_does_not_wait_for_a_call() {
+            // The buttons work outside a call, so what they set is true of the
+            // session rather than of a call it may not have joined yet.
+            assert!(left_switched_off(vec![Message::SetMuted(true)]).await);
         }
 
         #[tokio::test]

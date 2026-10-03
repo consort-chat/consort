@@ -47,6 +47,28 @@ picture honest in both configurations: with voice activity switched on a ring
 follows the gate, and with it switched off a ring follows the room, because that
 is what the other person is hearing in each case.
 
+### The one fact the samples do not carry
+
+Amended 2026-10-01, from #132: a session that had muted itself still lit its own
+green ring, and so did one that had marked itself away.
+
+For everybody else, the frames are the whole story, because a sender who mutes
+stops sending. Ours is not, in one way the samples cannot show. A mute here is
+applied to the LiveKit publication, and that sits downstream of the microphone
+queue the ring is measured from, so our frames carry on arriving at full volume
+after the room has stopped receiving them. Away is the same hole for the same
+reason: it mutes, and nothing more.
+
+So `Microphone::switch_off` carries that one fact from the call thread, which
+owns `SelfAudio`, across to the sink that measures the ring. It is the rule in
+"Alternative 2" below held to rather than bent: a lit ring means this is reaching
+people, and for as long as somebody muted kept making noise it did not.
+
+It changes nothing about the frames themselves. Silence is still published
+rather than withheld, which is `consort_call::publish`'s own rule, and the tally
+still ticks on every frame, so everybody else's ring still goes out while we are
+muted.
+
 ### Two numbers, and why neither is what it looks like
 
 `FLOOR` is 0.005, deliberately near the bottom. The question is "is there
