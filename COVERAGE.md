@@ -27,7 +27,7 @@ Run them:
 ```sh
 # Rust, with the same exclusions CI uses
 cargo llvm-cov --workspace \
-  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
+  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
   --summary-only
 
 # Frontend, thresholds enforced from vitest.config.ts
@@ -50,7 +50,7 @@ one costs nothing.
 
 ## What is excluded, and why
 
-Five files are outside the measurement. Each is excluded because a test could
+Six files are outside the measurement. Each is excluded because a test could
 only reach it by pretending, not because the code is uninteresting.
 
 **`crates/consort-audio/src/cpal_host.rs`.** Every line talks to a sound card,
@@ -69,6 +69,27 @@ It carries an `#[ignore]` test that asks a real machine what it has:
 ```sh
 cargo test -p consort-audio --lib -- --ignored --nocapture list_the_real_devices
 ```
+
+**`crates/consort-video/src/v4l_host.rs`.** The same shape as `cpal_host.rs`
+with a camera instead of a sound card, and a CI runner has neither. Faking V4L2
+would mean faking the kernel's `ioctl` interface, which is the whole of what
+this file is.
+
+Thin on the same terms, and this one has more to keep out than the audio
+backend does. Which format to ask a camera for is a real decision, and it is
+`choose_offer` in `capture.rs`; reading the bytes back is the other, and it is
+`pixels.rs`. Both are at 100% and both are tested as data.
+
+Two `#[ignore]` tests ask a real machine what it has and then read from it:
+
+```sh
+cargo test -p consort-video --lib -- --ignored --nocapture list_the_real_cameras
+cargo test -p consort-video --lib -- --ignored --nocapture read_the_real_camera
+```
+
+The second one reports the frame rate it actually sustained, which is the only
+way to tell a conversion that cannot keep up from a camera that has decided to
+run at fifteen frames a second because the room is dark.
 
 **`crates/consort-matrix/src/secrets/keyring_store.rs`.** Every line is a call
 into the platform credential store. Covering it would mean either a mock, which

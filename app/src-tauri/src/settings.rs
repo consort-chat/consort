@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use consort_audio::AudioSettings;
 use consort_call::Dialect;
 use consort_matrix::atomic;
+use consort_video::VideoSettings;
 use serde::{Deserialize, Serialize};
 
 use crate::notify::NotificationSettings;
@@ -64,6 +65,7 @@ pub(crate) const MAX_TEXT_SCALE: f64 = 1.5;
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub audio: AudioSettings,
+    pub video: VideoSettings,
     pub calls: CallSettings,
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
@@ -401,6 +403,9 @@ mod tests {
 
     fn tuned() -> Settings {
         Settings {
+            video: VideoSettings {
+                camera: Some("/dev/video2".to_owned()),
+            },
             audio: AudioSettings {
                 input: Some("Yeti Stereo Microphone".to_owned()),
                 output: Some("HD-Audio Generic".to_owned()),

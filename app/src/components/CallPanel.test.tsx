@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { CallPanel } from "./CallPanel";
-import { HEARING, type Call, type SelfAudio } from "../lib/api";
+import { HEARING, NOT_FILMING, type Call, type SelfAudio, type SelfVideo } from "../lib/api";
 
 const LOUNGE = "!lounge:example.org";
 
@@ -12,23 +12,27 @@ function panel(
   channelName: string | null = "Lounge",
   selfAudio: SelfAudio = HEARING,
   cardShown = true,
+  selfVideo: SelfVideo = NOT_FILMING,
 ) {
   const onDisconnect = vi.fn();
   const onSetMuted = vi.fn();
   const onSetDeafened = vi.fn();
   const onSetAway = vi.fn();
+  const onSetCamera = vi.fn();
   const onToggleCard = vi.fn();
   const { container } = render(
     <CallPanel
       call={call}
       channelName={channelName}
       selfAudio={selfAudio}
+      selfVideo={selfVideo}
       cardShown={cardShown}
       onToggleCard={onToggleCard}
       onDisconnect={onDisconnect}
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
       onSetAway={onSetAway}
+      onSetCamera={onSetCamera}
     />,
   );
   return {
@@ -37,6 +41,7 @@ function panel(
     onSetMuted,
     onSetDeafened,
     onSetAway,
+    onSetCamera,
     onToggleCard,
   };
 }
@@ -299,6 +304,67 @@ describe("CallPanel", () => {
     );
   });
 
+  it("asks for the camera when it is off", async () => {
+    const { onSetCamera } = panel(CONNECTED);
+
+    await userEvent.click(screen.getByRole("button", { name: /share camera/i }));
+
+    expect(onSetCamera).toHaveBeenCalledWith(true);
+  });
+
+  it("asks to put the camera away when it is on", async () => {
+    const { onSetCamera } = panel(CONNECTED, "Lounge", HEARING, true, {
+      camera: true,
+      trouble: null,
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: /share camera/i }));
+
+    expect(onSetCamera).toHaveBeenCalledWith(false);
+  });
+
+  it("says whether the camera is on rather than leaving it to the glyph", () => {
+    // The same reason the mute button says so: a screen reader cannot read a
+    // slash through a drawing, and this is the control that decides whether a
+    // room can see somebody.
+    panel(CONNECTED, "Lounge", HEARING, true, { camera: true, trouble: null });
+
+    expect(screen.getByRole("button", { name: /share camera/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("draws the camera as off while it is off", () => {
+    panel(CONNECTED);
+
+    expect(screen.getByRole("button", { name: /share camera/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("says why the camera did not come on", async () => {
+    // The press has no words of its own, so without this a camera another
+    // application is holding looks like a button that does nothing.
+    panel(CONNECTED, "Lounge", HEARING, true, {
+      camera: false,
+      trouble: '"/dev/video0" is already in use by another application',
+    });
+
+    const said = await screen.findByRole("alert");
+
+    expect(said).toHaveTextContent(/already in use by another application/i);
+  });
+
+  it("says nothing about a camera that is merely off", () => {
+    // The distinction `trouble` exists for. An error every time somebody
+    // switches their camera off is an error nobody reads.
+    panel(CONNECTED, "Lounge", HEARING, true, { camera: false, trouble: null });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows the microphone as off while deafened, without saying it was muted", async () => {
     // Deafening stops the microphone, so drawing it live would be a lie. The
     // mute button is still not the one that was pressed, which is why
@@ -545,10 +611,12 @@ describe("CallPanel", () => {
     });
 
     it("can be reached and opened from the keyboard", async () => {
-      // Second in the strip, behind the state line and the microphone. A
-      // control only a pointer can reach is a control some people do not have.
+      // Third in the strip, behind the state line, the microphone and the
+      // camera. A control only a pointer can reach is a control some people do
+      // not have.
       panel(CONNECTED);
 
+      await userEvent.tab();
       await userEvent.tab();
       await userEvent.tab();
       await userEvent.tab();

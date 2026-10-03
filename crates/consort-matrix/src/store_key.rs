@@ -32,6 +32,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use rand::RngCore;
+use zeroize::Zeroize;
 
 /// How many bytes the SDK's store cipher takes. Not ours to choose.
 const KEY_BYTES: usize = 32;
@@ -47,6 +48,15 @@ pub struct StoreKey([u8; KEY_BYTES]);
 impl std::fmt::Debug for StoreKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoreKey").finish_non_exhaustive()
+    }
+}
+
+/// The hand-written `Debug` above keeps the key out of a log. This keeps it
+/// out of a core dump and out of a swapped page, which is the same concern one
+/// step later.
+impl Drop for StoreKey {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -75,8 +85,16 @@ impl StoreKey {
     /// key belonged to cannot be opened, so the session it belonged to is over.
     /// Signing in again discards that store and builds a fresh one.
     pub fn decode(encoded: &str) -> Option<Self> {
-        let bytes = STANDARD.decode(encoded).ok()?;
-        Some(Self(bytes.try_into().ok()?))
+        // Into a fixed buffer rather than a `Vec`, which would hand the key
+        // back to the allocator as it was. One byte over, because
+        // `decode_slice` sizes against its estimate rather than the answer.
+        let mut buffer = [0u8; KEY_BYTES + 1];
+        let key = match STANDARD.decode_slice(encoded, &mut buffer) {
+            Ok(KEY_BYTES) => buffer[..KEY_BYTES].try_into().ok().map(Self),
+            _ => None,
+        };
+        buffer.zeroize();
+        key
     }
 }
 

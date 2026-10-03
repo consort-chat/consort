@@ -12,6 +12,9 @@ const audioToneStop = vi.hoisted(() => vi.fn());
 const audioMonitorStart = vi.hoisted(() => vi.fn());
 const audioMonitorStop = vi.hoisted(() => vi.fn());
 const onAudio = vi.hoisted(() => vi.fn());
+const cameras = vi.hoisted(() => vi.fn());
+const videoSettings = vi.hoisted(() => vi.fn());
+const setVideoSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -25,10 +28,18 @@ vi.mock("../lib/api", async (importOriginal) => ({
   audioMonitorStart,
   audioMonitorStop,
   onAudio,
+  cameras,
+  videoSettings,
+  setVideoSettings,
 }));
 
 import { VoiceVideoSection } from "./VoiceVideoSection";
-import type { AudioActivity, AudioDeviceReport, AudioSettings } from "../lib/api";
+import type {
+  AudioActivity,
+  AudioDeviceReport,
+  AudioSettings,
+  CameraList,
+} from "../lib/api";
 
 const defaults: AudioSettings = {
   input: null,
@@ -67,6 +78,15 @@ const report: AudioDeviceReport = {
   },
 };
 
+const found: CameraList = {
+  cameras: [
+    { id: "/dev/video0", name: "Lid camera" },
+    { id: "/dev/video2", name: "HD Pro Webcam C920" },
+  ],
+  selected: "/dev/video0",
+  missing: null,
+};
+
 /** The handler the component registered, so a test can push events at it. */
 let emit: (activity: AudioActivity) => void = () => {};
 
@@ -87,6 +107,9 @@ describe("VoiceVideoSection", () => {
     audioToneStop.mockReset().mockResolvedValue(undefined);
     audioMonitorStart.mockReset().mockResolvedValue(undefined);
     audioMonitorStop.mockReset().mockResolvedValue(undefined);
+    cameras.mockReset().mockResolvedValue(found);
+    videoSettings.mockReset().mockResolvedValue({ camera: null });
+    setVideoSettings.mockReset().mockResolvedValue(undefined);
     unlisten.mockReset();
     onAudio.mockReset().mockImplementation((handler) => {
       emit = handler;
@@ -111,6 +134,100 @@ describe("VoiceVideoSection", () => {
       /output device/i,
     );
     expect(output.value).toBe("Built-in Speakers");
+  });
+
+  it("lists the cameras by name with the one in use selected", async () => {
+    // By name, not by device node. "/dev/video2" is the identity a saved
+    // choice holds and is not what anybody recognises their webcam by.
+    render(<VoiceVideoSection />);
+
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    expect(
+      Array.from(picker.options).map((option) => option.textContent),
+    ).toEqual(["Lid camera", "HD Pro Webcam C920"]);
+    expect(picker.value).toBe("/dev/video0");
+  });
+
+  it("saves the chosen camera by its device node", async () => {
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(setVideoSettings).toHaveBeenCalledWith({ camera: "/dev/video2" });
+  });
+
+  it("does not reopen anything when the camera changes", async () => {
+    // Deliberately unlike an input change. A new camera means a new frame
+    // size, so a new publication, which is a reconnect in everybody else's
+    // call in answer to somebody browsing this screen.
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+    audioTestStart.mockClear();
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(audioTestStart).not.toHaveBeenCalled();
+  });
+
+  it("shows the chosen camera immediately rather than waiting for the re-read", async () => {
+    // Re-reading means probing every video node. Drawing the old camera until
+    // that lands would tell somebody their click did nothing.
+    let answer = () => {};
+    cameras.mockImplementation(() => {
+      return new Promise((resolve) => {
+        answer = () => resolve(found);
+      });
+    });
+    cameras.mockResolvedValueOnce(found);
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(picker.value).toBe("/dev/video2");
+    answer();
+  });
+
+  it("says so when the saved camera has been unplugged", async () => {
+    // Named by its label rather than by the node, because the sentence is for
+    // a person and a path is not an answer to "which camera is this".
+    cameras.mockResolvedValue({
+      ...found,
+      selected: "/dev/video0",
+      missing: "/dev/video9",
+    });
+    render(<VoiceVideoSection />);
+
+    const warning = await screen.findByText(/is not plugged in/i);
+
+    expect(warning).toHaveTextContent(/Using Lid camera instead/i);
+  });
+
+  it("says a machine with no camera has none rather than drawing an empty picker", async () => {
+    cameras.mockResolvedValue({ cameras: [], selected: null, missing: null });
+    render(<VoiceVideoSection />);
+
+    expect(
+      await screen.findByText(/no camera Consort can open/i),
+    ).toBeVisible();
+    expect(screen.queryByLabelText(/^camera$/i)).toBeNull();
+  });
+
+  it("reports a camera choice that could not be written", async () => {
+    setVideoSettings.mockRejectedValue({
+      message: "Consort could not save that.",
+      detail: "disk full",
+    });
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not save that/i,
+    );
   });
 
   it("opens the microphone as soon as the section appears", async () => {

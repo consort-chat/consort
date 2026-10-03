@@ -6,7 +6,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use consort_call::{CallEvent, CallTransport, Microphone};
+use consort_call::{
+    CallEvent, CallTransport, Camera as ConsortCamera, Microphone, PictureSize, SelfVideo,
+};
 use consort_matrix::{
     CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, Typing, backup,
     calls, notifications, rooms, sync, timeline, verification,
@@ -21,8 +23,11 @@ use crate::call::CallBridge;
 use crate::ears::speakers;
 use crate::events::{AppEvent, CallRefused, EventSink, LatestSink};
 use crate::notify::{Front, Notifier, worth_drawing};
+use crate::selfview::SelfView;
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
+use crate::video::{CameraTrouble, VideoBridge};
+use consort_video::VideoCapture;
 
 /// One background task's handle.
 ///
@@ -265,6 +270,27 @@ pub struct AppState {
     /// audio thread fills it whenever a call is up, and the call thread drains
     /// it. Empty and harmless the rest of the time.
     microphone: Microphone,
+    /// The slot carrying captured frames from the camera to the call.
+    ///
+    /// The microphone's opposite number for video, built once and cloned for
+    /// the same reason. One frame deep: see `consort_call::camera`.
+    camera: ConsortCamera,
+    /// The newest camera frame, for the call card to draw.
+    ///
+    /// Beside the queue above rather than inside the bridge, because the bridge
+    /// is `None` until somebody switches a camera on and the command that draws
+    /// this has to have somewhere to ask either way.
+    self_view: SelfView,
+    /// The camera device, once anything has wanted one.
+    ///
+    /// `None` until then, on the same terms as the audio thread in
+    /// [`crate::sound::Sound`]: most sessions never switch a camera on, and a
+    /// `VideoBridge` holds the backend that would enumerate devices.
+    ///
+    /// An `Arc` because the call pump holds one too. Releasing the device is
+    /// driven by call events rather than by the click, for the reason the
+    /// microphone is: a call ends for reasons that are not a button.
+    video: Arc<std::sync::Mutex<Option<VideoBridge>>>,
     /// The mixer carrying everybody else's audio from the call to the audio
     /// thread.
     ///
@@ -467,6 +493,9 @@ impl AppState {
             events,
             settings,
             microphone: Microphone::new(),
+            camera: ConsortCamera::new(),
+            self_view: SelfView::new(),
+            video: Arc::new(std::sync::Mutex::new(None)),
             voices,
             chiming,
             speaking,
@@ -569,6 +598,7 @@ impl AppState {
             CallBridge::spawn(
                 transport(),
                 self.microphone.clone(),
+                self.camera.clone(),
                 speakers(
                     self.voices.clone(),
                     self.chiming.clone(),
@@ -740,6 +770,116 @@ impl AppState {
         }
     }
 
+    /// Open a camera and publish it into the call in progress.
+    ///
+    /// The device first and the publication second, because opening is what
+    /// fails in the ordinary way and a publication with nothing behind it is a
+    /// black rectangle in everybody else's call. A device that will not open is
+    /// reported here and nothing is published.
+    ///
+    /// `backend` is a closure because it is only needed the first time: the
+    /// bridge outlives any one call, and almost every session that switches a
+    /// camera on does it more than once.
+    pub fn start_camera(
+        &self,
+        backend: impl FnOnce() -> Box<dyn VideoCapture>,
+        device: Option<String>,
+    ) -> Result<PictureSize, CameraTrouble> {
+        // Asked before the device is touched, so a camera light never comes on
+        // for a publication there is nowhere to make.
+        if self.locked_call().is_none() {
+            return Err(CameraTrouble::NoCall);
+        }
+
+        let size = {
+            let mut slot = self.locked_video();
+            let bridge =
+                slot.get_or_insert_with(|| VideoBridge::new(backend(), self.self_view.clone()));
+            bridge
+                .start(device.as_deref(), self.camera.clone())
+                .map_err(CameraTrouble::Device)?
+        };
+
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_camera(Some(size));
+        }
+
+        Ok(size)
+    }
+
+    /// Switch this session's camera on or off, and say what happened.
+    ///
+    /// Answers the caller and also puts the answer on the camera channel, so a
+    /// camera that stops for a reason nobody clicked is reported exactly like
+    /// one that would not start. The button is drawn from that channel and from
+    /// nothing else, which is what keeps it from claiming a camera that is not
+    /// running.
+    ///
+    /// Nothing is announced on success. The call thread says when the
+    /// publication is actually up, which is later and is the only moment that
+    /// is true.
+    pub fn set_camera(
+        &self,
+        backend: impl FnOnce() -> Box<dyn VideoCapture>,
+        on: bool,
+    ) -> SelfVideo {
+        if !on {
+            self.stop_camera();
+            return SelfVideo::default();
+        }
+
+        let chosen = self.settings().load().video.camera;
+        match self.start_camera(backend, chosen) {
+            Ok(_) => SelfVideo {
+                camera: true,
+                trouble: None,
+            },
+            Err(trouble) => {
+                let said = SelfVideo {
+                    camera: false,
+                    trouble: Some(trouble.user_message()),
+                };
+                self.events.emit(AppEvent::SelfVideo(said.clone()));
+                said
+            }
+        }
+    }
+
+    /// Take the camera down, releasing the device.
+    ///
+    /// The device first. "Stop filming me" is what the button promises, and the
+    /// retraction that follows is a message to everybody else.
+    pub fn stop_camera(&self) {
+        if let Some(bridge) = self.locked_video().as_ref() {
+            bridge.stop();
+        }
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_camera(None);
+        }
+    }
+
+    /// The newest camera frame as a data URL, for the call card to draw.
+    ///
+    /// `None` when no camera is running, and in the moment between opening one
+    /// and its first frame. The card draws its faces either way.
+    pub fn self_view(&self) -> Option<String> {
+        self.self_view.latest()
+    }
+
+    /// Whether a camera is open right now. Test-only.
+    #[cfg(test)]
+    pub fn camera_running(&self) -> bool {
+        self.locked_video()
+            .as_ref()
+            .is_some_and(VideoBridge::running)
+    }
+
+    fn locked_video(&self) -> std::sync::MutexGuard<'_, Option<VideoBridge>> {
+        self.video
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// What to do with everything the call thread says.
     ///
     /// Two jobs in one closure, and the order inside it is the point. The
@@ -759,6 +899,7 @@ impl AppState {
         let call_audio = self.call_audio.clone();
         let called = self.called.clone();
         let talking = self.talking.clone();
+        let video_bridge = self.video.clone();
 
         move |event| {
             match &event {
@@ -802,6 +943,23 @@ impl AppState {
                 // why it cannot travel with the call.
                 CallEvent::SelfAudio(audio) => {
                     events.emit(AppEvent::SelfAudio(*audio));
+                    return;
+                }
+                // The camera follows the call, on the same terms as the
+                // microphone above and in the same place: the call thread takes
+                // a publication down when the channel changes or the call ends,
+                // and the device has to be released by whatever hears that
+                // rather than by a click that may never come.
+                CallEvent::SelfVideo(video) => {
+                    if !video.camera
+                        && let Some(bridge) = video_bridge
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .as_ref()
+                    {
+                        bridge.stop();
+                    }
+                    events.emit(AppEvent::SelfVideo(video.clone()));
                     return;
                 }
             }
@@ -1476,6 +1634,298 @@ mod tests {
         let sink = Arc::new(RecordingSink::new());
         let settings = SettingsStore::at(dir.path());
         (dir, AppState::new(store, settings, sink.clone()), sink)
+    }
+
+    mod the_camera {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Not `consort_video::Camera`, which is a device. The queue is the call
+        // crate's.
+        use consort_video::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
+
+        /// A camera backend a test can refuse from, or push a frame through.
+        #[derive(Clone, Default)]
+        struct Backend {
+            opens: Arc<AtomicUsize>,
+            closes: Arc<AtomicUsize>,
+            busy: bool,
+            /// Whatever sink the last `open` was given.
+            sink: Arc<std::sync::Mutex<Option<FrameSink>>>,
+        }
+
+        impl Backend {
+            fn busy() -> Self {
+                Self {
+                    busy: true,
+                    ..Self::default()
+                }
+            }
+
+            fn opens(&self) -> usize {
+                self.opens.load(Ordering::Relaxed)
+            }
+
+            /// Hand one frame over the way a device would.
+            fn capture(&self) {
+                if let Some(sink) = self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_mut()
+                {
+                    sink(consort_video::Picture {
+                        width: 2,
+                        height: 2,
+                        y: vec![120; 4],
+                        u: vec![128],
+                        v: vec![128],
+                        timestamp_us: 1,
+                    });
+                }
+            }
+        }
+
+        struct Stream {
+            closes: Arc<AtomicUsize>,
+        }
+
+        impl Drop for Stream {
+            fn drop(&mut self) {
+                self.closes.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        impl CameraStream for Stream {
+            fn camera_id(&self) -> &str {
+                "/dev/video0"
+            }
+
+            fn resolution(&self) -> Resolution {
+                Resolution {
+                    width: 640,
+                    height: 480,
+                    fps: 30,
+                }
+            }
+        }
+
+        impl VideoCapture for Backend {
+            fn open(
+                &self,
+                _camera: Option<&str>,
+                _want: Resolution,
+                on_frame: FrameSink,
+            ) -> Result<Box<dyn CameraStream>, CaptureError> {
+                self.opens.fetch_add(1, Ordering::Relaxed);
+                if self.busy {
+                    return Err(CaptureError::Busy {
+                        camera: "/dev/video0".to_owned(),
+                    });
+                }
+                *self
+                    .sink
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(on_frame);
+                Ok(Box::new(Stream {
+                    closes: Arc::clone(&self.closes),
+                }))
+            }
+        }
+
+        /// The most recent thing said on the camera channel.
+        fn last_video(sink: &Arc<RecordingSink>) -> Option<SelfVideo> {
+            sink.events().iter().rev().find_map(|event| match event {
+                AppEvent::SelfVideo(video) => Some(video.clone()),
+                _ => None,
+            })
+        }
+
+        #[test]
+        fn switching_it_on_outside_a_call_opens_no_device_and_says_why() {
+            // Asked before the device is touched, so a webcam light never comes
+            // on for a publication there is nowhere to make.
+            let (_dir, state, sink) = state();
+            let backend = Backend::default();
+
+            let said = state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+
+            assert!(!said.camera);
+            assert_eq!(
+                said.trouble.as_deref(),
+                Some("join a voice channel before switching your camera on")
+            );
+            assert_eq!(backend.opens(), 0, "the camera was opened for nothing");
+            assert_eq!(last_video(&sink), Some(said), "and it reached the webview");
+        }
+
+        #[test]
+        fn switching_it_on_in_a_call_opens_the_device() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+
+            let said = state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+
+            assert!(said.camera, "{said:?}");
+            assert_eq!(backend.opens(), 1);
+            assert!(state.camera_running());
+        }
+
+        #[test]
+        fn a_camera_another_application_has_is_reported_and_nothing_is_left_open() {
+            // The ordinary failure on Linux, where exactly one process may hold
+            // a video node.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            let said = state.set_camera(|| Box::new(Backend::busy()), true);
+
+            assert!(!said.camera);
+            assert_eq!(
+                said.trouble.as_deref(),
+                Some("\"/dev/video0\" is already in use by another application")
+            );
+            assert!(!state.camera_running());
+            assert_eq!(last_video(&sink), Some(said));
+        }
+
+        #[test]
+        fn there_is_nothing_for_the_card_to_draw_before_a_camera_is_on() {
+            let (_dir, state, _sink) = state();
+
+            assert_eq!(state.self_view(), None);
+        }
+
+        #[test]
+        fn a_captured_frame_reaches_the_card() {
+            // What pins the wiring: the slot the capture thread fills and the
+            // one this command answers from have to be the same slot. A fresh
+            // one here would answer nothing forever, with every other camera
+            // test still passing.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+
+            backend.capture();
+
+            assert!(state.self_view().is_some(), "the card has nothing to draw");
+        }
+
+        #[test]
+        fn switching_the_camera_off_takes_the_card_picture_down() {
+            // Camera off, card back to faces. Without this it keeps showing the
+            // last frame the camera saw.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+            backend.capture();
+            assert!(
+                state.self_view().is_some(),
+                "nothing was drawn to take down"
+            );
+
+            state.set_camera(|| Box::new(Backend::default()), false);
+
+            assert_eq!(state.self_view(), None);
+        }
+
+        #[test]
+        fn switching_it_off_releases_the_device() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            state.set_camera(|| Box::new(Backend::default()), true);
+
+            let said = state.set_camera(|| Box::new(Backend::default()), false);
+
+            assert_eq!(said, SelfVideo::default());
+            assert!(!state.camera_running());
+        }
+
+        #[test]
+        fn a_driver_failure_is_not_put_in_front_of_anybody_verbatim() {
+            // The one variant that carries a driver's own words. "No such file
+            // or directory (os error 2)" is a fact about an ioctl and not
+            // something anybody can act on.
+            let trouble = crate::video::CameraTrouble::Device(CaptureError::Backend(
+                "No such file or directory (os error 2)".to_owned(),
+            ));
+
+            let message = trouble.user_message();
+
+            assert_eq!(message, "the camera could not be started");
+            assert!(!message.contains("os error"));
+        }
+
+        #[test]
+        fn the_call_taking_the_camera_down_releases_the_device() {
+            // The camera follows the call. Leaving is not a click on the camera
+            // button, so nothing else would give the device back, and a webcam
+            // light left on after a call is the kind of thing people notice.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            state.set_camera(|| Box::new(Backend::default()), true);
+            assert!(state.camera_running(), "nothing was open to release");
+
+            state.disconnect_call();
+
+            wait_for(
+                "the camera to be released",
+                || !state.camera_running(),
+                || format!("camera still open; last said {:?}", last_video(&sink)),
+            );
+        }
+
+        #[test]
+        fn the_frame_queue_is_the_one_the_call_drains() {
+            // One queue, built once and cloned. Two would be a camera feeding
+            // nothing while a call waited on an empty slot.
+            let (_dir, state, _sink) = state();
+
+            let queue = state.camera.clone();
+            queue.offer(consort_call::OutgoingPicture {
+                width: 2,
+                height: 2,
+                y: vec![1; 4],
+                u: vec![128],
+                v: vec![128],
+                timestamp_us: 1,
+            });
+
+            assert_eq!(state.camera.dropped(), 0);
+        }
     }
 
     mod interrupting {

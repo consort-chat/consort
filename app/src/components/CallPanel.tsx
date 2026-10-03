@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 
-import { microphoneOff, type Call, type SelfAudio } from "../lib/api";
+import { microphoneOff, type Call, type SelfAudio, type SelfVideo } from "../lib/api";
 import { callLabel } from "../lib/labels";
 import "./CallPanel.css";
 
@@ -65,6 +65,35 @@ function MicrophoneIcon({ off }: { off: boolean }) {
       <path d="M5 10a7 7 0 0 0 14 0" />
       <path d="M12 17v4" />
       {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
+/**
+ * A camera, and the same camera struck through.
+ *
+ * One drawing with a slash it can draw or not, for the reason
+ * [`MicrophoneIcon`] gives: the body has to stay put between the two states or
+ * the button jumps when it is pressed.
+ *
+ * The same shape `CallFace` draws beside somebody else's name, so that the
+ * control and the indicator are visibly the same subject.
+ */
+function CameraIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      className="call-panel__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 7.5h11v9H3z" />
+      <path d="m14 12 6-3.5v7z" />
+      {off && <path d="m3.5 3.5 17 17" />}
     </svg>
   );
 }
@@ -516,6 +545,15 @@ interface Props {
    */
   selfAudio: SelfAudio;
   /**
+   * Whether this session's camera is in the call, and why it is not.
+   *
+   * Carried in like `selfAudio` and read from the camera channel rather than
+   * from the click, which is what keeps the button from claiming a camera that
+   * is not running: a camera also goes down when the channel changes, and
+   * nobody pressed anything then.
+   */
+  selfVideo: SelfVideo;
+  /**
    * Why this session cannot play the call, if it cannot.
    *
    * A separate sentence from `call.trouble`, which is about whether the audio
@@ -542,6 +580,7 @@ interface Props {
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
   onSetAway: (away: boolean) => void;
+  onSetCamera: (on: boolean) => void;
 }
 
 /**
@@ -564,6 +603,7 @@ export function CallPanel({
   call,
   channelName,
   selfAudio,
+  selfVideo,
   audioProblem = null,
   cardShown,
   onToggleCard,
@@ -571,6 +611,7 @@ export function CallPanel({
   onSetMuted,
   onSetDeafened,
   onSetAway,
+  onSetCamera,
 }: Props) {
   if (call.state === "disconnected" || call.state === "failed") return null;
 
@@ -658,6 +699,22 @@ export function CallPanel({
           <MicrophoneIcon off={off} />
         </button>
 
+        {/*
+          Beside the microphone rather than behind the chevron, because it is
+          the other thing this session publishes and it is pressed as often.
+          Still after it: the microphone is what a voice channel is for.
+        */}
+        <button
+          type="button"
+          className="call-panel__control"
+          onClick={() => onSetCamera(!selfVideo.camera)}
+          aria-pressed={selfVideo.camera}
+          aria-label="Share camera"
+          title={selfVideo.camera ? "Stop sharing your camera" : "Share your camera"}
+        >
+          <CameraIcon off={!selfVideo.camera} />
+        </button>
+
         <MoreActions
           deafened={deafened}
           away={away}
@@ -699,6 +756,17 @@ export function CallPanel({
       {audioProblem !== null && (
         <p className="call-panel__problem" role="alert">
           {audioProblem}
+        </p>
+      )}
+      {/*
+        A third independent failure. A camera that will not open says nothing
+        about whether the call can be heard, and the button it belongs to is an
+        icon with no words of its own, so without this a press does nothing
+        visible and there is nothing to argue with.
+      */}
+      {selfVideo.trouble !== null && (
+        <p className="call-panel__problem" role="alert">
+          {selfVideo.trouble}
         </p>
       )}
     </div>

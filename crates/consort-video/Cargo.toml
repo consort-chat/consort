@@ -1,0 +1,32 @@
+[package]
+name = "consort-video"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Baseline JPEG, for the cameras that offer MJPEG and nothing else usable.
+# Already in Cargo.lock at this version as an optional dependency of `image`,
+# which `app/src-tauri` uses for PNG, so naming it resolves nothing new.
+zune-jpeg = { version = "0.5", default-features = false }
+
+serde = { workspace = true }
+tracing = { workspace = true }
+
+# Video4Linux 2, as kernel ioctls on the device node. Confined to
+# `v4l_host.rs`, which is excluded from coverage: CI has no camera, so every
+# line that talks to one is a line no test can reach. Why this crate and not
+# `v4l` or `nokhwa`: docs/adr/0005-capture-the-camera-in-rust.md.
+[target.'cfg(target_os = "linux")'.dependencies]
+moq-v4l = "0.1"
+
+[dev-dependencies]
+# Only the tests see the wire format. The crate hands settings to its caller as
+# a type and never chooses a serialisation.
+serde_json = { workspace = true }
+# A JPEG *encoder*, so the MJPEG tests pin the decode against a known-good
+# encoder rather than against bytes this repository wrote itself. Dev-only:
+# nothing in the crate encodes anything.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

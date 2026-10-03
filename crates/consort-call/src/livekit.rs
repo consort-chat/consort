@@ -28,8 +28,9 @@ use std::time::Duration;
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
+    AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
+    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
+    VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -38,6 +39,7 @@ use livekit::DataPacket;
 
 use futures_util::StreamExt;
 
+use crate::camera::{OutgoingPicture, PictureSize};
 use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
@@ -46,6 +48,7 @@ use crate::hearing::{self, Ears};
 use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
 use crate::roster;
+use crate::showing::PublishedVideo;
 use crate::thread::AbortOnDrop;
 use crate::transport::{CallSession, CallTransport, Roster};
 use crate::trouble::{Faults, what_it_says};
@@ -415,12 +418,14 @@ impl LiveKitSession {
 /// Both are fixed for the life of a call, and carrying them together keeps the
 /// pairing in one place: filing our own notice under the wrong identity would
 /// hide it behind somebody else's.
+#[derive(Clone)]
 struct Us {
     /// How the SFU names this session. The key our own notice is filed under,
     /// alongside everybody else's, so that one map answers the whole question.
     identity: String,
     /// How MatrixRTC names it. What a notice carries, and what the roster
-    /// matches a person against.
+    /// matches a person against. Paired with the identity above in the roll,
+    /// so our own icon never waits on a derivation agreeing with the SFU.
     member_id: String,
 }
 
@@ -510,6 +515,7 @@ async fn watch_notices(
 
 impl CallSession for LiveKitSession {
     type Track = Arc<dyn LocalTrackHandle>;
+    type Video = CameraTrack;
     type Roster = LiveKitRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
@@ -524,6 +530,19 @@ impl CallSession for LiveKitSession {
         // recoverable.
         let _ = self.microphone.set(track.clone());
         Ok(track)
+    }
+
+    async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+        let track = self
+            .call
+            .publish(PublishOptions::camera(VideoSourceConfig {
+                width: size.width,
+                height: size.height,
+            }))
+            .await
+            .map_err(|error| classify(&error))?;
+
+        Ok(CameraTrack(track))
     }
 
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
@@ -692,7 +711,7 @@ impl CallSession for LiveKitSession {
         let watching = AbortOnDrop(tokio::task::spawn_local(watch_notices(
             self.call.session().room().subscribe(),
             self.saying.subscribe(),
-            me,
+            me.clone(),
             announcing,
         )));
 
@@ -704,6 +723,7 @@ impl CallSession for LiveKitSession {
             client: self.client.clone(),
             room_id: self.room_id.clone(),
             announced,
+            me,
             _watching: watching,
         }
     }
@@ -750,6 +770,12 @@ pub struct LiveKitRoster {
     /// Consort clients talking to each other over the call's data channel, and
     /// nothing in MatrixRTC or LiveKit reports it. See [`crate::notices`].
     announced: watch::Receiver<notices::Flags>,
+    /// This session's own identity and membership, known rather than derived.
+    ///
+    /// Everybody else's pairing is worked out from the server's list; ours is
+    /// already in hand, and taking the long way round would make our own icon
+    /// depend on a derivation agreeing with the SFU.
+    me: Us,
     /// The task filling it in. Ends when this roster is dropped.
     _watching: AbortOnDrop,
 }
@@ -775,20 +801,33 @@ impl Roster for LiveKitRoster {
         // The mute travels with the user id rather than being looked up again
         // afterwards, because between the two reads somebody can leave and the
         // pairing would silently shift by one.
-        let seen: Vec<Seen> = self
-            .memberships
-            .borrow()
-            .iter()
-            .map(|member| Seen {
-                member_id: member.member_id.clone(),
-                user_id: member.user_id.clone(),
-                muted: roster::microphone_muted(member),
-                camera: roster::camera_live(member),
-                since: roster::arrived_at(member, self.joined_at),
-            })
-            .collect();
+        //
+        // The roll comes out of the same borrow for the same reason: it says
+        // which membership each SFU identity belongs to, and reading it from
+        // a later snapshot would pair notices against a call that has moved.
+        let (seen, roll) = {
+            let memberships = self.memberships.borrow();
+            let seen: Vec<Seen> = memberships
+                .iter()
+                .map(|member| Seen {
+                    member_id: member.member_id.clone(),
+                    user_id: member.user_id.clone(),
+                    muted: roster::microphone_muted(member),
+                    camera: roster::camera_live(member),
+                    since: roster::arrived_at(member, self.joined_at),
+                })
+                .collect();
+
+            let mut roll = roster::roll(&memberships);
+            roll.insert(self.me.identity.clone(), self.me.member_id.clone());
+            (seen, roll)
+        };
 
         let flags = self.announced.borrow().clone();
+        // Who each notice was actually from. See `roster::spoken_for`: the
+        // membership a notice names is the sender's to write.
+        let deafened = roster::spoken_for(&flags.deafened, &roll);
+        let away = roster::spoken_for(&flags.away, &roll);
 
         let user_ids: Vec<String> = seen.iter().map(|one| one.user_id.clone()).collect();
         let mutes: Vec<(String, bool)> = seen
@@ -816,8 +855,8 @@ impl Roster for LiveKitRoster {
         let named = roster::with_mutes(named, &mutes);
         let named = roster::with_cameras(named, &cameras);
         let named = roster::with_since(named, &arrivals);
-        let named = roster::with_deafened(named, &whose, &flags.deafened);
-        roster::with_away(named, &whose, &flags.away)
+        let named = roster::with_deafened(named, &whose, &deafened);
+        roster::with_away(named, &whose, &away)
     }
 
     async fn changed(&mut self) -> Option<()> {
@@ -871,6 +910,49 @@ impl Roster for LiveKitRoster {
                 },
             }
         }
+    }
+}
+
+/// A camera publication.
+///
+/// A newtype rather than a second trait on `Arc<dyn LocalTrackHandle>`, which
+/// already carries [`PublishedAudio`]. One type implementing both would let a
+/// microphone publication be handed to the frame pump and a camera to the PCM
+/// pump, and the compiler would allow it.
+#[derive(Clone)]
+pub struct CameraTrack(Arc<dyn LocalTrackHandle>);
+
+impl PublishedVideo for CameraTrack {
+    fn send(&self, picture: OutgoingPicture) -> Result<(), CallFailure> {
+        let frame = VideoFrame {
+            buffer: I420Buffer {
+                width: picture.width,
+                height: picture.height,
+                // Tight strides, which is what `consort_video` produces. The
+                // transport copies honouring both sides' strides and refuses a
+                // plane too short for the size, so this is checked rather than
+                // trusted.
+                stride_y: picture.width,
+                stride_u: picture.width.div_ceil(2),
+                stride_v: picture.width.div_ceil(2),
+                data_y: picture.y,
+                data_u: picture.u,
+                data_v: picture.v,
+            },
+            rotation: VideoRotation::Deg0,
+            timestamp_us: picture.timestamp_us,
+        };
+
+        self.0
+            .capture_video(frame)
+            .map_err(|error| classify(&CallError::Media(error)))
+    }
+
+    async fn unpublish(&self) -> Result<(), CallFailure> {
+        self.0
+            .unpublish()
+            .await
+            .map_err(|error| classify(&CallError::Media(error)))
     }
 }
 
