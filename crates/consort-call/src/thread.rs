@@ -1352,16 +1352,7 @@ mod tests {
     /// sleep anywhere. `serve` owns the event sender and drops it on return,
     /// which is what lets the drain below terminate.
     async fn transcript(transport: FakeTransport, commands: Vec<Message>) -> Vec<CallEvent> {
-        transcript_into(transport, commands, Microphone::new()).await
-    }
-
-    /// [`transcript`], with the microphone handed in so a test can read what
-    /// the loop left switched on it.
-    async fn transcript_into(
-        transport: FakeTransport,
-        commands: Vec<Message>,
-        microphone: Microphone,
-        filmed(transport, commands, Camera::new()).await
+        transcript_into(transport, commands, Microphone::new(), Camera::new()).await
     }
 
     /// [`transcript`], with the camera queue handed in so a test can prefill it
@@ -1369,6 +1360,17 @@ mod tests {
     async fn filmed(
         transport: FakeTransport,
         commands: Vec<Message>,
+        camera: Camera,
+    ) -> Vec<CallEvent> {
+        transcript_into(transport, commands, Microphone::new(), camera).await
+    }
+
+    /// [`transcript`], with the microphone and the camera handed in so a test
+    /// can read what the loop left switched on them.
+    async fn transcript_into(
+        transport: FakeTransport,
+        commands: Vec<Message>,
+        microphone: Microphone,
         camera: Camera,
     ) -> Vec<CallEvent> {
         let (to_loop, inbox) = unbounded_channel();
@@ -1387,7 +1389,7 @@ mod tests {
                 transport,
                 inbox,
                 events,
-                Microphone::new(),
+                microphone,
                 camera,
                 Arc::new(Deaf::default()),
             ))
@@ -1958,7 +1960,7 @@ mod tests {
         async fn left_switched_off(commands: Vec<Message>) -> bool {
             let (transport, _log) = FakeTransport::new(Joining::Succeeds);
             let microphone = Microphone::new();
-            transcript_into(transport, commands, microphone.clone()).await;
+            transcript_into(transport, commands, microphone.clone(), Camera::new()).await;
             microphone.switched_off()
         }
 
