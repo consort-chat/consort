@@ -3,25 +3,13 @@
 
 //! Which correction a message is currently showing.
 //!
-//! Kept beside [`crate::timeline::history::History`] rather than inside it,
-//! for the reason [`crate::timeline::reactions::Reactions`] is: an edit is not
-//! a message and the two lists do not line up. An `m.replace` arrives for a
-//! message that may not be loaded, may be loaded later by a page, or may never
-//! be, and a message can be replaced by a re-read without anything having
-//! happened to the corrections on it.
+//! Beside [`crate::timeline::history::History`] rather than inside it, for the
+//! reason [`crate::timeline::reactions::Reactions`] is, and for one more: a
+//! room key re-reading the original would silently undo text written into it.
 //!
-//! That last one is why folding here rather than writing the new text into the
-//! history. `History::replace` swaps one reading of an event for another
-//! reading of the same event, which is what a room key arriving does. An edit
-//! is a different event, it arrives and re-arrives, and a later re-read of the
-//! original would silently undo it.
-//!
-//! ## Why the edits are held individually
-//!
-//! The same argument the annotations make, twice over. A redaction names only
-//! the event it removes, so undoing an edit needs that edit under its own ID;
-//! and which edit wins changes when a later one arrives, so collapsing on
-//! arrival would throw away the one that a redaction falls back to.
+//! Held individually, each under its own event ID, because a redaction names
+//! only the event it removes and which edit wins changes when a later one
+//! arrives.
 
 use std::collections::HashMap;
 
@@ -58,12 +46,8 @@ impl Edits {
     /// Take note of one edit. Says whether anything changed.
     ///
     /// Taken unconditionally, including from somebody who did not write the
-    /// message being replaced. Whether they are allowed to have sent it is a
-    /// comparison against the original's sender, and the original is regularly
-    /// not loaded when its edit arrives; [`Self::latest_on`] is where the
-    /// comparison can actually be made. An edit that never matches is dead
-    /// weight in a map, which is the same dead weight a reaction on an
-    /// unloaded message already is.
+    /// message being replaced, because that comparison needs the original and
+    /// it is often not loaded yet: [`Self::latest_on`] makes it.
     pub fn added(
         &mut self,
         event_id: &str,
@@ -94,11 +78,9 @@ impl Edits {
         true
     }
 
-    /// Forget the edit `event_id` was, if it was one.
-    ///
-    /// Says whether anything changed. What the message falls back to is the
-    /// newest edit still held, or the original when there are none, and that
-    /// falls out of [`Self::latest_on`] rather than needing a branch here.
+    /// Forget the edit `event_id` was, if it was one, saying whether anything
+    /// changed. What the message falls back to is whatever
+    /// [`Self::latest_on`] then answers, so there is no branch here.
     pub fn redacted(&mut self, event_id: &str) -> bool {
         let Some(gone) = self.held.remove(event_id) else {
             return false;
@@ -115,9 +97,9 @@ impl Edits {
 
     /// The edit that wins on `target`, if `author` is allowed to have made it.
     ///
-    /// `author` is who sent the message being replaced. An `m.replace` from
-    /// anybody else is ignored, which is the whole of what stops one person in
-    /// a room rewriting another person's words in Consort.
+    /// `author` is who sent the message being replaced, and an `m.replace`
+    /// from anybody else is ignored. That is the whole of what stops one
+    /// person in a room rewriting another's words.
     pub fn latest_on(&self, target: &str, author: &str) -> Option<&Edit> {
         self.on
             .get(target)
@@ -125,11 +107,10 @@ impl Edits {
             .flatten()
             .filter_map(|event_id| Some((event_id.as_str(), self.held.get(event_id)?)))
             .filter(|(_, edit)| edit.sender == author)
-            // The event ID breaks a tie, and it is the stability rather than
-            // the answer that matters: two edits stamped the same millisecond
-            // is a homeserver under load, which of them wins cannot be known,
-            // and an unstable comparison would have the room draw one and
-            // redraw the other on the next publish for no reason.
+            // The event ID breaks a tie, and the stability is what matters
+            // rather than the answer: which of two edits stamped the same
+            // millisecond won cannot be known, and an unstable comparison
+            // would redraw the room on every publish.
             .max_by(|(one, left), (other, right)| {
                 left.at.cmp(&right.at).then_with(|| one.cmp(other))
             })

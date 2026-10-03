@@ -3,15 +3,11 @@
 
 //! The wire types for a room's messages.
 //!
-//! One value describes the whole of what is currently loaded, on the same
-//! terms as the room list: a reader handed one of these has everything it
-//! needs to draw, and a late subscriber can be handed the same value rather
-//! than a stream of patches it has to replay in order.
-//!
-//! None of the SDK's own types appear here, for the reason they do not appear
-//! in the room or verification DTOs: this shape is a contract with
-//! `app/src/lib/api.ts`, and pinning it to an upstream type means an SDK bump
-//! can silently change what the webview receives.
+//! One value describes the whole of what is currently loaded, so a late
+//! subscriber can be handed it rather than a stream of patches to replay in
+//! order. None of the SDK's own types appear here: this shape is a contract
+//! with `app/src/lib/api.ts`, and an SDK bump must not silently change what
+//! the webview receives.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,168 +15,92 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Timeline {
-    /// Which room this is, so a reader can tell an arriving timeline apart
-    /// from the one it is drawing.
-    ///
-    /// Load-bearing rather than informational. This channel keeps its latest
-    /// value for a late subscriber, and somebody who changes room twice
-    /// quickly has two watchers publishing for a moment; without this the
-    /// second room would draw the first room's messages until the next one
-    /// arrived.
+    /// Which room this is. Load-bearing: changing room twice quickly leaves
+    /// two watchers publishing for a moment, and the reader draws the one it
+    /// asked for rather than whichever arrived.
     pub room_id: String,
     /// Oldest first, which is the order they are drawn in.
     pub messages: Vec<Message>,
-    /// The messages a reply names that are not in `messages`.
-    ///
-    /// A room draws a window of history and a reply can name anything older
-    /// than it, so the row above a reply regularly points at something that is
-    /// not on screen. Without these the row can only say so, which is a
-    /// sentence where every other reply shows a name and a line of what was
-    /// said.
-    ///
-    /// Here rather than on [`Message::reply_to`], which carries the ID alone
-    /// and gives its reasons. They hold: this is only the ones the reader does
-    /// not already have, and a message twenty replies name is carried once.
+    /// The messages a reply names that are not in `messages`, since a reply
+    /// can name anything older than the loaded window. Only the ones the
+    /// reader does not already have, and a message twenty replies name once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answered: Vec<Message>,
-    /// Whether there is more history to ask for.
-    ///
-    /// False at the start of the room, and also false before anything has been
-    /// loaded at all, because "there might be more" is not something to offer
-    /// until there is something to be more than.
+    /// Whether there is more history to ask for. False before anything has
+    /// loaded at all, as well as at the start of the room.
     pub more_before: bool,
-    /// Whether there are messages newer than these.
-    ///
-    /// Always false in the room as it is normally drawn, which is the live end
-    /// and has nothing after it by definition. True only in a window somebody
-    /// jumped into, where the history runs on in both directions.
+    /// Whether there are messages newer than these. True only in a window
+    /// somebody jumped into; the live end has nothing after it.
     #[serde(default)]
     pub more_after: bool,
-    /// Membership changes (joins, invites, leaves, kicks, bans), drawn as
-    /// system lines rather than as messages.
-    ///
-    /// Oldest first, on the same terms as `messages`. A separate list rather
-    /// than folded into `messages`, because a `Message` is what somebody
-    /// wrote and a `SystemMessage` is Consort's own sentence about something
-    /// that happened; keeping them apart means one can change shape without
-    /// the other's serialised form moving. The interface merges the two by
-    /// `at` for drawing, which is an approximation: see
-    /// [`SystemMessage::at`] for what that costs.
+    /// Membership changes, drawn as system lines rather than as messages,
+    /// oldest first. The interface merges them with `messages` by `at`, which
+    /// is an approximation: see [`SystemMessage::at`] for what that costs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub system: Vec<SystemMessage>,
-    /// The message this window was opened around, when it is not the present.
-    ///
-    /// `None` for the room as it is normally drawn, and for a window that has
-    /// been read forwards until it caught up with the live end, which is the
-    /// room normally drawn by another route. Load-bearing rather than
-    /// informational: a reader looking at last March has to be told it is not
-    /// the bottom of the room, because everything else about the two looks the
-    /// same and a conversation that has stopped arriving is what a broken
-    /// connection looks like.
+    /// The message this window was opened around; `None` at the live end. A
+    /// reader looking at last March has to be told it is not the bottom of
+    /// the room, because that is also what a broken connection looks like.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<String>,
-    /// Whether a page of older messages is being fetched right now.
-    ///
-    /// Here rather than kept by the interface so that the spinner belongs to
-    /// the room. A reader that owned this would have to clear it itself on a
-    /// room change, and forgetting to is a spinner that never stops.
-    ///
-    /// Also true while a jump is in flight. A window around a message from
-    /// last March is earlier messages by any reading.
+    /// Whether a page of older messages is being fetched, a jump included.
+    /// Here rather than in the interface, which would have to clear it on a
+    /// room change and is a spinner that never stops when it forgets.
     pub loading: bool,
-    /// Whether a page of newer messages is being fetched right now.
-    ///
-    /// Its own flag rather than a direction on `loading`, because the notice
-    /// is drawn at the end of the list the page is coming from: one flag for
-    /// both would say "loading earlier messages" at the top of a box whose
-    /// reader is at the bottom waiting for the opposite page.
+    /// Whether a page of newer messages is being fetched. Its own flag rather
+    /// than a direction on `loading`, because the notice is drawn at the end
+    /// of the list the page is coming from.
     #[serde(default)]
     pub loading_after: bool,
-    /// The last message this account had read when the room was opened.
-    ///
-    /// What the line across the conversation is drawn under: everything after
-    /// this is new since the last visit. Read from the `m.fully_read` marker
-    /// once, when the watcher starts, and then held for as long as the room
-    /// stays open. Held rather than followed on purpose, because reading the
-    /// room moves the marker: a value that tracked it would take the line away
-    /// the moment somebody looked at what it was pointing out.
-    ///
-    /// `None` for a room this account has never read in any client, and for
-    /// one whose marker names something not in the loaded window. Both mean
-    /// the same thing to a reader: no line.
+    /// The last message this account had read when the room was opened, which
+    /// the new-messages line is drawn under. Read from `m.fully_read` once and
+    /// then held, because reading the room moves the marker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_up_to: Option<String>,
 }
 
-/// One thread as it is currently loaded, oldest reply first.
-///
-/// Its own value rather than a field on [`Timeline`], because a thread is open
-/// or it is not: a room whose panel is shut should not be carrying a copy of
-/// somebody's last conversation, and a reader that has just been handed a room
-/// should not have to work out whether the thread attached to it is still the
-/// one being looked at.
+/// One thread as it is currently loaded, oldest reply first. Its own value
+/// rather than a field on [`Timeline`]: a room whose panel is shut should not
+/// carry a copy of somebody's last conversation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
     /// The room the thread is in, on the same terms as [`Timeline::room_id`].
     pub room_id: String,
-    /// The event ID of the message the thread hangs from.
-    ///
-    /// Load-bearing for the same reason as `room_id`: opening one thread and
-    /// then another puts two of these in flight, and the reader draws the one
-    /// whose root it asked for.
+    /// The event ID the thread hangs from. Load-bearing like `room_id`:
+    /// opening one thread and then another puts two of these in flight.
     pub root_id: String,
-    /// The message it hangs from, drawn at the top of the panel.
-    ///
-    /// `None` when the homeserver would not hand it over, which a redaction
-    /// and a missing key both look like. The replies are still worth reading,
-    /// so a thread with no root is drawn rather than refused.
+    /// The message it hangs from. `None` when the homeserver would not hand it
+    /// over, which a redaction and a missing key both look like; the replies
+    /// are still worth reading, so the thread is drawn rather than refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root: Option<Message>,
     /// The replies, oldest first, which is the order they are drawn in.
     pub messages: Vec<Message>,
-    /// Whether there are older replies than the ones here.
-    ///
-    /// The homeserver is asked for the recent end of a long thread, so this is
-    /// how the panel says the top of what it is showing is not the beginning.
+    /// Whether there are older replies than the ones here. The homeserver is
+    /// asked for the recent end of a long thread.
     pub more_before: bool,
 }
 
-/// Who is typing in one room, right now.
-///
-/// Its own value rather than a field on [`Timeline`], because the two change
-/// for unrelated reasons and at unrelated rates. A timeline carries every
-/// message loaded, and republishing all of it because somebody pressed a key
-/// would put the whole conversation across the IPC boundary several times a
-/// sentence.
+/// Who is typing in one room, right now. Its own value rather than a field on
+/// [`Timeline`], because republishing every loaded message on each keystroke
+/// would cross the IPC boundary several times a sentence.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Typing {
-    /// The room they are typing in, on the same terms as [`Timeline::room_id`]:
-    /// one channel serves whichever room is open, and this is how a reader
-    /// tells an answer about the last room from an answer about this one.
+    /// The room they are typing in, on the same terms as [`Timeline::room_id`].
     pub room_id: String,
-    /// Matrix user IDs, with this session's own already taken out.
-    ///
-    /// Nobody needs telling that they are typing, and every client that has
-    /// ever shown you your own name doing it looked broken.
+    /// Matrix user IDs, with this session's own already taken out: nobody
+    /// needs telling that they are typing.
     pub users: Vec<String>,
 }
 
 /// Who has read how far, for the room and for whatever thread is open.
 ///
-/// Its own value rather than a field on [`Timeline`], and the reason is
-/// measured rather than assumed. On this machine a receipt arriving costs
-/// 0.9us to put on the wire this way and 4.8us as part of a republished
-/// timeline, which is the smaller half of it; the larger half is that a
-/// republished timeline is new objects all the way down, and redrawing fifty
-/// messages costs 6.3ms against 0.14ms for the rows that actually changed. A
-/// busy room produces about as many receipts as messages, so that is the
-/// difference between a conversation that sits still and one that does not.
-///
-/// Both conversations in one value because the channel keeps its latest for a
-/// late subscriber, and two values on one channel would mean the second
-/// erasing the first.
+/// Its own value rather than a field on [`Timeline`], because a receipt
+/// arriving would otherwise redraw the whole room: the measurements are in
+/// docs/PERFORMANCE.md. Both conversations in one value because the channel
+/// keeps only its latest, so two values would mean one erasing the other.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Readers {
@@ -188,11 +108,8 @@ pub struct Readers {
     pub room_id: String,
     /// Who has read how far in the room's own timeline.
     pub main: Vec<ReadOn>,
-    /// The same for the thread somebody has open, when one is.
-    ///
-    /// `None` with no thread open. A thread has receipts of its own and a
-    /// receipt in the room does not answer for it, so the panel is given its
-    /// own answer rather than the room's.
+    /// The same for the thread somebody has open, when one is. A thread has
+    /// receipts of its own and a receipt in the room does not answer for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadReaders>,
 }
@@ -208,29 +125,19 @@ pub struct ThreadReaders {
     pub on: Vec<ReadOn>,
 }
 
-/// Who has read one message, as far as this account can see.
-///
-/// "As far as this account can see" is load-bearing and is not a hedge. A
-/// person who has turned public read receipts off is visible to nobody, so
-/// they are absent from every one of these and there is no way to tell them
-/// from somebody who has not read it. See `ReadBy` in the webview for what is
-/// said about that, and why it is said whether or not anybody is missing.
+/// Who has read one message, as far as this account can see. Somebody who has
+/// turned public read receipts off is absent from every one of these and
+/// cannot be told from somebody who has not read it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadOn {
     /// The message they have read up to.
     pub event_id: String,
     /// Up to [`crate::timeline::read_by::SHOWN`] of them, by Matrix user ID,
-    /// in a stable order.
-    ///
-    /// This session's own is never here. Nobody needs telling that they have
-    /// read their own room.
+    /// in a stable order. This session's own is never here.
     pub readers: Vec<String>,
-    /// How many more there are than the ones named.
-    ///
-    /// Zero for a row that fits, which is almost every row. A room with fifty
-    /// people in it puts fifty receipts on its newest message, and the count
-    /// is how that stays a row rather than a wall.
+    /// How many more there are than the ones named. A room of fifty puts fifty
+    /// receipts on its newest message, and the count keeps that a row.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub more: u32,
 }
@@ -244,20 +151,13 @@ fn is_zero(count: &u32) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reaction {
-    /// What they reacted with.
-    ///
-    /// An emoji for almost every one of them, and deliberately not required to
-    /// be one: `m.annotation` carries free text, and a client that assumed
-    /// otherwise would silently drop what other clients send.
+    /// What they reacted with. Deliberately not required to be an emoji:
+    /// `m.annotation` carries free text and other clients send it.
     pub key: String,
     /// How many people have used it.
     pub count: u32,
-    /// This session's own annotation, when there is one.
-    ///
-    /// The event ID rather than a flag, because taking a reaction back is
-    /// redacting that exact event. Carrying the ID here is what lets the
-    /// interface toggle a pill without a second lookup, and it says "mine" at
-    /// the same time.
+    /// This session's own annotation, when there is one. The event ID rather
+    /// than a flag, because taking a reaction back redacts that exact event.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mine: Option<String>,
 }
@@ -269,123 +169,61 @@ pub struct Message {
     /// The event ID. Also the deduplication key: an event can arrive from a
     /// sync and again from a backfill page that overlaps it.
     pub id: String,
-    /// Who sent it, as a Matrix user ID.
-    ///
-    /// Not a display name. A name is per room and changes under a message that
-    /// has already been drawn, and the frontend already asks for names and
-    /// avatars by user ID for the voice roster.
+    /// Who sent it, as a Matrix user ID. Not a display name: a name is per
+    /// room and changes under a message that has already been drawn.
     pub sender: String,
-    /// `origin_server_ts`, in milliseconds.
-    ///
-    /// The server's clock rather than the sender's, because the sender's is
-    /// whatever their machine says and a room with one badly set clock in it
-    /// would draw one person's messages in the wrong century.
+    /// `origin_server_ts`, in milliseconds. The server's clock, because one
+    /// badly set machine would draw its messages in the wrong century.
     pub at: u64,
-    /// What it says, with no formatting.
-    ///
-    /// The plaintext fallback every message carries, and the only thing to
-    /// draw when `html` is `None`.
-    ///
-    /// Empty for an attachment nobody captioned, which is most of them. The
-    /// filename lives on [`Media::name`] and is deliberately not here: a line
-    /// reading "screenshot.png" above the screenshot is the thing somebody
-    /// sent a picture to avoid.
+    /// What it says, with no formatting, and the only thing to draw when
+    /// `html` is `None`. Empty for an attachment nobody captioned: the
+    /// filename is on [`Media::name`] rather than here, above the picture.
     pub body: String,
-    /// What it says as HTML, when the sender sent formatting.
-    ///
     /// `formatted_body` off the wire, verbatim, and only when `format` said
-    /// `org.matrix.custom.html`. `None` for the messages nobody formatted,
-    /// which is most of them.
+    /// `org.matrix.custom.html`.
     ///
     /// Deliberately not sanitised here, and nothing downstream may put it in a
-    /// document. `FormattedBody` in the webview parses it into an inert
-    /// document and rebuilds it out of an allow-list of elements it knows, so
-    /// a tag that is not on that list is dropped rather than trusted.
-    /// Sanitising here as well would be a second copy of that list to keep in
-    /// step with the first, and the one that is not the renderer is the one
-    /// that would go stale.
+    /// document. `FormattedBody` in the webview rebuilds it from an allow-list
+    /// of elements, and a second copy of that list would be the stale one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub html: Option<String>,
-    /// The picture or the clip hanging off it, when there is one.
-    ///
-    /// Present for [`MessageKind::Image`] and [`MessageKind::Video`] and for
-    /// nothing else. The bytes are not here: this says where they are and what
-    /// shape they will be, and the interface asks for them one at a time.
+    /// Where the picture or the clip is, not the bytes themselves. Present for
+    /// [`MessageKind::Image`] and [`MessageKind::Video`] and nothing else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<Media>,
-    /// The thread hanging off it, when anybody has replied in one.
-    ///
-    /// `None` rather than a count of zero for a message nobody has replied to,
-    /// because a message with no thread is not a thread with nothing in it and
-    /// the interface has to be able to tell the two apart.
+    /// The thread hanging off it. `None` rather than a count of zero, because
+    /// a message with no thread is not a thread with nothing in it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadSummary>,
-    /// What people have reacted to it with, in the order the keys first
-    /// appeared.
-    ///
-    /// Empty for most messages, and skipped when empty so the ordinary case
-    /// costs nothing on the wire.
+    /// What people have reacted with, in the order the keys first appeared.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Reaction>,
-    /// The event this message is answering, when it is answering one.
-    ///
-    /// The ID alone. What that event said is not repeated here: the interface
-    /// is already holding every message it is drawing, so a preview would be a
-    /// second copy of one of them on the wire and a second thing to keep in
-    /// step when the original is edited or redacted.
-    ///
-    /// `None` for the fallback pointer every threaded message carries. That
-    /// one names the last thing said in the thread rather than anything
-    /// somebody chose, and drawing it would put a reply row on every message
-    /// in a thread panel.
+    /// The event this message is answering. The ID alone, since the interface
+    /// already holds what it draws. `None` for the fallback pointer every
+    /// threaded message carries, which names nobody's choice of reply.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
-    /// Who this message names, as Matrix user IDs.
-    ///
-    /// `m.mentions` off the wire and nothing else. A client that does not send
-    /// it names nobody here, which is the honest answer: the alternative is
-    /// searching the body for somebody's display name, and a sentence that
-    /// merely contains a name is not a message about them.
-    ///
-    /// The `room` flag beside them is deliberately not read. An @room is about
-    /// everybody, so lighting one person's copy of it would say something
-    /// untrue about the other twenty.
+    /// Who this message names: `m.mentions` off the wire and nothing else, so
+    /// a client that does not send it names nobody. The `room` flag beside
+    /// them is deliberately not read, because an @room is about everybody.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mentions: Vec<String>,
-    /// Whether what is drawn above is a correction rather than what was first
-    /// sent.
-    ///
-    /// The flag alone. What it said before is deliberately not carried: no
-    /// interface here offers an edit history, and putting the superseded text
-    /// on the wire would be shipping a sentence somebody deliberately took
-    /// back to every client that draws the room.
-    ///
-    /// Skipped when false, which is almost every message, so the ordinary case
-    /// costs nothing on the wire.
+    /// Whether what is drawn above is a correction. The flag alone: no
+    /// interface here offers an edit history, so a sentence somebody took back
+    /// is not put on the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub edited: bool,
-    /// Who redacted it, for a [`MessageKind::Deleted`] and nothing else.
-    ///
-    /// Carried so that a tombstone can avoid saying something untrue about
-    /// who did it. A moderator removing somebody's message and that person
-    /// removing their own are the same event type with a different sender,
-    /// and a mark that read "deleted" with the author's name above it would
-    /// put the second story on the first.
-    ///
-    /// Equal to `sender` for the ordinary case. `None` where the redaction
-    /// carried no sender this build could read, and the mark then names
-    /// nobody rather than guessing.
+    /// Who redacted it, for a [`MessageKind::Deleted`] and nothing else. Equal
+    /// to `sender` ordinarily, and carried so that a moderator's removal is
+    /// not drawn as the author taking their own message back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_by: Option<String>,
     pub kind: MessageKind,
 }
 
-/// What is known about a thread without opening it.
-///
-/// The homeserver counts this and bundles it onto the message the thread hangs
-/// from, so a room learns which of its messages are threads while it is being
-/// drawn rather than by asking about each one. In an encrypted room the bundle
-/// arrives with the encrypted message and is decrypted alongside it.
+/// What is known about a thread without opening it. The homeserver bundles it
+/// onto the message the thread hangs from, and in an encrypted room it arrives
+/// with that message and is decrypted alongside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
@@ -399,63 +237,30 @@ pub struct ThreadSummary {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Media {
-    /// An opaque handle, to be handed back to `timeline::media` unread.
-    ///
-    /// It is the event's own `MediaSource` as JSON, which for an encrypted
-    /// room carries the file's key as well as its URI. That is deliberate and
-    /// it is the reason this is one field rather than two: half the shapes an
-    /// attachment can take are encrypted, and a handle that held only a URI
-    /// would need a second path beside it for the half that matters here.
-    ///
-    /// It crosses the IPC boundary, which is the same boundary the decrypted
-    /// bytes cross a moment later, so the key adds nothing to what the webview
-    /// already holds. Nothing reads it on that side: it goes back to Rust as
-    /// it arrived.
+    /// An opaque handle, handed back to `timeline::media` unread: the event's
+    /// own `MediaSource` as JSON, carrying an encrypted file's key as well as
+    /// its URI. It crosses the boundary the decrypted bytes then cross.
     pub source: String,
-    /// The file's own name.
-    ///
-    /// `filename` where the sender wrote one and `body` where they did not,
-    /// which is the rule the specification gives for media captions. It is
-    /// what a card is labelled with, what a save dialog opens on, and what a
-    /// screen reader is told when the picture will not load.
+    /// The file's own name: `filename` where the sender wrote one and `body`
+    /// where they did not, which is the rule the spec gives for captions.
     pub name: String,
-    /// A second handle, for the still the sender uploaded beside a clip.
-    ///
-    /// A clip is not fetched until somebody asks for one, so without this
-    /// there is nothing to draw where it will be: a black rectangle and a
-    /// filename, which says almost nothing about what is in it. The thumbnail
-    /// is a few kilobytes and is drawn straight away, so what somebody decides
-    /// on is the picture rather than the name.
-    ///
-    /// Absent for the senders who upload no thumbnail, which is plenty of
-    /// them, and always absent for anything that is not a clip: a picture is
-    /// its own thumbnail, and there is nothing to look at in a spreadsheet.
+    /// A second handle, for the still a sender uploaded beside a clip, since a
+    /// clip is not fetched until somebody asks for it. Always absent for
+    /// anything that is not a clip, and for senders who upload no still.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<String>,
-    /// What the sender said the bytes are, when they said something this build
-    /// would repeat.
-    ///
-    /// Kept only when it names an image or a video, because it is the type
-    /// the webview is handed for playback and the sender writes it: anything
-    /// else here would be a way to have a browser treat somebody's attachment
-    /// as a document. It is a hint rather than a fact, and what actually
-    /// arrives is sniffed in Rust.
-    ///
-    /// So a file and a voice note carry none. Neither is played, only saved,
-    /// and the name already ends in the extension that says what it is.
+    /// What the sender said the bytes are, kept only when it names an image or
+    /// a video: the webview is handed this for playback, and anything else
+    /// would let a browser treat an attachment as a document. The bytes that
+    /// actually arrive are sniffed in Rust.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mime: Option<String>,
-    /// How many bytes the sender said it is.
-    ///
-    /// For telling somebody what they are about to wait for, and for nothing
-    /// else. The real limit is applied to what arrives.
+    /// How many bytes the sender said it is, for telling somebody what they
+    /// are about to wait for. The real limit is applied to what arrives.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
-    /// The pixel width the sender said it has, if any.
-    ///
-    /// Here so the room can hold the space before the bytes land. Without it
-    /// every picture that loads shoves the conversation below it downwards,
-    /// which in a room that follows the bottom is the whole view moving.
+    /// The pixel width the sender said it has, so the room can hold the space
+    /// before the bytes land rather than shove the conversation downwards.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u64>,
     /// The pixel height the sender said it has, if any.
@@ -464,10 +269,6 @@ pub struct Media {
 }
 
 /// What sort of message this is.
-///
-/// The three `m.room.message` types that are text, the two that carry
-/// something to look at, the two that carry something to save, and the three
-/// ways a message can exist with nothing to draw at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MessageKind {
@@ -480,105 +281,52 @@ pub enum MessageKind {
     Notice,
     /// `m.image`. Its `media` says where the picture is.
     Image,
-    /// `m.file`. Its `media` says where the file is.
-    ///
-    /// Drawn as a card that saves rather than as anything to look at. Consort
-    /// has no viewer for a spreadsheet and should not pretend to.
+    /// `m.file`. Drawn as a card that saves: Consort has no viewer for a
+    /// spreadsheet and should not pretend to.
     File,
-    /// `m.audio`. A card that saves, on exactly the same terms as a file.
-    ///
-    /// Separate from one only because the interface says "voice note" rather
-    /// than "file" when it knows, and because playing one is the obvious next
-    /// thing and will want its own variant when it lands.
+    /// `m.audio`. A card that saves, on the same terms as a file, and separate
+    /// only because the interface says "voice note" when it knows.
     Audio,
-    /// `m.video`. Its `media` says where the clip is.
-    ///
-    /// Separate from an image rather than folded in with it, because the two
-    /// are not fetched on the same terms: a picture is drawn as soon as the
-    /// room is, and a clip waits to be asked for.
+    /// `m.video`. Separate from an image because the two are not fetched on
+    /// the same terms: a clip waits to be asked for.
     Video,
-    /// Encrypted, and this session has no key for it.
-    ///
-    /// Drawn rather than skipped. A gap in a conversation that says nothing
-    /// about itself is indistinguishable from a conversation that had a gap in
-    /// it, and the difference matters: one is a key that has not arrived and
-    /// the other is nobody talking.
+    /// Encrypted, and this session has no key for it. Drawn rather than
+    /// skipped: a silent gap is indistinguishable from nobody talking.
     Undecryptable,
-    /// A message body this build cannot render, such as a location.
-    ///
-    /// Also drawn rather than skipped, and for the same reason. Somebody whose
-    /// message silently vanished has no way to know it was ever sent.
+    /// A message body this build cannot render, such as a location. Also drawn
+    /// rather than skipped, so nothing vanishes without saying so.
     Unsupported,
-    /// Redacted. The homeserver has emptied it and there is nothing to draw.
-    ///
-    /// A mark where it was rather than a gap, which is the third time this
-    /// enum makes the same argument and the one with the most behind it. A
-    /// reply sitting under a message that vanished answers nothing and reads
-    /// as a non-sequitur, and every other client in the room draws a mark for
-    /// the same redaction, so closing over the gap would make one room look
-    /// like two depending on what it was opened in.
-    ///
-    /// Redacted is not erased, and nothing here should be written as though it
-    /// were. The event survives with its sender and its timestamp, which is
-    /// what this is built from; what federation already handed to other
-    /// servers is not recalled by any of it.
+    /// Redacted. A mark where it was rather than a gap, because every other
+    /// client in the room draws one and a reply under a vanished message
+    /// answers nothing. Redacted is not erased: the envelope survives, with
+    /// its sender and timestamp, which is what this is built from.
     Deleted,
 }
 
-/// One thing that happened to a room rather than in it: somebody's membership
-/// changing, or the room's name, topic or picture changing.
-///
-/// Carries the people involved as bare Matrix IDs, on the same terms as
-/// [`Message::sender`], rather than a composed sentence. The interface already
-/// resolves IDs to display names for the voice roster and for replies, and
-/// building the English here would mean building it again in every locale
-/// Consort ever gains; the IDs are enough for the interface to write
-/// "so-and-so joined the room" in whatever language it is drawing in.
-///
-/// `actor` is the only thing every one of these has in common, because it is
-/// the only thing every one of them is: somebody did this. What was done sits
-/// in [`SystemChange`], which carries whatever that particular change is
-/// about. A membership change is about a person and a rename is about a new
-/// name, and those are not the same field wearing two hats.
+/// One thing that happened to a room rather than in it: a membership, name,
+/// topic or picture changing. Carries bare Matrix IDs rather than a composed
+/// sentence, so the interface writes the English in the locale it draws in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemMessage {
     /// The event ID. The React key, on the same terms as [`Message::id`].
     pub id: String,
-    /// `origin_server_ts`, in milliseconds.
-    ///
-    /// Used only to place this line among the messages when the interface
-    /// draws the two together, which is an approximation rather than the
-    /// server's own order: see [`History`](super::History) for why messages
-    /// themselves are deliberately not sorted by this. One of these lands
-    /// beside the messages nearest its timestamp rather than at its exact
-    /// position in the room's single timeline, which the two lists held apart
-    /// from each other cannot recover.
+    /// `origin_server_ts`, in milliseconds, used only to place this line among
+    /// the messages. An approximation rather than the room's own order: see
+    /// [`History`](super::History) for why messages are not sorted by it.
     pub at: u64,
-    /// Who made the change: the sender of the state event.
-    ///
-    /// For a join this is also the subject; for an invite, a kick or a ban it
-    /// is whoever sent the invitation, or made the removal; for a room change
-    /// it is whoever changed the room.
+    /// Who made the change: the sender of the state event. For a join this is
+    /// also the subject; for an invite, a kick or a ban it is the other party.
     pub actor: String,
-    /// What was done, and whatever that particular change is about.
-    ///
-    /// Flattened, so the wire carries `kind` beside `actor` rather than
-    /// nested under a field of its own, which is what lets the interface
-    /// switch on one discriminant and read the payload the arm it took
-    /// actually has.
+    /// What was done. Flattened, so the wire carries `kind` beside `actor` and
+    /// the interface switches on one discriminant.
     #[serde(flatten)]
     pub change: SystemChange,
 }
 
-/// What a [`SystemMessage`] reports, and what that change is about.
-///
-/// Tagged by `kind` on the wire, so TypeScript reads it as a discriminated
-/// union: an arm that matched `renamed` has a `name` and no `subject`, and the
-/// compiler on both sides is what says so. The alternative was one `subject`
-/// string standing for a person in five variants and a room name in three,
-/// which would make "the room was renamed to @ada:example.org" a value this
-/// type could hold.
+/// What a [`SystemMessage`] reports. Tagged by `kind` so TypeScript reads it
+/// as a discriminated union: one `subject` string for both a person and a room
+/// name would make "renamed to @ada:example.org" a value this type could hold.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum SystemChange {
@@ -610,31 +358,23 @@ pub enum SystemChange {
     },
     /// The actor changed the room's name.
     Renamed {
-        /// The new name, or `None` when the name was removed.
-        ///
-        /// A room name is cleared by setting it to the empty string rather
-        /// than by redacting the event, so an empty one is a removal and not
-        /// a name: see `facts::or_cleared`.
+        /// The new name, or `None` when it was removed. A room name is cleared
+        /// by setting it empty rather than by redacting: see
+        /// `facts::or_cleared`.
         name: Option<String>,
     },
     /// The actor changed the room's topic.
     TopicChanged {
-        /// The new topic, or `None` when the topic was removed, on the same
-        /// terms as [`SystemChange::Renamed`].
-        ///
-        /// The plain-text topic only. `m.topic` carries the same thing in
-        /// several mimetypes and a one-line note about the room is not the
-        /// place to start rendering HTML.
+        /// The new topic, or `None` when it was removed, on the same terms as
+        /// [`SystemChange::Renamed`]. The plain-text one only: `m.topic`
+        /// carries the same thing in several mimetypes.
         topic: Option<String>,
     },
     /// The actor changed the room's picture.
     AvatarChanged {
         /// The new picture as an `mxc:` URI, or `None` when it was removed.
-        ///
-        /// Carried because removing a picture and changing one are different
-        /// sentences and this is what tells them apart. `m.room.avatar`
-        /// clears itself by omitting `url` rather than by emptying it, so
-        /// unlike a name or a topic this one arrives as an `Option` already.
+        /// `m.room.avatar` clears itself by omitting `url` rather than by
+        /// emptying it, so unlike a name this arrives as an `Option` already.
         url: Option<String>,
     },
 }
