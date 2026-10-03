@@ -51,7 +51,7 @@ use crate::roster;
 use crate::showing::PublishedVideo;
 use crate::thread::AbortOnDrop;
 use crate::transport::{CallSession, CallTransport, Roster};
-use crate::trouble::{Faults, what_it_says};
+use crate::trouble::{Faults, is_the_end, what_it_says};
 use tokio::sync::{broadcast, watch};
 
 /// A MatrixRTC call over LiveKit.
@@ -468,20 +468,9 @@ async fn watch_notices(
     mut events: tokio::sync::mpsc::UnboundedReceiver<livekit::RoomEvent>,
     mut mine: watch::Receiver<SelfAudio>,
     me: Us,
+    mut known: notices::Announced,
     flags: watch::Sender<notices::Flags>,
 ) {
-    let mut known = notices::Announced::new();
-
-    // Seeded rather than waited for. `subscribe` marks the value current at
-    // the time it was called as already seen, and this session can have
-    // deafened itself before there was a roster watching, in which case
-    // nothing would ever arrive below to say so.
-    let ours = *mine.borrow_and_update();
-    known.note(
-        &me.identity,
-        Notice::new(&me.member_id, ours.deafened, ours.away),
-    );
-
     loop {
         let changed = tokio::select! {
             event = events.recv() => match event {
@@ -721,7 +710,6 @@ impl CallSession for LiveKitSession {
         // Started here rather than at the join so that its lifetime is the
         // roster's. The roster is what the call thread aborts when a call
         // ends, so there is no path out of a call that leaves this running.
-        let (announcing, announced) = watch::channel(notices::Flags::default());
         let me = Us {
             identity: self
                 .call
@@ -732,10 +720,24 @@ impl CallSession for LiveKitSession {
                 .to_string(),
             member_id: self.call.membership_id().to_owned(),
         };
+
+        // Seeded before the channel is made rather than inside the task. The
+        // roster is read for the `Connected` that follows, which is sooner
+        // than a spawned task runs, so a flag seeded in there lands after the
+        // one read that needed it. #144: join while away and the clock beside
+        // your own name is missing until somebody else moves.
+        let ours = *self.saying.borrow();
+        let known = notices::Announced::starting_with(
+            &me.identity,
+            Notice::new(&me.member_id, ours.deafened, ours.away),
+        );
+        let (announcing, announced) = watch::channel(known.flags());
+
         let watching = AbortOnDrop(tokio::task::spawn_local(watch_notices(
             self.call.session().room().subscribe(),
             self.saying.subscribe(),
             me.clone(),
+            known,
             announcing,
         )));
 
@@ -921,6 +923,11 @@ impl Roster for LiveKitRoster {
                     // anybody for. The cryptor reports its state per frame run
                     // rather than only on a transition, so most of these say
                     // what the last one said.
+                    Ok(event) if is_the_end(&event) => {
+                        // Nothing follows this one, so there is nothing left to
+                        // wait for. `None` is what this seam calls that.
+                        return None;
+                    }
                     Ok(event) => match what_it_says(&event) {
                         Some((member_id, fault)) => {
                             if faults.note(member_id, fault) {

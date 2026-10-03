@@ -1,6 +1,7 @@
 /*
-  How the faces behind a shared screen are moved into place, read off the two
-  stylesheets that decide it.
+  How the faces behind a shared screen are moved into place, and where a glyph
+  sits inside the controls along the card's title bar, read off the stylesheets
+  that decide both.
 
   A file of its own, because it is the only kind of test that wants CSS.
   `vitest.config.ts` runs a second project over `.css.test.tsx` with the
@@ -61,5 +62,19 @@ describe("the faces rising from behind a shared screen", () => {
     expect(underReducedMotion(":root").getPropertyValue("--duration-normal")).toBe(
       "1ms",
     );
+  });
+});
+
+/*
+  Read off the declaration rather than through `getComputedStyle`, which cannot
+  answer this one. The padding at issue is the browser's own: WebKitGTK 2.52.6
+  gives a button `2px 6px 3px 6px` and jsdom gives it nothing, so the computed
+  value is "0" here whether or not the rule resets it.
+*/
+describe("the controls on the call card's title bar", () => {
+  it("leaves a glyph the whole control to be centred in", () => {
+    const control = ruleFor(".call-card__control");
+
+    expect(control.style.padding).toBe("0px");
   });
 });

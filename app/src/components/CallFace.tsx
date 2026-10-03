@@ -65,13 +65,13 @@ function DeafenedIcon({ "aria-label": label }: { "aria-label": string }) {
  * A clock, next to somebody who is not at their computer.
  *
  * The one icon here that is not a struck-through anything, deliberately. The
- * other two say what somebody switched off; this one says they are not there,
+ * others say what somebody switched off; this one says they are not there,
  * which is a different kind of fact and should not look like a fault.
  */
 function AwayIcon({ "aria-label": label }: { "aria-label": string }) {
   return (
     <svg
-      className="call-face__flag"
+      className="call-face__away"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -232,34 +232,22 @@ export function CallFace({
         </span>
         <span className="call-face__who">{person.name}</span>
         {/*
-          Drawn rather than only dimmed, and with a name on it. Somebody
-          scanning this list for who to talk to is reading names, not noticing
-          that one of them is a shade lighter, and a colour with no glyph
-          beside it is nothing at all to a screen reader.
-
-          One icon, never two. All three flags can be set on one person at
-          once, because each of the stronger ones implies the microphone is
-          off, so this is a precedence rather than a set of conditions.
-
-          Deafened first: it is the only one that says talking to them will not
-          reach them at all. Then away, which says they are not there to
-          answer. Muted last, because it is the weakest claim of the three and
-          the only one that leaves somebody listening and present.
+          Drawn rather than only dimmed, and with a name on it: a shade of grey
+          is nothing to somebody scanning the list and nothing at all to a
+          screen reader. One slot for the two, because deafening mutes and the
+          headphones are the stronger claim.
         */}
         {person.deafened === true ? (
           <DeafenedIcon aria-label={`${person.name} is deafened`} />
-        ) : person.away === true ? (
-          <AwayIcon aria-label={`${person.name} is away`} />
         ) : (
           person.muted === true && (
             <MutedIcon aria-label={`${person.name} is muted`} />
           )
         )}
         {/*
-          Beside the precedence above rather than inside it, because it is a
-          different question. Somebody muted with their camera on is ordinary,
-          and so is the reverse, so these are two facts about one person rather
-          than two candidates for one slot.
+          Beside that slot rather than in it, because it is a different
+          question. Somebody muted with their camera on is ordinary, and so is
+          the reverse.
         */}
         {live && (
           <CameraIcon
@@ -270,6 +258,14 @@ export function CallFace({
                 : `${person.name} has their camera off`
             }
           />
+        )}
+        {/*
+          Last, and in its own slot, which is where #144 asked for it. Away
+          arrives with a mute every time, and sharing a slot meant the clock
+          replaced the only glyph the row would otherwise have had.
+        */}
+        {person.away === true && (
+          <AwayIcon aria-label={`${person.name} is away`} />
         )}
       </button>
     </li>
