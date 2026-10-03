@@ -1067,3 +1067,148 @@ describe("filling the window with the card", () => {
     expect(onScreen()).toHaveStyle({ left: "400px" });
   });
 });
+
+describe("the people tucked behind a shared screen", () => {
+  function sharer(id: string, name: string): Participant {
+    return { id, name, muted: false, screen: true };
+  }
+
+  /** The roster, which is one list under one name however it is arranged. */
+  function roster() {
+    return screen.getByRole("list", { name: /^People in Lounge/ });
+  }
+
+  /** How its faces are arranged, which is what the stylesheet reads. */
+  function faces() {
+    return within(roster())
+      .queryAllByRole("listitem")
+      .filter((item) => item.dataset.layout !== undefined);
+  }
+
+  /** A roomful, so the row has more than it can hold. */
+  function crowd(many: number) {
+    return Array.from({ length: many }, (_, index) =>
+      person(`@p${index}:example.org`, `Person ${index}`),
+    );
+  }
+
+  it("tucks them behind the screen rather than putting them beside it", () => {
+    // #137. A card 240px across cannot give a screen room and still spread the
+    // call out underneath it, and the screen is what the call is about.
+    render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        sharing: "DP-0",
+      }),
+    );
+
+    expect(onScreen()).toHaveAttribute("data-peeking", "true");
+    expect(faces()[0]).toHaveAttribute("data-layout", "peek");
+  });
+
+  it("spreads them back out when the share stops", () => {
+    // The card as it was. Nothing about this outlives the share that caused it.
+    const { rerender } = render(
+      card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+        sharing: "DP-0",
+      }),
+    );
+
+    rerender(card(inCall([person("@bob:example.org", "Bob")])));
+
+    expect(onScreen()).toHaveAttribute("data-peeking", "false");
+    expect(faces()[0]).toHaveAttribute("data-layout", "tile");
+  });
+
+  it("tucks them behind somebody else's screen too", () => {
+    // The question is whether the call is carrying a screen, not whose.
+    render(card(inCall([sharer("@ada:example.org", "Ada")])));
+
+    expect(onScreen()).toHaveAttribute("data-peeking", "true");
+  });
+
+  it("leaves a peeking face a way into the card about that person", () => {
+    // Tucked away is not the same as out of reach. A face is the control that
+    // opens somebody's card, and it still is while it is half behind a screen.
+    render(card(inCall([person("@ada:example.org", "Ada")]), undefined, {
+      sharing: "DP-0",
+    }));
+
+    expect(within(roster()).getByRole("button", { name: /Ada/ })).toBeVisible();
+  });
+
+  it("counts whoever it had no room for", () => {
+    // A row that ran off the side of the card would be a row that hid the
+    // thing it is tucked behind.
+    render(card(inCall(crowd(7)), undefined, { sharing: "DP-0" }));
+
+    expect(faces()).toHaveLength(4);
+    expect(roster()).toHaveTextContent("+3");
+  });
+
+  it("says how many it left out, rather than only drawing a number", () => {
+    // `+3` is a glyph to anybody reading the screen rather than looking at it.
+    render(card(inCall(crowd(7)), undefined, { sharing: "DP-0" }));
+
+    expect(roster()).toHaveAccessibleName("People in Lounge, and 3 more");
+  });
+
+  it("counts nobody when everybody fits", () => {
+    // `+0` on the end of a row that left nobody out is the shape this goes
+    // wrong in, and it says the opposite of what it means.
+    render(card(inCall(crowd(4)), undefined, { sharing: "DP-0" }));
+
+    expect(faces()).toHaveLength(4);
+    expect(roster()).toHaveAccessibleName("People in Lounge");
+    expect(roster()).not.toHaveTextContent("+");
+  });
+
+  it("has room for more of them once the card has been expanded", () => {
+    // The row is capped by what the card is wide enough for, and expanding it
+    // is the one thing that changes that.
+    render(card(inCall(crowd(7)), undefined, { sharing: "DP-0" }));
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Expand the call card" }),
+    );
+
+    expect(faces()).toHaveLength(7);
+  });
+
+  it("tucks nobody away while there is nobody in the call", () => {
+    // A join in flight shares a screen with an empty roster. An empty strip
+    // above the screen would be furniture that says nothing.
+    render(card(inCall([]), undefined, { sharing: "DP-0" }));
+
+    expect(onScreen()).toHaveAttribute("data-peeking", "false");
+  });
+
+  it("spreads them out again once the card fills the window", async () => {
+    // Nothing is short of room there, which is the only reason to tuck them
+    // away. ADR-0008 keeps that view as the same squares, only bigger.
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+    }));
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /, fill the window$/ }),
+    );
+
+    expect(onScreen()).toHaveAttribute("data-peeking", "false");
+    expect(faces()[0]).toHaveAttribute("data-layout", "tile");
+  });
+
+  it("keeps your own camera in your peeking face", () => {
+    // Sharing a screen with a camera on is two things at once, and the card
+    // said both before this. It still says both.
+    usePicture.mockReturnValue("data:image/jpeg;base64,cccc");
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+      cameraOn: true,
+    }));
+
+    expect(
+      within(roster()).getByRole("img", { name: "Your camera" }),
+    ).toBeVisible();
+  });
+});

@@ -75,6 +75,34 @@
 }
 
 /*
+  A face peeking out from behind a shared screen. The avatar on its own: the
+  row is shorter than a face and a name under one would be cut off anyway, and
+  the sidebar's roster is still drawing every name and every flag in full.
+*/
+.call-face[data-layout="peek"] .call-face__button {
+  display: block;
+  width: var(--avatar-size, 32px);
+  padding: 0;
+}
+
+/*
+  Clipped rather than removed. The avatar is decorative by design, so this is
+  the only accessible name the button has and `display: none` would take it.
+*/
+.call-face[data-layout="peek"] .call-face__who {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.call-face[data-layout="peek"] .call-face__flag {
+  display: none;
+}
+
+/*
   Somebody who has muted themselves.
 
   Dimmed as well as marked. The glyph is the message and carries the label a
