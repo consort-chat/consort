@@ -122,6 +122,9 @@ const general: Channel = {
 
 const lounge: Channel = { ...general, id: "!lounge:example.org", name: "Lounge", kind: "voice" };
 
+const OTHER = "!other:example.org";
+const other: Channel = { ...general, id: OTHER, name: "other" };
+
 /** One minute past midnight, so the clock time is stable wherever this runs. */
 const NOON = Date.UTC(2026, 0, 1, 12, 0, 0);
 
@@ -273,7 +276,7 @@ beforeEach(() => {
 
 /** Render the pane and hand back a way to publish into it. */
 async function pane(channel: Channel = general) {
-  render(
+  const rendered = render(
     <RoomTimeline
       selfId="@bob:example.org"
       onOpenRoom={vi.fn()}
@@ -283,6 +286,7 @@ async function pane(channel: Channel = general) {
     />,
   );
   await waitFor(() => expect(timelineOpen).toHaveBeenCalled());
+  return rendered;
 }
 
 /** Put the reader at `top` and let the pane notice. */
@@ -2933,6 +2937,45 @@ describe("who has read a message", () => {
     });
 
     expect(faces()).toEqual(["@cleo:example.org"]);
+  });
+
+  it("ignores the room it has left even when the answer names that room", async () => {
+    // Stopping a listener is a promise, so the one belonging to the room
+    // before this is still attached for a moment after the switch, and it
+    // closed over that room's id. The check against the open room passes
+    // inside it, so only `cancelled` can tell that answer from a current one.
+    // What it costs to take is the whole store: a published value replaces it
+    // rather than merging, so this room's faces go with it.
+    const { rerender } = await pane();
+    await arrive(timeline([said("$one", ADA, "first")]));
+    const leftBehind = publishReaders;
+
+    rerender(
+      <RoomTimeline
+        selfId="@bob:example.org"
+        onOpenRoom={vi.fn()}
+        infoOpen={false}
+        onToggleInfo={vi.fn()}
+        channel={other}
+      />,
+    );
+    await waitFor(() => expect(onReaders).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onTimeline).toHaveBeenCalledTimes(2));
+    await arrive(timeline([said("$two", ADA, "second")], { roomId: OTHER }));
+    await readArrives({
+      roomId: OTHER,
+      main: [{ eventId: "$two", readers: ["@dot:example.org"] }],
+    });
+    expect(faces()).toEqual(["@dot:example.org"]);
+
+    await act(async () => {
+      leftBehind({
+        roomId: GENERAL,
+        main: [{ eventId: "$one", readers: ["@cleo:example.org"] }],
+      });
+    });
+
+    expect(faces()).toEqual(["@dot:example.org"]);
   });
 
   it("draws the faces under the last message in a group, not every one", async () => {

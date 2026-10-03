@@ -3,21 +3,13 @@
 
 //! Who has reacted to what, and with what.
 //!
-//! Kept beside [`crate::timeline::history::History`] rather than inside it,
-//! because a reaction is not a message and the two lists do not line up. An
-//! annotation arrives for a message that may not be loaded, may be loaded
-//! later, or may never be; and a message can be replaced by a re-read without
-//! anything having happened to what is on it.
+//! Beside [`crate::timeline::history::History`] rather than inside it, because
+//! an annotation arrives for a message that may not be loaded, or may never
+//! be, and a re-read replaces a message without touching what is on it.
 //!
-//! ## Why the annotations are held individually
-//!
-//! A count on its own cannot be undone. Taking a reaction back is redacting
-//! the `m.reaction` event, and a redaction names only the event it removes: it
-//! carries neither the key nor the message it was on. So each annotation is
-//! held under its own event ID, and the redaction is a lookup.
-//!
-//! That is also what answers "have I reacted with this one", which is what
-//! decides whether pressing a pill adds or removes.
+//! Held individually, each under its own event ID, because a redaction carries
+//! neither the key nor the message it was on, so a count could not be undone.
+//! It is also what answers "have I reacted with this one".
 
 use std::collections::HashMap;
 
@@ -40,11 +32,9 @@ pub struct Reactions {
     /// Every annotation held, by its own event ID, which is what a redaction
     /// names.
     held: HashMap<String, Annotation>,
-    /// The annotations on each message, in the order they arrived.
-    ///
-    /// The order is what stops the pills under a message rearranging
-    /// themselves every time somebody adds one. Arrival order is not the
-    /// homeserver's opinion about anything, it is simply stable.
+    /// The annotations on each message, in the order they arrived, which is
+    /// what stops the pills rearranging every time somebody adds one. Not the
+    /// homeserver's opinion about anything, simply stable.
     on: HashMap<String, Vec<String>>,
 }
 
@@ -56,11 +46,9 @@ impl Reactions {
 
     /// Take note of one annotation. Says whether anything changed.
     ///
-    /// A repeat of one already held changes nothing, which covers the event
-    /// arriving from a sync and again inside a backfill page that overlaps the
-    /// live edge. So does a second annotation of the same key by the same
-    /// person, which the specification says to ignore and which a client that
-    /// counted would draw as two.
+    /// A repeat of one already held changes nothing, and so does a second
+    /// annotation of the same key by the same person, which the specification
+    /// says to ignore and a client that counted would draw as two.
     pub fn added(&mut self, event_id: &str, target: &str, key: &str, sender: &str) -> bool {
         if self.held.contains_key(event_id) {
             return false;
@@ -88,11 +76,9 @@ impl Reactions {
         true
     }
 
-    /// Forget the annotation `event_id` was, if it was one.
-    ///
-    /// Says whether anything changed. A redaction of something that is not an
-    /// annotation is the ordinary case rather than an error: a room's
-    /// redactions are mostly of messages.
+    /// Forget the annotation `event_id` was, if it was one, saying whether
+    /// anything changed. A redaction of something that is not an annotation is
+    /// the ordinary case rather than an error.
     pub fn redacted(&mut self, event_id: &str) -> bool {
         let Some(gone) = self.held.remove(event_id) else {
             return false;
@@ -107,11 +93,9 @@ impl Reactions {
         true
     }
 
-    /// What is on `target`, ready to draw, most recently started last.
-    ///
-    /// `me` is whoever is signed in, so that a pill can say whether pressing
-    /// it would add or take away. `None` for a session with no user ID, which
-    /// nothing signed in has.
+    /// What is on `target`, ready to draw, most recently started last. `me` is
+    /// whoever is signed in, so a pill can say whether pressing it would add
+    /// or take away.
     pub fn on(&self, target: &str, me: Option<&str>) -> Vec<Reaction> {
         let mut counted: Vec<Reaction> = Vec::new();
 

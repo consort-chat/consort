@@ -121,6 +121,19 @@ pub enum Cue {
 /// A shared handle on somewhere to play a call.
 pub type Ears = Arc<dyn Heard>;
 
+/// What one pass of [`crate::CallSession::listen`] managed.
+///
+/// `pending` is the roster calling somebody audible while the transport has no
+/// track for them yet, which is the ordinary order of events rather than a
+/// failure. It is reported because nothing else will necessarily ask again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Attached {
+    /// Memberships now being pumped.
+    pub playing: usize,
+    /// Memberships the roster calls audible that have no track yet.
+    pub pending: usize,
+}
+
 /// Everybody in `participants` whose audio we should be playing.
 ///
 /// Our own membership is excluded, and not as an optimisation: an SFU does not

@@ -3,19 +3,13 @@
 
 //! Reading one thread out of a room.
 //!
-//! A thread is not in the room's timeline. Its replies carry an `m.thread`
-//! relation and `timeline::facts` keeps them out, so the only way to read one
-//! is to ask the homeserver for the events related to the message it hangs
-//! from. That is `/relations`, and the SDK decrypts what comes back, so an
-//! encrypted room needs nothing special here.
+//! A thread is not in the room's timeline, so the only way to read one is
+//! `/relations` against the message it hangs from. The SDK decrypts what comes
+//! back, so an encrypted room needs nothing special here.
 //!
-//! ## Why the recent end
-//!
-//! The page is asked for backwards. A thread long enough to need two pages is
-//! one somebody is opening to read the end of, and answering with its first
-//! fifty replies would put the panel at the part of the conversation nobody
-//! asked about. What comes back is turned round before it is handed on, so the
-//! panel draws downwards like every other conversation.
+//! Asked for backwards, because a thread long enough to need two pages is one
+//! somebody is opening to read the end of, and turned round before it is
+//! handed on so the panel draws downwards.
 
 use matrix_sdk::Client;
 use matrix_sdk::room::{IncludeRelations, RelationsOptions};
@@ -27,11 +21,9 @@ use crate::error::Result;
 use crate::timeline::dto::Thread;
 use crate::timeline::{event_id_of, facts, room_of};
 
-/// How many replies one page holds.
-///
-/// Enough that almost every thread arrives whole, and few enough that opening
-/// one is a single small request. What does not fit is reported rather than
-/// dropped: see [`Thread::more_before`].
+/// How many replies one page holds: enough that almost every thread arrives
+/// whole. What does not fit is reported rather than dropped, through
+/// [`Thread::more_before`].
 const PAGE: u32 = 50;
 
 /// Everything currently readable in the thread hanging from `root_id`.
@@ -40,12 +32,10 @@ pub async fn thread(client: &Client, room_id: &str, root_id: &str) -> Result<Thr
     let root_event_id = event_id_of(root_id)?;
 
     // Fetched rather than taken from the room's own timeline, because a thread
-    // can be opened from a message that has since scrolled out of what is
-    // loaded, and because the panel has to stand on its own.
+    // can be opened from a message that has since scrolled out of it.
     //
-    // A failure here is not a failure of the whole thread. A redacted root and
-    // one this session has no key for both look like this, and the replies are
-    // what somebody opened the panel to read.
+    // A failure here is not a failure of the whole thread: a redacted root and
+    // one with no key both look like this, and the replies still read.
     let root = room
         .load_or_fetch_event(&root_event_id, None)
         .await

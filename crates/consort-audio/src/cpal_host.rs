@@ -135,7 +135,7 @@ impl AudioCapture for CpalHost {
         };
         let mut frames = Frames::new(channels);
         let mut on_frame = on_frame;
-        let on_error = |error| tracing::error!(%error, "audio input stream error");
+        let on_error = |error: cpal::Error| tracing::error!(kind = ?error.kind(), %error, "audio input stream error");
 
         let stream = match chosen.sample_format() {
             SampleFormat::F32 => device.build_input_stream(
@@ -273,7 +273,7 @@ impl AudioPlayback for CpalHost {
         let chosen = format;
 
         let mut playing = Playing::new(tone, channels, on_end);
-        let on_error = |error| tracing::error!(%error, "audio output stream error");
+        let on_error = |error: cpal::Error| tracing::error!(kind = ?error.kind(), %error, "audio output stream error");
 
         let stream = match chosen {
             SampleFormat::F32 => device.build_output_stream(
@@ -323,7 +323,7 @@ impl AudioPlayback for CpalHost {
         let channels = config.channels;
 
         let mut mixing = Mixing::new(voices, channels);
-        let on_error = |error| tracing::error!(%error, "call audio output stream error");
+        let on_error = |error: cpal::Error| tracing::error!(kind = ?error.kind(), %error, "call audio output stream error");
 
         let stream = match format {
             SampleFormat::F32 => device.build_output_stream(
