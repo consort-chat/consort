@@ -433,7 +433,9 @@ impl consort_call::CallSession for FakeCallSession {
         Ok(FakeCallCamera)
     }
 
-    fn listen(&self, _ears: &consort_call::hearing::Ears) {}
+    fn listen(&self, _ears: &consort_call::hearing::Ears) -> consort_call::Attached {
+        consort_call::Attached::default()
+    }
 
     fn roster(&self) -> Self::Roster {
         FakeCallRoster(self.roster.subscribe())

@@ -20,3 +20,4 @@ imperfect for now and the terms on which it would be revisited.
 | [0007](0007-draw-the-self-view-from-a-still.md) | Draw the self view from a still the card asks for | accepted |
 | [0008](0008-one-square-for-everything-in-a-call.md) | One square for everything in a call, and a second still to fill one | accepted |
 | [0009](0009-a-shared-screen-takes-the-stage.md) | A shared screen takes the stage, and everything else goes under it | accepted |
+| [0010](0010-a-timeline-on-the-base-sdk.md) | Read the timeline off the base SDK, not matrix-sdk-ui | accepted |

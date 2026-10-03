@@ -80,3 +80,24 @@ in a dim room with `auto_exposure` at aperture priority and
 `exposure_time_absolute` at 666, which is 66.6 ms a frame and so exactly 15 a
 second. At 6% of a core the conversion is not the limit; the light in the room
 is. In better light the same build reads 30.
+
+## A read receipt on its own channel, not a republished timeline
+
+[`Readers`](../crates/consort-matrix/src/timeline/dto.rs) is its own value
+rather than a field on `Timeline`, and the reason was measured rather than
+assumed.
+
+| What | On its own channel | Folded into the timeline |
+|---|---|---|
+| Putting one receipt on the wire | 0.9 us | 4.8 us |
+| Redrawing what changed | 0.14 ms | 6.3 ms |
+
+The wire cost is the smaller half. The larger half is that a republished
+timeline is new objects all the way down, so every row in the room is a new
+reference and the whole list redraws. A busy room produces about as many
+receipts as messages, which makes this the difference between a conversation
+that sits still while people read it and one that does not.
+
+Both conversations, the room's and whatever thread is open, travel in one
+value. The channel keeps only its latest for a late subscriber, so two values
+on one channel would mean the second erasing the first.

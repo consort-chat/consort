@@ -10,10 +10,12 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 import { RoomAvatar } from "./RoomAvatar";
-import { resetAvatarCache } from "../lib/avatars";
+import { cachedAvatar, resetAvatarCache } from "../lib/avatars";
 import { initialsOf } from "../lib/labels";
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
+/** A second picture, so "which one is drawn" is a question with an answer. */
+const STALE = "data:image/png;base64,c3RhbGU=";
 
 describe("initialsOf", () => {
   it("uses the first letter, upper case", () => {
@@ -188,29 +190,48 @@ describe("RoomAvatar", () => {
     expect(roomAvatar).toHaveBeenCalledTimes(1);
   });
 
-  it("does not set state after unmounting", async () => {
-    let resolve: (url: string | null) => void = () => {};
-    roomAvatar.mockReturnValue(
-      new Promise<string | null>((r) => {
-        resolve = r;
-      }),
+  it("keeps the room it switched to when the room before it answers late", async () => {
+    // The effect is keyed on the room, so a switch runs the cleanup while this
+    // stays mounted and a late answer about the room before it lands on live
+    // state. An unmount is the one case where the check would not matter:
+    // React has dropped a state update aimed at a component that has gone,
+    // silently, since 18.
+    const answers = new Map<string, (url: string | null) => void>();
+    roomAvatar.mockImplementation(
+      (room: string) =>
+        new Promise<string | null>((resolve) => {
+          answers.set(room, resolve);
+        }),
     );
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const { unmount } = render(
+    const { rerender } = render(
       <RoomAvatar
-        roomId="!a:example.org"
-        name="general"
-        avatar="mxc://example.org/abc"
+        roomId="!before:example.org"
+        name="before"
+        avatar="mxc://example.org/before"
       />,
     );
-    unmount();
-    resolve(PNG);
+    await waitFor(() => expect(answers.has("!before:example.org")).toBe(true));
 
-    await waitFor(() => expect(roomAvatar).toHaveBeenCalled());
-    // React logs an act warning through console.error if a setState lands
-    // after unmount, so silence is the assertion.
-    expect(logged).not.toHaveBeenCalled();
+    rerender(
+      <RoomAvatar
+        roomId="!after:example.org"
+        name="after"
+        avatar="mxc://example.org/after"
+      />,
+    );
+    await waitFor(() => expect(answers.has("!after:example.org")).toBe(true));
+    answers.get("!after:example.org")?.(PNG);
+    expect(await screen.findByRole("presentation")).toHaveAttribute("src", PNG);
+
+    answers.get("!before:example.org")?.(STALE);
+
+    // Waiting on the cache rather than a timer: `avatarFor` writes it in the
+    // `then` immediately before the one this component attached.
+    await waitFor(() =>
+      expect(cachedAvatar("!before:example.org")).toBe(STALE),
+    );
+    expect(screen.getByRole("presentation")).toHaveAttribute("src", PNG);
   });
 
   it("swaps back to the initial when the room loses its avatar", async () => {

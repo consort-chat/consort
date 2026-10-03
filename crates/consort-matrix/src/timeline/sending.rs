@@ -3,43 +3,12 @@
 
 //! Putting a picture, a clip, a file or a voice note into a room.
 //!
-//! ## One call, because the SDK already did the hard part
+//! One `Room::send_attachment` call, which uploads, sends, and encrypts when
+//! the room is encrypted, deciding that from the room's own state. A caption
+//! and a reply ride on the same call as fields on [`AttachmentConfig`].
 //!
-//! `Room::send_attachment` uploads and sends in one go, and encrypts when the
-//! room is encrypted, decided from the room's own state rather than from
-//! anything passed in here. So there is no upload step to sequence, no second
-//! path for an encrypted room, and nothing above this has to know which of the
-//! two it is talking to.
-//!
-//! A caption and answering somebody with a picture ride on the same call, for
-//! the same reason. Both are fields on [`AttachmentConfig`], so neither needs
-//! a send path of its own, and a captioned reply with a photo in it is one
-//! request rather than three.
-//!
-//! ## What it is, is decided by the bytes
-//!
-//! [`crate::media`] already sniffs, because the type an arriving event claims
-//! is written by whoever sent it. The same answer is wanted here for the
-//! mirror-image reason: the type this end would otherwise claim is a guess off
-//! a file extension, and the extension is whatever somebody last renamed the
-//! file to. A `.png` saved as `.mp4` should arrive as the picture it is.
-//!
-//! The `msgtype` follows from the content type rather than being chosen
-//! beside it: the SDK reads `image/`, `video/` and `audio/` off the mime and
-//! writes `m.image`, `m.video` or `m.audio`. Anything the sniffer will not
-//! name goes as `application/octet-stream`, which is `m.file`, which is a card
-//! that saves. That is the honest answer for a spreadsheet and it is also the
-//! safe one: a content type this build made up is a content type a receiving
-//! client might act on.
-//!
-//! ## Two ceilings, and they are not the same ceiling
-//!
-//! [`MAX_BYTES`] is Consort's own, and it is about memory: an attachment is
-//! held whole while it is uploaded, on the same terms as one being drawn.
-//! `load_or_fetch_max_upload_size` is the homeserver's, and it is about what
-//! will be accepted. Asked before the upload rather than discovered by a 413
-//! halfway through it, because the second is several minutes of somebody's
-//! evening spent on a request that was never going to land.
+//! What it is is decided by the bytes rather than by the file extension, and
+//! the `msgtype` follows from that: see [`content_type_of`].
 
 use matrix_sdk::attachment::{
     AttachmentConfig, AttachmentInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
@@ -53,47 +22,34 @@ use crate::error::{Error, Result};
 use crate::media::{audio_type, image_type, pixel_size, video_type};
 use crate::timeline::media::MAX_BYTES;
 
-/// What goes out as `m.file` when the bytes answer to nothing else.
-///
-/// Deliberately not a type guessed from the extension. What this says is "a
-/// pile of bytes", which is exactly what is known about it, and it is what
-/// every client turns into a card that saves.
+/// What goes out as `m.file` when the bytes answer to nothing else: a pile of
+/// bytes, which is what is known about it, and what every client turns into a
+/// card that saves. A content type this build made up could be acted on.
 const ANYTHING: &str = "application/octet-stream";
 
-/// One attachment on its way out.
-///
-/// A value rather than a long argument list, because the last two are
-/// optional, they arrive from different parts of the interface, and a call
-/// site passing `None, None` says nothing about which of them it meant.
+/// One attachment on its way out. A value rather than an argument list,
+/// because the last two are optional and a call site passing `None, None`
+/// says nothing about which of them it meant.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Attaching {
-    /// What to call it in the room.
-    ///
-    /// The sender's own file name, which is the only name anybody has for it.
-    /// It is not read for anything else: what the bytes are is sniffed.
+    /// What to call it in the room: the sender's own file name, which is the
+    /// only name anybody has for it and is not read for anything else.
     pub filename: String,
     /// The whole of it, held once.
     pub bytes: Vec<u8>,
-    /// What was typed beside it, if anything.
-    ///
-    /// Read as markdown, on the same terms as an ordinary message, because it
-    /// is typed into the same box.
+    /// What was typed beside it, read as markdown because it is typed into the
+    /// same box as an ordinary message.
     pub caption: Option<String>,
-    /// The message it answers, when it is answering one.
-    ///
-    /// The event ID alone. Who wrote it is not passed, unlike
-    /// [`super::send_reply`]: the SDK resolves the event itself to build the
-    /// relation, and having done so it knows who to mention without being
-    /// told.
+    /// The message it answers, when it is answering one. The event ID alone,
+    /// unlike [`super::send_reply`]: the SDK resolves the event itself to
+    /// build the relation, so it knows who to mention.
     pub reply_to: Option<String>,
 }
 
 /// Send one attachment to a room.
 ///
-/// Nothing is returned and nothing is echoed, on the same terms as saying
-/// something: it appears when the sync brings it back. Worth stating rather
-/// than discovering, because an upload takes long enough that the gap between
-/// pressing send and seeing the picture is visible.
+/// Nothing is returned and nothing is echoed: it appears when the sync brings
+/// it back, and an upload takes long enough for that gap to be visible.
 pub async fn send_attachment(client: &Client, room_id: &str, attaching: Attaching) -> Result<()> {
     let room = super::room_of(client, room_id)?;
     let reply = reply_to(attaching.reply_to.as_deref())?;
@@ -122,10 +78,9 @@ pub async fn send_attachment(client: &Client, room_id: &str, attaching: Attachin
 
 /// The call itself, split out so the arguments above stay readable.
 ///
-/// The mime is parsed rather than held: every string this can be handed comes
-/// from [`content_type_of`], which answers from a fixed list, so a parse
-/// failure here is unreachable without editing that list into something that
-/// is not a media type.
+/// The mime is parsed rather than held. Every string this can be handed comes
+/// from [`content_type_of`]'s fixed list, so a parse failure is unreachable
+/// without editing that list into something that is not a media type.
 async fn upload(
     room: &Room,
     filename: &str,
@@ -144,9 +99,9 @@ async fn upload(
 /// What these bytes are, or `application/octet-stream` when they are nothing
 /// this build recognises.
 ///
-/// Audio before video on purpose. An m4a and an mp4 share a container, and so
+/// Audio before video on purpose: an m4a and an mp4 share a container, and so
 /// do the two kinds of Ogg, so asking the video sniffer first would send every
-/// voice note as a clip and draw a black rectangle where one should be.
+/// voice note as a clip.
 fn content_type_of(bytes: &[u8]) -> &'static str {
     image_type(bytes)
         .or_else(|| audio_type(bytes))
@@ -156,14 +111,9 @@ fn content_type_of(bytes: &[u8]) -> &'static str {
 
 /// The metadata that rides beside the upload.
 ///
-/// A picture is measured, and that is the point of this function. `width` and
-/// `height` are what let a receiving room hold the space before the bytes land;
-/// without them every picture that loads shoves the conversation below it
-/// downwards, which in a room that follows the bottom is the whole view moving.
-///
-/// Nothing else is measured. A clip's dimensions and duration need a decoder,
-/// which this build does not have and should not grow one for, and the size is
-/// filled in by the SDK from the bytes it was handed.
+/// A picture is measured, so a receiving room can hold the space before the
+/// bytes land. Nothing else is: a clip's dimensions and duration need a
+/// decoder, and the size is filled in by the SDK from the bytes.
 fn info_of(content_type: &str, bytes: &[u8]) -> AttachmentInfo {
     let size = UInt::new(bytes.len() as u64);
 
@@ -190,10 +140,9 @@ fn info_of(content_type: &str, bytes: &[u8]) -> AttachmentInfo {
 
 /// The caption, as something to send, or `None` when nobody typed one.
 ///
-/// Markdown, because it is typed into the same box as a message and going out
-/// as plain text there would make the same asterisks mean two things. Trimmed
-/// before it is judged empty so that a box somebody tabbed through does not
-/// put an empty line under their picture.
+/// Markdown, because it is typed into the same box as a message. Trimmed
+/// before it is judged empty, so a box somebody tabbed through does not put an
+/// empty line under their picture.
 fn caption(caption: Option<&str>) -> Option<TextMessageEventContent> {
     let caption = caption?;
     if caption.trim().is_empty() {
@@ -205,8 +154,7 @@ fn caption(caption: Option<&str>) -> Option<TextMessageEventContent> {
 /// The reply relation, or `None` when this is not answering anything.
 ///
 /// `Unthreaded` and not `MaybeThreaded`, matching [`super::send_reply`]: a
-/// message in a thread is not drawn in the room at all, so nothing the
-/// interface can press to attach a picture to a reply is pointing at one.
+/// message in a thread is not drawn in the room at all.
 fn reply_to(event_id: Option<&str>) -> Result<Option<Reply>> {
     let Some(event_id) = event_id else {
         return Ok(None);
@@ -221,14 +169,12 @@ fn reply_to(event_id: Option<&str>) -> Result<Option<Reply>> {
 
 /// Whether this many bytes is more than this build will hold at once.
 ///
-/// The shell refuses a file by its length before reading it, so nothing that
-/// arrives here ordinarily trips this. It stays because the shell is one
-/// caller rather than the only possible one, and because a bound that lives
-/// with the thing it bounds is the one that cannot be forgotten.
+/// [`MAX_BYTES`] is about memory: an attachment is held whole while it is
+/// uploaded. The shell refuses a file by its length first, so this ordinarily
+/// does not trip, and it stays because the shell is one caller of many.
 ///
-/// Takes the length rather than the bytes, which is what lets it be driven
-/// from a test: the ceiling is half a gigabyte, and a test that had to
-/// allocate one would be half a gigabyte per run.
+/// Takes the length rather than the bytes so a test can drive it: the ceiling
+/// is half a gigabyte, which is a lot to allocate per run.
 fn within_the_ceiling(bytes: usize) -> Result<()> {
     if bytes <= MAX_BYTES {
         return Ok(());
@@ -240,21 +186,15 @@ fn within_the_ceiling(bytes: usize) -> Result<()> {
     })
 }
 
-/// Refuse an upload the homeserver would refuse, before it is attempted.
+/// Refuse an upload the homeserver would refuse, before it is attempted,
+/// rather than discovering it as a 413 halfway through.
 ///
-/// The answer is fetched once per session and held by the SDK, so this costs a
-/// request the first time somebody sends anything and nothing afterwards.
+/// The answer is fetched once per session and held by the SDK. Here as well as
+/// inside the SDK, which answers the same question with an error written for a
+/// log: what this adds is a sentence somebody can act on.
 ///
-/// Here as well as inside the SDK, which asks the same question and answers a
-/// file that is too large with an error written for a log. What this adds is
-/// the sentence: "larger than this homeserver accepts" sends somebody to
-/// compress the file or to ask their admin, and "the homeserver could not
-/// complete that request" sends them nowhere.
-///
-/// A homeserver that will not say what its limit is is left to the SDK rather
-/// than refused here. It will make the same call a moment later and report
-/// whatever it finds, and two failures for one lookup would be this layer
-/// guessing at a limit nobody set.
+/// A homeserver that will not say what its limit is is left to the SDK, which
+/// will make the same call a moment later.
 async fn within_the_servers_limit(client: &Client, bytes: usize) -> Result<()> {
     let limit = match client.load_or_fetch_max_upload_size().await {
         Ok(limit) => u64::from(limit),

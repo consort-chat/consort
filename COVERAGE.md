@@ -229,3 +229,44 @@ after, 100% both times. The two `cancelled` checks left in that file do
 something, stopping a listener that arrived late and not asking to be caught up
 into a screen that has gone, and each fails a test when it is removed. That is
 the line: a check earns its place when removing it turns a test red.
+
+That line has since been held to all thirty-six of these checks, one mutation
+at a time, each run against the whole suite. Three were pinned: the two in
+`SignedIn.tsx` and the `resendState` one in `ThreadPanel.tsx`. Thirty-three
+turned nothing red. What follows is not one thing, because the checks are not
+one thing, and what decides it is the effect's dependency list rather than the
+body.
+
+**A mount-only effect is where the silence argument holds.** With `[]` the
+cleanup runs at unmount and nowhere else, so the late answer reaches a
+component that has gone and a check in front of a bare `setState` cannot be
+told from its absence. Nine are this: `App` 1, `OpeningPane` 2,
+`NotificationsSection` 2, `PrivacySection` 2, `ThreadPanel` 1, `RoomTimeline`
+1. They are `SignedIn.tsx`'s twelve again and they would go the same way.
+
+**A keyed effect is not.** With `[channel.id]` or `[userId]` the cleanup runs on
+every change of the key while the component stays mounted, so the check guards
+a write to live state, and removing it draws the previous room's or person's
+answer under the name of the one that replaced it. Twenty are this:
+`VerificationBanner` 4, `VoiceVideoSection` 4, `AccessibilitySection` 1,
+`ThreadPanel` 1, `RoomAvatar` 1, `PersonMenu` 3, `PresenceDot` 1,
+`RoomTimeline` 5. They earn their place and the suite was not asking.
+
+Two now ask, one per shape. `RoomAvatar` covers a stale answer overwriting the
+key that replaced it. `RoomTimeline` covers a stale channel listener, which
+closed over the room it subscribed for, so the `roomId === channel.id` beside
+the check cannot reject the answer and only `cancelled` can; what it costs to
+take is every face in the open room, because a published value replaces the
+store rather than merging into it. Each fails when its own check is removed and
+nothing else does. The eighteen left are the same two shapes again.
+
+**Four guard something other than a state update**, so the silence argument
+never applied to them: `App` logs through `console.error` twice and writes the
+document's text scale once, and `RoomTimeline` stages a dropped file.
+Observable, mount-only, untested.
+
+Two numbers worth keeping beside each other. Replacing one unfalsifiable test
+with a falsifiable one and adding a second moved coverage not at all:
+statements 95.83%, branches 92.47%, functions 95.98%, lines 98.07%, before and
+after. Those branches were already counted. That is the whole of #98 in one
+line.

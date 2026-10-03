@@ -65,7 +65,7 @@ pub use camera::{Camera, OutgoingPicture, PictureSize};
 pub use dialect::{Dialect, detect};
 pub use event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 pub use failure::CallFailure;
-pub use hearing::{Cue, Ears, Heard, audible, changes, mono};
+pub use hearing::{Attached, Cue, Ears, Heard, audible, changes, mono};
 pub use livekit::LiveKitTransport;
 pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use notices::{Announced, Flags, Notice};

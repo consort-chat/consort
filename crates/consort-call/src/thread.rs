@@ -43,7 +43,7 @@ use crate::arrivals::Arrivals;
 use crate::camera::{Camera, PictureSize};
 use crate::event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 use crate::failure::CallFailure;
-use crate::hearing::{Cue, Ears};
+use crate::hearing::{Attached, Cue, Ears};
 use crate::microphone::Microphone;
 use crate::publish::pump;
 use crate::showing::{self, PublishedVideo};
@@ -87,6 +87,21 @@ pub const LEAVE_TIMEOUT: Duration = Duration::from_secs(20);
 /// an application that will not close, and a person who cannot quit is a worse
 /// outcome than a ghost in a channel that the dead man's switch will clear.
 pub const SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long to wait before asking again for a track that has not arrived.
+///
+/// Short enough that nobody notices the gap in a conversation. The gap between
+/// an announce and a subscription on a healthy SFU is well under a second, so
+/// most of the time one of these is all that is spent.
+pub const ATTACH_RETRY: Duration = Duration::from_millis(500);
+
+/// How many times to ask. Past this, the track is not coming.
+///
+/// Ten seconds of chasing, at [`ATTACH_RETRY`] apart. A judgement rather than a
+/// measurement, and the bound exists so that somebody publishing a stream this
+/// client can never subscribe to does not leave a timer running for the whole
+/// of the call.
+pub const ATTACH_ATTEMPTS: u32 = 20;
 
 /// What the thread accepts.
 enum Message {
@@ -292,6 +307,57 @@ struct Joined<S: CallSession> {
     /// The screen share, while one is up. A second slot rather than a wider
     /// one, because both can be up at the same time.
     sharing: Option<Showing<S::Video>>,
+    /// The retry looking for tracks that have not arrived yet. Dies with the
+    /// call it belongs to, like the two tasks above.
+    chasing: Chase,
+}
+
+/// The task waiting to ask again for a track that has not arrived, and how
+/// many times it already has.
+///
+/// The count lives here rather than in the task because the task is replaced on
+/// every attempt, and a count inside it would bound nothing.
+#[derive(Default)]
+struct Chase {
+    attempts: u32,
+    /// Ends when this is dropped. See [`AbortOnDrop`].
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which is what stops the retry; reading it \
+                  would be reading a JoinHandle nobody awaits"
+    )]
+    task: Option<AbortOnDrop>,
+}
+
+impl<S: CallSession> Joined<S> {
+    /// Arm the retry, or stand it down.
+    ///
+    /// Stood down either because everything is attached or because the bound is
+    /// spent, and only the second of those is worth saying out loud.
+    fn chase(&mut self, attached: Attached, chase: &UnboundedSender<()>) {
+        let Some(next) = chasing(attached, self.chasing.attempts, ATTACH_ATTEMPTS) else {
+            if attached.pending > 0 {
+                tracing::warn!(
+                    room_id = %self.room_id,
+                    pending = attached.pending,
+                    "gave up on audio whose track never arrived"
+                );
+            }
+            self.chasing = Chase::default();
+            return;
+        };
+
+        let chase = chase.clone();
+        self.chasing = Chase {
+            attempts: next,
+            // Replacing the handle aborts whatever was already waiting, so
+            // arming this twice over is the same as arming it once.
+            task: Some(AbortOnDrop(tokio::task::spawn_local(async move {
+                tokio::time::sleep(ATTACH_RETRY).await;
+                let _ = chase.send(());
+            }))),
+        };
+    }
 }
 
 /// A camera publication and the task feeding it.
@@ -352,6 +418,12 @@ async fn serve<T: CallTransport>(
     // see it.
     let (restate, mut restated) = unbounded_channel::<()>();
 
+    // How a retry asks for the attachment half to run again, with a channel of
+    // its own for the reason `restate` has one: the sender goes to a task this
+    // loop owns, and a clone of the command sender would keep `inbox.recv()`
+    // from ever returning `None`.
+    let (chase, mut chased) = unbounded_channel::<()>();
+
     loop {
         let message = tokio::select! {
             message = inbox.recv() => message,
@@ -361,7 +433,17 @@ async fn serve<T: CallTransport>(
                 // decision taken before they got here: without this, the one
                 // thing deafen must never do, let somebody through, is exactly
                 // what happens to whoever walks in next.
-                apply(current.as_ref(), audio, &ears).await;
+                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+                continue;
+            }
+            Some(()) = chased.recv() => {
+                // The attachment half alone, never the whole of `apply`: a
+                // retry must not re-announce this session to every peer in the
+                // call on each attempt. See issue #157.
+                let attached = attach(current.as_ref(), &ears);
+                if let Some(joined) = current.as_mut() {
+                    joined.chase(attached, &chase);
+                }
                 continue;
             }
         };
@@ -404,7 +486,7 @@ async fn serve<T: CallTransport>(
                 // state whose other half is already drawn, and repeating it as
                 // part of joining would make it look like something a call
                 // decides.
-                apply(current.as_ref(), audio, &ears).await;
+                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -431,11 +513,11 @@ async fn serve<T: CallTransport>(
             }
             Message::SetMuted(muted) => {
                 audio = announce(&events, audio, SelfAudio { muted, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
             }
             Message::SetDeafened(deafened) => {
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
             }
             Message::SetAway(away) => {
                 // Only on the way back, and only from having actually been
@@ -446,7 +528,7 @@ async fn serve<T: CallTransport>(
                 // broken.
                 let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
                 if returning {
                     ears.cue(Cue::Returned);
                 }
@@ -684,9 +766,13 @@ where
 /// tearing the call down over a mute that the SFU would not accept, or silently
 /// snapping the button back after somebody pressed it, are both worse than a
 /// line in the log.
-async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ears: &Ears) {
+async fn apply<S: CallSession>(
+    current: Option<&Joined<S>>,
+    audio: SelfAudio,
+    ears: &Ears,
+) -> Attached {
     let Some(joined) = current else {
-        return;
+        return Attached::default();
     };
 
     if let Err(error) = joined.session.set_muted(audio.microphone_off()).await {
@@ -710,7 +796,7 @@ async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ea
     // tracks are subscribed. This runs again on every roster change, which is
     // exactly when a track appears, and it leaves anybody already playing
     // alone.
-    joined.session.listen(ears);
+    let attached = attach(Some(joined), ears);
 
     // Last, and after `set_deafened` rather than before it. Pausing the
     // subscriptions stops more audio arriving but takes a round trip to the
@@ -719,6 +805,47 @@ async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ea
     if audio.deafened {
         ears.silence();
     }
+
+    attached
+}
+
+/// Whether to ask again for a track that has not arrived, and the attempt
+/// count that follows.
+///
+/// `None` means stand down: either everything is attached, or the bound is
+/// spent and the track is not coming.
+pub fn chasing(attached: Attached, spent: u32, limit: u32) -> Option<u32> {
+    (attached.pending > 0 && spent < limit).then_some(spent + 1)
+}
+
+/// Push this session's state at the call, attach what has arrived, and arrange
+/// to ask again for whatever has not.
+///
+/// One helper rather than two calls at each of five sites, because a site that
+/// applied and did not chase would be issue #157 again for that one path.
+async fn apply_and_chase<S: CallSession>(
+    current: Option<&mut Joined<S>>,
+    audio: SelfAudio,
+    ears: &Ears,
+    chase: &UnboundedSender<()>,
+) {
+    let Some(joined) = current else {
+        return;
+    };
+
+    let attached = apply(Some(&*joined), audio, ears).await;
+    joined.chase(attached, chase);
+}
+
+/// Attach the audio of everybody in `current` whose track has arrived.
+///
+/// Separate from [`apply`] because a retry must reach only this half: going
+/// through the whole of `apply` would re-announce this session to every peer in
+/// the call on every attempt. `None` is a retry whose send beat its own abort.
+fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears) -> Attached {
+    current
+        .map(|joined| joined.session.listen(ears))
+        .unwrap_or_default()
 }
 
 /// Join `room_id`, having first left whatever call was current.
@@ -832,6 +959,7 @@ async fn connect<T: CallTransport>(
         // `Message::SetCamera` and `Message::SetScreen`.
         showing: None,
         sharing: None,
+        chasing: Chase::default(),
     })
 }
 
@@ -910,6 +1038,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
         watching,
         showing,
         sharing,
+        chasing,
     }) = current
     else {
         return false;
@@ -920,6 +1049,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
     // and no roster is reported for a call that is on its way out.
     drop(publishing);
     drop(watching);
+    drop(chasing);
     // Dropped rather than retracted. Leaving takes every publication in the
     // call down with it, so an `unpublish` here would be a second request for
     // something the leave is about to do, on the budget the leave needs.
@@ -971,6 +1101,7 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -1036,6 +1167,10 @@ mod tests {
         /// a call are subscribed after their memberships are known, so asking
         /// once at the join would attach to nobody.
         listens: Arc<AtomicUsize>,
+        /// What each pass of `listen` reports, in order, the last entry
+        /// standing for every pass after it. So one pending value is a track
+        /// that never arrives, and empty is nothing ever pending.
+        attachments: Arc<Mutex<VecDeque<Attached>>>,
     }
 
     impl Log {
@@ -1077,6 +1212,16 @@ mod tests {
 
         fn listens(&self) -> usize {
             self.listens.load(Ordering::Relaxed)
+        }
+
+        /// What this pass of `listen` reports, spending the script by one.
+        fn attachment(&self) -> Attached {
+            let mut scripted = self.attachments.lock().unwrap();
+            let reported = scripted.front().copied().unwrap_or_default();
+            if scripted.len() > 1 {
+                scripted.pop_front();
+            }
+            reported
         }
 
         fn cameras(&self) -> Vec<PictureSize> {
@@ -1285,6 +1430,15 @@ mod tests {
             (transport, log)
         }
 
+        /// A call whose tracks arrive on the schedule in `attachments`.
+        ///
+        /// See `Log::attachments` for what the last entry means.
+        fn whose_attachments(attachments: Vec<Attached>) -> (Self, Log) {
+            let (transport, log) = Self::new(Joining::Succeeds);
+            *log.attachments.lock().unwrap() = attachments.into();
+            (transport, log)
+        }
+
         /// A call somebody is already in.
         fn whose_roster_holds(people: Vec<Participant>) -> (Self, Log) {
             let (mut transport, log) = Self::new(Joining::Succeeds);
@@ -1446,8 +1600,9 @@ mod tests {
             Ok(())
         }
 
-        fn listen(&self, _ears: &Ears) {
+        fn listen(&self, _ears: &Ears) -> Attached {
             self.log.listens.fetch_add(1, Ordering::Relaxed);
+            self.log.attachment()
         }
 
         async fn leave(self) -> Result<(), CallFailure> {
@@ -3707,6 +3862,214 @@ mod tests {
                 .await;
 
             assert_eq!(log.listens(), 0);
+        }
+    }
+
+    /// Chasing a track that arrives after the roster has stopped changing.
+    ///
+    /// The bug is issue #157: upstream inserts a late subscription without
+    /// publishing a roster or emitting an event, so nothing asks again.
+    mod chasing_a_late_track {
+        use super::*;
+
+        fn pending(pending: usize) -> Attached {
+            Attached {
+                playing: 0,
+                pending,
+            }
+        }
+
+        fn all_playing(playing: usize) -> Attached {
+            Attached {
+                playing,
+                pending: 0,
+            }
+        }
+
+        #[test]
+        fn nothing_is_chased_once_everybody_is_attached() {
+            // Which is the ordinary case. A timer left running for the life of
+            // every call would be a cost paid by every call that works.
+            assert_eq!(chasing(all_playing(2), 0, 20), None);
+        }
+
+        #[test]
+        fn a_pending_track_is_chased() {
+            assert_eq!(chasing(pending(1), 0, 20), Some(1));
+        }
+
+        #[test]
+        fn chasing_stops_at_the_bound() {
+            // Somebody publishing a stream this client can never subscribe to
+            // must not produce a timer for the rest of the call.
+            assert_eq!(chasing(pending(1), 20, 20), None);
+        }
+
+        /// Run the loop with the command sender held and the roster reachable.
+        ///
+        /// [`transcript`] cannot serve these: it queues `Shutdown` up front, so
+        /// the loop drains and exits before any retry could land. Modelled on
+        /// `roster::driving`, which stays alive for the same reason.
+        async fn attaching<F, Fut>(transport: FakeTransport, act: F)
+        where
+            F: FnOnce(watch::Sender<Standing>, UnboundedSender<Message>) -> Fut,
+            Fut: Future<Output = ()>,
+        {
+            let roster = transport.roster.clone();
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, mut said) = unbounded_channel();
+
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Camera::new(),
+                        Arc::new(Deaf::default()),
+                    ));
+
+                    act(roster, to_loop.clone()).await;
+
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+                    while said.recv().await.is_some() {}
+                })
+                .await;
+        }
+
+        /// Let the loop reach everything it has been given, then let `count`
+        /// retry intervals pass.
+        ///
+        /// A barrier rather than a race: a paused clock only moves when every
+        /// task is idle, so the loop is always done before the first interval.
+        async fn retries_land(count: u32) {
+            tokio::time::sleep(ATTACH_RETRY * count + Duration::from_millis(1)).await;
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_track_that_lands_after_the_roster_settles_is_still_played() {
+            // The stayer's half of #157. The roster change that announces a
+            // publication is the last one there will be, and the handle lands
+            // after it, so with nothing to ask again that person is silent for
+            // the rest of the call.
+            let (transport, log) = FakeTransport::whose_attachments(vec![
+                Attached::default(),
+                pending(1),
+                Attached::default(),
+            ]);
+            // Held so the roster send below reaches the loop's own view rather
+            // than being refused for want of a receiver.
+            let _watching = transport.roster.subscribe();
+
+            attaching(transport, async |roster, to_loop| {
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                // Nothing is pending on the join's own pass, so this arms no
+                // timer and only lets the loop get as far as the join.
+                retries_land(1).await;
+
+                roster.send((vec![person("Ada")], None)).unwrap();
+                retries_land(2).await;
+            })
+            .await;
+
+            assert_eq!(
+                log.listens(),
+                3,
+                "the join, the roster change, and then nothing went looking for \
+                 the track that arrived after it"
+            );
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_fresh_join_chases_its_own_attachments() {
+            // The joiner's half. The pass after the join is the only one a
+            // joiner gets when nothing else ever changes, so the chase has to
+            // be armed from there as well as from a roster change.
+            let (transport, log) =
+                FakeTransport::whose_attachments(vec![pending(1), Attached::default()]);
+
+            attaching(transport, async |_roster, to_loop| {
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                retries_land(2).await;
+            })
+            .await;
+
+            assert_eq!(
+                log.listens(),
+                2,
+                "a join that left a track pending never asked again"
+            );
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_track_that_never_arrives_is_given_up_on() {
+            // Somebody publishing a stream this client can never subscribe to
+            // must not leave a timer running for the rest of the call.
+            let (transport, log) = FakeTransport::whose_attachments(vec![pending(1)]);
+
+            attaching(transport, async |_roster, to_loop| {
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                retries_land(ATTACH_ATTEMPTS + 5).await;
+            })
+            .await;
+
+            assert_eq!(
+                log.listens(),
+                ATTACH_ATTEMPTS as usize + 1,
+                "the join's own pass and then the bound, and nothing after it"
+            );
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn chasing_does_not_outlive_the_call() {
+            // A retry that survived its call would attach the audio of the
+            // channel just left into the one just joined.
+            let (transport, log) =
+                FakeTransport::whose_attachments(vec![pending(1), Attached::default()]);
+
+            attaching(transport, async |_roster, to_loop| {
+                // Queued together, so the loop reaches the disconnect while the
+                // clock is still too early for the first retry to have fired.
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                to_loop.send(Message::Disconnect).unwrap();
+                to_loop.send(connect_to(MUSIC)).unwrap();
+                retries_land(4).await;
+            })
+            .await;
+
+            assert_eq!(
+                log.listens(),
+                2,
+                "one pass per join, and a retry armed in general reached music"
+            );
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_retry_does_not_re_announce_this_session() {
+            // The single most likely way to make this fix worse than the bug.
+            // `announce_self` goes out to every peer over the call's data
+            // channel, and twenty of them is visible to other people.
+            let (transport, log) = FakeTransport::whose_attachments(vec![pending(1)]);
+
+            attaching(transport, async |_roster, to_loop| {
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                retries_land(ATTACH_ATTEMPTS + 5).await;
+            })
+            .await;
+
+            assert_eq!(
+                log.listens(),
+                ATTACH_ATTEMPTS as usize + 1,
+                "nothing was retried, so this proves nothing about the retries"
+            );
+            assert_eq!(
+                log.announcements(),
+                1,
+                "the join announced once and a retry announced again"
+            );
         }
     }
 }

@@ -26,7 +26,7 @@ use consort_matrix::Participant;
 use crate::camera::PictureSize;
 use crate::event::SelfAudio;
 use crate::failure::CallFailure;
-use crate::hearing::Ears;
+use crate::hearing::{Attached, Ears};
 use crate::publish::PublishedAudio;
 use crate::showing::PublishedVideo;
 
@@ -162,11 +162,10 @@ pub trait CallSession {
     /// every membership change is audible. [`crate::hearing::changes`] is the
     /// difference, as a value.
     ///
-    /// Not `async` and not fallible. There is no answer a caller could act on:
-    /// audio that cannot be played is not a reason to end a call, and a
-    /// participant whose stream has not arrived yet is the ordinary case rather
-    /// than a failure, because the next roster change asks again.
-    fn listen(&self, ears: &Ears);
+    /// Not `async` and not fallible, and the count it answers with is not a
+    /// failure either: a participant whose stream has not arrived yet is the
+    /// ordinary case. It is reported because nothing else need ever say so.
+    fn listen(&self, ears: &Ears) -> Attached;
 
     /// Start watching who is in the call.
     ///

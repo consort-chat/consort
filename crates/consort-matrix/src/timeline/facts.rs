@@ -3,59 +3,12 @@
 
 //! Turning one timeline event into one message, or into nothing.
 //!
-//! The only part of this module that has to know what an SDK event looks like.
-//! It needs no `Client`, no room and no network: a `TimelineEvent` can be built
-//! from JSON, so every rule below is tested against the exact bytes a
-//! homeserver sends rather than against a shape somebody assumed.
+//! The only part of this module that has to know what an SDK event looks like,
+//! and it needs no `Client`, no room and no network, so every rule below is
+//! tested against the exact bytes a homeserver sends.
 //!
-//! ## Most events are not messages
-//!
-//! A room's timeline carries joins, leaves, renames, topic changes, avatar
-//! changes, power level edits, reactions, receipts and call membership. None of
-//! them is drawn here, and `None` is the ordinary answer rather than a failure.
-//!
-//! ## What is deliberately dropped
-//!
-//! Thread replies, until threads are built. They arrive in the main timeline
-//! and every other client keeps them out of it, so drawing them inline would
-//! put half of two conversations in one column with nothing to say which half
-//! belonged to what.
-//!
-//! Edits, for a different reason. An `m.replace` is a correction to something
-//! already said, so drawing it inline would show a room a second copy of the
-//! sentence somebody corrected. It is not discarded: [`replacement`] reads it,
-//! and the watcher folds it onto the message it replaces.
-//!
-//! Replies are **not** dropped. A reply is a whole message that happens to
-//! name another one, and it reads correctly on its own; a thread reply does
-//! not.
-//!
-//! ## What is deliberately kept
-//!
-//! An event this session cannot decrypt, and a message body this build cannot
-//! render. Both are drawn as themselves. A gap that says nothing about itself
-//! is indistinguishable from nobody having spoken, and those are very different
-//! things to be looking at.
-//!
-//! A redacted message, for the same reason and one more. [`deleted`] builds the
-//! mark left where it was out of the envelope, which survives a redaction when
-//! the content does not. The extra reason is that a room is read in more than
-//! one client: every other one draws a mark here, and a Consort that closed
-//! over the gap would leave the reply underneath answering nothing.
-//!
-//! What cannot be recovered is which conversation it was in. A redaction
-//! strips `m.relates_to` along with everything else, so a thread reply that is
-//! paged back in after being deleted is indistinguishable from a message in
-//! the room, and is drawn there. Nothing here can tell them apart, and
-//! guessing would be worse than the noise.
-//!
-//! A thread hanging *from* a deleted message is the opposite case and reads
-//! the opposite way, which is worth saying because the two look alike. What a
-//! redaction takes is the relation the event declares about itself, in
-//! `content`. A thread summary is not that: it is an aggregation the
-//! homeserver computes over the replies and hangs off `unsigned`, none of
-//! which a redaction touches. It is still on the wire, and [`deleted`] reads
-//! it.
+//! Most of a room's timeline is not messages, so `None` is the ordinary answer
+//! rather than a failure.
 
 use matrix_sdk::deserialized_responses::TimelineEvent;
 use matrix_sdk::ruma::UInt;
@@ -82,10 +35,9 @@ use crate::timeline::dto::{
 };
 use crate::timeline::read_by::About;
 
-/// One `m.reaction` event, unpacked.
-///
-/// Its own type rather than a tuple, because three strings in a row is three
-/// chances to pass them in the wrong order and the compiler would not mind.
+/// One `m.reaction` event, unpacked. Its own type rather than a tuple, because
+/// three strings in a row the compiler cannot tell apart is three chances to
+/// pass them in the wrong order.
 pub struct Annotated {
     /// The reaction event's own ID, which is what a redaction names.
     pub event_id: String,
@@ -99,44 +51,37 @@ pub struct Annotated {
 
 /// One `m.replace` event, unpacked.
 ///
-/// Its own type for the reason [`Annotated`] is one, and with a second reason
-/// on top: `target` and `event_id` are both event IDs and the difference
-/// between them is the difference between correcting a message and correcting
-/// the correction.
+/// Its own type for the reason [`Annotated`] is one, and because `target` and
+/// `event_id` are both event IDs: confusing them is the difference between
+/// correcting a message and correcting the correction.
 pub struct Replacement {
     /// The edit's own event ID, which is what a redaction of it names.
     pub event_id: String,
     /// The message it replaces.
     pub target: String,
-    /// Who sent the edit.
-    ///
-    /// Carried rather than assumed, because whether it matches the original's
-    /// sender is the whole of what stops one person rewriting another's words.
-    /// Nothing here can answer that: the original is regularly not loaded.
+    /// Who sent the edit. Carried rather than assumed, because matching it
+    /// against the original's sender is the whole of what stops one person
+    /// rewriting another's words, and the original is often not loaded here.
     pub sender: String,
-    /// The edit's own `origin_server_ts`, in milliseconds.
-    ///
-    /// Which of several edits wins, and nothing else. It is deliberately not
-    /// written onto the message: see `Loaded::drawn`.
+    /// The edit's own `origin_server_ts`, in milliseconds: which of several
+    /// edits wins, and nothing else. Deliberately not written onto the
+    /// message, for the reason `Loaded::corrected` gives.
     pub at: u64,
     /// What the message now says, with no formatting.
     pub body: String,
     /// What it now says as HTML, when the edit carried formatting.
     ///
     /// `None` is a message edited down to plain text, and it has to overwrite
-    /// rather than leave the old formatting standing: `FormattedBody` draws
-    /// the HTML when there is any, so a merge would draw the sentence that was
-    /// corrected.
+    /// rather than leave the old formatting standing, because
+    /// `FormattedBody` draws the HTML whenever there is any.
     pub html: Option<String>,
 }
 
 /// What this build says instead of an encrypted message it has no key for.
 ///
-/// Short on purpose. A room that was busy while this session was away is a
+/// Short on purpose: a room that was busy while this session was away is a
 /// screen full of these, and a screen full of sentences beginning "cannot"
-/// reads as a broken client rather than as what it is. A key that has not
-/// arrived is a wait, so this says it is waiting and leaves it there; the
-/// interface draws something turning beside it.
+/// reads as a broken client rather than as a key that has not arrived.
 const NO_KEY: &str = "Waiting for the key to this message.";
 
 /// What this build says instead of a message it cannot draw.
@@ -145,8 +90,8 @@ const NOT_SUPPORTED: &str = "A message Consort cannot draw.";
 /// Where the message being read is going to be drawn.
 ///
 /// The only thing it decides is what to do with a thread reply, which belongs
-/// in exactly one of the two and would be a conversation happening twice if it
-/// were drawn in both.
+/// in exactly one of the two and would be a conversation drawn twice if it
+/// were in both. A reply in the room is not a thread reply and is kept.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reading {
     /// The room's own timeline.
@@ -167,19 +112,16 @@ pub fn in_thread(event: &TimelineEvent) -> Option<Message> {
 
 /// One event as a message drawn on its own, or `None` when it is not one.
 ///
-/// The same reading as [`in_thread`], and named separately because the caller
-/// is asking a different question. A reply row draws the message it names as
-/// itself, and whether that message happens to live in a thread is not
-/// something the row asks: it is being drawn beside the reply either way.
+/// The same reading as [`in_thread`], named separately because the caller asks
+/// a different question: a reply row draws the message it names as itself,
+/// whether or not that message lives in a thread.
 pub fn alone(event: &TimelineEvent) -> Option<Message> {
     read(event, Reading::Thread)
 }
 
-/// The message an event is a threaded reply to, when it is one.
-///
-/// Deliberately not a field on [`Message`]. A reply's own relation is of no
-/// interest to anything drawing it, and the one caller is the watcher asking
-/// whether an arriving event belongs to the thread somebody has open.
+/// The message an event is a threaded reply to, when it is one. Deliberately
+/// not a field on [`Message`]: the one caller is the watcher asking whether an
+/// arriving event belongs to the thread somebody has open.
 pub fn thread_root(event: &TimelineEvent) -> Option<String> {
     let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
         SyncMessageLikeEvent::Original(said),
@@ -194,11 +136,8 @@ pub fn thread_root(event: &TimelineEvent) -> Option<String> {
     }
 }
 
-/// One person's claim to have read up to one message.
-///
-/// Its own type rather than a tuple, on the same terms as [`Annotated`]: three
-/// values in a row is three chances to pass them in the wrong order, and the
-/// compiler would not mind.
+/// One person's claim to have read up to one message. Its own type rather than
+/// a tuple, on the same terms as [`Annotated`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Read {
     /// Who read it, as a Matrix user ID.
@@ -211,27 +150,16 @@ pub struct Read {
 
 /// Who an `m.receipt` event says has read what, or `None` for anything else.
 ///
-/// The whole batch every time, because that is what the event carries: one of
-/// these holds every receipt that moved since the last sync, across any number
-/// of people and messages.
+/// The whole batch every time, because that is what the event carries. An
+/// empty answer is not `None`: it lets the caller tell a batch with no public
+/// receipts in it from no batch at all.
 ///
-/// An empty answer is not the same as `None`. A receipt event carrying nothing
-/// this draws is an `m.receipt` all the same, and saying so is what lets the
-/// caller tell "a batch with no public receipts in it" from "no batch".
+/// `m.read` only, because it is the one receipt anybody else in the room can
+/// see, and a private one reaching this client is its own.
 ///
-/// ## Only the public ones
-///
-/// `m.read` is the only receipt anybody else in the room can see, so it is the
-/// only one drawn. The private receipts that reach this client are its own,
-/// sent by whichever setting `crate::receipts::mark_read` was called under,
-/// and drawing one would put this account's own face against its own message.
-///
-/// ## Which conversation
-///
-/// A receipt with no `thread_id` and a receipt naming `main` are both about the
-/// room's own timeline. The difference is what the sending client knew rather
-/// than what was read, and a build that understood only one of the two would
-/// draw nobody for half the people in the room.
+/// A receipt with no `thread_id` and one naming `main` are both about the
+/// room's own timeline, so both are read: the difference is what the sending
+/// client knew, and reading one of the two draws nobody for half the room.
 pub fn receipts(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<Read>> {
     let AnySyncEphemeralRoomEvent::Receipt(receipt) = event.deserialize().ok()? else {
         return None;
@@ -255,10 +183,9 @@ pub fn receipts(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<Read>> {
 
 /// Who an `m.typing` event says is typing, or `None` for anything else.
 ///
-/// The whole list every time, because that is what the event carries: it is a
-/// statement of who is typing now rather than a report of somebody starting.
-/// A room where everybody stopped sends an empty one, and treating that as
-/// nothing to say would leave the last name on screen for ever.
+/// The whole list every time, because the event is a statement of who is
+/// typing now. A room where everybody stopped sends an empty one, and treating
+/// that as nothing to say leaves the last name on screen for ever.
 pub fn typing(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<String>> {
     let AnySyncEphemeralRoomEvent::Typing(typing) = event.deserialize().ok()? else {
         return None;
@@ -274,11 +201,9 @@ pub fn typing(event: &Raw<AnySyncEphemeralRoomEvent>) -> Option<Vec<String>> {
     )
 }
 
-/// One event as a reaction, or `None` when it is not one.
-///
-/// Deliberately separate from [`message`], which answers `None` for a reaction
-/// and should keep doing so: a reaction is not a line in the conversation and
-/// drawing it as one is what the annotation relation exists to avoid.
+/// One event as a reaction, or `None` when it is not one. Deliberately
+/// separate from [`message`], which answers `None` for a reaction and should
+/// keep doing so: a reaction is not a line in the conversation.
 pub fn annotation(event: &TimelineEvent) -> Option<Annotated> {
     let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::Reaction(
         SyncMessageLikeEvent::Original(reacted),
@@ -295,28 +220,22 @@ pub fn annotation(event: &TimelineEvent) -> Option<Annotated> {
     })
 }
 
-/// One `m.room.redaction`, unpacked.
-///
-/// Its own type rather than the event ID alone, because who did it is now
-/// drawn. See [`Annotated`] for why a pair of strings is a struct here.
+/// One `m.room.redaction`, unpacked. Its own type rather than the event ID
+/// alone, because who did it is now drawn.
 pub struct Redaction {
     /// The event it removes.
     pub event_id: String,
-    /// Who removed it.
-    ///
-    /// Not always whoever wrote the message. A moderator can redact somebody
-    /// else's, and the mark left behind has to be able to say which of the two
-    /// happened rather than putting one story under the other's name.
+    /// Who removed it, which is not always whoever wrote the message: a
+    /// moderator can redact somebody else's, and the mark has to say which of
+    /// the two happened.
     pub sender: String,
 }
 
 /// The event a redaction removes, when the event is one.
 ///
-/// Both fields are read for the ID, because which of them carries it is the
-/// room version's business: room 11 moved `redacts` into the content and older
-/// rooms keep it at the top level. Answering that properly needs the room's
-/// version, which this module deliberately has no access to, and taking
-/// whichever is present gets the same answer without it.
+/// Both fields are read for the ID, because which one carries it is the room
+/// version's business: room 11 moved `redacts` into the content and older
+/// rooms keep it at the top level. This module has no room version to ask.
 pub fn redaction(event: &TimelineEvent) -> Option<Redaction> {
     let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomRedaction(
         SyncRoomRedactionEvent::Original(redacted),
@@ -336,16 +255,12 @@ pub fn redaction(event: &TimelineEvent) -> Option<Redaction> {
 
 /// One event as an edit of another, or `None` when it is not one.
 ///
-/// Read out of `m.new_content` and never out of the top-level body. That one
-/// is the fallback a client with no idea about edits draws, conventionally
-/// prefixed with `* `, and reading it is how a client ends up with a stray
-/// asterisk in front of every correction in a room. An edit that carries no
-/// `m.new_content` therefore carries nothing to fold, and `None` says so.
+/// Read out of `m.new_content` and never out of the top-level body, which is
+/// the `* `-prefixed fallback a client with no idea about edits draws. An edit
+/// carrying no `m.new_content` has nothing to fold, and `None` says so.
 ///
-/// Says nothing about whether the edit is allowed. Whether the sender wrote
-/// the message being replaced is a comparison against the original, which is
-/// regularly not loaded when its edit arrives, so it is made at fold time by
-/// [`crate::timeline::Edits::latest_on`].
+/// Says nothing about whether the edit is allowed: that comparison needs the
+/// original, so [`crate::timeline::Edits::latest_on`] makes it at fold time.
 pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
     let AnySyncTimelineEvent::MessageLike(AnySyncMessageLikeEvent::RoomMessage(
         SyncMessageLikeEvent::Original(said),
@@ -359,10 +274,8 @@ pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
     };
 
     // Text, and the two that are text wearing a different hat. An edit of an
-    // attachment's caption arrives as the attachment's own type with the
-    // caption inside it, and there is no caption editing surface to fold it
-    // onto: drawing the filename as the new body would be worse than leaving
-    // the message as it was.
+    // attachment's caption arrives as the attachment's own type, and there is
+    // no caption editing surface to fold it onto.
     let (body, formatted) = match replaced.new_content.msgtype {
         MessageType::Text(text) => (text.body, text.formatted),
         MessageType::Emote(emote) => (emote.body, emote.formatted),
@@ -385,27 +298,17 @@ pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
 /// One event as something that happened to the room, or `None` when it is not
 /// one to draw.
 ///
-/// The only state events this module reads: see the module doc for why the
-/// rest are skipped. Membership came first because it is the one every other
-/// Matrix client shows by default. Name, topic and avatar followed because
-/// "somebody has updated the room" is the other half of the same complaint,
-/// and a room that renames itself with nothing said about it reads as though
-/// somebody opened a different room.
-///
-/// A power level change, a canonical alias, a join rule, a history visibility
-/// and every other state event are still `None`, the same as any event
-/// `message` does not draw; there is no line missing so much as a line not
-/// yet written.
+/// Membership, name, topic and avatar are the only state events read. A power
+/// level change, a canonical alias, a join rule and the rest are still `None`:
+/// a line not yet written rather than a line missing.
 pub fn system(event: &TimelineEvent) -> Option<SystemMessage> {
     let AnySyncTimelineEvent::State(state) = event.raw().deserialize().ok()? else {
         // Every message-like event, and every reaction.
         return None;
     };
 
-    // Each arm names its own event rather than binding one through the enum,
-    // because `id`, `at` and `actor` live on the event and the change does
-    // not: there is nothing common to hoist above this match that would not
-    // have to be taken apart again inside it.
+    // Each arm names its own event rather than binding one through the enum:
+    // there is nothing common to hoist that would not be taken apart again.
     match state {
         AnySyncStateEvent::RoomMember(SyncStateEvent::Original(member)) => Some(SystemMessage {
             id: member.event_id.to_string(),
@@ -582,11 +485,9 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
                 media,
             )
         }
-        // Neither is played and neither is looked at. Both are a card that
-        // saves, so both hand over the size to say what it will cost and
-        // nothing about the type: what the sender claims a file is has no
-        // business becoming a content type, and the name already ends in the
-        // extension that says it.
+        // Neither is played and neither is looked at, so both hand over the
+        // size and nothing about the type: what the sender claims a file is
+        // has no business becoming a content type.
         MessageType::File(file) => {
             let media = attachment(
                 &file.source,
@@ -638,10 +539,9 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         // of the annotations and the corrections the watcher is holding.
         reactions: Vec::new(),
         edited: false,
-        // Only for a reply. The plaintext fallback and an ordinary markdown
-        // quote are the same characters, and the relation is the only thing
-        // that tells them apart, so stripping unconditionally would eat the
-        // first paragraph of anybody quoting somebody.
+        // Only for a reply: the plaintext fallback and an ordinary markdown
+        // quote are the same characters, so stripping unconditionally would
+        // eat the first paragraph of anybody quoting somebody.
         body: if reply_to.is_some() {
             remove_plain_reply_fallback(&body).to_owned()
         } else {
@@ -665,14 +565,9 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
 
 /// One homeserver's thread tally as the interface's.
 ///
-/// Free and shared, because the two paths that build a message read the same
-/// bundle from different places and a second copy of this rule would be a
-/// second answer free to drift.
-///
-/// Saturating rather than fallible. The count is the homeserver's own tally,
-/// and a thread long enough to overflow this is one nobody is reaching the end
-/// of, so a badge that has stopped counting beats a message that failed to
-/// draw.
+/// Shared, because the two paths that build a message read the same bundle
+/// from different places. Saturating rather than fallible: a badge that has
+/// stopped counting beats a message that failed to draw.
 fn summary(bundle: &BundledThread) -> ThreadSummary {
     ThreadSummary {
         count: u32::try_from(u64::from(bundle.count)).unwrap_or(u32::MAX),
@@ -682,17 +577,10 @@ fn summary(bundle: &BundledThread) -> ThreadSummary {
 
 /// The part of `unsigned` that ruma's redacted view does not offer.
 ///
-/// Deserialised by hand for one reason: [`RedactedUnsigned`] is the whole of
-/// what a redacted event's `unsigned` is modelled as, and it holds
-/// `redacted_because` and nothing else. The aggregations are still on the
-/// wire. See [`deleted`].
-///
-/// The field below is [`MessageLikeUnsigned`]'s own declaration copied: same
-/// name, same `default`, same type. That is deliberate and it is what makes
-/// this worth trusting. The two paths that build a message read the bundle
-/// through the same code, so they agree on a well-formed one and fail
-/// together on anything else, which is the property #86 wanted and could not
-/// have.
+/// Deserialised by hand because [`RedactedUnsigned`] models `redacted_because`
+/// and nothing else, while the aggregations are still on the wire: see
+/// [`deleted`]. The field below is [`MessageLikeUnsigned`]'s own declaration
+/// copied, same name, same `default`, same type.
 ///
 /// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
 /// [`MessageLikeUnsigned`]: matrix_sdk::ruma::events::MessageLikeUnsigned
@@ -704,11 +592,9 @@ struct StillBundled {
 
 /// Which event a message is answering, if it chose one.
 ///
-/// Not every `m.in_reply_to` is somebody answering. A threaded message carries
-/// one pointing at the last thing said in the thread, purely so that a client
-/// with no idea about threads draws the conversation in some order, and
-/// `is_falling_back` is the flag that says which kind it is. Reading them all
-/// would put a reply row on every message in a thread panel.
+/// Not every `m.in_reply_to` is somebody answering: a threaded message carries
+/// one as a fallback for clients that do not understand threads, and
+/// `is_falling_back` is the flag that says which kind it is.
 fn answering(
     relation: Option<&Relation<RoomMessageEventContentWithoutRelation>>,
 ) -> Option<String> {
@@ -727,11 +613,9 @@ fn answering(
 /// A `formatted_body` with the rich reply fallback taken off the front.
 ///
 /// The specification puts `<mx-reply>` at the very start and nowhere else, so
-/// this is a slice rather than a parse. ruma has the plaintext half of this
-/// and not the HTML half without turning on its own sanitiser, which would
-/// mean a second allow-list of elements to keep in step with `FormattedBody`'s
-/// in the webview, and the one that is not the renderer is the one that goes
-/// stale.
+/// this is a slice rather than a parse. ruma's HTML half needs its own
+/// sanitiser turned on, which would be a second allow-list to keep in step
+/// with `FormattedBody`'s in the webview.
 fn without_quoted_reply(html: String) -> String {
     const CLOSE: &str = "</mx-reply>";
 
@@ -747,8 +631,8 @@ fn without_quoted_reply(html: String) -> String {
 /// What the interface needs to fetch, name and place one attachment.
 ///
 /// `None` only when the source cannot be written down, which nothing a
-/// homeserver sends produces: it is a URI or a key, and both are JSON already.
-/// The caller falls back to the line that says this build cannot draw it.
+/// homeserver sends produces. The caller then falls back to the line that says
+/// this build cannot draw it.
 fn attachment(
     source: &MediaSource,
     name: String,
@@ -761,10 +645,9 @@ fn attachment(
     Some(Media {
         source: serde_json::to_string(source).ok()?,
         name,
-        // A handle like the one above and on the same terms, so a thumbnail in
-        // an encrypted room carries its own key. Dropped rather than raised if
-        // it will not serialise: the card falls back to the filename, which is
-        // what it did before there was a thumbnail at all.
+        // A handle like the one above, so a thumbnail in an encrypted room
+        // carries its own key. Dropped rather than raised if it will not
+        // serialise: the card falls back to the filename.
         thumbnail: thumbnail.and_then(|source| serde_json::to_string(source).ok()),
         // The sender writes this and nothing checks it, and it is the type the
         // webview is handed for playback. Anything that is not one of the two
@@ -796,11 +679,9 @@ fn drawable(
     }
 }
 
-/// An encrypted event with no key for it, as something to draw.
-///
-/// Read out of the raw JSON field by field rather than deserialised, because
-/// there is nothing to deserialise it into: the content is ciphertext, and the
-/// only things outside it are the envelope fields below.
+/// An encrypted event with no key for it, as something to draw. Read out of
+/// the raw JSON field by field, because the content is ciphertext and the only
+/// things outside it are the envelope fields below.
 fn undecryptable(event: &TimelineEvent) -> Option<Message> {
     Some(Message {
         id: event.kind.parse_event_id()?.to_string(),
@@ -829,22 +710,15 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
 /// The mark left where a redacted message was.
 ///
 /// Built out of the envelope, which a redaction leaves alone: the event ID,
-/// who wrote it and when. The content is gone and nothing here invents any, so
-/// the body is empty and the words on screen are the interface's. That is also
-/// what lets the mark name a moderator by their display name, which this side
-/// does not know.
+/// who wrote it and when. The body is empty and the words on screen are the
+/// interface's, which is what lets the mark name a moderator.
 ///
-/// `thread` is the exception, and it is read off the raw JSON rather than off
-/// the deserialised event, the way [`undecryptable`] reads `origin_server_ts`.
-/// The replies under a deleted root were not redacted, and a redaction strips
-/// `content` and leaves `unsigned` alone, so the homeserver goes on bundling
-/// the tally onto the event and goes on counting into it. What has no count is
-/// ruma: [`RedactedUnsigned`] models `redacted_because` and nothing else, so
-/// the typed view drops a field that is sitting in the bytes. Reading it here
-/// is what lets [`crate::timeline::History::redacted`] keep the summary on the
-/// live path without the two ends disagreeing after a reload.
+/// `thread` is read off the raw JSON, because a redaction strips `content` and
+/// leaves `unsigned` alone, so the homeserver goes on counting replies under a
+/// deleted root while ruma's typed view drops the field: see [`StillBundled`].
 ///
-/// [`RedactedUnsigned`]: matrix_sdk::ruma::events::RedactedUnsigned
+/// Which conversation it was in is not recoverable. `m.relates_to` goes with
+/// the content, so a deleted thread reply paged back in is drawn in the room.
 fn deleted(
     event: &TimelineEvent,
     gone: &RedactedSyncMessageLikeEvent<RedactedRoomMessageEventContent>,
@@ -872,9 +746,8 @@ fn deleted(
         reply_to: None,
         mentions: Vec::new(),
         // One field off the raw redaction rather than a match over
-        // `AnyRedactionEvent`, which is non-exhaustive and has variants this
-        // has no use for. A homeserver that sent no sender leaves it `None`,
-        // and the mark then names nobody rather than guessing.
+        // `AnyRedactionEvent`, which is non-exhaustive. A homeserver that sent
+        // no sender leaves it `None`, and the mark then names nobody.
         deleted_by: gone
             .unsigned
             .redacted_because
@@ -987,9 +860,7 @@ mod tests {
     #[test]
     fn a_format_this_build_does_not_know_is_left_for_the_fallback() {
         // `format` is an open string and `org.matrix.custom.html` is the only
-        // value the specification gives. Anything else is somebody's
-        // extension, and `body` is what the specification says to draw
-        // instead.
+        // value the specification gives, so anything else draws `body`.
         let said = message(&sent(json!({
             "msgtype": "m.text",
             "body": "plain enough",
@@ -1280,10 +1151,9 @@ mod tests {
 
     #[test]
     fn the_words_sent_with_a_picture_are_kept() {
-        // What the Lampshade bot does with a link: it uploads the clip and
-        // puts the quoted post in the same event as a caption. Reading `body`
-        // as the filename threw the post away and put it on the card as a
-        // name.
+        // What the Lampshade bot does with a link: the clip and the quoted
+        // post arrive in one event, so reading `body` as the filename threw
+        // the post away and put it on the card as a name.
         let said = message(&sent(json!({
             "msgtype": "m.image",
             "body": "Look at this",
@@ -1509,10 +1379,9 @@ mod tests {
 
     #[test]
     fn a_replacement_of_a_threaded_message_is_still_a_replacement() {
-        // An edit inside a thread relates by `m.replace`, not by `m.thread`:
-        // the relation slot holds one thing and the correction is what it
-        // holds. A reader that looked for the thread relation would drop every
-        // correction made in a panel.
+        // An edit inside a thread relates by `m.replace`, not by `m.thread`,
+        // because the relation slot holds one thing. A reader that looked for
+        // the thread relation would drop every correction made in a panel.
         let edit = replacement(&edit_of("$in a thread:example.org", text("corrected")))
             .expect("an m.replace is a replacement");
 
@@ -1521,11 +1390,9 @@ mod tests {
 
     #[test]
     fn an_edit_of_an_attachments_caption_is_left_alone_for_now() {
-        // Deliberate rather than missed. Nothing in this build offers caption
-        // editing, so the only way one arrives is from another client, and
-        // folding it would need the caption read out of the attachment's own
-        // type. Until there is a surface for it, a caption stays as it was
-        // sent rather than half-following an edit: see #74's out of scope.
+        // Deliberate rather than missed: nothing in this build offers caption
+        // editing, so a caption stays as it was sent rather than half
+        // following an edit from another client. See #74's out of scope.
         let edit = sent(json!({
             "msgtype": "m.image",
             "body": "* a new caption",
@@ -1621,10 +1488,8 @@ mod tests {
 
     #[test]
     fn a_reply_loses_the_quote_it_was_sent_with() {
-        // The fallback exists for clients that draw no reply of their own.
-        // Consort draws one, so leaving it in would show the quoted message
-        // twice, once as a blockquote nobody can click and once as the row
-        // above it.
+        // The fallback exists for clients that draw no reply of their own, so
+        // leaving it in would show the quoted message twice.
         let reply = sent(json!({
             "msgtype": "m.text",
             "body": "> <@ada:example.org> the original\n\nagreed",
@@ -1662,9 +1527,8 @@ mod tests {
     #[test]
     fn a_thread_reply_answering_nothing_in_particular_says_so() {
         // Every threaded message carries an `m.in_reply_to` pointing at the
-        // last thing said, so that a client with no idea about threads draws
-        // something. `is_falling_back` is what says it is that rather than
-        // somebody actually answering a particular message.
+        // last thing said, and `is_falling_back` is what says it is that
+        // rather than somebody answering a particular message.
         let threaded = sent(json!({
             "msgtype": "m.text",
             "body": "in the thread",
@@ -1747,12 +1611,9 @@ mod tests {
 
     /// The same, with the thread summary a homeserver still bundles onto it.
     ///
-    /// A redaction strips `content` and leaves `unsigned` alone, and Synapse
-    /// computes the aggregation when it serialises the event rather than when
-    /// the event was written, so a deleted root arrives looking exactly like
-    /// this. Checked against a real one rather than assumed: see
-    /// `a_redacted_thread_root_still_carries_its_count` in
-    /// `tests/against_a_real_homeserver.rs`.
+    /// Synapse computes the aggregation when it serialises the event, so a
+    /// deleted root arrives looking exactly like this. Checked against a real
+    /// one in `a_redacted_thread_root_still_carries_its_count`.
     fn emptied_in_a_thread(by: Value, count: u64, participated: bool) -> TimelineEvent {
         let mut unsigned = thread_bundle(count, participated);
         unsigned["redacted_because"] = by;
@@ -1780,11 +1641,9 @@ mod tests {
 
     #[test]
     fn a_redacted_message_is_drawn_as_a_mark() {
-        // The gap is the thing being avoided, and it is the argument the two
-        // tests below this one make as well. A message that vanishes leaves
-        // the reply under it answering nothing, and every other client in the
-        // room draws a mark here, so closing over it would make one room look
-        // like two depending on what it was opened in.
+        // The gap is the thing being avoided, here and in the two tests below.
+        // Every other client draws a mark, so closing over it would make one
+        // room look like two depending on what it was opened in.
         let gone = message(&emptied(because("@ada:example.org")))
             .expect("a redacted message is still drawn");
 
@@ -1803,9 +1662,7 @@ mod tests {
     #[test]
     fn a_mark_carries_who_did_it() {
         // A moderator removing somebody's message and that person removing
-        // their own are one event type with a different sender on it. Without
-        // this the mark under somebody's name says they deleted what they
-        // said, which for half the redactions in a moderated room is untrue.
+        // their own are one event type with a different sender on it.
         let gone = message(&emptied(because("@mod:example.org"))).unwrap();
 
         assert_eq!(gone.deleted_by.as_deref(), Some("@mod:example.org"));
@@ -1826,9 +1683,8 @@ mod tests {
     #[test]
     fn a_mark_keeps_the_way_into_the_thread_hanging_from_it() {
         // The replies are not redacted and the homeserver still counts them,
-        // so the count is on the wire. Read it, and the room keeps the one
-        // control that opens the panel. Without this the conversation is
-        // still there and nothing in the interface can reach it.
+        // so the count is on the wire and the room keeps the one control that
+        // opens the panel.
         let gone = message(&emptied_in_a_thread(because("@ada:example.org"), 3, true)).unwrap();
 
         assert_eq!(gone.kind, MessageKind::Deleted);
@@ -1901,10 +1757,8 @@ mod tests {
 
     #[test]
     fn an_event_this_session_has_no_key_for_is_still_drawn() {
-        // The one that matters most. A gap that says nothing about itself is
-        // indistinguishable from nobody having spoken, and the two are very
-        // different things to be looking at: one is a key that has not
-        // arrived, the other is a quiet room.
+        // The one that matters most: a gap that says nothing about itself is
+        // indistinguishable from a quiet room.
         let encrypted = TimelineEvent::from_utd(
             Raw::new(&json!({
                 "type": "m.room.encrypted",
@@ -1938,9 +1792,8 @@ mod tests {
     #[test]
     fn an_unreadable_message_reads_as_a_wait_rather_than_a_failure() {
         // A room that was quiet while this session was away is a screen full
-        // of these, and a screen full of sentences beginning "cannot" reads as
-        // a broken client. What it is is a key that has not arrived yet, and
-        // one short line says so without filling the room with it.
+        // of these, and a screen of sentences beginning "cannot" reads as a
+        // broken client rather than as a key that has not arrived.
         let encrypted = TimelineEvent::from_utd(
             Raw::new(&json!({
                 "type": "m.room.encrypted",
@@ -2003,9 +1856,7 @@ mod tests {
     #[test]
     fn a_room_mention_is_not_a_person() {
         // `m.mentions` carries a `room` flag beside the user IDs, and an @room
-        // is a different thing to draw: it is about everybody, so lighting one
-        // person's copy of it would be a lie about the other twenty. Nothing
-        // reads it yet, and nothing invents a user ID for it.
+        // is about everybody, so nothing here invents a user ID for it.
         let said = sent(json!({
             "msgtype": "m.text",
             "body": "@room the server is going down",
@@ -2279,11 +2130,9 @@ mod tests {
 
     #[test]
     fn the_wire_carries_the_kind_beside_the_actor_rather_than_under_it() {
-        // `SystemChange` is flattened into `SystemMessage`, which is what
-        // lets the TypeScript mirror be a union discriminated on `kind` with
-        // the payload beside it. Pinned because the mirror is written by
-        // hand: a nested `change` object would typecheck on both sides and
-        // draw nothing.
+        // `SystemChange` is flattened into `SystemMessage`, which is what lets
+        // the TypeScript mirror discriminate on `kind`. Pinned because a
+        // nested `change` would typecheck on both sides and draw nothing.
         let said =
             system(&changed("m.room.name", json!({ "name": "tech" }))).expect("a rename is drawn");
 
@@ -2324,9 +2173,7 @@ mod tests {
     #[test]
     fn a_state_event_with_no_sentence_yet_is_still_nothing() {
         // The set #84's "or otherwise" gestures at and this change does not
-        // build: a canonical alias, a join rule, a history visibility, power
-        // levels. Undrawn on purpose, and this pins that they stay that way
-        // rather than arriving as a half-written line.
+        // build. Undrawn on purpose, and this pins that they stay that way.
         for (kind, content) in [
             (
                 "m.room.canonical_alias",
@@ -2411,10 +2258,8 @@ mod tests {
     fn a_thread_this_build_cannot_name_is_still_not_the_room() {
         // `thread_id` is an arbitrary string on the wire, and ruma hands back
         // anything that is neither "main" nor an event ID as a value of its
-        // own. Read as the room it would put a stranger's face against a
-        // message they have not seen, which is the failure worth avoiding:
-        // drawing nothing for a thread nobody can name costs a face somebody
-        // never sees.
+        // own. Read as the room, it puts a stranger's face against a message
+        // they have not seen, which is the failure worth avoiding.
         let said = receipts(&receipt_event(read_by(
             "@ada:example.org",
             "$said:example.org",
