@@ -3927,6 +3927,7 @@ mod tests {
                         events,
                         Microphone::new(),
                         Camera::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
