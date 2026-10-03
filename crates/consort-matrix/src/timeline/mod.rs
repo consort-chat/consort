@@ -3,45 +3,12 @@
 
 //! Reading and writing one room's messages.
 //!
-//! ## Which rooms this is for
+//! All rooms, the voice ones included: a voice channel is a Matrix room whose
+//! `m.room.create` carries a call type, and nothing else about it differs.
 //!
-//! All of them, including the voice ones. A voice channel is an ordinary
-//! Matrix room whose `m.room.create` carries a call type, and `rooms::facts`
-//! reads exactly that one field to tell them apart. Everything else about it
-//! is a room: the same timeline, the same `m.room.message`, the same
-//! encryption. So there is one implementation here and the only difference is
-//! where the shell draws it.
-//!
-//! ## Built on the base SDK
-//!
-//! `matrix-sdk-ui` has a timeline that does far more than this: gap-aware
-//! storage, edits folded into the events they replace, reactions grouped,
-//! local echo, read receipts. It is not a dependency, and adding one would
-//! mean pinning a second crate to the same git revision as the SDK, which
-//! [`docs/DEPENDENCIES.md`] describes the cost of. What is here instead is the
-//! three things the base SDK already gives: the events a sync delivered, a
-//! page of history on request, and the window around one event.
-//!
-//! What that costs is written down rather than hidden. A sync that arrives
-//! `limited`, which is what a client that has been offline for a while gets,
-//! has a gap in front of it that this appends across without saying so. The
-//! messages drawn are all real and all in order; some in the middle may be
-//! missing until the room is reopened. Fixing it properly is a gap-aware
-//! store, which is the thing `matrix-sdk-ui` exists to be.
-//!
-//! The window is the same absence answered honestly rather than papered over.
-//! With nowhere to put a piece of history that is not next to what is loaded,
-//! going to a message somebody linked or answered means drawing that part of
-//! the room instead of this one, and saying so. A store that knew where its
-//! gaps were could hold both at once and would not have to choose.
-//!
-//! There is also no local echo. A message goes to the homeserver and appears
-//! when the sync brings it back, which on a healthy connection is a moment and
-//! on a bad one is visible. Echo means a second, provisional kind of message
-//! and a rule for reconciling it, and neither is worth building before
-//! somebody has typed into this at all.
-//!
-//! [`docs/DEPENDENCIES.md`]: https://github.com/consort-chat/consort
+//! Built on the base SDK rather than on `matrix-sdk-ui`, which costs a gap
+//! across a `limited` sync, a window instead of a gap-aware store, and no
+//! local echo: docs/adr/0010-a-timeline-on-the-base-sdk.md.
 
 mod answering;
 mod around;
@@ -93,38 +60,25 @@ use tokio::task::JoinHandle;
 
 use crate::error::{Error, Result};
 
-/// How many messages to ask for at a time.
-///
-/// Enough to fill a tall window on the first read, so that opening a busy room
-/// does not immediately need a second request to have anything to scroll.
-/// Small enough that a room with ten years in it does not spend a second
-/// decrypting history nobody scrolled to.
+/// How many messages to ask for at a time: enough to fill a tall window on the
+/// first read, few enough that a long room does not decrypt history nobody
+/// scrolled to.
 const PAGE: u32 = 30;
 
 /// How many pages one ask may consume before giving up and reporting.
 ///
-/// A page can hold nothing to draw. The beginning of every room is a dozen
-/// state events before the first word, and a spell of membership churn is the
-/// same thing in the middle, so an ask that fetched exactly one page would
-/// sometimes answer a scroll with nothing and look broken.
-///
-/// Bounded because a room can contain more of that than anybody wants to page
-/// through on one press, and because each page is a request and a round of
-/// decryption.
+/// A page can hold nothing to draw, since a spell of membership churn is state
+/// events and no words, so one page per ask would sometimes answer a scroll
+/// with nothing. Bounded because each page is a request and a decryption.
 const PAGES_PER_ASK: usize = 3;
 
-/// What a watcher can be asked to do.
-///
-/// One channel rather than two, so that opening a thread and scrolling back
-/// cannot be answered in the other order from the one they were asked in.
+/// What a watcher can be asked to do. One channel rather than two, so two asks
+/// cannot be answered in the other order from the one they arrived in.
 enum Ask {
     /// One more page of the room's own history.
     Earlier,
-    /// One more page of what came after what is loaded.
-    ///
-    /// Only ever answerable inside a window somebody jumped into. The room as
-    /// it is normally drawn ends at the live end, where later is a sync away
-    /// rather than a request.
+    /// One more page of what came after what is loaded. Only answerable inside
+    /// a window somebody jumped into; at the live end, later is a sync away.
     Later,
     /// Draw the history around this message instead of the present.
     Around(String),
@@ -132,13 +86,12 @@ enum Ask {
     Present,
     /// Open the thread hanging from this message, or close whatever is open.
     Thread(Option<String>),
-    /// Say that everything up to this message has been read.
+    /// Say that everything up to this message has been read, the boolean being
+    /// whether the receipt is public.
     ///
-    /// The boolean is whether the receipt that rides along with the marker is
-    /// the public one. Carried per ask rather than held by the watcher because
-    /// it is a setting somebody can change with a room already open, and a
-    /// watcher holding the answer from when the room was opened would keep
-    /// publishing receipts under the choice that has just been revoked.
+    /// Carried per ask rather than held by the watcher, because somebody can
+    /// revoke that choice with the room already open and a held answer would
+    /// go on publishing receipts under it.
     Read(String, bool),
 }
 
@@ -160,68 +113,45 @@ impl Watch {
 
     /// Ask for one more page of history.
     ///
-    /// Answered on the watcher's own task, in order with everything else it is
-    /// doing, so two presses cannot have their pages interleaved. Silently
-    /// ignored once the watcher has ended, which is what a scroll landing at
-    /// the same moment as a room change is.
+    /// Answered on the watcher's own task, in order with everything else, so
+    /// two presses cannot interleave their pages. Silently ignored once the
+    /// watcher has ended, which is a scroll landing on a room change.
     pub fn earlier(&self) {
         let _ = self.asking.send(Ask::Earlier);
     }
 
-    /// Ask for one more page of what came after what is loaded.
-    ///
-    /// Answered with nothing at the live end, which is where the room normally
-    /// is: there is no page after the present, and what comes next arrives on
-    /// its own.
+    /// Ask for one more page of what came after what is loaded. Answered with
+    /// nothing at the live end, where what comes next arrives on its own.
     pub fn later(&self) {
         let _ = self.asking.send(Ask::Later);
     }
 
-    /// Draw the history around `event_id` instead of the present.
-    ///
-    /// What following a reply row or a link to a message older than what is
-    /// loaded does. The window replaces what was loaded rather than joining
-    /// it, and [`present`](Self::present) is the way back.
-    ///
-    /// Answered on the watcher's own task, like everything else here, so a
-    /// jump and a scroll cannot be answered in the other order from the one
-    /// they were asked in.
+    /// Draw the history around `event_id` instead of the present, which is
+    /// what following a reply row or an old link does. The window replaces
+    /// what was loaded, and [`present`](Self::present) is the way back.
     pub fn go_to(&self, event_id: String) {
         let _ = self.asking.send(Ask::Around(event_id));
     }
 
-    /// Go back to the live end of the room.
-    ///
-    /// The first page again, freshly read, which is also how whatever was said
-    /// while somebody was reading last March arrives. What had been scrolled
-    /// back through is not kept: coming back to the present is a request to be
-    /// at the bottom of the room, and restoring somebody's old scroll position
-    /// underneath them would be answering a different one.
+    /// Go back to the live end of the room: the first page again, freshly
+    /// read, which is also how what was said while they were away arrives.
+    /// What had been scrolled back through is deliberately not kept.
     pub fn present(&self) {
         let _ = self.asking.send(Ask::Present);
     }
 
     /// Open the thread hanging from `root_id`, or close whatever is open.
-    ///
-    /// Answered on the watcher's own task, like everything else, so a thread
-    /// opened and closed quickly cannot report the two out of order. Silently
-    /// ignored once the watcher has ended, which is what pressing a thread at
-    /// the same moment as a room change is.
+    /// Answered on the watcher's own task, so a thread opened and closed
+    /// quickly cannot report the two out of order.
     pub fn open_thread(&self, root_id: Option<String>) {
         let _ = self.asking.send(Ask::Thread(root_id));
     }
 
     /// Say that everything up to and including `event_id` has been read.
     ///
-    /// Safe to call as often as a scroll does. The watcher drops an ask naming
-    /// the message it last sent, so a reader sitting still at the bottom of a
-    /// quiet room sends one receipt and then nothing, however many times this
-    /// is called.
-    ///
-    /// This is also where leaving a room cancels the receipt. The ask travels
-    /// on the channel a room change drops, so one that arrives just after
-    /// somebody clicked away is answered by nobody rather than by the new
-    /// room's watcher, and no receipt is sent for a room nobody is reading.
+    /// Safe to call as often as a scroll does: the watcher drops an ask naming
+    /// the message it last sent. Leaving a room cancels the receipt, because
+    /// the ask travels on the channel a room change drops.
     pub fn mark_read(&self, event_id: String, public: bool) {
         let _ = self.asking.send(Ask::Read(event_id, public));
     }
@@ -235,19 +165,9 @@ impl Drop for Watch {
 
 /// Watch one room's messages, reporting all of them whenever they change.
 ///
-/// The whole timeline every time, on the same terms as the room list: a value
-/// that is always complete is a value a late subscriber can be handed as-is,
-/// and the alternative is a frontend patching its own copy from a stream of
-/// deltas it has to receive in order.
-///
-/// The first report arrives without waiting for a sync, because it is a
-/// backfill request rather than a wait. An empty room reports as empty rather
-/// than not reporting.
-///
-/// # Lifetime
-///
-/// Unlike [`crate::rooms::watch`], this one is per room and is meant to be
-/// replaced. Dropping the [`Watch`] ends it.
+/// The whole timeline every time, so a late subscriber can be handed it as-is.
+/// The first report arrives without waiting for a sync, and an empty room
+/// reports as empty. Dropping the [`Watch`] ends it.
 pub fn watch<F, G, H, I>(
     client: Client,
     room_id: &str,
@@ -270,14 +190,8 @@ where
         // Subscribed before the first page is read, so a message sent between
         // the two is not lost between them.
         let mut updates = client.subscribe_to_all_room_updates();
-        // The same reasoning, for keys. A key that lands while the first page
-        // is decrypting would otherwise be missed, and missing one leaves a
-        // message waiting for a key this session already holds.
-        //
-        // `None` before the crypto machine exists, which for a signed-in
-        // client it always does. Nothing waits on a stream that is not there:
-        // an unreadable message stays unreadable, which is what happened
-        // before any of this.
+        // The same reasoning, for keys: one landing while the first page
+        // decrypts would leave a message waiting for a key already held.
         let mut rekeyed = client.encryption().room_keys_received_stream().await;
 
         let Ok(parsed) = RoomId::parse(&watching) else {
@@ -295,8 +209,7 @@ where
         };
         let Some(room) = client.get_room(&parsed) else {
             // Left from another session between the room list and the click.
-            // Reported as an empty room rather than as an error: the shell has
-            // a room list arriving that will take the channel away anyway.
+            // Empty rather than an error: a room list is already on its way.
             tracing::info!(room_id = %watching, "asked to watch a room this account is not in");
             on_readers(Readers {
                 room_id: watching.clone(),
@@ -311,15 +224,12 @@ where
         };
 
         let mut loaded = Loaded::new(watching.clone(), client.user_id().map(ToString::to_string));
-        // Before the first page, and before anything this watcher does can
-        // move it. Reading the room is what moves the marker, so a value read
-        // any later would already be the answer to "what have you just read".
+        // Before the first page, because reading the room moves the marker.
         loaded.read_up_to = room.fully_read_event_id().map(|id| id.to_string());
         loaded.publish(&on_change);
         loaded.publish_thread(&on_thread);
         // Said once at the start, so a reader that has just changed room is
         // not left holding the last room's answer until somebody here types.
-        // In a quiet room that is never.
         on_typing(Typing {
             room_id: watching.clone(),
             users: Vec::new(),
@@ -343,9 +253,7 @@ where
                             loaded.catch_up_on_readers(&room).await;
                             loaded.publish_readers(&on_readers);
                         }
-                        // Boxed for the reason the thread arm below is: the
-                        // compiler otherwise gives up computing the layout of
-                        // this task.
+                        // Boxed for the reason the thread arm below is.
                         Some(Ask::Around(event_id)) => {
                             Box::pin(loaded.go_to(&room, &on_change, event_id)).await;
                             loaded.catch_up_on_readers(&room).await;
@@ -357,16 +265,13 @@ where
                             loaded.publish_readers(&on_readers);
                         }
                         Some(Ask::Thread(root_id)) => {
-                            // Boxed because the compiler otherwise gives up
-                            // computing the layout of this task: the arm holds
+                            // Boxed or rustc gives up on this task's layout:
                             // a `/relations` request and an event fetch, both
-                            // of them deep, inside a `select!` inside a spawn.
+                            // deep, inside a `select!` inside a spawn.
                             Box::pin(loaded.open(&client, root_id)).await;
                             loaded.publish_thread(&on_thread);
                             // A thread keeps receipts of its own, so opening
-                            // one is a question this watcher has not asked
-                            // before and shutting one is an answer to stop
-                            // carrying.
+                            // one asks a question this watcher has not asked.
                             loaded.catch_up_on_readers(&room).await;
                             loaded.publish_readers(&on_readers);
                         }
@@ -379,21 +284,18 @@ where
                 update = updates.recv() => match update {
                     Ok(update) => {
                         let Some(joined) = update.joined.get(&parsed) else {
-                            // The ordinary case. A sync delivers one update
+                            // The ordinary case: a sync delivers one update
                             // whether or not this room was in it.
                             continue;
                         };
-                        // The thread first, because counting a reply against
-                        // the message it hangs from writes into the same
-                        // history the room is about to be published from.
+                        // The thread first, because counting a reply writes
+                        // into the history the room is published from.
                         if loaded.replied(&joined.timeline.events) {
                             loaded.publish_thread(&on_thread);
                         }
-                        // Dropped while a window somebody jumped into is
-                        // being drawn. What was just said does not belong
-                        // after a message from last March, and appending it
-                        // there would draw the two as one conversation. It is
-                        // read afresh when they come back to the present.
+                        // Dropped while a window somebody jumped into is on
+                        // screen: appending what was just said after a message
+                        // from last March draws the two as one conversation.
                         let (arrived, system_arrived) = match loaded.focus {
                             Some(_) => (Vec::new(), Vec::new()),
                             None => (
@@ -403,17 +305,14 @@ where
                         };
                         let counted = loaded.count_replies(&joined.timeline.events);
                         let added = loaded.history.arrived(arrived);
-                        // After the history and not before it. Somebody who
-                        // deletes what they just said sends the message and
-                        // the redaction inside one sync, and a sweep that ran
-                        // first would find nothing to mark and then watch the
-                        // line below draw the words it was sent to remove.
+                        // After the history, not before: one sync can carry a
+                        // message and the redaction that empties it, and a
+                        // sweep run first would find nothing to mark.
                         let annotated = loaded.annotations(&joined.timeline.events);
                         let system_added = loaded.system.arrived(system_arrived);
                         if added {
                             // A message can arrive answering something older
-                            // than what is loaded, and the row above it has
-                            // the same nothing to draw as any other reply.
+                            // than what is loaded.
                             loaded.resolve(&room).await;
                         }
                         if added | counted | annotated | system_added {
@@ -427,34 +326,27 @@ where
                         if let Some(typing) = loaded.typing(&joined.ephemeral) {
                             on_typing(typing);
                         }
-                        // Read straight off the batch rather than out of the
-                        // store. An `m.receipt` carries everything that moved,
-                        // which is the whole of what a steady room needs, and
-                        // this is the path a receipt actually arrives by.
+                        // Off the batch rather than out of the store: an
+                        // `m.receipt` carries everything that moved.
                         if loaded.receipts(&joined.ephemeral) {
                             loaded.publish_readers(&on_readers);
                         }
                     }
-                    // Too many syncs while this task was busy decrypting a
-                    // page. What was missed is history, and scrolling back is
-                    // how it is asked for, so there is nothing to do but carry
-                    // on from the next one.
+                    // Too many syncs while this task was decrypting a page.
+                    // What was missed is history, asked for by scrolling back.
                     Err(RecvError::Lagged(missed)) => {
                         tracing::debug!(missed, room_id = %watching, "fell behind the sync updates");
                     }
                     Err(RecvError::Closed) => break,
                 },
                 // `Pin::as_mut` on an `Option` is not a thing, so the arm is
-                // guarded instead: with no stream there is nothing to poll and
-                // the other two arms carry on.
+                // guarded instead and the other two carry on without it.
                 keys = async { rekeyed.as_mut().expect("guarded").next().await },
                     if rekeyed.is_some() =>
                 {
                     match keys {
-                        // The room is checked here rather than in the loop
-                        // body because a key for somewhere else is the
-                        // ordinary case: every room on the account shares this
-                        // one stream.
+                        // Checked here because a key for somewhere else is the
+                        // ordinary case: one stream serves every room.
                         Some(Ok(keys)) => {
                             if keys.iter().any(|key| key.room_id == parsed)
                                 && loaded.reread(&room).await
@@ -462,11 +354,9 @@ where
                                 loaded.publish(&on_change);
                             }
                         }
-                        // Too many keys at once, which a session catching up
-                        // after a long absence produces. Nothing is retried
-                        // for the batch that was dropped, so a message may
-                        // stay waiting until the room is reopened, which is
-                        // where this started.
+                        // Too many keys at once, which catching up after a
+                        // long absence produces. The dropped batch is not
+                        // retried, so a message may wait for a reopen.
                         Some(Err(missed)) => {
                             tracing::debug!(%missed, room_id = %watching, "fell behind the arriving keys");
                         }
@@ -485,66 +375,40 @@ where
 }
 
 /// What one watcher is holding.
-///
-/// Its own type so that `watch` above reads as the loop it is, rather than as
-/// six variables threaded through two arms.
 struct Loaded {
     room_id: String,
-    /// Who is signed in, so a reply this session sent counts as one this
-    /// session took part in. `None` only for a client with no session, which
-    /// is not one that reaches here.
+    /// Who is signed in, so a reply this session sent counts as taking part.
     me: Option<String>,
     /// The thread somebody has open, if any.
     open: Option<OpenThread>,
     history: History,
-    /// The membership changes loaded alongside `history`.
-    ///
-    /// Its own field rather than folded into `history`, because a join or a
-    /// leave is never re-read the way an undecryptable message is: `history`
-    /// carries the events that key arrivals and thread counts have to find
-    /// again by ID, and membership changes are never looked up after they
-    /// arrive.
+    /// The membership changes loaded alongside `history`. Its own field
+    /// because a join is never looked up again by ID, which is what `history`
+    /// exists for.
     system: SystemHistory,
-    /// What people have reacted with, for every message annotated in anything
-    /// this watcher has seen.
+    /// What people have reacted with, for everything this watcher has seen.
     ///
-    /// Beside the history rather than inside it, because an annotation arrives
-    /// for a message that may not be loaded, may be loaded later by a page, or
-    /// may never be. Merged onto the messages when a timeline is published.
+    /// Beside the history because an annotation arrives for a message that may
+    /// not be loaded, or may never be. Merged on when a timeline is published.
     reactions: Reactions,
-    /// The corrections people have made, for every message replaced in
-    /// anything this watcher has seen.
+    /// The corrections people have made, for everything this watcher has seen.
     ///
-    /// Beside the history for the reason the reactions are, and for one more:
-    /// an edit is a different event from the message it corrects, so writing
-    /// the new text into the history would be undone the moment a room key
-    /// re-read the original. Merged onto the messages when a timeline is
-    /// published.
+    /// Beside the history for the reason the reactions are, and because
+    /// writing the new text in would be undone the moment a room key re-read
+    /// the original.
     edits: Edits,
-    /// The events this session could not read, by event ID.
-    ///
-    /// Held as the JSON they arrived as, which is what `decrypt_event` takes,
-    /// and dropped as each one opens. An encrypted room that has been quiet
-    /// holds nothing here at all; one this session arrived late to holds a
-    /// screenful, which is the case this exists for.
+    /// The events this session could not read, by event ID, held as the JSON
+    /// they arrived as, which is what `decrypt_event` takes.
     waiting: HashMap<String, Raw<AnySyncTimelineEvent>>,
     /// The message each reply names, for the ones not in the history.
     ///
-    /// Beside the history rather than inside it, on the same terms as the
-    /// reactions: a reply names a message that may not be loaded, may be
-    /// loaded later by a page, or may never be. Merged onto the timeline when
-    /// one is published.
-    ///
-    /// `None` is a lookup that came back with nothing to draw, kept so that a
-    /// redacted message is asked about once rather than on every publish for
-    /// as long as the reply to it is on screen.
+    /// Beside the history on the same terms as the reactions. `None` is a
+    /// lookup that came back with nothing, kept so a redacted message is asked
+    /// about once rather than on every publish.
     answered: HashMap<String, Option<Message>>,
     /// Where the next backwards page starts, or `None` before the first one.
     from: Option<String>,
-    /// Where the next forwards page starts.
-    ///
-    /// `None` at the live end, which is where the room normally is and where
-    /// there is nothing after the present to ask for.
+    /// Where the next forwards page starts; `None` at the live end.
     forward: Option<String>,
     /// The message the loaded window was opened around, when it is not the
     /// present.
@@ -553,50 +417,35 @@ struct Loaded {
     more_before: bool,
     /// Whether the homeserver has messages after the loaded window.
     more_after: bool,
-    /// Whether a page of older messages is being fetched right now.
-    ///
-    /// Also what a jump raises. A window around a message from last March is
-    /// earlier messages by any reading, and it is drawn where they would be.
+    /// Whether a page of older messages is being fetched, a jump included.
     loading: bool,
     /// Whether a page of newer messages is being fetched right now.
     loading_after: bool,
     /// Who was last reported as typing, so an unchanged list is not
     /// republished on every sync for as long as somebody keeps typing.
     typing: Vec<String>,
-    /// Where this account had stopped reading when the room was opened.
-    ///
-    /// Read once and then left alone. See [`Timeline::read_up_to`] for why it
-    /// must not follow the marker it came from.
+    /// Where this account had stopped reading when the room was opened. Read
+    /// once and then left alone: see [`Timeline::read_up_to`] for why.
     read_up_to: Option<String>,
-    /// Where everybody else in the room has read up to.
-    ///
-    /// Beside the history rather than inside it, for the reason the reactions
-    /// are and for one measured one. See [`Readers`]: a receipt arriving is
-    /// frequent enough in a busy room to be a message's worth of work, and
-    /// putting it on a message would redraw the conversation every time
-    /// somebody else looked at it.
+    /// Where everybody else in the room has read up to. Beside the history,
+    /// because putting it on a message would redraw the conversation every
+    /// time somebody else looked at it: see [`Readers`].
     read_by: ReadBy,
     /// What was last said about that, so an unchanged answer is not
-    /// republished.
-    ///
-    /// Held rather than derived from a dirty flag because what is drawn
-    /// depends on which thread is open as well as on what has arrived, and a
-    /// flag would have to be set in both places and would eventually not be.
+    /// republished. Held rather than flagged, because what is drawn depends on
+    /// which thread is open as well as on what has arrived.
     published: Readers,
-    /// The message this watcher last sent a receipt for.
-    ///
-    /// The whole of the throttling. A reader sitting at the bottom of a room
-    /// asks for the same message to be marked read on every scroll and every
-    /// arriving sync, and without this each of those would be a request.
+    /// The message this watcher last sent a receipt for, which is the whole of
+    /// the throttling: a reader sitting at the bottom of a room asks for the
+    /// same message on every scroll and every sync.
     marked: Option<String>,
 }
 
 /// One thread being watched alongside the room.
 ///
-/// Its replies are not in the room's timeline, so this holds its own history
-/// rather than filtering the room's. What it shares with the room is the
-/// arriving sync: the events are already in hand, so keeping a thread current
-/// costs a second read of a batch rather than a second subscription.
+/// Its replies are not in the room's timeline, so it holds its own history.
+/// What it shares is the arriving sync, so keeping it current costs a second
+/// read of a batch rather than a second subscription.
 struct OpenThread {
     root_id: String,
     root: Option<Message>,
@@ -620,9 +469,8 @@ impl Loaded {
             from: None,
             forward: None,
             focus: None,
-            // Assumed until the homeserver says otherwise, because the first
-            // page has not been asked for yet and "no more history" is a
-            // stronger claim than an empty list supports.
+            // Assumed until the homeserver says otherwise: "no more history"
+            // is a stronger claim than an unasked question supports.
             more_before: true,
             more_after: false,
             loading: true,
@@ -637,9 +485,8 @@ impl Loaded {
 
     /// Answer one ask for a page at either end, and report the result.
     ///
-    /// Reports twice, once to put the spinner up and once to take it down.
-    /// Both are cheap, and the first is the only thing that makes a slow
-    /// homeserver distinguishable from a button that did nothing.
+    /// Reports twice, to put the spinner up and to take it down. The first is
+    /// what makes a slow homeserver distinguishable from a dead button.
     async fn page<F>(&mut self, room: &Room, on_change: &F, towards: Direction)
     where
         F: Fn(Timeline),
@@ -659,14 +506,11 @@ impl Loaded {
 
         self.resolve(room).await;
         // A window read forwards until the homeserver has nothing after it is
-        // not a window any more: what is loaded ends where the room does. Held
-        // on to, it says a reader at the newest message in the room is looking
-        // at older ones, and it goes on telling the sync arm to drop every
-        // message that arrives, so the room reads as frozen at its own bottom.
+        // not a window any more. Held on to, it goes on telling the sync arm
+        // to drop every message that arrives, so the room reads as frozen.
         //
-        // Nothing arriving is lost to giving it up here. A sync that landed
-        // while the page was being read is still waiting on the broadcast
-        // receiver, and the loop reaches it with the window already gone.
+        // Nothing arriving is lost: a sync that landed while the page was
+        // read is still on the broadcast receiver when the loop comes round.
         if matches!(towards, Direction::Forward) && !self.more_after {
             self.focus = None;
         }
@@ -682,12 +526,8 @@ impl Loaded {
         }
     }
 
-    /// Say that a page is on its way, or has stopped being.
-    ///
-    /// Which end is part of it, because the interface draws the notice at that
-    /// end of the list. One flag for both would put "loading earlier messages"
-    /// at the top of a box whose reader is at the bottom waiting for the
-    /// opposite page.
+    /// Say that a page is on its way, or has stopped being. Which end is part
+    /// of it, because the interface draws the notice at that end of the list.
     fn loading(&mut self, towards: Direction, loading: bool) {
         match towards {
             Direction::Backward => self.loading = loading,
@@ -699,9 +539,8 @@ impl Loaded {
     ///
     /// `true` only when the page held nothing to draw and the homeserver has
     /// more, which is the one reason to go round again. A failure answers
-    /// `false`: the room is still drawn and still live, the scroll can be
-    /// tried again, and three requests in a row to a homeserver that just
-    /// refused one is not a way to be told anything new.
+    /// `false`, because three requests to a homeserver that just refused one
+    /// tell nobody anything new.
     async fn fetch(&mut self, room: &Room, towards: Direction) -> bool {
         let mut options = MessagesOptions::new(towards);
         options.from = match towards {
@@ -713,22 +552,19 @@ impl Loaded {
         let page = match room.messages(options).await {
             Ok(page) => page,
             Err(error) => {
-                // Logged rather than raised. A dialog about a page of history
-                // would be worse than the absence of it.
+                // Logged rather than raised: a dialog about a page of history
+                // is worse than the absence of it.
                 tracing::warn!(%error, room_id = %self.room_id, "could not read a page of messages");
                 return false;
             }
         };
 
-        // An empty chunk is the end of what the homeserver will give, and so
-        // is a missing `end`. Both are checked because homeservers differ
-        // about which one they say it with.
+        // Both checked: homeservers differ about whether the end of history is
+        // an empty chunk or a missing `end`.
         let more = page.end.is_some() && !page.chunk.is_empty();
         let chunk: Vec<TimelineEvent> = match towards {
             // Backwards, so the homeserver answers newest first and the page
-            // has to be turned round. Getting this wrong reverses every page
-            // while leaving the pages themselves in order, which reads as a
-            // conversation that almost makes sense.
+            // has to be turned round.
             Direction::Backward => {
                 self.more_before = more;
                 self.from = page.end;
@@ -756,14 +592,11 @@ impl Loaded {
                 self.system.arrived(system_arrived);
             }
         };
-        // A page carries every kind of event, reactions among them, which is
-        // how a message scrolled back to arrives with what is already on it.
-        // The thread panel has no equivalent: `/relations` is asked for thread
-        // replies only, so a reply's reactions appear when one arrives live
-        // rather than when the panel opens.
+        // A page carries reactions too, which is how a message scrolled back
+        // to arrives with what is already on it. The thread panel has no
+        // equivalent: `/relations` asks for thread replies only.
         //
-        // After the history, for the reason the sync has it in that order: a
-        // page regularly holds a message and the redaction that emptied it.
+        // After the history, for the reason the sync arm has it in that order.
         self.annotations(&chunk);
 
         !drawable && self.has_more(towards)
@@ -771,15 +604,9 @@ impl Loaded {
 
     /// Draw the history around `event_id` instead of the present.
     ///
-    /// The window replaces what is loaded rather than joining it, for the
-    /// reason [`around`] gives: two pieces of a room that are not next to each
-    /// other, drawn as though they were, is a year passing with nothing to say
-    /// so.
-    ///
-    /// A window that will not load leaves the room where it was. There is
-    /// nothing better to do with a message the homeserver will not hand over,
-    /// and emptying the room to say so would take away the conversation
-    /// somebody was reading as well as the one they asked for.
+    /// The window replaces what is loaded rather than joining it: see
+    /// [`around`]. A window that will not load leaves the room where it was,
+    /// rather than emptying it to say so.
     async fn go_to<F>(&mut self, room: &Room, on_change: &F, event_id: String)
     where
         F: Fn(Timeline),
@@ -812,10 +639,8 @@ impl Loaded {
     /// Go back to the live end of the room.
     ///
     /// The first page again rather than whatever was loaded before the jump.
-    /// A sync arriving while somebody reads last March is deliberately not
-    /// appended to the window they are reading, so what is held is out of date
-    /// by however long they were away, and reading it fresh is both the
-    /// correction and how the messages they missed arrive.
+    /// A sync arriving during the jump was dropped, so what is held is out of
+    /// date and reading it fresh is both the correction and the catch-up.
     async fn present<F>(&mut self, room: &Room, on_change: &F)
     where
         F: Fn(Timeline),
@@ -836,10 +661,9 @@ impl Loaded {
 
     /// Look up whatever the loaded replies name and this does not hold.
     ///
-    /// One request each at worst, and for a message the SDK has already stored
-    /// none at all. Bounded by what is loaded rather than by the room: a reply
-    /// is only looked up while it is on screen, and the answer is kept so
-    /// scrolling past it twice is not asking twice.
+    /// One request each at worst, none for a message the SDK has stored.
+    /// Bounded by what is loaded, and the answer is kept, so scrolling past a
+    /// reply twice is not asking twice.
     async fn resolve(&mut self, room: &Room) {
         let held: HashSet<&str> = self
             .history
@@ -858,9 +682,7 @@ impl Loaded {
 
         for id in wanted {
             // Boxed here rather than at the three call sites, which is where
-            // the compiler would otherwise report it: an event fetch is a deep
-            // future, this is awaited from inside a `select!` inside a spawn,
-            // and holding it inline overflows the layout depth limit.
+            // the compiler would otherwise report the layout depth limit.
             let found = Box::pin(answering::answered(room, &id)).await;
             self.answered.insert(id, found);
         }
@@ -868,10 +690,9 @@ impl Loaded {
 
     /// One batch of events as messages, remembering the ones with no key.
     ///
-    /// The remembering is the whole reason this is not a `filter_map` at the
-    /// two call sites. An event that arrives unreadable is drawn as a wait,
-    /// and the wait can only be redeemed by something holding the ciphertext
-    /// until the key turns up.
+    /// The remembering is why this is not a `filter_map` at the two call
+    /// sites: a wait drawn for an unreadable event is only redeemed by
+    /// something holding the ciphertext until the key turns up.
     fn read(&mut self, events: &[TimelineEvent]) -> Vec<Message> {
         events
             .iter()
@@ -885,27 +706,22 @@ impl Loaded {
             .collect()
     }
 
-    /// One batch of events as membership changes.
-    ///
-    /// No waiting list of its own, unlike [`Self::read`]: a membership event
-    /// is never encrypted the way a message can be, so there is no key for
-    /// one of these to arrive late for.
+    /// One batch of events as membership changes. No waiting list, unlike
+    /// [`Self::read`]: a membership event is never encrypted.
     fn read_system(&self, events: &[TimelineEvent]) -> Vec<SystemMessage> {
         events.iter().filter_map(facts::system).collect()
     }
 
     /// Who this batch says is typing, when it says anything about it.
     ///
-    /// `None` when the batch carried no `m.typing` at all, which is almost
-    /// every sync, and when it says the same thing as the last one. A room
-    /// where somebody is typing sends one of these on every sync until they
-    /// stop, and republishing an unchanged list would wake the webview several
-    /// times a minute to hand it what it has.
+    /// `None` when the batch carried no `m.typing`, and when it says what the
+    /// last one did: a room where somebody is typing sends one on every sync
+    /// until they stop.
     fn typing(&mut self, ephemeral: &[Raw<AnySyncEphemeralRoomEvent>]) -> Option<Typing> {
         let said = ephemeral.iter().find_map(facts::typing)?;
 
-        // Ours taken out here rather than in the interface, because it is the
-        // same answer for every reader and there is exactly one of us.
+        // Ours taken out here rather than in the interface: same answer for
+        // every reader.
         let users: Vec<String> = said
             .into_iter()
             .filter(|user| Some(user) != self.me.as_ref())
@@ -921,13 +737,9 @@ impl Loaded {
         })
     }
 
-    /// Take note of everything in one batch that is not a message.
-    ///
-    /// The reactions, the corrections and the redactions. Reports whether
-    /// anything drawn changed. Separate from [`Self::read`] because none of
-    /// these is a message and none of them ever becomes one: a reaction and an
-    /// edit are both something *about* a message, and a redaction can remove
-    /// any of the three.
+    /// Take note of the reactions, corrections and redactions in one batch,
+    /// reporting whether anything drawn changed. Separate from [`Self::read`]
+    /// because none of these is a message or ever becomes one.
     fn annotations(&mut self, events: &[TimelineEvent]) -> bool {
         let mut changed = false;
         for event in events {
@@ -938,28 +750,22 @@ impl Loaded {
                 continue;
             }
             if let Some(one) = facts::replacement(event) {
-                // Taken whoever sent it. Whether they wrote the message being
-                // replaced is a comparison against the original, which is
-                // regularly not loaded here, and `Edits::latest_on` is where
-                // it can be made.
+                // Taken whoever sent it: the comparison against the original's
+                // author needs the original, so `Edits::latest_on` makes it.
                 changed |= self.edits.added(one);
                 continue;
             }
             if let Some(gone) = facts::redaction(event) {
-                // Whichever it was. A redacted annotation is somebody taking a
-                // reaction back and a redacted edit is somebody taking a
-                // correction back, both of which leave nothing behind. A
-                // redacted message is emptied where it stands instead of being
-                // dropped, so that the reply underneath is not left answering
-                // a gap.
+                // Whichever it was. An annotation and an edit leave nothing
+                // behind; a message is emptied where it stands, so the reply
+                // underneath is not left answering a gap.
                 let by = Some(gone.sender.as_str());
                 changed |= self.reactions.redacted(&gone.event_id);
                 changed |= self.edits.redacted(&gone.event_id);
                 changed |= self.history.redacted(&gone.event_id, by);
-                // The panel draws out of its own history and its own root,
-                // neither of which is the room's. Without this, deleting a
-                // message while its thread is open empties it in the room and
-                // leaves the words in the panel, on one screen at once.
+                // The panel draws out of its own history and its own root, so
+                // without this a deletion empties the room copy and leaves the
+                // words in the panel, both on screen at once.
                 if let Some(open) = self.open.as_mut() {
                     changed |= open.history.redacted(&gone.event_id, by);
                     if let Some(root) = open.root.as_mut().filter(|root| root.id == gone.event_id) {
@@ -971,15 +777,9 @@ impl Loaded {
         changed
     }
 
-    /// Try every message this session had no key for again.
-    ///
-    /// Answered on the watcher's own task, in order with the pages and the
-    /// syncs, so a retry cannot interleave with a backfill writing into the
-    /// same history.
-    ///
-    /// Reports whether anything on screen changed. A key usually opens nothing
-    /// here: it is one stream for the whole account, and most keys are for
-    /// rooms nobody is looking at.
+    /// Try every message this session had no key for again, reporting whether
+    /// anything on screen changed. Answered on the watcher's own task, so a
+    /// retry cannot interleave with a backfill writing the same history.
     async fn reread(&mut self, room: &Room) -> bool {
         let held: Vec<(String, Raw<AnySyncTimelineEvent>)> = self
             .waiting
@@ -989,24 +789,22 @@ impl Loaded {
 
         let mut changed = false;
         for (id, raw) in held {
-            // Cast unchecked because it is the same JSON either way: this is
-            // the raw event as the homeserver sent it, and it reached here
-            // only by having been an `m.room.encrypted` nothing could open.
+            // Cast unchecked because it is the same JSON either way: nothing
+            // reaches here but an `m.room.encrypted` that would not open.
             let Ok(event) = room.decrypt_event(raw.cast_ref_unchecked(), None).await else {
                 continue;
             };
             if event.kind.is_utd() {
-                // This key was for a different session. Kept, because the one
-                // that opens it may still arrive.
+                // This key was for a different session. Kept: the one that
+                // opens it may still arrive.
                 continue;
             }
 
             self.waiting.remove(&id);
             changed |= match facts::message(&event) {
                 Some(message) => self.history.replace(message),
-                // It opened, and it is a reaction or a thread reply, which are
-                // not drawn. The wait has to go: a placeholder for something
-                // that was never a message would sit there forever.
+                // It opened, and it is a reaction or a thread reply, neither
+                // of which is drawn, so the wait has to go.
                 None => self.history.forget(&id),
             };
         }
@@ -1016,10 +814,8 @@ impl Loaded {
 
     /// Open the thread hanging from `root_id`, or close whatever is open.
     ///
-    /// A thread that will not load closes rather than half-opening. The
-    /// alternative is a panel drawn from a root with no replies under it,
-    /// which reads as a thread somebody deleted rather than as a request that
-    /// failed.
+    /// A thread that will not load closes rather than half-opening: a root
+    /// with no replies under it reads as a thread somebody deleted.
     async fn open(&mut self, client: &Client, root_id: Option<String>) {
         let Some(root_id) = root_id else {
             self.open = None;
@@ -1038,8 +834,8 @@ impl Loaded {
                 });
             }
             Err(error) => {
-                // Logged rather than raised, on the same terms as a page of
-                // history that would not come back.
+                // Logged rather than raised, like a page that would not come
+                // back.
                 tracing::warn!(%error, room_id = %self.room_id, %root_id, "could not read the thread");
                 self.open = None;
             }
@@ -1048,16 +844,9 @@ impl Loaded {
 
     /// Say that everything up to and including `event_id` has been read.
     ///
-    /// Dropped when it names the message this watcher last sent, which is what
-    /// keeps a reader sitting still in a quiet room from sending a receipt per
-    /// scroll event. Recorded before the request rather than after it, so a
-    /// homeserver that is slow to answer does not collect a queue of asks for
-    /// the same message behind it.
-    ///
-    /// A failure is logged rather than raised. There is nothing to say to
-    /// somebody about a receipt that did not go out: the room is still drawn,
-    /// the count settles on the next one, and a dialog about it would be a
-    /// dialog about bookkeeping.
+    /// Dropped when it names the message this watcher last sent, and recorded
+    /// before the request so a slow homeserver does not collect a queue of
+    /// asks for the same message. A failure is logged rather than raised.
     async fn mark_read(&mut self, room: &Room, event_id: String, public: bool) {
         if !self.worth_sending(&event_id) {
             return;
@@ -1070,10 +859,9 @@ impl Loaded {
 
     /// Whether a receipt for `event_id` is worth a request, recording it if so.
     ///
-    /// Recording and answering in one step on purpose. Two callers cannot race
-    /// here, because every ask is answered on the watcher's own task in the
-    /// order it arrived, and a check that did not record would let the second
-    /// of two identical asks through while the first was still in flight.
+    /// Recording and answering in one step on purpose: a check that did not
+    /// record would let the second of two identical asks through while the
+    /// first was still in flight.
     fn worth_sending(&mut self, event_id: &str) -> bool {
         if self.marked.as_deref() == Some(event_id) {
             return false;
@@ -1100,14 +888,11 @@ impl Loaded {
     }
 
     /// Count whichever of `events` are thread replies against the messages in
-    /// this room they hang from.
+    /// this room they hang from, reporting whether the room changed.
     ///
-    /// The tally on a message is the homeserver's, and it is only recounted
-    /// when the message is read again. Without this a thread somebody has just
-    /// replied in shows nothing until the room is reopened, which includes
-    /// replying from here.
-    ///
-    /// Reports whether the room changed.
+    /// The homeserver's tally is only recounted when the message is read
+    /// again, so without this a thread just replied in shows nothing until the
+    /// room is reopened.
     fn count_replies(&mut self, events: &[TimelineEvent]) -> bool {
         let mut changed = false;
         for event in events {
@@ -1148,21 +933,17 @@ impl Loaded {
     /// The messages, each carrying what people have reacted to it with and
     /// whatever its author has since corrected it to say.
     ///
-    /// Merged here rather than held on the message, because these change for
-    /// different reasons than the message does: a message is replaced when a
-    /// room key opens it, what is on it changes when somebody presses a pill,
-    /// and what it says changes when its author corrects it. Keeping any of
-    /// them on the message would mean every re-read had to carry them forward
-    /// by hand, and the one that forgot would silently drop them.
+    /// Merged here rather than held on the message, because a message is
+    /// replaced wholesale when a room key opens it and every re-read would
+    /// have to carry the rest forward by hand.
     fn drawn(&self, messages: &[Message]) -> Vec<Message> {
         let me = self.me.as_deref();
         messages
             .iter()
             .map(|message| {
-                // Nothing folds onto a mark. A pill on a message that has
-                // been emptied counts agreement with nothing, and
-                // [`Self::corrected`] refuses the edits for a stronger reason
-                // than that.
+                // Nothing folds onto a mark: a pill on an emptied message
+                // counts agreement with nothing. [`Self::corrected`] refuses
+                // the edits for a stronger reason than that.
                 if message.kind == MessageKind::Deleted {
                     return message.clone();
                 }
@@ -1178,16 +959,13 @@ impl Loaded {
             .collect()
     }
 
-    /// One message as its author has since corrected it, if they have.
-    ///
-    /// The sender check is [`Edits::latest_on`]'s, made here rather than when
-    /// the edit arrived because here is the first place the original is in
-    /// hand to compare against.
+    /// One message as its author has since corrected it, if they have. The
+    /// sender check is [`Edits::latest_on`]'s, made here because this is the
+    /// first place the original is in hand to compare against.
     fn corrected(&self, message: &Message) -> Message {
-        // An edit outlives the message it corrects: a redaction names one
-        // event, and the corrections held against it are not that event.
-        // Folding one onto a mark would put back the sentence the redaction
-        // was sent to remove, which is the whole of what deleting is for.
+        // An edit outlives the message it corrects, because a redaction names
+        // one event and the corrections against it are not that event, so
+        // folding one on would put the removed sentence back.
         //
         // Guarded here and not only in [`Self::drawn`], because the quoted row
         // above a reply is built in [`Self::answers`] without passing through
@@ -1200,21 +978,18 @@ impl Loaded {
         };
 
         Message {
-            // Both, always, out of the edit alone. Merging field by field is
-            // how a message edited down to plain text keeps the formatting it
-            // had: the new sentence would come from `body` and the old one
-            // from `html`, and `FormattedBody` draws the second.
+            // Both, always, out of the edit alone. Field by field, a message
+            // edited down to plain text keeps its old `html`, and that is the
+            // one `FormattedBody` draws.
             body: edit.body.clone(),
             html: edit.html.clone(),
             edited: true,
             // The edit's, not the original's: the words above are the
             // edit's, so its device is the one to vouch for.
             sender_trust: edit.sender_trust,
-            // `at` is deliberately untouched, and it is the line a later
-            // reader will be tempted to fix. A message keeps the moment it was
-            // said: the date separators are keyed off it, so a message from
-            // last Tuesday corrected this morning would otherwise jump to
-            // today and take its separator with it.
+            // `at` is deliberately untouched: the date separators are keyed
+            // off it, and a message from last Tuesday corrected this morning
+            // would otherwise jump to today and take its separator with it.
             ..message.clone()
         }
     }
@@ -1222,19 +997,11 @@ impl Loaded {
     /// The messages these replies name that are not among them.
     ///
     /// Read out of what [`Self::resolve`] found rather than looked up here,
-    /// because publishing happens on every reaction and every key and is not
-    /// somewhere a request belongs. A reply whose lookup has not happened yet,
-    /// or came back with nothing, contributes nothing and the row says so.
+    /// because publishing happens on every reaction and every key.
     ///
-    /// Reactions are deliberately not merged onto these. The row above a reply
-    /// draws a name and a line of what was said; pills belong on the message
-    /// itself, wherever it is drawn.
-    ///
-    /// Edits are, and the two are different for a reason rather than by
-    /// oversight. A pill missing from a quoted row is something not drawn; the
-    /// pre-edit text in a quoted row is a wrong sentence attributed to
-    /// somebody by name, which is the whole defect this fold exists to fix,
-    /// one layer down.
+    /// Edits are merged onto these and reactions deliberately are not. A pill
+    /// missing from a quoted row is something not drawn; pre-edit text in one
+    /// is a wrong sentence attributed to somebody by name.
     fn answers(&self, messages: &[Message]) -> Vec<Message> {
         let held: HashSet<&str> = messages.iter().map(|message| message.id.as_str()).collect();
         let mut answers: Vec<Message> = Vec::new();
@@ -1273,20 +1040,16 @@ impl Loaded {
 
     /// Read what the store already knows about who has read what.
     ///
-    /// Needed because the receipts a sync carries are a delta. A restored
-    /// session resumes from its own token and is told only what has moved
-    /// since, so everything anybody read before this launch is in the store
-    /// and nowhere else.
+    /// Needed because the receipts a sync carries are a delta, so what anybody
+    /// read before this launch is in the store and nowhere else.
     ///
-    /// One lookup per loaded message, and two of them, because a client that
-    /// predates threads and a current one spell the same claim differently:
-    /// `m.read` with no `thread_id` and `m.read` with `main`. Asking for only
-    /// one of the two draws an empty room for half the people in it.
+    /// Two lookups per loaded message, because a client that predates threads
+    /// and a current one spell the same claim differently: `m.read` with no
+    /// `thread_id`, and `m.read` with `main`. Asking for one of the two draws
+    /// an empty room for half the people in it.
     ///
-    /// The cost was measured rather than assumed. Against the real encrypted
-    /// store, fifty messages cost under four milliseconds, and this runs on a
-    /// page rather than on a receipt: the path a receipt actually arrives by
-    /// is [`Self::receipts`], which touches no store at all.
+    /// Fifty messages cost under four milliseconds against the real encrypted
+    /// store, and this runs on a page rather than on a receipt.
     async fn catch_up_on_readers(&mut self, room: &Room) {
         let wanted: Vec<(String, About)> = self
             .history
@@ -1319,9 +1082,8 @@ impl Loaded {
                 let found = match found {
                     Ok(found) => found,
                     Err(error) => {
-                        // Logged rather than raised, on the same terms as a
-                        // page of history that would not come back. A row of
-                        // faces is not worth a dialog.
+                        // Logged rather than raised: a row of faces is not
+                        // worth a dialog.
                         tracing::warn!(%error, room_id = %self.room_id, "could not read the receipts on a message");
                         continue;
                     }
@@ -1333,11 +1095,9 @@ impl Loaded {
         }
     }
 
-    /// Take note of the receipts one sync batch carried.
-    ///
-    /// Reports whether anything drawn changed. No store lookup: an
-    /// `m.receipt` names everybody who has moved and where they moved to,
-    /// which is the whole of what a room that is already open needs.
+    /// Take note of the receipts one sync batch carried, reporting whether
+    /// anything drawn changed. No store lookup: an `m.receipt` names everybody
+    /// who has moved and where they moved to.
     fn receipts(&mut self, ephemeral: &[Raw<AnySyncEphemeralRoomEvent>]) -> bool {
         let mut changed = false;
         for event in ephemeral {
@@ -1353,11 +1113,9 @@ impl Loaded {
 
     /// Say who has read what, unless it is what was said last time.
     ///
-    /// The suppression is the point rather than an optimisation. This channel
-    /// keeps its latest value for a late subscriber, and a room where
-    /// everybody has already caught up receives an unchanged `m.receipt` on
-    /// every sync; republishing it would be a wake-up per sync for every face
-    /// on screen, for ever, in a room where nothing is happening.
+    /// The suppression is the point rather than an optimisation: a room where
+    /// everybody has caught up receives an unchanged `m.receipt` on every
+    /// sync, and republishing it would wake the webview for ever.
     fn publish_readers<I>(&mut self, on_readers: &I)
     where
         I: Fn(Readers),
@@ -1398,11 +1156,9 @@ impl Loaded {
     }
 }
 
-/// Say whether this session is typing in a room.
-///
-/// Safe to call on every keystroke. The SDK holds the time of the last notice
-/// per room and sends nothing while one is still current, so the throttling
-/// that this would otherwise need is already done a layer down.
+/// Say whether this session is typing in a room. Safe to call on every
+/// keystroke: the SDK sends nothing while the last notice is still current, so
+/// the throttling is already done a layer down.
 pub async fn typing(client: &Client, room_id: &str, typing: bool) -> Result<()> {
     room_of(client, room_id)?.typing_notice(typing).await?;
     Ok(())
@@ -1410,11 +1166,9 @@ pub async fn typing(client: &Client, room_id: &str, typing: bool) -> Result<()> 
 
 /// React to a message.
 ///
-/// Nothing is returned and nothing is echoed, on the same terms as sending a
-/// message: the reaction appears when the sync brings it back. Reacting twice
-/// with one key is not guarded against here, because the interface knows
-/// whether this session has already used that key and the specification says
-/// a duplicate is ignored anyway.
+/// Nothing is returned and nothing is echoed: the reaction appears when the
+/// sync brings it back. Reacting twice with one key is not guarded here, and
+/// the specification says a duplicate is ignored.
 pub async fn react(client: &Client, room_id: &str, event_id: &str, key: &str) -> Result<()> {
     let room = room_of(client, room_id)?;
     let target = event_id_of(event_id)?;
@@ -1428,16 +1182,13 @@ pub async fn react(client: &Client, room_id: &str, event_id: &str, key: &str) ->
 
 /// Take a reaction back.
 ///
-/// `reaction_id` is the annotation's own event, not the message it is on: a
-/// reaction is undone by redacting it, and the two would be indistinguishable
-/// here if the wrong one were passed. `Reaction::mine` is where the interface
-/// gets it.
+/// `reaction_id` is the annotation's own event, not the message it is on,
+/// because a reaction is undone by redacting it and the two are
+/// indistinguishable here. `Reaction::mine` is where the interface gets it.
 pub async fn unreact(client: &Client, room_id: &str, reaction_id: &str) -> Result<()> {
     let room = room_of(client, room_id)?;
-    // `redact` answers with the SDK's HTTP error rather than its own, which is
-    // the only call in this module that does. Lifted rather than given a
-    // variant of its own: a redaction that failed is an SDK call that failed,
-    // and `user_message` already has words for that.
+    // `redact` answers with the SDK's HTTP error rather than its own, so it is
+    // lifted: `user_message` already has words for a failed SDK call.
     room.redact(&event_id_of(reaction_id)?, None, None)
         .await
         .map_err(matrix_sdk::Error::from)?;
@@ -1446,33 +1197,18 @@ pub async fn unreact(client: &Client, room_id: &str, reaction_id: &str) -> Resul
 
 /// Delete a message.
 ///
-/// A redaction, which is what deleting is in Matrix and is worth being exact
-/// about rather than promising more than happens. The homeserver empties the
-/// event and serves the emptied version from then on; the event itself
-/// survives, keeping its sender and its timestamp, which is what the mark left
-/// in the room is drawn from. What federation has already handed to other
-/// servers is not recalled by any of this.
+/// A redaction, which is what deleting is in Matrix: the event survives with
+/// its sender and timestamp, which is what the mark in the room is drawn from,
+/// and what federation already handed on is not recalled.
 ///
-/// No reason is sent. `Room::redact` takes an optional one and there is
-/// nowhere in the interface that asks for it, so `None` is the honest
-/// argument: a reason invented here would be a sentence nobody wrote, filed
-/// against somebody's account.
-///
-/// Whose message it is stays the homeserver's to enforce. The interface offers
-/// the control on this account's own messages only, which is what keeps
-/// somebody from being handed a control that cannot work, and a redaction of
-/// anybody else's comes back as an error from the one place the power levels
-/// actually live.
-///
-/// Nothing is returned and nothing is echoed, on the same terms as every other
-/// send here: the message empties when the sync brings the redaction back.
+/// No reason is sent, because nowhere in the interface asks for one. Whose
+/// message it is stays the homeserver's to enforce, and nothing is echoed:
+/// the message empties when the sync brings the redaction back.
 pub async fn delete(client: &Client, room_id: &str, event_id: &str) -> Result<()> {
     // Before the room, so that something which is not an event ID is answered
-    // as that rather than as whatever the room lookup happens to say first.
+    // as that rather than as whatever the room lookup says first.
     let target = event_id_of(event_id)?;
-    // Lifted the way `unreact` lifts it, and for the reason written there:
-    // these two are the calls in this module that answer with the SDK's HTTP
-    // error rather than with one of ours.
+    // Lifted the way `unreact` lifts it, and for the reason written there.
     room_of(client, room_id)?
         .redact(&target, None, None)
         .await
@@ -1482,17 +1218,11 @@ pub async fn delete(client: &Client, room_id: &str, event_id: &str) -> Result<()
 
 /// Say something in a room.
 ///
-/// Read as markdown, which is what every client somebody is arriving from
-/// does. The text is sent as the plaintext fallback either way; formatting is
-/// added beside it only when there was some, so a sentence with a stray
-/// asterisk in it goes out as the sentence.
+/// Read as markdown, with the text sent as the plaintext fallback either way,
+/// so a sentence with a stray asterisk in it goes out as the sentence.
+/// Encrypted or not according to the room, which the SDK decides.
 ///
-/// Encrypted or not according to the room, because the SDK decides that from
-/// the room's own state rather than from anything a caller passes.
-///
-/// Nothing is returned and nothing is echoed. The message appears when the
-/// sync brings it back, which is the same path every other message in the room
-/// takes. See the module header for why there is no local echo.
+/// Nothing is returned and nothing is echoed: see the module header.
 pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
     let content = written(body)?;
     room_of(client, room_id)?.send(content).await?;
@@ -1501,16 +1231,12 @@ pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
 
 /// Answer one message in the room.
 ///
-/// A reply rather than a thread: it lands in the conversation everybody is
-/// reading, and `facts::answering` is what draws the row above it saying what
-/// it answers. Nothing here writes the quoted fallback the specification used
-/// to ask for. It was removed from the specification because every client that
-/// draws replies has to strip it again, and this one strips what arrives.
+/// A reply rather than a thread, so it lands in the conversation everybody is
+/// reading. Nothing here writes the quoted fallback: it was removed from the
+/// specification because every client has to strip it again.
 ///
-/// `sender` is who wrote the message being answered, and it is used for one
-/// thing: the `m.mentions` a reply carries, so that the person answered is
-/// notified rather than having to notice. It comes from the message the
-/// interface is already drawing, on the same terms as `latest_id` below.
+/// `sender` is who wrote the message being answered, used only for the
+/// `m.mentions` a reply carries, so the person answered is notified.
 pub async fn send_reply(
     client: &Client,
     room_id: &str,
@@ -1524,9 +1250,8 @@ pub async fn send_reply(
     })?;
     let content = written(body)?.make_reply_to(
         ReplyMetadata::new(&answered, &author, None),
-        // The room, never the thread the answered message might be in. A
-        // message in a thread is not drawn in the room at all, so nothing here
-        // can be pressed to reply to one.
+        // The room, never the thread the answered message might be in: a
+        // message in a thread is not drawn in the room at all.
         ForwardThread::No,
         AddMentions::Yes,
     );
@@ -1537,38 +1262,29 @@ pub async fn send_reply(
 
 /// Correct a message this account sent.
 ///
-/// A wrapper rather than an implementation. `Room::make_edit_event` builds the
-/// whole event: it refuses an edit of somebody else's message, carries the
-/// original's `m.mentions` forward so that correcting a typo does not silently
-/// unmention whoever was named, and writes both `m.new_content` and the `* `
-/// fallback body a client with no idea about edits draws.
+/// A wrapper. `Room::make_edit_event` refuses an edit of somebody else's
+/// message, carries the original's `m.mentions` forward, and writes both
+/// `m.new_content` and the `* ` fallback body.
 ///
-/// It also reads the target event first, which is a round trip. An edit of a
-/// message old enough to have fallen out of the event cache can therefore fail
-/// on the fetch, before anything has been sent.
-///
-/// Nothing is returned and nothing is echoed, on the same terms as every other
-/// send here: the correction appears when the sync brings it back.
+/// It reads the target event first, so an edit of a message old enough to have
+/// fallen out of the event cache fails on the fetch, before anything is sent.
+/// Nothing is echoed: the correction appears when the sync brings it back.
 pub async fn send_edit(client: &Client, room_id: &str, event_id: &str, body: &str) -> Result<()> {
     // Before the fetch, so an empty box costs no round trip. Emptying the
-    // composer is also not how a message is deleted, and sending this would
-    // leave a blank line where a sentence was.
+    // composer is also not how a message is deleted.
     let content = written(body)?;
     let target = event_id_of(event_id)?;
     let room = room_of(client, room_id)?;
 
-    // Boxed, and it is load-bearing rather than tidy. `make_edit_event` reads
-    // the target event through the SDK's event cache first, and inlining that
-    // future makes this one deep enough that rustc gives up computing the
-    // layout of anything holding it. Under `-C instrument-coverage` it gives
-    // up sooner, so the failure shows up in CI's coverage job rather than in
-    // an ordinary build. One box here beats one at every call site.
+    // Boxed, and load-bearing rather than tidy: inlining `make_edit_event`
+    // makes this future deep enough that rustc gives up on its layout. Under
+    // `-C instrument-coverage` it gives up sooner, so the failure lands in
+    // CI's coverage job rather than in an ordinary build.
     let edit = Box::pin(room.make_edit_event(&target, EditedContent::RoomMessage(content.into())))
         .await
         .map_err(|error| match error {
             // Its own variant, because it is the one failure here with
-            // something to say to a person. Everything else is a homeserver
-            // that would not answer, which `Error::Sdk` already has words for.
+            // something to say to a person.
             EditError::NotAuthor => Error::NotYourMessage {
                 event_id: event_id.to_owned(),
             },
@@ -1586,23 +1302,14 @@ pub async fn send_edit(client: &Client, room_id: &str, event_id: &str, body: &st
 
 /// Say something in a thread, answering one reply in it or none.
 ///
-/// `in_reply_to` is what the `m.in_reply_to` points at, and `answering` is who
-/// wrote it. The two cases differ only in that pair and in one boolean, and
-/// the boolean is the whole of what tells them apart on the way back in.
+/// With no `answering`, `in_reply_to` is the last thing said in the thread as
+/// far as the caller knows, and it is only a fallback for clients that do not
+/// understand threads. Stale is harmless: nothing about which thread this
+/// belongs to depends on it.
 ///
-/// With no `answering`, this is just another reply and `in_reply_to` is the
-/// last thing said in the thread as far as the caller knows. It is falling
-/// back: a client that understands threads reads `event_id` and puts the
-/// message in the right conversation, one that does not sees an ordinary reply
-/// pointing at whatever was being answered, and `facts::answering` ignores it
-/// so that a panel does not draw a quoted row on every line in it. Stale is
-/// harmless, because nothing about which thread this belongs to depends on it.
-///
-/// With one, this answers that message and says so. `in_reply_to` is the
-/// message being answered rather than the newest, the fallback flag comes off,
-/// and the author is mentioned, on the same terms and for the same reason as a
-/// reply in the room: an answer nobody is notified of is a line in a panel
-/// that is not open.
+/// With one, `in_reply_to` is the message being answered, the fallback flag
+/// comes off, and the author is mentioned, because an answer nobody is
+/// notified of is a line in a panel that is not open.
 pub async fn send_in_thread(
     client: &Client,
     room_id: &str,
@@ -1625,9 +1332,8 @@ pub async fn send_in_thread(
                 user_id: sender.to_owned(),
             })?;
             // Which thread, handed in rather than read off the message being
-            // answered. `make_for_thread` takes the root from this and would
-            // otherwise start a new thread rooted at the answered message,
-            // which is a second conversation where somebody meant a sentence.
+            // answered: `make_for_thread` takes the root from this, and would
+            // otherwise start a second thread rooted at the answered message.
             let thread = ThreadRelation::without_fallback(root);
             content.make_for_thread(
                 ReplyMetadata::new(&answered, &author, Some(&thread)),
@@ -1643,9 +1349,8 @@ pub async fn send_in_thread(
 
 /// What was typed, as something to send.
 fn written(body: &str) -> Result<RoomMessageEventContent> {
-    // Trimmed before it is judged empty, so that a stray newline from a text
-    // area is not a message. Sent untrimmed is not an option either: leading
-    // spaces in a pasted code block are the message.
+    // Trimmed before it is judged empty, so a stray newline is not a message.
+    // Sent untrimmed, because leading spaces in a pasted code block count.
     if body.trim().is_empty() {
         return Err(Error::EmptyMessage);
     }

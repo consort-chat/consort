@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 
 import {
   HOME_ID,
@@ -16,6 +22,7 @@ import {
   type Profile,
   type Rooms,
   type SelfAudio,
+  type SelfVideo,
   type TokenStorage,
   type Verification,
   type VerificationFlow,
@@ -28,6 +35,7 @@ import { CallCard } from "./CallCard";
 import { CallPanel } from "./CallPanel";
 import { CallRefusedNotice } from "./CallRefusedNotice";
 import { ChannelList, type Joining } from "./ChannelList";
+import { ColumnGrip } from "./ColumnGrip";
 import { OpeningPane } from "./OpeningPane";
 import { RoomInfoPanel } from "./RoomInfoPanel";
 import { RoomTimeline } from "./RoomTimeline";
@@ -42,6 +50,11 @@ import {
 import { UserPanel } from "./UserPanel";
 import { VerificationBanner } from "./VerificationBanner";
 import { VerificationFlowPanel } from "./VerificationFlow";
+import {
+  SIDEBAR_WIDE,
+  clampSidebarWidth,
+  sidebarBounds,
+} from "./sidebarWidth";
 import "./AppShell.css";
 
 /**
@@ -129,6 +142,8 @@ interface Props {
   call: Call;
   /** Whether this session has muted or deafened itself. */
   selfAudio: SelfAudio;
+  /** Whether this session's camera is in the call, and why it is not. */
+  selfVideo: SelfVideo;
   /**
    * Who in the current call is talking, by Matrix user ID.
    *
@@ -153,6 +168,7 @@ interface Props {
   onSetMuted: (muted: boolean) => void;
   onSetDeafened: (deafened: boolean) => void;
   onSetAway: (away: boolean) => void;
+  onSetCamera: (on: boolean) => void;
   /**
    * A voice channel that was clicked and not joined, or null.
    *
@@ -207,6 +223,7 @@ export function AppShell({
   connection,
   call,
   selfAudio,
+  selfVideo,
   speaking = NOBODY,
   audioProblem = null,
   verification,
@@ -220,6 +237,7 @@ export function AppShell({
   onSetMuted,
   onSetDeafened,
   onSetAway,
+  onSetCamera,
   callRefused,
   onDismissRefusal,
   showRoom = null,
@@ -240,6 +258,14 @@ export function AppShell({
     not hide, which is the pane.
   */
   const [folded, setFolded] = useState(false);
+  /*
+    How wide the channel column is. Here rather than in the list, for the
+    reason the fold is: a folded column draws none of it, so a width the list
+    owned would go back to the default every time somebody brought it back.
+  */
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    clampSidebarWidth(SIDEBAR_WIDE),
+  );
   /*
     How wide the thread panel is. Here rather than in the panel, because the
     panel draws nothing while none is open: a width it owned would go back to
@@ -282,9 +308,12 @@ export function AppShell({
   */
   const [joining, setJoining] = useState<Joining | null>(null);
 
-  // So a panel dragged wide on a large window is not wider than a small one.
+  // So a column dragged wide on a large window is not wider than a small one.
   useEffect(() => {
-    const settle = () => setThreadWidth(clampThreadWidth);
+    const settle = () => {
+      setThreadWidth(clampThreadWidth);
+      setSidebarWidth(clampSidebarWidth);
+    };
     window.addEventListener("resize", settle);
     return () => window.removeEventListener("resize", settle);
   }, []);
@@ -505,6 +534,7 @@ export function AppShell({
       <div
         className="shell"
         inert={settingsOpen}
+        style={{ "--shell-sidebar": `${sidebarWidth}px` } as CSSProperties}
         {...(folded ? { "data-sidebar": "folded" } : {})}
       >
       <SpaceRail
@@ -541,11 +571,13 @@ export function AppShell({
           cardShown={cardShown}
           onToggleCard={toggleCard}
           selfAudio={selfAudio}
+          selfVideo={selfVideo}
           audioProblem={audioProblem}
           onDisconnect={onLeaveVoice}
           onSetMuted={onSetMuted}
           onSetDeafened={onSetDeafened}
           onSetAway={onSetAway}
+          onSetCamera={onSetCamera}
         />
         <UserPanel
           profile={profile}
@@ -553,6 +585,25 @@ export function AppShell({
           onOpenSettings={() => setSettingsOpen(true)}
         />
       </div>
+
+      {/*
+        Outside `.shell__sidebar` rather than against its inside edge, because
+        that box clips what leaves it and the channel list's scrollbar is
+        already at that edge. `AppShell.css` has the rest.
+
+        Absent while the column is folded: there is no edge to move, and the way
+        back is the control in the pane.
+      */}
+      {!folded && (
+        <ColumnGrip
+          className="shell__grip"
+          label="Resize the channel list"
+          width={sidebarWidth}
+          bounds={sidebarBounds}
+          widens="right"
+          onResize={setSidebarWidth}
+        />
+      )}
 
       <main className="shell__main">
         {/*
@@ -704,6 +755,11 @@ export function AppShell({
         shown={cardShown}
         onHide={hideCard}
         onOpenRoom={openRoom}
+        /*
+          From the same value the camera button is drawn from, so the picture
+          and the button cannot disagree about whether a camera is on.
+        */
+        cameraOn={selfVideo.camera}
       />
       
       {/*

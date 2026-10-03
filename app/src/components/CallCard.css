@@ -95,11 +95,17 @@
   white-space: nowrap;
 }
 
+/*
+  The padding is zeroed because `place-items` centres on the content box, and a
+  button left to WebKitGTK's own `2px 6px 3px 6px` has a 10px one for a 13px
+  glyph, which put the arrows a pixel and a half right of the middle (#137).
+*/
 .call-card__control {
   display: grid;
   place-items: center;
   width: 22px;
   height: 22px;
+  padding: 0;
   font-size: var(--text-base);
   line-height: 1;
   color: var(--text-muted);
@@ -161,4 +167,26 @@
   padding: var(--space-2);
   font-size: var(--text-sm);
   color: var(--amber);
+}
+
+/*
+  What the camera is sending, between the bar and the faces.
+
+  Mirrored, which is what every self view does and what people expect of
+  anything standing in for a mirror: raising your left hand should raise the
+  hand on the left. Only the preview is flipped. What the call receives is the
+  frame as the camera read it.
+
+  A fixed shape, so the first frame arriving does not move the card, and
+  `cover` so a camera that negotiated 4:3 fills it rather than letterboxing.
+*/
+.call-card__self {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--surface-void);
+  border-radius: var(--radius-md);
+  transform: scaleX(-1);
 }

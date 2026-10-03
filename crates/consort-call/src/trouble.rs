@@ -223,6 +223,15 @@ pub fn what_it_says(event: &CallEvent) -> Option<(&str, Option<Fault>)> {
     }
 }
 
+/// Whether this event means the call is over and nothing will follow.
+///
+/// Here rather than beside the transport, for the reason [`what_it_says`] is:
+/// `livekit.rs` is excluded from coverage on the grounds that CI has no SFU,
+/// and a decision hidden behind that exclusion is an untested decision.
+pub fn is_the_end(event: &CallEvent) -> bool {
+    matches!(event, CallEvent::Ended { .. })
+}
+
 /// What the frame cryptor's verdict means.
 fn from_cryptor(
     state: &FrameEncryptionState,
@@ -248,6 +257,7 @@ fn from_cryptor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use matrix_rtc_media::EndedReason;
 
     fn refused() -> Fault {
         Fault::KeyRefused {
@@ -664,5 +674,30 @@ mod tests {
         let said = what_it_says(&event);
 
         assert_eq!(said, None);
+    }
+    #[test]
+    fn the_end_of_a_call_is_recognised() {
+        // Nothing follows an `Ended`, so a reader that keeps waiting draws a
+        // dead call as connected for as long as the application runs.
+        let event = CallEvent::Ended {
+            reason: EndedReason::ConnectionClosed {
+                message: "the focus closed the connection".to_owned(),
+            },
+        };
+
+        assert!(is_the_end(&event));
+    }
+
+    #[test]
+    fn an_ordinary_report_is_not_the_end() {
+        // Most of this stream arrives while a call is perfectly healthy, and
+        // treating one of those as an ending would close the call panel.
+        let event = CallEvent::FrameEncryptionState {
+            member_id: "_@ada:example.org_LAPTOP".to_owned(),
+            state: FrameEncryptionState::Ok,
+            diagnostic: FrameEncryptionDiagnostic::NotApplicable,
+        };
+
+        assert!(!is_the_end(&event));
     }
 }

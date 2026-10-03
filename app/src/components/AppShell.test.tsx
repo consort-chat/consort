@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
@@ -65,10 +72,14 @@ vi.mock("../lib/api", async (importOriginal) => ({
   threadOpen,
 }));
 
+const useSelfView = vi.hoisted(() => vi.fn());
+vi.mock("../lib/useSelfView", () => ({ useSelfView }));
+
 import { AppShell } from "./AppShell";
+import { SIDEBAR_NARROWEST, SIDEBAR_WIDE } from "./sidebarWidth";
 import { goBack, goForward, pressBack } from "../test/traversal";
 import { resetAvatarCache } from "../lib/avatars";
-import { HEARING } from "../lib/api";
+import { HEARING, NOT_FILMING } from "../lib/api";
 import type {
   AudioDeviceReport,
   AudioSettings,
@@ -79,6 +90,7 @@ import type {
   Profile,
   Rooms,
   SelfAudio,
+  SelfVideo,
   Thread,
   Timeline,
 } from "../lib/api";
@@ -141,12 +153,14 @@ function shell({
   rooms = EMPTY_HOME,
   call = { state: "disconnected" } as Call,
   selfAudio = HEARING,
+  selfVideo = NOT_FILMING,
   onSignedOut = vi.fn(),
   onJoinVoice = vi.fn(),
   onLeaveVoice = vi.fn(),
   onSetMuted = vi.fn(),
   onSetDeafened = vi.fn(),
   onSetAway = vi.fn(),
+  onSetCamera = vi.fn(),
   callRefused = null,
   onDismissRefusal = vi.fn(),
   showRoom = null,
@@ -155,12 +169,14 @@ function shell({
   rooms?: Rooms;
   call?: Call;
   selfAudio?: SelfAudio;
+  selfVideo?: SelfVideo;
   onSignedOut?: Mock<() => void>;
   onJoinVoice?: Mock<(roomId: string) => void>;
   onLeaveVoice?: Mock<() => void>;
   onSetMuted?: Mock<(muted: boolean) => void>;
   onSetDeafened?: Mock<(deafened: boolean) => void>;
   onSetAway?: Mock<(away: boolean) => void>;
+  onSetCamera?: Mock<(on: boolean) => void>;
   callRefused?: CallRefused | null;
   onDismissRefusal?: Mock<() => void>;
   showRoom?: { roomId: string } | null;
@@ -177,6 +193,7 @@ function shell({
       connection={{ state: "live" }}
       call={nextCall}
       selfAudio={selfAudio}
+      selfVideo={selfVideo}
       verification={{ state: "verified" }}
       keyBackup={{ state: "enabled" }}
       storage={null}
@@ -188,6 +205,7 @@ function shell({
       onSetMuted={onSetMuted}
       onSetDeafened={onSetDeafened}
       onSetAway={onSetAway}
+      onSetCamera={onSetCamera}
       callRefused={callRefused}
       onDismissRefusal={onDismissRefusal}
       showRoom={nextShowRoom}
@@ -227,6 +245,7 @@ describe("AppShell", () => {
     resetAvatarCache();
     // jsdom has none, and a link followed to a message lands by calling it.
     Element.prototype.scrollIntoView = vi.fn();
+    useSelfView.mockReset().mockReturnValue(null);
     audioDevices.mockReset().mockResolvedValue(report);
     audioSettings.mockReset().mockResolvedValue(settings);
     audioTestStart.mockReset().mockResolvedValue(undefined);
@@ -515,6 +534,123 @@ describe("AppShell", () => {
     await userEvent.click(screen.getByRole("button", { name: /close settings/i }));
 
     await waitFor(() => expect(document.activeElement).toBe(gear));
+  });
+
+  describe("resizing the channel list", () => {
+    /** The grip on the column's right edge, and the only way to move it. */
+    const grip = () =>
+      screen.getByRole("separator", { name: /resize the channel list/i });
+
+    /** The width the shell is drawing the column at, in pixels. */
+    const drawnAt = (container: HTMLElement) =>
+      (container.querySelector(".shell") as HTMLElement).style.getPropertyValue(
+        "--shell-sidebar",
+      );
+
+    it("opens at the width it has always been", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      expect(drawnAt(container)).toBe(`${SIDEBAR_WIDE}px`);
+    });
+
+    it("widens when the grip is dragged towards the conversation", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      fireEvent.pointerDown(grip(), { clientX: 344 });
+      fireEvent.pointerMove(window, { clientX: 404 });
+
+      // Dragging right takes width from the pane and gives it to the list.
+      expect(drawnAt(container)).toBe(`${SIDEBAR_WIDE + 60}px`);
+    });
+
+    it("narrows when it is dragged back towards the rail", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      fireEvent.pointerDown(grip(), { clientX: 344 });
+      fireEvent.pointerMove(window, { clientX: 304 });
+
+      expect(drawnAt(container)).toBe(`${SIDEBAR_WIDE - 40}px`);
+    });
+
+    it("cannot be dragged away to nothing", async () => {
+      // #138 asks for a column somebody can resize, not one they can lose. The
+      // control that folds it is deliberate and has a way back; a drag to zero
+      // would have neither.
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      fireEvent.pointerDown(grip(), { clientX: 344 });
+      fireEvent.pointerMove(window, { clientX: -5_000 });
+
+      expect(drawnAt(container)).toBe(`${SIDEBAR_NARROWEST}px`);
+    });
+
+    it("cannot be dragged over the conversation it sits beside", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      fireEvent.pointerDown(grip(), { clientX: 344 });
+      fireEvent.pointerMove(window, { clientX: 5_000 });
+
+      const widest = parseFloat(drawnAt(container));
+      expect(widest).toBeLessThan(window.innerWidth / 2);
+      expect(widest).toBeGreaterThan(SIDEBAR_WIDE);
+    });
+
+    it("moves with the arrow keys, so a mouse is not the only way", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+      grip().focus();
+
+      await userEvent.keyboard("{ArrowRight}");
+      const wider = parseFloat(drawnAt(container));
+      expect(wider).toBeGreaterThan(SIDEBAR_WIDE);
+
+      await userEvent.keyboard("{ArrowLeft}");
+      expect(parseFloat(drawnAt(container))).toBe(SIDEBAR_WIDE);
+    });
+
+    it("comes back inside its bounds when the window is made smaller", async () => {
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+      fireEvent.pointerDown(grip(), { clientX: 344 });
+      fireEvent.pointerMove(window, { clientX: 444 });
+      expect(parseFloat(drawnAt(container))).toBeGreaterThan(SIDEBAR_WIDE);
+
+      act(() => {
+        window.innerWidth = 600;
+        fireEvent(window, new Event("resize"));
+      });
+
+      expect(parseFloat(drawnAt(container))).toBeLessThanOrEqual(600 * 0.5);
+    });
+
+    it("has no edge to take hold of while the list is folded", async () => {
+      // There is no column to resize, and the way back is the control in the
+      // pane rather than a grip against the rail.
+      shell();
+      await userEvent.click(
+        await screen.findByRole("button", { name: /hide the channel list/i }),
+      );
+
+      expect(
+        screen.queryByRole("separator", { name: /resize the channel list/i }),
+      ).toBeNull();
+    });
+
+    it("keeps the grip out of the box that clips the column", async () => {
+      // `.shell__sidebar` is `overflow: hidden`, which is what stops a folded
+      // column spilling into the pane and what the voice strip's menu relies
+      // on. A grip inside it would be clipped at the very edge it marks.
+      const { container } = shell();
+      await screen.findByRole("button", { name: /hide the channel list/i });
+
+      expect(container.querySelector(".shell__sidebar .grip")).toBeNull();
+      expect(container.querySelector(".shell > .grip")).not.toBeNull();
+    });
   });
 
   describe("a room's details", () => {
@@ -916,6 +1052,41 @@ describe("AppShell", () => {
       shell({ rooms: withVoice });
 
       expect(screen.queryByRole("region", { name: /^Call in/ })).toBeNull();
+    });
+
+    it("gives the card the camera state the camera button is drawn from", () => {
+      // One value, two readers. Asking Rust again here is how the picture and
+      // the button would come to disagree about whether a camera is on.
+      useSelfView.mockReturnValue("data:image/jpeg;base64,aaaa");
+
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+        selfVideo: { camera: true, trouble: null },
+      });
+
+      expect(useSelfView).toHaveBeenCalledWith(true);
+      expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
+    });
+
+    it("draws no camera on the card while the camera is off", () => {
+      shell({
+        rooms: withVoice,
+        call: {
+          state: "connected",
+          roomId: LOUNGE,
+          participants: [],
+          trouble: null,
+        },
+      });
+
+      expect(useSelfView).toHaveBeenCalledWith(false);
+      expect(screen.queryByRole("img", { name: "Your camera" })).toBeNull();
     });
 
     describe("putting the card away and getting it back", () => {

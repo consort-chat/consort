@@ -3,28 +3,14 @@
 
 //! What is currently loaded for one room, and the rules for adding to it.
 //!
-//! Two sources feed one list and they arrive at opposite ends. A sync delivers
-//! what was just said, which goes on the end; a backfill delivers a page of
-//! what was said before, which goes on the front. Neither is sorted here.
+//! A sync goes on the end, a backfill on the front, and each batch keeps the
+//! order it came in. Deliberately not sorted by `origin_server_ts`: the server
+//! already decided the order, and the timestamp is only close to it, because
+//! events tie within a millisecond and a federated room carries clocks that
+//! agree approximately.
 //!
-//! ## Why not sorted by timestamp
-//!
-//! Because the server already decided the order, and its decision is the one
-//! every other client draws. `origin_server_ts` is close to that order and is
-//! not it: two events written in the same millisecond tie, a homeserver under
-//! load can stamp them out of order, and a federated room carries timestamps
-//! from several machines that agree with each other only approximately. Sorting
-//! by it would reorder a conversation that arrived correct.
-//!
-//! So each batch keeps the order it came in, and the only decision here is
-//! which end it goes on.
-//!
-//! ## Deduplication
-//!
-//! An event can arrive twice: once from a sync and again inside a backfill
-//! page that overlaps the live edge, which is the ordinary case rather than an
-//! edge one. First occurrence wins, so a message never moves once it has been
-//! drawn.
+//! An event can arrive from a sync and again from a backfill page overlapping
+//! the live edge, so the first occurrence wins and a message never moves.
 
 use std::collections::HashSet;
 
@@ -50,14 +36,9 @@ impl History {
         &self.messages
     }
 
-    /// Add what a sync just delivered, at the live end.
-    ///
-    /// Also where a forwards page goes, which is the same end and the same
-    /// order: a window somebody jumped into grows towards the present the way
-    /// the present grows on its own.
-    ///
-    /// Reports whether anything was new, so a sync carrying nothing for this
-    /// room does not republish a timeline nobody's copy differs from.
+    /// Add what a sync just delivered, at the live end, which is also where a
+    /// forwards page goes. Reports whether anything was new, so a sync
+    /// carrying nothing for this room does not republish the timeline.
     pub fn arrived(&mut self, batch: Vec<Message>) -> bool {
         let fresh: Vec<Message> = batch
             .into_iter()
@@ -74,9 +55,8 @@ impl History {
     /// Add a page of history, at the old end.
     ///
     /// `batch` is oldest first, like everything else here, so the caller has
-    /// already put a backwards pagination the right way round. Doing it here
-    /// instead would mean this type had an opinion about which direction a
-    /// homeserver was asked in, which is not its business.
+    /// already turned a backwards pagination round: which direction the
+    /// homeserver was asked in is not this type's business.
     pub fn backfilled(&mut self, batch: Vec<Message>) -> bool {
         let fresh: Vec<Message> = batch
             .into_iter()
@@ -93,18 +73,12 @@ impl History {
         true
     }
 
-    /// Swap a message already held for a new reading of the same event.
+    /// Swap a message already held for a new reading of the same event, which
+    /// is what a room key arriving does. In place, so a message drawn as a
+    /// wait becomes what it says without the conversation reordering.
     ///
-    /// What a room key arriving does to the messages this session could not
-    /// read when they came in. In place, so a message that was drawn as a wait
-    /// becomes what it says without moving: the conversation around it is
-    /// already on somebody's screen, and reordering under them would be worse
-    /// than the wait.
-    ///
-    /// Reports whether anything changed, so a key for a session none of these
-    /// messages used does not republish a timeline nobody's copy differs from.
-    /// An unheld event is not an error: a key can arrive for a room while a
-    /// different one is open.
+    /// Reports whether anything changed. An unheld event is not an error: a
+    /// key can arrive for a room while a different one is open.
     pub fn replace(&mut self, message: Message) -> bool {
         let Some(held) = self.messages.iter_mut().find(|held| held.id == message.id) else {
             return false;
@@ -119,24 +93,17 @@ impl History {
 
     /// Empty a message the homeserver has redacted, leaving the mark.
     ///
-    /// In place and not removed, which is the whole point: a message that
-    /// vanished leaves the reply under it answering nothing, and every other
-    /// client in the room draws a mark here. The envelope stays, because a
-    /// redaction leaves it alone. Everything the content carried goes.
+    /// In place and not removed, because a message that vanished leaves the
+    /// reply under it answering nothing. The envelope stays, since a redaction
+    /// leaves it alone, and everything the content carried goes.
     ///
-    /// `thread` stays, and that is the one field where this is a decision
-    /// rather than a consequence. The replies under a deleted root were not
-    /// redacted, and the control drawn from the summary is the only thing in
-    /// the room that opens them. It survives a reload as well as the session
-    /// it happened in: see `facts::deleted`, which reads the same tally off
-    /// the raw `unsigned` of a message paged back in already deleted.
+    /// `thread` stays, which is the one field where that is a decision: the
+    /// replies under a deleted root were not redacted, and the control drawn
+    /// from the summary is the only thing that opens them.
     ///
     /// `by` is whoever sent the redaction, which is not always whoever wrote
-    /// the message. `None` where it could not be read.
-    ///
-    /// Reports whether anything changed. A redaction naming something not
-    /// loaded is the ordinary case rather than a failure: it names an event
-    /// anywhere in the room, and one window of it is open.
+    /// the message. Reports whether anything changed; a redaction naming
+    /// something not loaded is the ordinary case.
     pub fn redacted(&mut self, event_id: &str, by: Option<&str>) -> bool {
         let Some(held) = self.messages.iter_mut().find(|held| held.id == event_id) else {
             return false;
@@ -146,19 +113,12 @@ impl History {
 
     /// Stop drawing an event, without forgetting that it was seen.
     ///
-    /// The other half of [`replace`](Self::replace). An event this session
-    /// could not read is drawn as a wait, and when the key arrives some of
-    /// them turn out to be reactions or thread replies, which are not drawn at
-    /// all. Leaving the wait there would keep a placeholder for something that
-    /// was never a message.
+    /// The other half of [`replace`](Self::replace), for a wait that turns out
+    /// to have been a reaction or a thread reply. Not what a redaction does:
+    /// that is [`redacted`](Self::redacted), which leaves a mark.
     ///
-    /// Not what a redaction does any more: that is [`redacted`](Self::redacted),
-    /// which leaves a mark where this leaves nothing. What is left here is the
-    /// case with nothing to mark, where the event turned out never to have
-    /// been a message at all.
-    ///
-    /// The ID stays in `seen`, so a backfill that carries the event again does
-    /// not draw it a second time.
+    /// The ID stays in `seen`, so a backfill carrying the event again does not
+    /// draw it a second time.
     pub fn forget(&mut self, event_id: &str) -> bool {
         let before = self.messages.len();
         self.messages.retain(|held| held.id != event_id);
@@ -169,12 +129,10 @@ impl History {
 /// Empty one message in place, leaving the mark.
 ///
 /// Free rather than a method, because the thread panel holds its root as one
-/// `Message` beside a `History` of replies, and both are marked by the same
-/// redaction. Two copies of this rule would be two answers free to drift.
+/// `Message` beside a `History` of replies and the same redaction marks both.
 ///
 /// Reports whether anything changed. A second redaction of the same event is
-/// not news: a backfill page overlapping the live edge carries one that has
-/// already been swept.
+/// not news: an overlapping backfill page carries one already swept.
 pub fn redact(message: &mut Message, by: Option<&str>) -> bool {
     if message.kind == MessageKind::Deleted {
         return false;
@@ -195,12 +153,9 @@ pub fn redact(message: &mut Message, by: Option<&str>) -> bool {
 
 /// The membership changes loaded for one room.
 ///
-/// [`History`]'s smaller sibling: the same arrival-order-kept, dedup-by-ID
-/// rules apply and are not restated here, only the ways this is simpler.
-/// There is no [`History::replace`] or [`History::forget`], because neither
-/// has a membership-change equivalent yet: a `SystemMessage` is never held as
-/// a wait for a key the way an undecryptable message is, so nothing here is
-/// ever swapped or withdrawn after arriving.
+/// [`History`]'s smaller sibling, on the same arrival-order and dedup rules.
+/// No [`History::replace`] or [`History::forget`], because a `SystemMessage`
+/// is never held as a wait for a key.
 #[derive(Debug, Default)]
 pub struct SystemHistory {
     messages: Vec<SystemMessage>,
@@ -329,15 +284,12 @@ mod tests {
 
     #[test]
     fn a_redaction_leaves_the_way_into_the_thread_hanging_from_it() {
-        // The one field a redaction does not take, and the one field where
-        // that is a decision rather than a consequence. Everything else here
-        // is content and the content is gone; the replies are neither. They
-        // were not redacted, the homeserver still counts them, and this
-        // control is the only thing in the room that opens them.
+        // The one field a redaction does not take. The replies were not
+        // redacted, the homeserver still counts them, and this control is the
+        // only thing in the room that opens them.
         //
-        // It is safe to keep because the count survives a reload too: see
-        // `facts::deleted`, which reads the same tally off the raw
-        // `unsigned` when the message is paged back in already deleted.
+        // Safe to keep because the count survives a reload too: see
+        // `facts::deleted`, which reads the same tally off the raw `unsigned`.
         let mut history = History::new();
         let mut root = said("$1", "the question");
         root.thread = Some(ThreadSummary {

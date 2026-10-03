@@ -12,6 +12,7 @@ use matrix_sdk::encryption::{BackupDownloadStrategy, EncryptionSettings};
 use matrix_sdk::store::RoomLoadSettings;
 use matrix_sdk::{Client, ClientBuilder, SessionChange, SqliteStoreConfig};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::error::{Error, Result};
 use crate::session::{SessionStore, StoredSession};
@@ -45,6 +46,15 @@ impl fmt::Debug for Credentials {
             .field("username", &self.username)
             .field("password", &"<redacted>")
             .finish()
+    }
+}
+
+/// Redacting `Debug` keeps the password out of a log. This keeps it out of a
+/// core dump and out of a swapped page. Only the password: the other two are
+/// not secret and are worth reading in a dump.
+impl Drop for Credentials {
+    fn drop(&mut self) {
+        self.password.zeroize();
     }
 }
 

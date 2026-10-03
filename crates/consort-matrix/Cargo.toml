@@ -35,6 +35,10 @@ sha2 = "0.10"
 # already resolves, so cargo unifies the two rather than compiling a second
 # copy.
 rand = "0.9"
+
+# Overwriting a secret before its memory goes back. Already in the graph under
+# rustls, so this adds an edge rather than a build.
+zeroize = "1"
 # The platform credential store: Secret Service on Linux and the BSDs, the
 # Credential Manager on Windows, Keychain on macOS. The `v1` feature (the
 # default) is the one that selects a store per platform automatically and
@@ -66,6 +70,10 @@ rustls = { version = "0.23", features = ["aws_lc_rs"] }
 matrix-sdk = { workspace = true, features = ["bundled-sqlite"] }
 
 [dev-dependencies]
+# Already a dependency above. Named here so the H8 test can build a key out of
+# known bytes through `StoreKey::decode`, rather than production growing a
+# constructor nothing but a test would call.
+base64 = "0.22"
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 # `testing` brings in MatrixMockServer, which is how login, restore and logout

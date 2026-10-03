@@ -27,7 +27,7 @@
 use std::thread::JoinHandle;
 
 use consort_call::hearing::Ears;
-use consort_call::{CallEvent, CallThread, CallTransport, Microphone};
+use consort_call::{CallEvent, CallThread, CallTransport, Camera, Microphone, PictureSize};
 
 /// A running call thread, with its events wired to the webview.
 pub struct CallBridge {
@@ -40,9 +40,10 @@ pub struct CallBridge {
 impl CallBridge {
     /// Start the call thread and the pump that forwards what it says.
     ///
-    /// `microphone` is where this session's captured audio comes from and
-    /// `ears` is where everybody else's goes. Both are handed in rather than
-    /// built here, because both ends outlive any one call.
+    /// `microphone` is where this session's captured audio comes from, `camera`
+    /// is where its frames do, and `ears` is where everybody else's audio goes.
+    /// All three are handed in rather than built here, because every one of
+    /// them outlives any one call.
     ///
     /// `report` is called once per event, on the pump thread. It does two jobs
     /// that have to happen in that order: give the microphone back when the
@@ -52,11 +53,12 @@ impl CallBridge {
     pub fn spawn<T: CallTransport>(
         transport: T,
         microphone: Microphone,
+        camera: Camera,
         ears: Ears,
         mut report: impl FnMut(CallEvent) + Send + 'static,
     ) -> Self {
         let (events, mut inbox) = tokio::sync::mpsc::unbounded_channel::<CallEvent>();
-        let thread = CallThread::spawn(transport, events, microphone, ears);
+        let thread = CallThread::spawn(transport, events, microphone, camera, ears);
 
         let pump = std::thread::Builder::new()
             .name("consort-call-events".to_owned())
@@ -111,6 +113,13 @@ impl CallBridge {
     pub fn set_away(&self, away: bool) {
         if let Some(thread) = &self.thread {
             thread.set_away(away);
+        }
+    }
+
+    /// Publish this session's camera at `size`, or retract it with `None`.
+    pub fn set_camera(&self, size: Option<PictureSize>) {
+        if let Some(thread) = &self.thread {
+            thread.set_camera(size);
         }
     }
 }
@@ -173,6 +182,7 @@ mod tests {
         let bridge = CallBridge::spawn(
             transport,
             Microphone::new(),
+            Camera::new(),
             crate::ears::speakers(
                 voices.clone(),
                 std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),

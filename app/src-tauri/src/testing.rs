@@ -368,6 +368,26 @@ impl consort_call::PublishedAudio for FakeCallTrack {
     }
 }
 
+/// A camera publication that takes whatever it is given.
+///
+/// Counting frames is `consort_call`'s business and is tested there. What the
+/// app-side tests need is a publication that exists.
+#[derive(Clone)]
+pub struct FakeCallCamera;
+
+impl consort_call::PublishedVideo for FakeCallCamera {
+    fn send(
+        &self,
+        _picture: consort_call::OutgoingPicture,
+    ) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn unpublish(&self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+}
+
 pub struct FakeCallRoster(tokio::sync::watch::Receiver<Standing>);
 
 impl consort_call::Roster for FakeCallRoster {
@@ -392,13 +412,23 @@ impl consort_call::Roster for FakeCallRoster {
 
 impl consort_call::CallSession for FakeCallSession {
     type Track = FakeCallTrack;
+    type Video = FakeCallCamera;
     type Roster = FakeCallRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, consort_call::CallFailure> {
         Ok(FakeCallTrack)
     }
 
-    fn listen(&self, _ears: &consort_call::hearing::Ears) {}
+    async fn publish_camera(
+        &self,
+        _size: consort_call::PictureSize,
+    ) -> Result<Self::Video, consort_call::CallFailure> {
+        Ok(FakeCallCamera)
+    }
+
+    fn listen(&self, _ears: &consort_call::hearing::Ears) -> consort_call::Attached {
+        consort_call::Attached::default()
+    }
 
     fn roster(&self) -> Self::Roster {
         FakeCallRoster(self.roster.subscribe())

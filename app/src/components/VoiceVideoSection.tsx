@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   asCommandError,
   audioDevices,
+  cameras,
   audioMonitorStart,
   audioMonitorStop,
   audioSettings,
@@ -12,7 +13,10 @@ import {
   audioToneStop,
   onAudio,
   setAudioSettings,
+  setVideoSettings,
+  videoSettings,
   type AudioDeviceList,
+  type CameraList,
   FRAME_MS,
   type AudioSettings,
   type GateConfig,
@@ -118,6 +122,75 @@ function DevicePicker({
 }
 
 /**
+ * The camera picker.
+ *
+ * Not [`DevicePicker`], although it draws the same control. A camera is chosen
+ * by device node and labelled by the driver's name, so the value and the text
+ * are two different strings, and the warning below has to name the substitute
+ * camera rather than repeat a path at somebody. Sharing the stylesheet is the
+ * part worth sharing.
+ */
+function CameraPicker({
+  list,
+  selected,
+  onChange,
+}: {
+  list: CameraList;
+  /**
+   * The camera to show as chosen, which is not always the one in `list`.
+   *
+   * Between picking one and the backend answering there is a gap, and during
+   * it the list still names the old camera.
+   */
+  selected: string | null;
+  onChange: (id: string) => void;
+}) {
+  if (list.cameras.length === 0) {
+    return (
+      <div className="voice-field">
+        <span className="voice-field__label">Camera</span>
+        <p className="voice-field__note">
+          This machine has no camera Consort can open.
+        </p>
+      </div>
+    );
+  }
+
+  const using = list.cameras.find((camera) => camera.id === list.selected);
+
+  return (
+    <div className="voice-field">
+      <label className="voice-field__label" htmlFor="voice-camera">
+        Camera
+      </label>
+      <select
+        id="voice-camera"
+        className="voice-field__select"
+        value={selected ?? ""}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {list.cameras.map((camera) => (
+          <option key={camera.id} value={camera.id}>
+            {camera.name}
+          </option>
+        ))}
+      </select>
+      {/*
+        Said out loud rather than resolved silently, like the audio pickers
+        above: somebody who chose an external camera and is about to be filmed
+        by a laptop lid should find that out here rather than in a call.
+      */}
+      {list.missing !== null && (
+        <p className="voice-field__note voice-field__note--warn">
+          The camera you chose is not plugged in. Using{" "}
+          {using?.name ?? "the first one"} instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * One volume slider.
  *
  * A native `range` rather than a drawn track, for the same reason the pickers
@@ -212,6 +285,15 @@ export function VoiceVideoSection({
     output: AudioDeviceList;
   } | null>(null);
   const [settings, setSettings] = useState<AudioSettings | null>(null);
+  /*
+    What cameras there are, and which one is saved.
+
+    A second piece of state rather than a field on the two above, because a
+    camera is enumerated by a different backend and a machine can perfectly
+    well have one and not the other.
+  */
+  const [camerasFound, setCamerasFound] = useState<CameraList | null>(null);
+  const [pickedCamera, setPickedCamera] = useState<string | null>(null);
   const [meter, setMeter] = useState<Meter>(SILENT);
   const [chime, setChime] = useState<Chime>(QUIET);
   /*
@@ -249,13 +331,20 @@ export function VoiceVideoSection({
   const writing = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const reload = useCallback(async () => {
-    const [report, current] = await Promise.all([
+    // In parallel, because each of the four is a round trip and two of them
+    // probe every device on the machine. Serially this is the delay the
+    // spinner beside the menu item exists for, doubled.
+    const [report, current, found, video] = await Promise.all([
       audioDevices(),
       audioSettings(),
+      cameras(),
+      videoSettings(),
     ]);
     setDevices({ input: report.input, output: report.output });
     setSettings(current);
     saved.current = current;
+    setCamerasFound(found);
+    setPickedCamera(video.camera);
   }, []);
 
   // Somebody who drags a slider and immediately closes the settings screen has
@@ -409,6 +498,25 @@ export function VoiceVideoSection({
       if (direction === "input") await audioTestStart();
       await reload();
       setPicked((current) => ({ ...current, [direction]: null }));
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
+  /**
+   * Choose a camera.
+   *
+   * Nothing is reopened, unlike an input change. The camera this names is the
+   * one the next switch-on opens: changing device under a live publication
+   * means a new frame size, so a new publication, which is a reconnect in
+   * everybody else's call in answer to somebody browsing a settings screen.
+   */
+  async function chooseCamera(id: string) {
+    setPickedCamera(id);
+
+    try {
+      await setVideoSettings({ camera: id });
+      setCamerasFound(await cameras());
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     }
@@ -635,6 +743,19 @@ export function VoiceVideoSection({
             )}
           </DevicePicker>
         </>
+      )}
+
+      {/*
+        Below the two audio pickers rather than in a section of its own. This
+        screen is already called Voice and Video, and a camera is one more
+        device on the same machine.
+      */}
+      {camerasFound !== null && (
+        <CameraPicker
+          list={camerasFound}
+          selected={pickedCamera ?? camerasFound.selected}
+          onChange={(id) => void chooseCamera(id)}
+        />
       )}
 
       <div className="voice-field">

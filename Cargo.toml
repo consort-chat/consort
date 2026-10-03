@@ -4,6 +4,7 @@ members = [
     "crates/consort-audio",
     "crates/consort-call",
     "crates/consort-matrix",
+    "crates/consort-video",
     "app/src-tauri",
 ]
 
@@ -179,3 +180,14 @@ split-debuginfo = "unpacked"
 # debuginfo is not something anyone steps through. Dropping it entirely shrinks
 # the target dir and the link set without costing anything in our own crates.
 debug = false
+
+# A 720p MJPEG frame is a JPEG decode and then a per-pixel conversion, and at
+# opt-level 0 that is 159 ms of CPU each: 5.5 frames a second out of a camera
+# offering 30, with one core held at 100%. See docs/PERFORMANCE.md.
+[profile.dev.package.consort-video]
+opt-level = 2
+
+# The larger half of that frame, and a dependency, so the block above reaches
+# its debuginfo rather than its speed.
+[profile.dev.package.zune-jpeg]
+opt-level = 2

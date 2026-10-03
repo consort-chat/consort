@@ -5,8 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import {
@@ -26,6 +24,8 @@ import {
   type Thread,
 } from "../lib/api";
 import { useRoomLinks } from "../lib/roomLinks";
+import { clampTo, type Bounds } from "../lib/useColumnResize";
+import { ColumnGrip } from "./ColumnGrip";
 import { ComposerEmoji } from "./ComposerEmoji";
 import { ComposerTarget } from "./ComposerTarget";
 import { MessageGroups, group, previewOf } from "./MessageGroups";
@@ -43,9 +43,6 @@ const NARROWEST = 300;
 
 /** The most of the window a thread may take. */
 const MOST = 0.6;
-
-/** How far one press of an arrow key moves the edge, in pixels. */
-const STEP = 16;
 
 /**
  * The width a thread opens at: three tenths of the window.
@@ -66,10 +63,12 @@ export function defaultThreadWidth(): number {
  * window is made smaller than the panel.
  */
 export function clampThreadWidth(width: number): number {
-  const most = Math.round(window.innerWidth * MOST);
-  // The minimum last, so a window too small for both still leaves a readable
-  // column rather than a sliver.
-  return Math.max(NARROWEST, Math.min(width, most));
+  return clampTo(threadBounds(), width);
+}
+
+/** Asked afresh each gesture, because the maximum follows the window. */
+function threadBounds(): Bounds {
+  return { min: NARROWEST, max: Math.round(window.innerWidth * MOST) };
 }
 
 /**
@@ -347,43 +346,6 @@ export function ThreadPanel({
   }, [thread?.root, thread?.messages]);
 
   /**
-   * Follow the pointer until it is let go.
-   *
-   * On `window` rather than through `setPointerCapture`, which jsdom does not
-   * implement, so a drag would be the one thing here no test could reach.
-   * Capture would also be the wrong shape: what is being dragged is the edge
-   * of the panel, not the seven pixels the hand landed on.
-   */
-  function grab(event: ReactPointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    const from = event.clientX;
-    const started = width;
-
-    const move = (moved: PointerEvent) => {
-      // The panel is on the right, so the pointer moving left widens it.
-      onResize(clampThreadWidth(started + (from - moved.clientX)));
-    };
-    const drop = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", drop);
-    };
-
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", drop);
-  }
-
-  /** The same edge, for a keyboard. A splitter only a mouse can move is half a
-   * control. */
-  function nudge(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const by =
-      event.key === "ArrowLeft" ? STEP : event.key === "ArrowRight" ? -STEP : 0;
-    if (by === 0) return;
-
-    event.preventDefault();
-    onResize(clampThreadWidth(width + by));
-  }
-
-  /**
    * React to something in the panel, or take that reaction back.
    *
    * Declared here rather than inline at the two call sites below, because the
@@ -529,21 +491,13 @@ export function ThreadPanel({
 
   return (
     <aside className="thread" aria-label="Thread" style={{ width }}>
-      {/*
-        The edge, as something to take hold of. A separator rather than a
-        button, because that is what it is, and focusable so the arrows work.
-      */}
-      <div
+      <ColumnGrip
         className="thread__grip"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the thread panel"
-        aria-valuenow={width}
-        aria-valuemin={NARROWEST}
-        aria-valuemax={Math.round(window.innerWidth * MOST)}
-        tabIndex={0}
-        onPointerDown={grab}
-        onKeyDown={nudge}
+        label="Resize the thread panel"
+        width={width}
+        bounds={threadBounds}
+        widens="left"
+        onResize={onResize}
       />
       <div className="thread__head">
         <h2 className="thread__name">{topic}</h2>

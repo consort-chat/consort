@@ -23,10 +23,12 @@
 
 use consort_matrix::Participant;
 
+use crate::camera::PictureSize;
 use crate::event::SelfAudio;
 use crate::failure::CallFailure;
-use crate::hearing::Ears;
+use crate::hearing::{Attached, Ears};
 use crate::publish::PublishedAudio;
+use crate::showing::PublishedVideo;
 
 /// Something that can put this session into a call.
 ///
@@ -70,12 +72,26 @@ pub trait CallSession {
     /// tied to the session's lifetime the way a borrow would be.
     type Track: PublishedAudio;
 
+    /// The camera publication this call hands back, when there is one.
+    type Video: PublishedVideo;
+
     /// Publish this session's microphone and hand back somewhere to push PCM.
     ///
     /// Separate from joining because they fail differently and because the
     /// call thread does something different with each: the session it holds,
     /// the publication it hands to a task.
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure>;
+
+    /// Publish this session's camera and hand back somewhere to push frames.
+    ///
+    /// Not called at join, unlike the microphone. A camera goes up when
+    /// somebody asks for one and comes down when they stop asking, so this is
+    /// reached from the command channel rather than from the join path.
+    ///
+    /// Retracting it is [`PublishedVideo::unpublish`] rather than a method
+    /// here: the publication is what has to be taken down, and the session may
+    /// already be gone by the time anything takes it down.
+    async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
 
     /// Mute or unmute this session's own microphone at the transport.
     ///
@@ -133,11 +149,10 @@ pub trait CallSession {
     /// every membership change is audible. [`crate::hearing::changes`] is the
     /// difference, as a value.
     ///
-    /// Not `async` and not fallible. There is no answer a caller could act on:
-    /// audio that cannot be played is not a reason to end a call, and a
-    /// participant whose stream has not arrived yet is the ordinary case rather
-    /// than a failure, because the next roster change asks again.
-    fn listen(&self, ears: &Ears);
+    /// Not `async` and not fallible, and the count it answers with is not a
+    /// failure either: a participant whose stream has not arrived yet is the
+    /// ordinary case. It is reported because nothing else need ever say so.
+    fn listen(&self, ears: &Ears) -> Attached;
 
     /// Start watching who is in the call.
     ///

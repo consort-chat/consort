@@ -16,6 +16,10 @@ repository.workspace = true
 # `cpal_host.rs` is: CI has no SFU, so every line that talks to one is a line
 # no test can reach. Everything that decides anything sits behind
 # `CallTransport` and is tested against a fake.
+#
+# One exception, and it is not an SFU call: `roster.rs` uses
+# `identity::pseudonymous_identity`, the MSC4195 hash that says which
+# membership an SFU participant identity belongs to. Pure, and tested.
 matrix-rtc-livekit = { workspace = true }
 
 # The types `Call::publish` takes and returns, which live here rather than
