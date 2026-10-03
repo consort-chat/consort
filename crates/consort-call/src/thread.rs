@@ -87,6 +87,17 @@ pub const LEAVE_TIMEOUT: Duration = Duration::from_secs(20);
 /// outcome than a ghost in a channel that the dead man's switch will clear.
 pub const SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What the roster watcher says to the loop.
+///
+/// One channel rather than two, so the two arrive in the order the watcher
+/// produced them: a call that has gone is the last thing it ever says.
+enum FromRoster {
+    /// Somebody joined or left this call.
+    Moved,
+    /// This room's roster will never change again, because its call is over.
+    Gone { room_id: String },
+}
+
 /// How long to wait before asking again for a track that has not arrived.
 ///
 /// Short enough that nobody notices the gap in a conversation. The gap between
@@ -380,15 +391,14 @@ async fn serve<T: CallTransport>(
     let mut audio = SelfAudio::default();
     let mut video = SelfVideo::default();
 
-    // How the roster watcher asks for this session's own audio state to be
-    // pushed at the call again.
+    // What the roster watcher tells this loop.
     //
     // Its own channel rather than another `Message`, because the sender goes to
     // a task this loop owns and a clone of the command sender would keep the
     // command channel open forever. `inbox.recv()` returning `None` is how a
     // dropped handle is noticed, and a loop holding its own sender would never
     // see it.
-    let (restate, mut restated) = unbounded_channel::<()>();
+    let (from_roster, mut roster_says) = unbounded_channel::<FromRoster>();
 
     // How a retry asks for the attachment half to run again, with a channel of
     // its own for the reason `restate` has one: the sender goes to a task this
@@ -399,13 +409,30 @@ async fn serve<T: CallTransport>(
     loop {
         let message = tokio::select! {
             message = inbox.recv() => message,
-            Some(()) = restated.recv() => {
-                // Somebody joined or left. Deafening is per participant all
-                // the way down, so a new arrival hears nothing about a
-                // decision taken before they got here: without this, the one
-                // thing deafen must never do, let somebody through, is exactly
-                // what happens to whoever walks in next.
-                apply_and_chase(current.as_mut(), audio, &ears, &chase).await;
+            Some(word) = roster_says.recv() => {
+                match word {
+                    // Somebody joined or left. Deafening is per participant all
+                    // the way down, so a new arrival hears nothing about a
+                    // decision taken before they got here: without this, the
+                    // one thing deafen must never do, let somebody through, is
+                    // exactly what happens to whoever walks in next.
+                    FromRoster::Moved => {
+                        apply_and_chase(current.as_mut(), audio, &ears, &chase).await
+                    }
+                    FromRoster::Gone { room_id }
+                        if ended_the_current_call(current.as_ref(), &room_id) =>
+                    {
+                        // Said before the leave, like a disconnect, and for the
+                        // same reason: the call is already over and there is no
+                        // answer the homeserver could give that would undo it.
+                        emit(&events, CallEvent::Disconnected);
+                        ears.silence();
+                        leave(current.take(), LEAVE_TIMEOUT).await;
+                        video = show(&events, video, SelfVideo::default());
+                        camera.clear();
+                    }
+                    FromRoster::Gone { .. } => {}
+                }
                 continue;
             }
             Some(()) = chased.recv() => {
@@ -433,7 +460,7 @@ async fn serve<T: CallTransport>(
                     room_id,
                     &events,
                     &microphone,
-                    &restate,
+                    &from_roster,
                     &ears,
                 )
                 .await;
@@ -720,6 +747,16 @@ fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears) -> Attached 
         .unwrap_or_default()
 }
 
+/// Whether a roster that has ended belongs to the call currently being held.
+///
+/// The guard that keeps a channel switch quiet. A roster also ends when its
+/// session is dropped, which is what leaving and switching channels both do, and
+/// a `Disconnected` for the channel just left would close the call panel between
+/// two calls that are meant to be continuous.
+fn ended_the_current_call<S: CallSession>(current: Option<&Joined<S>>, room_id: &str) -> bool {
+    current.is_some_and(|joined| joined.room_id == room_id)
+}
+
 /// Join `room_id`, having first left whatever call was current.
 ///
 /// Returns the call to hold on to, or `None` when there is none: both a join
@@ -730,7 +767,7 @@ async fn connect<T: CallTransport>(
     room_id: String,
     events: &UnboundedSender<CallEvent>,
     microphone: &Microphone,
-    restate: &UnboundedSender<()>,
+    from_roster: &UnboundedSender<FromRoster>,
     ears: &Ears,
 ) -> Option<Joined<T::Session>> {
     // Already there. Re-announced rather than ignored, because the interface
@@ -818,7 +855,7 @@ async fn connect<T: CallTransport>(
         room_id.clone(),
         roster,
         events.clone(),
-        restate.clone(),
+        from_roster.clone(),
         ears.clone(),
     )));
 
@@ -842,13 +879,14 @@ async fn connect<T: CallTransport>(
 /// one has not also lost track of whether it is in a call.
 ///
 /// Ends when the roster says it will never change again, which is a call that
-/// went away underneath this task. Nothing is emitted for that: whatever ended
-/// the call is what says so.
+/// went away underneath this task. [`FromRoster::Gone`] is sent for that,
+/// because nothing else will say so: a deliberate leave is announced by whoever
+/// asked for it, and a call that ended on its own has nobody to ask.
 async fn watch_roster<R: Roster>(
     room_id: String,
     mut roster: R,
     events: UnboundedSender<CallEvent>,
-    restate: UnboundedSender<()>,
+    from_roster: UnboundedSender<FromRoster>,
     ears: Ears,
 ) {
     // Per call, and that is what makes a channel switch silent: the people in
@@ -862,7 +900,7 @@ async fn watch_roster<R: Roster>(
         // different questions and this one is the urgent half: somebody who
         // just walked in is audible until it is answered, and unheard until
         // their audio is attached.
-        let _ = restate.send(());
+        let _ = from_roster.send(FromRoster::Moved);
         let said = connected(&room_id, &roster).await;
 
         // Diffed against the people rather than against the event.
@@ -879,6 +917,8 @@ async fn watch_roster<R: Roster>(
 
         emit(&events, said);
     }
+
+    let _ = from_roster.send(FromRoster::Gone { room_id });
 }
 
 /// What being in this call currently means, all of it.
@@ -1241,6 +1281,9 @@ mod tests {
         /// Held by the transport rather than made per session, so a test can
         /// reach the roster of a call the loop is holding.
         roster: watch::Sender<Standing>,
+        /// Fired to end the call underneath the loop, which is what the real
+        /// roster does when the transport says `CallEvent::Ended`.
+        ending: watch::Sender<()>,
     }
 
     /// What a leave does.
@@ -1264,6 +1307,7 @@ mod tests {
                     publishing: Publishing::Succeeds,
                     filming: Filming::Succeeds,
                     roster: watch::channel((Vec::new(), None)).0,
+                    ending: watch::channel(()).0,
                 },
                 log,
             )
@@ -1318,6 +1362,7 @@ mod tests {
                     publishing: self.publishing,
                     filming: self.filming,
                     roster: self.roster.clone(),
+                    ending: self.ending.clone(),
                 }),
                 Joining::Fails(failure) => Err(failure.clone()),
                 Joining::Hangs => std::future::pending().await,
@@ -1334,6 +1379,8 @@ mod tests {
         /// The roster every view of this call reads from. A test pushes to the
         /// sender to make somebody arrive or leave.
         roster: watch::Sender<Standing>,
+        /// See `FakeTransport::ending`.
+        ending: watch::Sender<()>,
     }
 
     /// What a fake call currently is: who is in it, and what is wrong.
@@ -1345,6 +1392,7 @@ mod tests {
     /// One view of a fake call.
     struct FakeRoster {
         standing: watch::Receiver<Standing>,
+        ending: watch::Receiver<()>,
     }
 
     impl Roster for FakeRoster {
@@ -1366,7 +1414,16 @@ mod tests {
         }
 
         async fn changed(&mut self) -> Option<()> {
-            self.standing.changed().await.ok()
+            // Destructured so the two futures borrow different fields, as the
+            // real roster is and for the same reason.
+            let Self { standing, ending } = self;
+
+            tokio::select! {
+                changed = standing.changed() => changed.is_ok().then_some(()),
+                // The real roster answers `None` for a call the transport says
+                // has ended, which is what `trouble::is_the_end` makes it do.
+                _ = ending.changed() => None,
+            }
         }
     }
 
@@ -1383,6 +1440,7 @@ mod tests {
         fn roster(&self) -> Self::Roster {
             FakeRoster {
                 standing: self.roster.subscribe(),
+                ending: self.ending.subscribe(),
             }
         }
 
@@ -1486,6 +1544,26 @@ mod tests {
             room_id: room_id.to_owned(),
             participants: Vec::new(),
             trouble: Some(trouble.to_owned()),
+        }
+    }
+
+    /// The two ends of the loop, handed to a test to drive by hand.
+    ///
+    /// At this level rather than inside one module, because more than one needs
+    /// a loop that stays alive while the test decides what happens next.
+    struct Driver {
+        to_loop: UnboundedSender<Message>,
+        said: UnboundedReceiver<CallEvent>,
+    }
+
+    impl Driver {
+        fn send(&self, message: Message) {
+            self.to_loop.send(message).unwrap();
+        }
+
+        /// The next thing the loop says. Never sleeps, never polls.
+        async fn next(&mut self) -> CallEvent {
+            self.said.recv().await.expect("the loop stopped talking")
         }
     }
 
@@ -2013,14 +2091,14 @@ mod tests {
                 let (events, _said) = unbounded_channel();
                 let microphone = Microphone::new();
 
-                let (restate, _restated) = unbounded_channel();
+                let (from_roster, _said) = unbounded_channel();
                 let joined = connect(
                     &transport,
                     None,
                     GENERAL.to_owned(),
                     &events,
                     &microphone,
-                    &restate,
+                    &from_roster,
                     &(Arc::new(Deaf::default()) as Ears),
                 )
                 .await;
@@ -2047,14 +2125,14 @@ mod tests {
                 let (events, _said) = unbounded_channel();
                 let microphone = Microphone::new();
 
-                let (restate, _restated) = unbounded_channel();
+                let (from_roster, _said) = unbounded_channel();
                 let joined = connect(
                     &transport,
                     None,
                     GENERAL.to_owned(),
                     &events,
                     &microphone,
-                    &restate,
+                    &from_roster,
                     &(Arc::new(Deaf::default()) as Ears),
                 )
                 .await;
@@ -2586,14 +2664,14 @@ mod tests {
         /// Join a call, with the plumbing the loop would otherwise own.
         async fn joined(transport: &FakeTransport) -> Option<Joined<FakeSession>> {
             let (events, _said) = unbounded_channel();
-            let (restate, _restated) = unbounded_channel();
+            let (from_roster, _said) = unbounded_channel();
             connect(
                 transport,
                 None,
                 GENERAL.to_owned(),
                 &events,
                 &Microphone::new(),
-                &restate,
+                &from_roster,
                 &(Arc::new(Deaf::default()) as Ears),
             )
             .await
@@ -2966,23 +3044,6 @@ mod tests {
             assert!(played.is_empty(), "{played:?}");
         }
 
-        /// The two ends of the loop, handed to a test to drive by hand.
-        struct Driver {
-            to_loop: UnboundedSender<Message>,
-            said: UnboundedReceiver<CallEvent>,
-        }
-
-        impl Driver {
-            fn send(&self, message: Message) {
-                self.to_loop.send(message).unwrap();
-            }
-
-            /// The next thing the loop says. Never sleeps, never polls.
-            async fn next(&mut self) -> CallEvent {
-                self.said.recv().await.expect("the loop stopped talking")
-            }
-        }
-
         #[tokio::test]
         async fn joining_reports_who_is_already_in_the_channel() {
             // Read before the watcher starts rather than waiting for the first
@@ -3337,6 +3398,185 @@ mod tests {
                 .await;
 
             assert_eq!(log.listens(), 0);
+        }
+    }
+
+    /// A call that ended underneath this session rather than being left.
+    ///
+    /// `CallEvent::Ended` is emitted once by the transport, nothing follows it,
+    /// and the broadcast channel is not closed by it. Without an answer the
+    /// interface draws a dead call as connected with a full roster.
+    mod a_call_that_ended {
+        use super::*;
+
+        /// Run the loop with `ears` handed in, so a test can see both what was
+        /// said and what reached the speakers.
+        ///
+        /// Modelled on `roster::chiming`, which exposes the ears for the same
+        /// reason: half of ending a call is an event and half is a buffer being
+        /// thrown away.
+        async fn until<F, Fut>(transport: FakeTransport, ears: Deaf, act: F) -> Vec<CallEvent>
+        where
+            F: FnOnce(Driver) -> Fut,
+            Fut: Future<Output = Driver>,
+        {
+            let (to_loop, inbox) = unbounded_channel();
+            let (events, said) = unbounded_channel();
+
+            tokio::task::LocalSet::new()
+                .run_until(async move {
+                    let serving = tokio::task::spawn_local(serve(
+                        transport,
+                        inbox,
+                        events,
+                        Microphone::new(),
+                        Camera::new(),
+                        Arc::new(ears),
+                    ));
+
+                    let Driver { to_loop, mut said } = act(Driver { to_loop, said }).await;
+                    to_loop.send(Message::Shutdown).unwrap();
+                    drop(to_loop);
+                    serving.await.unwrap();
+
+                    let mut rest = Vec::new();
+                    while let Some(event) = said.recv().await {
+                        rest.push(event);
+                    }
+                    rest
+                })
+                .await
+        }
+
+        /// The next thing the loop says, or nothing because it stopped talking.
+        ///
+        /// Bounded, so a change that leaves the loop silent fails the test
+        /// rather than hanging it. A paused clock makes the bound cost nothing.
+        async fn next_within(driver: &mut Driver) -> Option<CallEvent> {
+            tokio::time::timeout(LEAVE_TIMEOUT, driver.next())
+                .await
+                .ok()
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_call_that_ended_underneath_us_is_drawn_as_disconnected() {
+            // Nothing else says so. The transport emits `Ended` once and keeps
+            // its channel open, so a reader that waits for the next thing waits
+            // for the life of the application.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let ending = transport.ending.clone();
+
+            until(transport, Deaf::default(), async |mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(next_within(&mut driver).await, Some(connecting(GENERAL)));
+                assert_eq!(next_within(&mut driver).await, Some(connected(GENERAL)));
+
+                ending.send(()).unwrap();
+
+                assert_eq!(
+                    next_within(&mut driver).await,
+                    Some(CallEvent::Disconnected),
+                    "a call that ended went on drawing as connected"
+                );
+                driver
+            })
+            .await;
+
+            assert_eq!(log.left(), vec![GENERAL]);
+        }
+
+        #[tokio::test]
+        async fn a_roster_that_ended_in_another_channel_is_not_this_call_ending() {
+            // The regression guard for the only way this can make things worse.
+            // A roster also ends when its session is dropped, which is what a
+            // channel switch does, so a roster ending is not on its own a call
+            // ending: it has to be the call being held.
+            tokio::task::LocalSet::new()
+                .run_until(async {
+                    let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+                    let call = joined_in(&transport, MUSIC).await;
+
+                    assert!(
+                        !ended_the_current_call(call.as_ref(), GENERAL),
+                        "the channel just left was taken for the one being held"
+                    );
+                    assert!(
+                        ended_the_current_call(call.as_ref(), MUSIC),
+                        "the call being held was not recognised as itself"
+                    );
+                    assert!(
+                        !ended_the_current_call::<FakeSession>(None, GENERAL),
+                        "a roster ending reported a call where there is none"
+                    );
+                })
+                .await;
+        }
+
+        /// Join `room_id`, with the plumbing the loop would otherwise own.
+        async fn joined_in(
+            transport: &FakeTransport,
+            room_id: &str,
+        ) -> Option<Joined<FakeSession>> {
+            let (events, _said) = unbounded_channel();
+            let (from_roster, _said) = unbounded_channel();
+            connect(
+                transport,
+                None,
+                room_id.to_owned(),
+                &events,
+                &Microphone::new(),
+                &from_roster,
+                &(Arc::new(Deaf::default()) as Ears),
+            )
+            .await
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_call_that_ended_gives_the_microphone_back() {
+            // Announcing it is not enough. Whatever the pumps had already
+            // queued plays out into the silence afterwards unless the buffer
+            // is dropped, and the call has to be genuinely left or the loop
+            // goes on believing it is in one.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            let ending = transport.ending.clone();
+            let ears = Deaf::default();
+
+            let heard = ears.clone();
+            until(transport, ears, async |mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(next_within(&mut driver).await, Some(connecting(GENERAL)));
+                assert_eq!(next_within(&mut driver).await, Some(connected(GENERAL)));
+                assert_eq!(log.live(), 1, "nothing was publishing");
+
+                // Counted from here, because joining silences the buffer too.
+                let before = heard.silences();
+                ending.send(()).unwrap();
+                assert_eq!(
+                    next_within(&mut driver).await,
+                    Some(CallEvent::Disconnected)
+                );
+
+                assert!(
+                    heard.silences() > before,
+                    "the buffer played on after the call was over"
+                );
+
+                driver.send(Message::Disconnect);
+                assert_eq!(
+                    next_within(&mut driver).await,
+                    None,
+                    "the call was announced as over and then still held, so \
+                     leaving it said so a second time"
+                );
+                driver
+            })
+            .await;
+
+            assert_eq!(
+                log.left(),
+                vec![GENERAL],
+                "the membership was left published, or retracted twice"
+            );
         }
     }
 
