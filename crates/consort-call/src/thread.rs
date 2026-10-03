@@ -42,7 +42,7 @@ use crate::arrivals::Arrivals;
 use crate::camera::{Camera, PictureSize};
 use crate::event::{CallEvent, SelfAudio, SelfVideo};
 use crate::failure::CallFailure;
-use crate::hearing::{Cue, Ears};
+use crate::hearing::{Attached, Cue, Ears};
 use crate::microphone::Microphone;
 use crate::publish::pump;
 use crate::showing::{self, PublishedVideo};
@@ -333,7 +333,7 @@ async fn serve<T: CallTransport>(
                 // decision taken before they got here: without this, the one
                 // thing deafen must never do, let somebody through, is exactly
                 // what happens to whoever walks in next.
-                apply(current.as_ref(), audio, &ears).await;
+                let _ = apply(current.as_ref(), audio, &ears).await;
                 continue;
             }
         };
@@ -371,7 +371,7 @@ async fn serve<T: CallTransport>(
                 // state whose other half is already drawn, and repeating it as
                 // part of joining would make it look like something a call
                 // decides.
-                apply(current.as_ref(), audio, &ears).await;
+                let _ = apply(current.as_ref(), audio, &ears).await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -396,11 +396,11 @@ async fn serve<T: CallTransport>(
             }
             Message::SetMuted(muted) => {
                 audio = announce(&events, audio, SelfAudio { muted, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                let _ = apply(current.as_ref(), audio, &ears).await;
             }
             Message::SetDeafened(deafened) => {
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                let _ = apply(current.as_ref(), audio, &ears).await;
             }
             Message::SetAway(away) => {
                 // Only on the way back, and only from having actually been
@@ -411,7 +411,7 @@ async fn serve<T: CallTransport>(
                 // broken.
                 let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
-                apply(current.as_ref(), audio, &ears).await;
+                let _ = apply(current.as_ref(), audio, &ears).await;
                 if returning {
                     ears.cue(Cue::Returned);
                 }
@@ -556,9 +556,13 @@ async fn set_camera<S: CallSession>(
 /// tearing the call down over a mute that the SFU would not accept, or silently
 /// snapping the button back after somebody pressed it, are both worse than a
 /// line in the log.
-async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ears: &Ears) {
+async fn apply<S: CallSession>(
+    current: Option<&Joined<S>>,
+    audio: SelfAudio,
+    ears: &Ears,
+) -> Attached {
     let Some(joined) = current else {
-        return;
+        return Attached::default();
     };
 
     if let Err(error) = joined.session.set_muted(audio.microphone_off()).await {
@@ -582,7 +586,7 @@ async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ea
     // tracks are subscribed. This runs again on every roster change, which is
     // exactly when a track appears, and it leaves anybody already playing
     // alone.
-    joined.session.listen(ears);
+    let attached = attach(Some(joined), ears);
 
     // Last, and after `set_deafened` rather than before it. Pausing the
     // subscriptions stops more audio arriving but takes a round trip to the
@@ -591,6 +595,19 @@ async fn apply<S: CallSession>(current: Option<&Joined<S>>, audio: SelfAudio, ea
     if audio.deafened {
         ears.silence();
     }
+
+    attached
+}
+
+/// Attach the audio of everybody in `current` whose track has arrived.
+///
+/// Separate from [`apply`] because a retry must reach only this half: going
+/// through the whole of `apply` would re-announce this session to every peer in
+/// the call on every attempt.
+fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears) -> Attached {
+    current
+        .map(|joined| joined.session.listen(ears))
+        .unwrap_or_default()
 }
 
 /// Join `room_id`, having first left whatever call was current.
@@ -1286,8 +1303,9 @@ mod tests {
             Ok(())
         }
 
-        fn listen(&self, _ears: &Ears) {
+        fn listen(&self, _ears: &Ears) -> Attached {
             self.log.listens.fetch_add(1, Ordering::Relaxed);
+            Attached::default()
         }
 
         async fn leave(self) -> Result<(), CallFailure> {
