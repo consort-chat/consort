@@ -218,6 +218,12 @@ pub struct Message {
     /// not drawn as the author taking their own message back.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_by: Option<String>,
+    /// Why this message's sender could not be vouched for, when they could not.
+    ///
+    /// `None` covers more than "verified": a sender nobody ever verified is
+    /// also `None`, not having checked being no finding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_trust: Option<SenderTrust>,
     pub kind: MessageKind,
 }
 
@@ -266,6 +272,27 @@ pub struct Media {
     /// The pixel height the sender said it has, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u64>,
+}
+
+/// Why a message's sender could not be vouched for.
+///
+/// One variant per `ShieldStateCode` the SDK can raise, and nothing else. A
+/// code rather than a sentence: the words belong beside the icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SenderTrust {
+    /// Not enough is known to check who sent it.
+    AuthenticityNotGuaranteed,
+    /// The sending device is one this session cannot find.
+    UnknownDevice,
+    /// The sender never signed the device they sent it from.
+    UnsignedDevice,
+    /// The sender is somebody this session has not verified.
+    UnverifiedIdentity,
+    /// The sender was verified once and their identity has changed since.
+    VerificationViolation,
+    /// The sender named on the event does not own the session it came in.
+    MismatchedSender,
 }
 
 /// What sort of message this is.
