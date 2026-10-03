@@ -4,6 +4,76 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.9.0 (2026-10-03)
+
+### Added
+
+- **video:** A crate that reads a camera (@tominal)
+- **call:** A camera somebody can switch on (@tominal)
+- **video:** Capture a screen or a window over X11 (@tominal)
+- **ui:** A card for choosing what to share, and an indicator while it goes (@tominal)
+- **ui:** Your own camera in the floating call card (@tominal)
+- **call:** A second still, for the screen you are sharing (@tominal)
+- **call:** Report who else is sharing a screen (@tominal)
+- **ui:** One square for a face, a camera and a shared screen (@tominal)
+- **call:** A shared screen takes the stage, and everything else goes under it (@tominal)
+- **ui:** A channel column somebody can resize (@tominal)
+- **ui:** The call tucked behind the screen it is watching (@tominal)
+- **timeline:** Say when a message's sender could not be vouched for (@tominal)
+
+### Changed
+
+- **ui:** Keep a camera frame from redrawing the faces beside it (@tominal)
+- **call:** Let a pass of listen report what it could not attach (@tominal)
+- **ui:** One grip for a column edge, and lines that say it is one (@tominal)
+
+### Documentation
+
+- Record the decision to read the camera in Rust (@tominal)
+- Say that Consort can publish a camera (@tominal)
+- An audit comment that claimed a moment (@tominal)
+- **selfview:** Say when there is no picture accurately (@tominal)
+- Record why the call card is squares (@tominal)
+- **security:** The October 2026 audit, and what it did not touch (@tominal)
+- **security:** Reconcile the Advisories job with GitHub's own view (@tominal)
+- **security:** Say why the packages cannot grow a maintainer script (@tominal)
+- **security:** Enumerate the command arguments instead of summarising them (@tominal)
+- **security:** Say where the data: scheme is actually needed (@tominal)
+- **security:** Make the summary agree with the enumeration below it (@tominal)
+- **security:** H7 has an attack path, so stop saying none of them does (@tominal)
+- **security:** Count the renderer's allowlist rather than estimate it (@tominal)
+- **security:** Say how the logging claim was established (@tominal)
+- **security:** Count the unsafe keyword rather than the table rows (@tominal)
+- **security:** Record what #155 closes and what each open finding needs (@tominal)
+- **timeline:** Cut consort-matrix's timeline comment to what the code cannot say (@tominal)
+- **call:** The two new microphone docs, inside the three line limit (@tominal)
+- **adr:** Say how long the ring was wrong for (@tominal)
+
+### Faster
+
+- **video:** Build the camera's frame path optimized in a dev build (@tominal)
+
+### Fixed
+
+- **deps:** Undici above the advisory floor (@tominal)
+- **video:** Share the monitor somebody chose, not every monitor (@tominal)
+- **ui:** Give the window back when the call ends (@tominal)
+- **ui:** Show the whole share picker, and stop crossing out the control (@tominal)
+- **attachments:** Never open the save window on a name a stranger wrote (@tominal)
+- **csp:** Stop admitting an asset protocol this build never enables (@tominal)
+- **notify:** Escape the markup a sender can write into a notification (@tominal)
+- **secrets:** Wipe the store key and the password before the memory goes back (@tominal)
+- **call:** Take an SFU over plain HTTP only on the loopback interface (@tominal)
+- **call:** Let a notice speak for its sender and for nobody else (@tominal)
+- **call:** Chase audio whose track lands after the roster settles (@tominal)
+- **audio:** Log the cpal error kind, not just its message (@tominal)
+- **call:** End the call when the transport says it has ended (@tominal)
+- **ui:** Centre the glyphs in the call card's title bar controls (@tominal)
+- **call:** A roster starts knowing this session is away (@tominal)
+- **ui:** Put the away clock where it can be seen (@tominal)
+- **call:** A muted or away session no longer reports itself speaking (@tominal)
+- **call:** Fixed merge issue in thread.rs (@tominal)
+
 ## 0.8.0 (2026-09-25)
 
 ### Added
