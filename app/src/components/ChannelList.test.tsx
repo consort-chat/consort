@@ -1027,16 +1027,15 @@ describe("ChannelList", () => {
       );
 
       expect(screen.getByLabelText("Ada is away")).toBeVisible();
-      // The clock replaces the microphone rather than joining it. Away mutes,
-      // so both flags are set, and two icons would spend twice the width on
-      // one fact.
-      expect(screen.queryByLabelText("Ada is muted")).toBeNull();
+      // Beside the microphone rather than in place of it. Away mutes, so both
+      // flags are set, and where somebody went is not what they switched off.
+      expect(screen.getByLabelText("Ada is muted")).toBeVisible();
     });
 
-    it("shows headphones rather than a clock for somebody both away and deafened", () => {
-      // The precedence, at the one point where all three flags are true.
-      // Deafened outranks away because it is the stronger claim: an away
-      // person may come back and hear what was said, a deafened one will not.
+    it("shows both headphones and a clock for somebody away and deafened", () => {
+      // The one point where all three flags are true. Headphones outrank the
+      // microphone, which is one fact about audio drawn once, and the clock is
+      // a different fact and keeps its own place at the end of the row.
       render(
         <ChannelList
         selfId="@bob:example.org"
@@ -1064,7 +1063,7 @@ describe("ChannelList", () => {
       );
 
       expect(screen.getByLabelText("Ada is deafened")).toBeVisible();
-      expect(screen.queryByLabelText("Ada is away")).toBeNull();
+      expect(screen.getByLabelText("Ada is away")).toBeVisible();
     });
 
     it("says nothing about being away for somebody who has only muted", () => {
