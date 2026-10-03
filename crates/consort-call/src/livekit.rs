@@ -44,7 +44,7 @@ use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
 use crate::failure::{CallFailure, classify};
-use crate::hearing::{self, Ears};
+use crate::hearing::{self, Attached, Ears};
 use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
 use crate::roster;
@@ -602,7 +602,7 @@ impl CallSession for LiveKitSession {
         Ok(())
     }
 
-    fn listen(&self, ears: &Ears) {
+    fn listen(&self, ears: &Ears) -> Attached {
         // Asked of the engine rather than tracked from events, so that this is
         // a statement of what should currently be true rather than a tally that
         // can drift. It is called on every roster change and has to be
@@ -645,6 +645,7 @@ impl CallSession for LiveKitSession {
 
         let attached: BTreeSet<String> = playing.keys().cloned().collect();
         let (start, stop) = hearing::changes(&attached, &audible);
+        let mut pending = 0;
 
         for who in stop {
             // Dropping the handle aborts the pump; forgetting drops whatever it
@@ -657,13 +658,14 @@ impl CallSession for LiveKitSession {
 
         for who in start {
             let Some(track) = self.call.remote_track(&who, MediaStreamKind::Microphone) else {
-                // The membership is known but its track has not been subscribed
-                // yet, which is the ordinary order of events rather than a
-                // fault. The next roster change asks again.
+                // Ordinary order of events rather than a fault, and counted
+                // because nothing need ever publish a roster again: issue #157.
+                pending += 1;
                 continue;
             };
             let Some(mut frames) = track.audio_frames() else {
                 tracing::warn!(member_id = %who, "a microphone track with no audio to pull");
+                pending += 1;
                 continue;
             };
 
@@ -690,6 +692,11 @@ impl CallSession for LiveKitSession {
                     pump: AbortOnDrop(pump),
                 },
             );
+        }
+
+        Attached {
+            playing: playing.len(),
+            pending,
         }
     }
 
