@@ -793,6 +793,17 @@ describe("the panel's width", () => {
     expect(resized).toHaveBeenLastCalledWith(384);
   });
 
+  it("advertises itself with the same lines the channel list has", async () => {
+    // #138: this panel has been resizable since #113 and said so only once the
+    // pointer was already on the grip. The lines come from the shared grip, so
+    // a bespoke one here would be an edge that goes quiet again.
+    await opened();
+    const grip = screen.getByRole("separator", { name: /resize/i });
+
+    expect(grip).toHaveClass("grip", "thread__grip");
+    expect(grip.querySelector(".grip__lines")).not.toBeNull();
+  });
+
   it("refuses to be dragged narrower than a conversation reads at", async () => {
     await opened();
 

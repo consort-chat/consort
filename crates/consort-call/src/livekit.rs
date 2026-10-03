@@ -51,7 +51,7 @@ use crate::roster;
 use crate::showing::PublishedVideo;
 use crate::thread::AbortOnDrop;
 use crate::transport::{CallSession, CallTransport, Roster};
-use crate::trouble::{Faults, what_it_says};
+use crate::trouble::{Faults, is_the_end, what_it_says};
 use tokio::sync::{broadcast, watch};
 
 /// A MatrixRTC call over LiveKit.
@@ -897,6 +897,11 @@ impl Roster for LiveKitRoster {
                     // anybody for. The cryptor reports its state per frame run
                     // rather than only on a transition, so most of these say
                     // what the last one said.
+                    Ok(event) if is_the_end(&event) => {
+                        // Nothing follows this one, so there is nothing left to
+                        // wait for. `None` is what this seam calls that.
+                        return None;
+                    }
                     Ok(event) => match what_it_says(&event) {
                         Some((member_id, fault)) => {
                             if faults.note(member_id, fault) {

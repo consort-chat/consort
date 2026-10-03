@@ -1,9 +1,14 @@
 /*
   The signed-in layout.
 
-  Three columns and two fixed widths. 72px is the rail, which holds a 48px
-  avatar plus breathing room, and 272px is the channel list. The third column
+  Three columns and two widths. 72px is the rail, which holds a 48px avatar
+  plus breathing room, and the channel list opens at 272px. The third column
   takes what is left.
+
+  Both are custom properties so the grip that moves the second one is placed by
+  the arithmetic the grid is built from. The shell overwrites `--shell-sidebar`
+  on itself; the value here is the floor that keeps a missing property from
+  collapsing the layout, and `sidebarWidth.ts` holds the same number.
 
   272 and not the 240 it was, because of the voice strip at the bottom of this
   column (#104). That strip is the widest thing the column has to hold: a
@@ -28,10 +33,27 @@
   side and the shell already keeps them from being open at once.
 */
 .shell {
+  --shell-rail: 72px;
+  --shell-sidebar: 272px;
+
+  position: relative;
   display: grid;
-  grid-template-columns: 72px 272px minmax(0, 1fr) auto auto;
+  grid-template-columns:
+    var(--shell-rail) var(--shell-sidebar) minmax(0, 1fr) auto auto;
   height: 100%;
   background: var(--surface-base);
+}
+
+/*
+  The channel column's edge, as something to take hold of.
+
+  A child of the shell and just past the rule rather than across it, because
+  `.shell__sidebar` below clips what leaves it: a grip inside that box would be
+  cut off at the very edge it marks, and the list's scrollbar is already there.
+  The pane's first few pixels hold no control, so this is the side with room.
+*/
+.shell__grip {
+  left: calc(var(--shell-rail) + var(--shell-sidebar));
 }
 
 /*
@@ -40,7 +62,7 @@
   click away and the control that unfolds is in the pane's own header.
 */
 .shell[data-sidebar="folded"] {
-  grid-template-columns: 72px 0 minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--shell-rail) 0 minmax(0, 1fr) auto auto;
 }
 
 /*
