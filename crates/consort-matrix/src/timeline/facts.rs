@@ -10,7 +10,7 @@
 //! Most of a room's timeline is not messages, so `None` is the ordinary answer
 //! rather than a failure.
 
-use matrix_sdk::deserialized_responses::TimelineEvent;
+use matrix_sdk::deserialized_responses::{ShieldState, ShieldStateCode, TimelineEvent};
 use matrix_sdk::ruma::UInt;
 use matrix_sdk::ruma::events::relation::{BundledMessageLikeRelations, BundledThread};
 use matrix_sdk::ruma::events::room::MediaSource;
@@ -31,7 +31,7 @@ use serde::Deserialize;
 use matrix_sdk::ruma::events::receipt::ReceiptType;
 
 use crate::timeline::dto::{
-    Media, Message, MessageKind, SystemChange, SystemMessage, ThreadSummary,
+    Media, Message, MessageKind, SenderTrust, SystemChange, SystemMessage, ThreadSummary,
 };
 use crate::timeline::read_by::About;
 
@@ -75,6 +75,10 @@ pub struct Replacement {
     /// rather than leave the old formatting standing, because
     /// `FormattedBody` draws the HTML whenever there is any.
     pub html: Option<String>,
+    /// Why the device that sent the edit could not be vouched for.
+    ///
+    /// The edit's own: the words a reader sees are this event's.
+    pub sender_trust: Option<SenderTrust>,
 }
 
 /// What this build says instead of an encrypted message it has no key for.
@@ -288,6 +292,7 @@ pub fn replacement(event: &TimelineEvent) -> Option<Replacement> {
         target: replaced.event_id.to_string(),
         sender: said.sender.to_string(),
         at: said.origin_server_ts.0.into(),
+        sender_trust: trust(event),
         body,
         html: formatted
             .filter(|formatted| formatted.format == MessageFormat::Html)
@@ -557,6 +562,7 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         thread: said.unsigned.relations.thread.as_deref().map(summary),
         reply_to,
         mentions,
+        sender_trust: trust(event),
         // Nobody has, or this would not have deserialised as an original.
         deleted_by: None,
         kind,
@@ -679,9 +685,42 @@ fn drawable(
     }
 }
 
-/// An encrypted event with no key for it, as something to draw. Read out of
-/// the raw JSON field by field, because the content is ciphertext and the only
-/// things outside it are the envelope fields below.
+/// One `ShieldStateCode` under this crate's own name for it.
+///
+/// Here rather than beside the enum: `dto` names no SDK type on purpose.
+impl From<ShieldStateCode> for SenderTrust {
+    fn from(code: ShieldStateCode) -> Self {
+        match code {
+            ShieldStateCode::AuthenticityNotGuaranteed => Self::AuthenticityNotGuaranteed,
+            ShieldStateCode::UnknownDevice => Self::UnknownDevice,
+            ShieldStateCode::UnsignedDevice => Self::UnsignedDevice,
+            ShieldStateCode::UnverifiedIdentity => Self::UnverifiedIdentity,
+            ShieldStateCode::VerificationViolation => Self::VerificationViolation,
+            ShieldStateCode::MismatchedSender => Self::MismatchedSender,
+        }
+    }
+}
+
+/// Why this message's sender could not be vouched for, when they could not.
+///
+/// Lax, not strict: strict reddens a sender merely nobody has verified, which
+/// is most of them. Grey goes with it, being mostly key backup.
+fn trust(event: &TimelineEvent) -> Option<SenderTrust> {
+    match event
+        .encryption_info()?
+        .verification_state
+        .to_shield_state_lax()
+    {
+        ShieldState::Red { code, .. } => Some(code.into()),
+        ShieldState::Grey { .. } | ShieldState::None => None,
+    }
+}
+
+/// An encrypted event with no key for it, as something to draw.
+///
+/// Read out of the raw JSON field by field rather than deserialised, because
+/// there is nothing to deserialise it into: the content is ciphertext, and the
+/// only things outside it are the envelope fields below.
 fn undecryptable(event: &TimelineEvent) -> Option<Message> {
     Some(Message {
         id: event.kind.parse_event_id()?.to_string(),
@@ -703,6 +742,9 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         reply_to: None,
         mentions: Vec::new(),
         deleted_by: None,
+        // No `EncryptionInfo` on an event that did not decrypt, and the mark
+        // this draws already says the session has no key for it.
+        sender_trust: None,
         kind: MessageKind::Undecryptable,
     })
 }
@@ -745,6 +787,9 @@ fn deleted(
         reactions: Vec::new(),
         reply_to: None,
         mentions: Vec::new(),
+        // Nothing survives to vouch for. The content is gone, so a shield on
+        // the mark left behind would be a claim about an empty box.
+        sender_trust: None,
         // One field off the raw redaction rather than a match over
         // `AnyRedactionEvent`, which is non-exhaustive. A homeserver that sent
         // no sender leaves it `None`, and the mark then names nobody.
@@ -761,7 +806,9 @@ fn deleted(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_sdk::deserialized_responses::UnableToDecryptInfo;
+    use matrix_sdk::deserialized_responses::{
+        AlgorithmInfo, EncryptionInfo, UnableToDecryptInfo, VerificationLevel, VerificationState,
+    };
     use matrix_sdk::ruma::events::room::MediaSource;
     use matrix_sdk::ruma::serde::Raw;
     use serde_json::{Value, json};
@@ -819,6 +866,37 @@ mod tests {
 
     fn text(body: &str) -> Value {
         json!({ "msgtype": "m.text", "body": body })
+    }
+
+    /// One decrypted message, carrying the trust the crypto machine put on it.
+    fn decrypted(state: VerificationState) -> TimelineEvent {
+        TimelineEvent::from_decrypted(
+            matrix_sdk::deserialized_responses::DecryptedRoomEvent {
+                event: Raw::new(&json!({
+                    "type": "m.room.message",
+                    "event_id": "$one:example.org",
+                    "room_id": "!room:example.org",
+                    "sender": "@ada:example.org",
+                    "origin_server_ts": 1_700_000_000_000u64,
+                    "content": text("hello"),
+                }))
+                .expect("the fixture is valid JSON")
+                .cast_unchecked(),
+                encryption_info: std::sync::Arc::new(EncryptionInfo {
+                    sender: matrix_sdk::ruma::user_id!("@ada:example.org").to_owned(),
+                    sender_device: None,
+                    forwarder: None,
+                    algorithm_info: AlgorithmInfo::MegolmV1AesSha2 {
+                        curve25519_key: "curve".to_owned(),
+                        sender_claimed_keys: std::collections::BTreeMap::new(),
+                        session_id: None,
+                    },
+                    verification_state: state,
+                }),
+                unsigned_encryption_info: None,
+            },
+            None,
+        )
     }
 
     #[test]
@@ -2345,5 +2423,210 @@ mod tests {
         }))
         .expect("the fixture is valid JSON")
         .cast_unchecked()
+    }
+
+    #[test]
+    fn a_message_from_a_device_its_owner_never_signed_says_so() {
+        // Issue #133's case, and the only one the SDK's own wording calls a
+        // client rather than a person: the sender never signed this device.
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::UnsignedDevice,
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, Some(SenderTrust::UnsignedDevice));
+    }
+
+    #[test]
+    fn a_message_from_a_verified_device_says_nothing() {
+        let said = message(&decrypted(VerificationState::Verified))
+            .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, None);
+    }
+
+    #[test]
+    fn a_sender_we_simply_never_verified_is_not_called_untrusted() {
+        // The state that means we have not checked, not that anything is
+        // wrong. Marking it would put a warning on nearly every message in a
+        // room and say something false about all of them.
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::UnverifiedIdentity,
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, None);
+    }
+
+    #[test]
+    fn a_key_from_an_insecure_source_is_not_called_untrusted_either() {
+        // Grey in the SDK's mapping, not red: a key out of backup or an
+        // unsafe forward is common and says nothing about the sender.
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::None(
+                matrix_sdk::deserialized_responses::DeviceLinkProblem::InsecureSource,
+            ),
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, None);
+    }
+
+    #[test]
+    fn a_device_this_session_cannot_find_says_so() {
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::None(
+                matrix_sdk::deserialized_responses::DeviceLinkProblem::MissingDevice,
+            ),
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, Some(SenderTrust::UnknownDevice));
+    }
+
+    #[test]
+    fn a_sender_who_was_verified_and_changed_identity_says_so() {
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::VerificationViolation,
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, Some(SenderTrust::VerificationViolation));
+    }
+
+    #[test]
+    fn a_sender_who_does_not_own_the_session_says_so() {
+        let said = message(&decrypted(VerificationState::Unverified(
+            VerificationLevel::MismatchedSender,
+        )))
+        .expect("a decrypted message is a message");
+
+        assert_eq!(said.sender_trust, Some(SenderTrust::MismatchedSender));
+    }
+
+    #[test]
+    fn an_unencrypted_message_carries_no_trust_either_way() {
+        // Nothing here knows whether the room was encrypted, so there is no
+        // honest warning to give. See docs/ADR on this if it ever gains one.
+        let said = message(&sent(text("hello"))).expect("a text message is a message");
+
+        assert_eq!(said.sender_trust, None);
+    }
+
+    #[test]
+    fn an_undecryptable_message_carries_no_trust() {
+        // It already draws as `Undecryptable`, and a shield beside that mark
+        // would be the same fact twice.
+        let encrypted = TimelineEvent::from_utd(
+            Raw::new(&json!({
+                "type": "m.room.encrypted",
+                "event_id": "$sealed:example.org",
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1_700_000_000_000u64,
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "ciphertext": "AwgAEnB...",
+                    "session_id": "session",
+                },
+            }))
+            .expect("the fixture is valid JSON")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("session".to_owned()),
+                reason:
+                    matrix_sdk::deserialized_responses::UnableToDecryptReason::MissingMegolmSession {
+                        withheld_code: None,
+                    },
+            },
+        );
+
+        let said = message(&encrypted).expect("an unreadable message is still a message");
+
+        assert_eq!(said.kind, MessageKind::Undecryptable);
+        assert_eq!(said.sender_trust, None);
+    }
+
+    #[test]
+    fn an_edit_carries_the_trust_of_the_device_that_sent_the_edit() {
+        // The words on screen come from the edit, so the trust shown has to as
+        // well. An edit from an unsigned device onto a message from a verified
+        // one is the case that would otherwise draw nothing.
+        let decrypted_edit = TimelineEvent::from_decrypted(
+            matrix_sdk::deserialized_responses::DecryptedRoomEvent {
+                event: Raw::new(&json!({
+                    "type": "m.room.message",
+                    "event_id": "$edit:example.org",
+                    "room_id": "!room:example.org",
+                    "sender": "@ada:example.org",
+                    "origin_server_ts": 1_700_000_100_000u64,
+                    "content": {
+                        "msgtype": "m.text",
+                        "body": "* corrected",
+                        "m.new_content": text("corrected"),
+                        "m.relates_to": {
+                            "rel_type": "m.replace",
+                            "event_id": "$original:example.org",
+                        },
+                    },
+                }))
+                .expect("the fixture is valid JSON")
+                .cast_unchecked(),
+                encryption_info: std::sync::Arc::new(EncryptionInfo {
+                    sender: matrix_sdk::ruma::user_id!("@ada:example.org").to_owned(),
+                    sender_device: None,
+                    forwarder: None,
+                    algorithm_info: AlgorithmInfo::MegolmV1AesSha2 {
+                        curve25519_key: "curve".to_owned(),
+                        sender_claimed_keys: std::collections::BTreeMap::new(),
+                        session_id: None,
+                    },
+                    verification_state: VerificationState::Unverified(
+                        VerificationLevel::UnsignedDevice,
+                    ),
+                }),
+                unsigned_encryption_info: None,
+            },
+            None,
+        );
+
+        let edit = replacement(&decrypted_edit).expect("that is a replacement");
+
+        assert_eq!(edit.sender_trust, Some(SenderTrust::UnsignedDevice));
+    }
+
+    #[test]
+    fn an_edit_from_a_device_nothing_is_wrong_with_carries_no_trust() {
+        let edit = replacement(&edit_of("$original:example.org", text("corrected")))
+            .expect("that is a replacement");
+
+        assert_eq!(edit.sender_trust, None);
+    }
+
+    #[test]
+    fn every_code_the_sdk_can_raise_has_a_name_here() {
+        // Total over `ShieldStateCode` on purpose. An SDK bump that adds a
+        // code fails to compile here rather than drawing nothing.
+        for (code, named) in [
+            (
+                ShieldStateCode::AuthenticityNotGuaranteed,
+                SenderTrust::AuthenticityNotGuaranteed,
+            ),
+            (ShieldStateCode::UnknownDevice, SenderTrust::UnknownDevice),
+            (ShieldStateCode::UnsignedDevice, SenderTrust::UnsignedDevice),
+            (
+                ShieldStateCode::UnverifiedIdentity,
+                SenderTrust::UnverifiedIdentity,
+            ),
+            (
+                ShieldStateCode::VerificationViolation,
+                SenderTrust::VerificationViolation,
+            ),
+            (
+                ShieldStateCode::MismatchedSender,
+                SenderTrust::MismatchedSender,
+            ),
+        ] {
+            assert_eq!(SenderTrust::from(code), named);
+        }
     }
 }

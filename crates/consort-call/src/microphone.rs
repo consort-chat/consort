@@ -26,7 +26,7 @@
 //! cap on how far behind live this can persistently sit.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::Notify;
@@ -81,6 +81,9 @@ struct Shared {
     /// so a frame that arrives between a failed pop and the await that follows
     /// it is not a lost wake-up.
     ready: Notify,
+    /// Whether the call carries anything offered here. See
+    /// [`Microphone::switched_off`].
+    switched_off: AtomicBool,
 }
 
 impl Microphone {
@@ -129,6 +132,20 @@ impl Microphone {
     /// How many frames have been dropped for want of room.
     pub fn dropped(&self) -> u64 {
         self.0.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Whether the person has switched this microphone off: mute, deafen and
+    /// away alike, because all three mean the call carries nothing. See
+    /// [`crate::SelfAudio::microphone_off`]. The frames are unchanged by it.
+    pub fn switched_off(&self) -> bool {
+        self.0.switched_off.load(Ordering::Relaxed)
+    }
+
+    /// Set by the call thread, which owns the answer, and read on the audio
+    /// thread. `Relaxed` because it orders nothing: a frame read on the stale
+    /// value holds a ring 10 ms too long, and nothing else.
+    pub fn switch_off(&self, off: bool) {
+        self.0.switched_off.store(off, Ordering::Relaxed);
     }
 
     /// The queue, recovering from a poisoned lock rather than spreading a
@@ -254,5 +271,26 @@ mod tests {
 
         assert_eq!(frame.samples, vec![7; 4]);
         assert!(!frame.open);
+    }
+
+    #[test]
+    fn a_microphone_starts_switched_on() {
+        // A queue born switched off would be a session whose ring never lights
+        // and whose own level meter reads nothing, for the whole call.
+        assert!(!Microphone::new().switched_off());
+    }
+
+    #[test]
+    fn switching_off_is_seen_through_every_clone() {
+        // The call thread holds the clone that knows and the audio thread
+        // holds the clone that asks.
+        let microphone = Microphone::new();
+        let audio_thread = microphone.clone();
+
+        microphone.switch_off(true);
+
+        assert!(audio_thread.switched_off());
+        microphone.switch_off(false);
+        assert!(!audio_thread.switched_off());
     }
 }
