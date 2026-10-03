@@ -942,14 +942,7 @@ impl Loaded {
                 // replaced is a comparison against the original, which is
                 // regularly not loaded here, and `Edits::latest_on` is where
                 // it can be made.
-                changed |= self.edits.added(
-                    &one.event_id,
-                    &one.target,
-                    &one.sender,
-                    one.at,
-                    one.body,
-                    one.html,
-                );
+                changed |= self.edits.added(one);
                 continue;
             }
             if let Some(gone) = facts::redaction(event) {
@@ -1214,6 +1207,9 @@ impl Loaded {
             body: edit.body.clone(),
             html: edit.html.clone(),
             edited: true,
+            // The edit's, not the original's: the words above are the
+            // edit's, so its device is the one to vouch for.
+            sender_trust: edit.sender_trust,
             // `at` is deliberately untouched, and it is the line a later
             // reader will be tempted to fix. A message keeps the moment it was
             // said: the date separators are keyed off it, so a message from
@@ -1675,6 +1671,7 @@ fn event_id_of(event_id: &str) -> Result<OwnedEventId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::timeline::dto::SenderTrust;
     use matrix_sdk::deserialized_responses::{UnableToDecryptInfo, UnableToDecryptReason};
     use serde_json::json;
 
@@ -1781,5 +1778,79 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["$one:example.org", "$two:example.org"]
         );
+    }
+
+    /// One drawn message, as a watcher is holding it before any fold.
+    fn held(id: &str, trust: Option<SenderTrust>) -> Message {
+        Message {
+            id: id.to_owned(),
+            sender: "@ada:example.org".to_owned(),
+            at: 1_700_000_000_000,
+            body: "as first said".to_owned(),
+            html: None,
+            media: None,
+            thread: None,
+            reactions: Vec::new(),
+            reply_to: None,
+            mentions: Vec::new(),
+            edited: false,
+            deleted_by: None,
+            sender_trust: trust,
+            kind: MessageKind::Text,
+        }
+    }
+
+    /// Note one edit on `$said:example.org`, carrying `trust`.
+    fn correction(loaded: &mut Loaded, trust: Option<SenderTrust>) {
+        loaded.edits.added(facts::Replacement {
+            event_id: "$edit:example.org".to_owned(),
+            target: "$said:example.org".to_owned(),
+            sender: "@ada:example.org".to_owned(),
+            at: 1_700_000_100_000,
+            body: "as corrected".to_owned(),
+            html: None,
+            sender_trust: trust,
+        });
+    }
+
+    #[test]
+    fn a_correction_brings_the_trust_of_the_device_that_sent_it() {
+        // The words on screen are the edit's, so the device that has to be
+        // vouched for is the edit's. A verified message rewritten from an
+        // unsigned device is the case that would otherwise draw nothing.
+        let mut loaded = Loaded::new("!room:example.org".to_owned(), None);
+        correction(&mut loaded, Some(SenderTrust::UnsignedDevice));
+
+        let folded = loaded.corrected(&held("$said:example.org", None));
+
+        assert_eq!(folded.body, "as corrected");
+        assert_eq!(folded.sender_trust, Some(SenderTrust::UnsignedDevice));
+    }
+
+    #[test]
+    fn a_correction_from_a_sound_device_takes_the_old_mark_off() {
+        // The other direction, and it has to work too: the sentence being read
+        // is the edit's, and nothing is wrong with the device that sent it.
+        let mut loaded = Loaded::new("!room:example.org".to_owned(), None);
+        correction(&mut loaded, None);
+
+        let folded = loaded.corrected(&held(
+            "$said:example.org",
+            Some(SenderTrust::UnsignedDevice),
+        ));
+
+        assert_eq!(folded.sender_trust, None);
+    }
+
+    #[test]
+    fn a_message_nobody_corrected_keeps_its_own_trust() {
+        let loaded = Loaded::new("!room:example.org".to_owned(), None);
+
+        let folded = loaded.corrected(&held(
+            "$said:example.org",
+            Some(SenderTrust::MismatchedSender),
+        ));
+
+        assert_eq!(folded.sender_trust, Some(SenderTrust::MismatchedSender));
     }
 }

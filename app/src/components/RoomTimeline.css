@@ -1580,3 +1580,66 @@
   font-size: var(--text-xs);
   text-align: center;
 }
+
+/*
+  Room for the mark, in the row rather than in the avatar's gutter: that gutter
+  holds the time, and the picture covers it at the top of a group.
+*/
+.timeline__message[data-untrusted="true"] {
+  padding-left: calc(var(--space-4) + var(--space-2));
+}
+
+.timeline__untrusted {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  height: calc(var(--text-base) * 1.5);
+}
+
+/* Focusable: a pointer is not the only way somebody reaches a message. */
+.timeline__untrusted-glyph {
+  display: flex;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+}
+
+.timeline__untrusted-glyph:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  On focus as well as hover, or the keyboard cannot read it. Sideways rather
+  than above: `.timeline__scroll` scrolls on `y`, so it clips on `y`.
+*/
+.timeline__untrusted-tip {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--space-1));
+  z-index: 2;
+  width: max-content;
+  max-width: 18rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-out-expo),
+    visibility var(--duration-fast) var(--ease-out-expo);
+}
+
+.timeline__untrusted-glyph:hover ~ .timeline__untrusted-tip,
+.timeline__untrusted-glyph:focus-visible ~ .timeline__untrusted-tip {
+  visibility: visible;
+  opacity: 1;
+}

@@ -267,6 +267,7 @@ mod tests {
             mentions: Vec::new(),
             edited: false,
             deleted_by: None,
+            sender_trust: None,
             kind: MessageKind::Text,
         }
     }
