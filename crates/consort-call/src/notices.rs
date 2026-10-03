@@ -271,10 +271,10 @@ mod tests {
         // session has already said has to be in them by then. Remembering it
         // without reporting it is a clock that never appears beside your own
         // name until somebody else moves.
-        let known = Announced::starting_with("ours", Notice::new("ada-laptop", true, true));
+        let known = Announced::starting_with("our-identity", Notice::new("our-laptop", true, true));
 
-        assert_eq!(known.flags().away, vec!["ada-laptop".to_owned()]);
-        assert_eq!(known.flags().deafened, vec!["ada-laptop".to_owned()]);
+        assert_eq!(known.flags().away, vec!["our-identity".to_owned()]);
+        assert_eq!(known.flags().deafened, vec!["our-identity".to_owned()]);
     }
 
     #[test]
@@ -282,7 +282,8 @@ mod tests {
         // Everybody re-announces on every roster change, so the rest of the
         // call fills itself in. Inventing a flag for somebody who has not
         // spoken would draw a headphone icon nobody asked for.
-        let known = Announced::starting_with("ours", Notice::new("ada-laptop", false, false));
+        let known =
+            Announced::starting_with("our-identity", Notice::new("our-laptop", false, false));
 
         assert!(known.flags().deafened.is_empty());
         assert!(known.flags().away.is_empty());
