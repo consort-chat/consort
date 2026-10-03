@@ -534,6 +534,23 @@ impl CallSession for LiveKitSession {
         Ok(CameraTrack(track))
     }
 
+    async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+        // `screen_share` rather than `camera`, which is the whole difference
+        // peers see: the stream arrives as `MediaStreamKind::ScreenShare`, so
+        // a client draws it large instead of in a face tile. Same simulcast,
+        // same `VideoSourceConfig`, same handle.
+        let track = self
+            .call
+            .publish(PublishOptions::screen_share(VideoSourceConfig {
+                width: size.width,
+                height: size.height,
+            }))
+            .await
+            .map_err(|error| classify(&error))?;
+
+        Ok(CameraTrack(track))
+    }
+
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
         let Some(track) = self.microphone.get() else {
             // Between joining and publishing. The call thread applies this
@@ -752,6 +769,7 @@ struct Seen {
     user_id: String,
     muted: bool,
     camera: bool,
+    screen: bool,
     since: Option<u64>,
 }
 
@@ -823,6 +841,7 @@ impl Roster for LiveKitRoster {
                     user_id: member.user_id.clone(),
                     muted: roster::microphone_muted(member),
                     camera: roster::camera_live(member),
+                    screen: roster::screen_live(member),
                     since: roster::arrived_at(member, self.joined_at),
                 })
                 .collect();
@@ -847,6 +866,10 @@ impl Roster for LiveKitRoster {
             .iter()
             .map(|one| (one.user_id.clone(), one.camera))
             .collect();
+        let screens: Vec<(String, bool)> = seen
+            .iter()
+            .map(|one| (one.user_id.clone(), one.screen))
+            .collect();
         let arrivals: Vec<(String, Option<u64>)> = seen
             .iter()
             .map(|one| (one.user_id.clone(), one.since))
@@ -863,6 +886,7 @@ impl Roster for LiveKitRoster {
 
         let named = roster::with_mutes(named, &mutes);
         let named = roster::with_cameras(named, &cameras);
+        let named = roster::with_screens(named, &screens);
         let named = roster::with_since(named, &arrivals);
         let named = roster::with_deafened(named, &whose, &deafened);
         roster::with_away(named, &whose, &away)

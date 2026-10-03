@@ -217,6 +217,17 @@ pub struct Participant {
     /// camera because room state carries nothing that could say otherwise.
     #[serde(default)]
     pub camera: bool,
+    /// Whether a screen or window of theirs is going out.
+    ///
+    /// The camera test applied to the other video stream, folded the same way:
+    /// sharing if any of their memberships is. Answers a different question
+    /// from [`camera`](Self::camera) and is never derived from it, because one
+    /// fills this person's own square and the other earns a square of its own.
+    ///
+    /// False where nothing knows, like the two above. Room state carries
+    /// nothing that could say otherwise.
+    #[serde(default)]
+    pub screen: bool,
     /// When they joined the call, in milliseconds since the Unix epoch.
     ///
     /// The SFU's own record rather than the moment this session noticed them,
@@ -254,6 +265,7 @@ impl Participant {
             deafened: false,
             away: false,
             camera: false,
+            screen: false,
             since: None,
         }
     }
@@ -276,6 +288,11 @@ impl Participant {
     /// The same person, with whether the call can see them.
     pub fn with_camera(self, camera: bool) -> Self {
         Self { camera, ..self }
+    }
+
+    /// The same person, with whether a screen of theirs is going out.
+    pub fn with_screen(self, screen: bool) -> Self {
+        Self { screen, ..self }
     }
 
     /// The same person, with when they joined the call.

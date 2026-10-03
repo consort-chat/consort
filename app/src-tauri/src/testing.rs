@@ -426,6 +426,13 @@ impl consort_call::CallSession for FakeCallSession {
         Ok(FakeCallCamera)
     }
 
+    async fn publish_screen(
+        &self,
+        _size: consort_call::PictureSize,
+    ) -> Result<Self::Video, consort_call::CallFailure> {
+        Ok(FakeCallCamera)
+    }
+
     fn listen(&self, _ears: &consort_call::hearing::Ears) -> consort_call::Attached {
         consort_call::Attached::default()
     }

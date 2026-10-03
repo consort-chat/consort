@@ -13,13 +13,16 @@ use consort_audio::{
     AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, GateConfig, catalogue,
     choose,
 };
-use consort_call::{LiveKitTransport, SelfVideo};
+use consort_call::{LiveKitTransport, SelfScreen, SelfVideo};
 use consort_matrix::{
     BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
 };
 // `catalogue` is already taken by the audio one above, which resolves a
 // different question over a different list, so the camera side is qualified.
-use consort_video::{CameraDevices, CameraList, Host as CameraHost, VideoSettings};
+use consort_video::{
+    CameraDevices, CameraList, Host as CameraHost, ScreenCapture, Screens as ScreensHost,
+    ShareSource, VideoSettings,
+};
 use serde::Serialize;
 use tauri::State;
 
@@ -1469,6 +1472,35 @@ pub fn set_camera(state: State<'_, AppState>, on: bool) -> SelfVideo {
     state.set_camera(|| Box::new(CameraHost::default()), on)
 }
 
+/// What this machine can share, screens first and then windows.
+///
+/// Its own function so a test can drive it with a backend that has no display
+/// behind it. The ordering is decided in `consort_video::screens` rather than
+/// here.
+///
+/// Synchronous, unlike `cameras`: this is a property read per window against a
+/// local socket, measured at 1.5ms for twelve sources, where enumerating
+/// cameras probes every video node with several ioctls each.
+fn share_sources_for(
+    state: &AppState,
+    backend: impl FnOnce() -> Box<dyn ScreenCapture>,
+) -> Result<Vec<ShareSource>, CommandError> {
+    state.share_sources(backend).map_err(|error| CommandError {
+        message: error.user_message(),
+        detail: format!("listing what can be shared: {error}"),
+    })
+}
+
+#[tauri::command]
+pub fn share_sources(state: State<'_, AppState>) -> Result<Vec<ShareSource>, CommandError> {
+    share_sources_for(&state, || Box::new(ScreensHost::default()))
+}
+
+#[tauri::command]
+pub fn set_share(state: State<'_, AppState>, source: Option<String>) -> SelfScreen {
+    state.set_share(|| Box::new(ScreensHost::default()), source)
+}
+
 /// The newest camera frame for the call card, as a `data:` URL.
 ///
 /// Asked for rather than pushed, so the card's own cadence decides how often a
@@ -1477,6 +1509,14 @@ pub fn set_camera(state: State<'_, AppState>, on: bool) -> SelfVideo {
 #[tauri::command]
 pub fn self_view(state: State<'_, AppState>) -> Option<String> {
     state.self_view()
+}
+
+/// The newest shared-screen frame for the call card, as a `data:` URL.
+///
+/// The twin of [`self_view`], asked for the same way and for the same reasons.
+#[tauri::command]
+pub fn screen_view(state: State<'_, AppState>) -> Option<String> {
+    state.screen_view()
 }
 
 #[tauri::command]

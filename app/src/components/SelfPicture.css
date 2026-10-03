@@ -1,0 +1,40 @@
+/*
+  A still of what this session is sending, filling the box it was put in.
+
+  Absolute, so it covers whatever is behind it: a face in `CallFace` waits
+  under the camera until the first frame arrives. Its host owns the shape and
+  the clipping, which is why the radius is inherited rather than set.
+*/
+.self-picture {
+  position: absolute;
+  inset: 0;
+  /* Not `inset` alone: a replaced element takes its intrinsic size from the
+     `width` attribute and ignores the far inset. */
+  width: 100%;
+  height: 100%;
+  background: var(--surface-void);
+  border-radius: inherit;
+}
+
+/*
+  Mirrored, which is what every self view does and what people expect of
+  anything standing in for a mirror: raising your left hand should raise the
+  hand on the left. Only the preview is flipped. What the call receives is the
+  frame as the camera read it.
+
+  `cover` so a camera that negotiated 4:3 fills the square rather than
+  letterboxing inside it. A cropped face is still a face.
+*/
+.self-picture[data-of="camera"] {
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+/*
+  Not mirrored, and `contain` rather than `cover`. A screen is wider than the
+  square it is drawn in, and cropping it would hide the half of somebody's
+  slides that happens to be on the right.
+*/
+.self-picture[data-of="screen"] {
+  object-fit: contain;
+}

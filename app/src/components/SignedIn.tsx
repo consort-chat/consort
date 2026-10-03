@@ -6,14 +6,17 @@ import {
   callDisconnect,
   callSetAway,
   callSetCamera,
+  callSetShare,
   callSetDeafened,
   callSetMuted,
   HEARING,
   NOT_FILMING,
+  NOT_SHARING,
   onCall,
   onCallRefused,
   onAudio,
   onSelfAudio,
+  onSelfScreen,
   onSelfVideo,
   onSpeaking,
   onConnection,
@@ -31,6 +34,7 @@ import {
   type Profile,
   type Rooms,
   type SelfAudio,
+  type SelfScreen,
   type SelfVideo,
   type TokenStorage,
   type Verification,
@@ -93,6 +97,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
   // Off, like Rust. A camera does not survive a channel switch, so the call
   // thread puts this back for every new call rather than this screen guessing.
   const [selfVideo, setSelfVideo] = useState<SelfVideo>(NOT_FILMING);
+  const [selfScreen, setSelfScreen] = useState<SelfScreen>(NOT_SHARING);
   // A join that was declined before it was attempted, until somebody dismisses
   // it. Kept here rather than in the shell because it is dismissed rather than
   // superseded: state owned lower down would be cleared by any re-render.
@@ -183,6 +188,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onCallRefused((refusal) => setCallRefused(refusal)).then(keep),
       onSelfAudio((audio) => setSelfAudio(audio)).then(keep),
       onSelfVideo((video) => setSelfVideo(video)).then(keep),
+      onSelfScreen((screen) => setSelfScreen(screen)).then(keep),
       onSpeaking((userIds) => setSpeaking(new Set(userIds))).then(keep),
       // A desktop notification somebody clicked. The window is already in
       // front by the time this arrives, because raising it is something only
@@ -305,6 +311,21 @@ export function SignedIn({ profile, onSignedOut }: Props) {
     });
   }
 
+  /**
+   * Start sharing a screen or window, or stop sharing.
+   *
+   * The answer is dropped for the reason `setCamera` drops its own: the same
+   * value arrives on the screen channel, and a share that stops because the
+   * channel changed or the call ended arrives only that way. An indicator
+   * drawn from the reply as well would keep saying a screen is going out
+   * after it has stopped.
+   */
+  function share(source: string | null) {
+    callSetShare(source).catch((raw: unknown) => {
+      console.error("could not ask to share a screen", asCommandError(raw).detail);
+    });
+  }
+
   const running = Object.values(flows);
 
   return (
@@ -321,6 +342,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onDismissFlow={dismiss}
       selfAudio={selfAudio}
       selfVideo={selfVideo}
+      selfScreen={selfScreen}
       speaking={speaking}
       audioProblem={audioProblem}
       onJoinVoice={joinVoice}
@@ -329,6 +351,7 @@ export function SignedIn({ profile, onSignedOut }: Props) {
       onSetDeafened={setDeafened}
       onSetAway={setAway}
       onSetCamera={setCamera}
+      onShare={share}
       callRefused={callRefused}
       onDismissRefusal={() => setCallRefused(null)}
       showRoom={asked}

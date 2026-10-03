@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import type { Participant } from "../lib/api";
 import { RoomAvatar } from "./RoomAvatar";
 import "./CallFace.css";
@@ -145,14 +147,24 @@ export interface CallFaceProps {
    */
   live: boolean;
   /**
-   * A row in a list, or a tile in a grid.
+   * A row in a list, a tile in a grid, or a face peeking out from behind a
+   * shared screen.
    *
-   * Two arrangements of one face rather than two components, because they are
-   * the same subject and #69 is about to put video in both. Size is not part
-   * of this: that comes from `--avatar-size` at the call site, which is what
-   * that variable is for.
+   * Arrangements of one face rather than components of their own, because they
+   * are the same subject and #69 is about to put video in all of them. Size is
+   * not part of this: that comes from `--avatar-size` at the call site.
    */
-  layout?: "row" | "tile";
+  layout?: "row" | "tile" | "peek";
+  /**
+   * A picture to draw over this face, filling the square it sits in.
+   *
+   * A node rather than a URL, so whatever polls for frames is a component of
+   * its own and a frame redraws that and nothing else: #142's trap.
+   *
+   * Over the avatar rather than instead of it, because it answers nothing
+   * until its first frame and nothing out here knows when that is.
+   */
+  picture?: ReactNode;
   /** Open the card about this person, at the pointer. */
   onOpen: (at: { x: number; y: number }) => void;
 }
@@ -171,6 +183,7 @@ export function CallFace({
   speaking,
   live,
   layout = "row",
+  picture,
   onOpen,
 }: CallFaceProps) {
   return (
@@ -208,12 +221,15 @@ export function CallFace({
           onOpen({ x: event.clientX, y: event.clientY });
         }}
       >
-        <RoomAvatar
-          roomId={roomId}
-          userId={person.id}
-          name={person.name}
-          className="call-face__avatar"
-        />
+        {/*
+          The face's own box, whatever is standing in it. The ring that marks
+          somebody talking is drawn on this rather than on the avatar, so a
+          camera filling the square is ringed exactly as a face is.
+        */}
+        <span className="call-face__stage" data-filled={picture !== undefined}>
+          <RoomAvatar roomId={roomId} userId={person.id} name={person.name} />
+          {picture}
+        </span>
         <span className="call-face__who">{person.name}</span>
         {/*
           Drawn rather than only dimmed, and with a name on it: a shade of grey

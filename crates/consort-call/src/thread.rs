@@ -33,6 +33,7 @@
 //! half-finished join means unwinding a membership that may or may not have
 //! published, and the queue costs at most [`JOIN_TIMEOUT`] of waiting.
 
+use std::future::Future;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -40,7 +41,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::arrivals::Arrivals;
 use crate::camera::{Camera, PictureSize};
-use crate::event::{CallEvent, SelfAudio, SelfVideo};
+use crate::event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 use crate::failure::CallFailure;
 use crate::hearing::{Attached, Cue, Ears};
 use crate::microphone::Microphone;
@@ -124,6 +125,12 @@ enum Message {
     /// Stop or resume receiving everybody else's audio.
     SetDeafened(bool),
     SetAway(bool),
+    /// Publish this session's screen, or retract it.
+    ///
+    /// Carries the title as well as the size, because the indicator has to
+    /// name what is going out from the moment it starts rather than a frame
+    /// later. See [`ScreenShare`].
+    SetScreen(Option<ScreenShare>),
     /// Publish this session's camera at this size, or retract it.
     ///
     /// The size rather than a bare switch, because the device is opened before
@@ -150,24 +157,28 @@ pub struct CallThread {
 impl CallThread {
     /// Start the thread. It idles until told to [`connect`](Self::connect).
     ///
-    /// `microphone` is where captured audio arrives from, `camera` is where
-    /// captured frames do, and `ears` is where everybody else's audio goes.
-    /// All three are taken here rather than at each connect because the threads
-    /// filling them have to be able to hold the other end whether or not a call
-    /// is up: they are started once, and what is between them outlives any one
-    /// call.
+    /// `microphone` is where captured audio arrives from, `camera` and
+    /// `screen` are where captured frames do, and `ears` is where everybody
+    /// else's audio goes. All of them are taken here rather than at each
+    /// connect because the threads filling them have to be able to hold the
+    /// other end whether or not a call is up: they are started once, and what
+    /// is between them outlives any one call.
+    ///
+    /// `camera` and `screen` are two queues rather than one because both can
+    /// be publishing at the same time.
     pub fn spawn<T: CallTransport>(
         transport: T,
         events: UnboundedSender<CallEvent>,
         microphone: Microphone,
         camera: Camera,
+        screen: Camera,
         ears: Ears,
     ) -> Self {
         let (commands, inbox) = unbounded_channel::<Message>();
 
         let join = std::thread::Builder::new()
             .name("consort-call".to_owned())
-            .spawn(move || run(transport, inbox, events, microphone, camera, ears))
+            .spawn(move || run(transport, inbox, events, microphone, camera, screen, ears))
             .expect("the operating system refused a thread");
 
         Self {
@@ -225,6 +236,15 @@ impl CallThread {
         self.send(Message::SetCamera(size));
     }
 
+    /// Publish this session's screen, or retract it with `None`.
+    ///
+    /// Not remembered across calls, for the reason
+    /// [`set_camera`](Self::set_camera) is not: a share belongs to the call it
+    /// was started in. See [`crate::SelfScreen`].
+    pub fn set_screen(&self, share: Option<ScreenShare>) {
+        self.send(Message::SetScreen(share));
+    }
+
     /// Post a command, ignoring a thread that has already gone.
     ///
     /// Nothing useful is done about it. The thread only ends when this handle
@@ -260,6 +280,7 @@ fn run<T: CallTransport>(
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
     camera: Camera,
+    screen: Camera,
     ears: Ears,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -278,7 +299,9 @@ fn run<T: CallTransport>(
     };
 
     let local = tokio::task::LocalSet::new();
-    runtime.block_on(local.run_until(serve(transport, inbox, events, microphone, camera, ears)));
+    runtime.block_on(local.run_until(serve(
+        transport, inbox, events, microphone, camera, screen, ears,
+    )));
 }
 
 /// A call this session is in, and the task carrying its microphone.
@@ -292,6 +315,9 @@ struct Joined<S: CallSession> {
     /// The camera, while one is up. `None` for the whole of a call nobody
     /// switched a camera on in, which is most of them.
     showing: Option<Showing<S::Video>>,
+    /// The screen share, while one is up. A second slot rather than a wider
+    /// one, because both can be up at the same time.
+    sharing: Option<Showing<S::Video>>,
     /// The retry looking for tracks that have not arrived yet. Dies with the
     /// call it belongs to, like the two tasks above.
     chasing: Chase,
@@ -385,11 +411,13 @@ async fn serve<T: CallTransport>(
     events: UnboundedSender<CallEvent>,
     microphone: Microphone,
     camera: Camera,
+    screen: Camera,
     ears: Ears,
 ) {
     let mut current: Option<Joined<T::Session>> = None;
     let mut audio = SelfAudio::default();
     let mut video = SelfVideo::default();
+    let mut sharing = SelfScreen::default();
 
     // What the roster watcher tells this loop.
     //
@@ -472,6 +500,11 @@ async fn serve<T: CallTransport>(
                 // running.
                 video = show(&events, video, SelfVideo::default());
                 camera.clear();
+                // And the screen, for the same reason and a sharper one:
+                // somebody who was showing their inbox in one channel has
+                // certainly not asked to show it in the next.
+                sharing = shared(&events, sharing, SelfScreen::default());
+                screen.clear();
                 // Re-applied rather than assumed. A new session starts unmuted
                 // and undeafened however this one was left, so a person who
                 // muted themselves in one channel and clicked another would
@@ -502,6 +535,8 @@ async fn serve<T: CallTransport>(
                     leave(Some(joined), LEAVE_TIMEOUT).await;
                     video = show(&events, video, SelfVideo::default());
                     camera.clear();
+                    sharing = shared(&events, sharing, SelfScreen::default());
+                    screen.clear();
                 }
             }
             Message::SetMuted(muted) => {
@@ -528,6 +563,9 @@ async fn serve<T: CallTransport>(
             }
             Message::SetCamera(size) => {
                 video = set_camera(&events, video, current.as_mut(), size, &camera).await;
+            }
+            Message::SetScreen(share) => {
+                sharing = set_screen(&events, sharing, current.as_mut(), share, &screen).await;
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
@@ -598,62 +636,152 @@ async fn set_camera<S: CallSession>(
         );
     };
 
+    // Split first, so the publish below and the slot it fills are two borrows
+    // of two fields rather than two of `joined`.
+    let Joined {
+        session, showing, ..
+    } = joined;
+
+    match publication(showing, camera, size, |at| session.publish_camera(at)).await {
+        Ok(camera) => show(
+            events,
+            current,
+            SelfVideo {
+                camera,
+                trouble: None,
+            },
+        ),
+        Err(error) => show(
+            events,
+            current,
+            SelfVideo {
+                camera: false,
+                trouble: Some(error.to_string()),
+            },
+        ),
+    }
+}
+
+/// Start this session's screen share, or stop it, and say which happened.
+///
+/// The twin of [`set_camera`], and for the same reasons: a share needs a call
+/// to go into, and asking outside one is reported rather than remembered,
+/// because a latched share would start publishing somebody's screen the moment
+/// they clicked a channel.
+async fn set_screen<S: CallSession>(
+    events: &UnboundedSender<CallEvent>,
+    current: SelfScreen,
+    joined: Option<&mut Joined<S>>,
+    share: Option<ScreenShare>,
+    frames: &Camera,
+) -> SelfScreen {
+    let Some(joined) = joined else {
+        // Stopping with no call is how every call ends. Starting is the only
+        // half worth complaining about.
+        let trouble = share.map(|_| "there is no call to share a screen into".to_owned());
+        return shared(
+            events,
+            current,
+            SelfScreen {
+                sharing: None,
+                trouble,
+            },
+        );
+    };
+
+    let (size, title) = match share {
+        Some(ScreenShare { size, title }) => (Some(size), title),
+        None => (None, String::new()),
+    };
+
+    // Split first, so the publish below and the slot it fills are two borrows
+    // of two fields rather than two of `joined`.
+    let Joined {
+        session, sharing, ..
+    } = joined;
+
+    match publication(sharing, frames, size, |at| session.publish_screen(at)).await {
+        Ok(true) => shared(
+            events,
+            current,
+            SelfScreen {
+                sharing: Some(title),
+                trouble: None,
+            },
+        ),
+        Ok(false) => shared(events, current, SelfScreen::default()),
+        Err(error) => shared(
+            events,
+            current,
+            SelfScreen {
+                sharing: None,
+                trouble: Some(error.to_string()),
+            },
+        ),
+    }
+}
+
+/// [`show`] for the screen share. Separate so a change to one state does not
+/// redraw the other.
+fn shared(
+    events: &UnboundedSender<CallEvent>,
+    current: SelfScreen,
+    next: SelfScreen,
+) -> SelfScreen {
+    if next != current {
+        emit(events, CallEvent::SelfScreen(next.clone()));
+    }
+    next
+}
+
+/// Put a video publication up, or take it down, and say whether one is up.
+///
+/// Shared by the camera and the screen share, which differ only in which slot
+/// they fill, which queue feeds them and what they are called. The lifecycle is
+/// the same and the two ways of getting it wrong are both bad: a second
+/// publication for one source, or a retraction that leaves peers holding a
+/// decoder for a stream that will never carry another frame.
+///
+/// `size` of `None` means take it down. An already-absent publication is not a
+/// failure, and an already-present one is not republished: the interface may be
+/// asking because it lost track of what it is doing.
+async fn publication<V, F, Fut>(
+    slot: &mut Option<Showing<V>>,
+    frames: &Camera,
+    size: Option<PictureSize>,
+    publish: F,
+) -> Result<bool, CallFailure>
+where
+    V: PublishedVideo,
+    F: FnOnce(PictureSize) -> Fut,
+    Fut: Future<Output = Result<V, CallFailure>>,
+{
     let Some(size) = size else {
-        if let Some(showing) = joined.showing.take()
+        if let Some(showing) = slot.take()
             && let Err(error) = showing.track.unpublish().await
         {
             // Logged and no more. The frames have already stopped, because
             // dropping the handle aborted the pump, so the worst case is a
             // publication peers see as stalled until the call ends.
-            tracing::warn!(%error, "could not retract the camera");
+            tracing::warn!(%error, "could not retract a video publication");
         }
-        // So that switching the camera back on does not publish the last thing
-        // it saw before it stopped.
-        camera.clear();
-        return show(events, current, SelfVideo::default());
+        // So that switching back on does not publish the last thing the source
+        // showed before it stopped.
+        frames.clear();
+        return Ok(false);
     };
 
-    if joined.showing.is_some() {
-        // Already up. Re-announced rather than republished, because the
-        // interface may be asking because it lost track of what it is doing.
-        return show(
-            events,
-            current,
-            SelfVideo {
-                camera: true,
-                trouble: None,
-            },
-        );
+    if slot.is_some() {
+        return Ok(true);
     }
 
-    let track = match joined.session.publish_camera(size).await {
-        Ok(track) => track,
-        Err(error) => {
-            return show(
-                events,
-                current,
-                SelfVideo {
-                    camera: false,
-                    trouble: Some(error.to_string()),
-                },
-            );
-        }
-    };
-
+    let track = publish(size).await?;
     let pump = AbortOnDrop(tokio::task::spawn_local(showing::pump(
         track.clone(),
-        camera.clone(),
+        frames.clone(),
     )));
-    joined.showing = Some(Showing { track, pump });
-
-    show(
-        events,
-        current,
-        SelfVideo {
-            camera: true,
-            trouble: None,
-        },
-    )
+    *slot = Some(Showing { track, pump });
+    Ok(true)
 }
 
 /// Push this session's mute and deafen state at the call it is in.
@@ -873,9 +1001,10 @@ async fn connect<T: CallTransport>(
         session,
         publishing,
         watching,
-        // A join publishes a microphone and never a camera. See
-        // `Message::SetCamera`.
+        // A join publishes a microphone and never a camera or a screen. See
+        // `Message::SetCamera` and `Message::SetScreen`.
         showing: None,
+        sharing: None,
         chasing: Chase::default(),
     })
 }
@@ -957,6 +1086,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
         publishing,
         watching,
         showing,
+        sharing,
         chasing,
     }) = current
     else {
@@ -972,7 +1102,12 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
     // Dropped rather than retracted. Leaving takes every publication in the
     // call down with it, so an `unpublish` here would be a second request for
     // something the leave is about to do, on the budget the leave needs.
+    //
+    // Both, and this is the path a quit takes: `SHUTDOWN_LEAVE_TIMEOUT` ends
+    // here, so a screen share that nothing else stopped stops here. See the
+    // "Quitting has to leave the call" section of CLAUDE.md.
     drop(showing);
+    drop(sharing);
 
     leave_session(&room_id, session, budget).await;
     true
@@ -1060,6 +1195,10 @@ mod tests {
         announcements: Arc<AtomicUsize>,
         /// Every camera publication asked for, by size.
         cameras: Arc<Mutex<Vec<PictureSize>>>,
+        /// Every screen publication asked for, by size. Separate from
+        /// `cameras` because the two are different streams to a peer, and a
+        /// test has to be able to tell a share from a camera.
+        screens: Arc<Mutex<Vec<PictureSize>>>,
         /// Camera publications not yet dropped, and how many were retracted.
         ///
         /// Both, because they are different acts: the pump stops when the
@@ -1136,6 +1275,10 @@ mod tests {
 
         fn cameras(&self) -> Vec<PictureSize> {
             self.cameras.lock().unwrap().clone()
+        }
+
+        fn screens(&self) -> Vec<PictureSize> {
+            self.screens.lock().unwrap().clone()
         }
 
         fn live_cameras(&self) -> usize {
@@ -1490,6 +1633,23 @@ mod tests {
             })
         }
 
+        async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
+            self.log.screens.lock().unwrap().push(size);
+
+            if self.filming == Filming::Fails {
+                return Err(CallFailure::NoTransport(
+                    "the focus refused the screen".to_owned(),
+                ));
+            }
+
+            self.log.live_cameras.fetch_add(1, Ordering::Relaxed);
+            Ok(FakeCamera {
+                log: self.log.clone(),
+                alive: Arc::new(Alive(self.log.clone())),
+                accepts: self.filming != Filming::Stalls,
+            })
+        }
+
         async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
             self.log.muted.store(muted, Ordering::Relaxed);
             self.log.mutes.fetch_add(1, Ordering::Relaxed);
@@ -1584,7 +1744,14 @@ mod tests {
     /// sleep anywhere. `serve` owns the event sender and drops it on return,
     /// which is what lets the drain below terminate.
     async fn transcript(transport: FakeTransport, commands: Vec<Message>) -> Vec<CallEvent> {
-        transcript_into(transport, commands, Microphone::new(), Camera::new()).await
+        transcript_into(
+            transport,
+            commands,
+            Microphone::new(),
+            Camera::new(),
+            Camera::new(),
+        )
+        .await
     }
 
     /// [`transcript`], with the camera queue handed in so a test can prefill it
@@ -1594,16 +1761,24 @@ mod tests {
         commands: Vec<Message>,
         camera: Camera,
     ) -> Vec<CallEvent> {
-        transcript_into(transport, commands, Microphone::new(), camera).await
+        transcript_into(
+            transport,
+            commands,
+            Microphone::new(),
+            camera,
+            Camera::new(),
+        )
+        .await
     }
 
-    /// [`transcript`], with the microphone and the camera handed in so a test
-    /// can read what the loop left switched on them.
+    /// [`transcript`], with the microphone and both frame queues handed in so
+    /// a test can prefill one or read what the loop left switched on it.
     async fn transcript_into(
         transport: FakeTransport,
         commands: Vec<Message>,
         microphone: Microphone,
         camera: Camera,
+        screen: Camera,
     ) -> Vec<CallEvent> {
         let (to_loop, inbox) = unbounded_channel();
         for command in commands {
@@ -1623,6 +1798,7 @@ mod tests {
                 events,
                 microphone,
                 camera,
+                screen,
                 Arc::new(Deaf::default()),
             ))
             .await;
@@ -1871,6 +2047,7 @@ mod tests {
                 events,
                 Microphone::new(),
                 Camera::new(),
+                Camera::new(),
                 Arc::new(Deaf::default()),
             ))
             .await;
@@ -1929,6 +2106,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Camera::new(),
                         Arc::new(Deaf::default()),
                     ),
@@ -1990,6 +2168,7 @@ mod tests {
             events,
             Microphone::new(),
             Camera::new(),
+            Camera::new(),
             Arc::new(Deaf::default()),
         );
         thread.connect(GENERAL.to_owned());
@@ -2016,6 +2195,7 @@ mod tests {
             transport,
             events,
             Microphone::new(),
+            Camera::new(),
             Camera::new(),
             Arc::new(Deaf::default()),
         );
@@ -2192,7 +2372,14 @@ mod tests {
         async fn left_switched_off(commands: Vec<Message>) -> bool {
             let (transport, _log) = FakeTransport::new(Joining::Succeeds);
             let microphone = Microphone::new();
-            transcript_into(transport, commands, microphone.clone(), Camera::new()).await;
+            transcript_into(
+                transport,
+                commands,
+                microphone.clone(),
+                Camera::new(),
+                Camera::new(),
+            )
+            .await;
             microphone.switched_off()
         }
 
@@ -2517,6 +2704,7 @@ mod tests {
                         events,
                         Microphone::new(),
                         Camera::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
@@ -2547,6 +2735,381 @@ mod tests {
     }
 
     /// Who is in the call, and how that reaches the interface.
+    /// Yield until `reached` frames have been pushed, or give up.
+    ///
+    /// The pump is a `spawn_local` task, so it runs only when the loop awaits.
+    /// [`transcript`] queues every command up front and shuts the loop down,
+    /// which never gives the task a turn, so the frame tests drive
+    /// [`set_camera`] and [`set_screen`] directly instead.
+    async fn pushed(log: &Log, reached: usize) {
+        for _ in 0..8 {
+            if log.frames() >= reached {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Join a call, with the plumbing the loop would otherwise own.
+    ///
+    /// In the parent module because both the camera tests and the screen
+    /// tests drive a publication against a call they joined themselves.
+    async fn joined(transport: &FakeTransport) -> Option<Joined<FakeSession>> {
+        let (events, _said) = unbounded_channel();
+        let (restate, _restated) = unbounded_channel();
+        connect(
+            transport,
+            None,
+            GENERAL.to_owned(),
+            &events,
+            &Microphone::new(),
+            &restate,
+            &(Arc::new(Deaf::default()) as Ears),
+        )
+        .await
+    }
+
+    mod the_screen {
+        use super::*;
+
+        const SIZE: PictureSize = PictureSize {
+            width: 2560,
+            height: 1440,
+        };
+
+        const WHAT: &str = "DP-0 (2560x1440)";
+
+        fn share_on() -> Message {
+            Message::SetScreen(Some(ScreenShare {
+                size: SIZE,
+                title: WHAT.to_owned(),
+            }))
+        }
+
+        fn share_off() -> Message {
+            Message::SetScreen(None)
+        }
+
+        fn sharing(what: Option<&str>) -> SelfScreen {
+            SelfScreen {
+                sharing: what.map(str::to_owned),
+                trouble: None,
+            }
+        }
+
+        /// The `selfScreen` events out of a transcript, in order.
+        fn screens(said: &[CallEvent]) -> Vec<SelfScreen> {
+            said.iter()
+                .filter_map(|event| match event {
+                    CallEvent::SelfScreen(screen) => Some(screen.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn starting_one_publishes_a_screen_at_the_size_it_was_given() {
+            // The size matters for the reason it does on a camera, and more
+            // so: a window is whatever size that window happens to be rather
+            // than one of a device's negotiated modes.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), share_on()]).await;
+
+            assert_eq!(log.screens(), vec![SIZE]);
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT))]);
+        }
+
+        #[tokio::test]
+        async fn a_share_is_published_as_a_screen_rather_than_as_a_camera() {
+            // The whole difference peers see. A screen published as a camera
+            // is drawn in a face tile at the size of a thumbnail.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let _said = transcript(transport, vec![connect_to(GENERAL), share_on()]).await;
+
+            assert_eq!(log.screens(), vec![SIZE]);
+            assert_eq!(log.cameras(), Vec::new(), "it went up as a camera");
+        }
+
+        #[tokio::test]
+        async fn what_is_being_shared_is_named_rather_than_only_flagged() {
+            // The requirement from #70 that an indicator exists for: somebody
+            // sharing has to be able to tell which window is going out.
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), share_on()]).await;
+
+            assert_eq!(
+                screens(&said)
+                    .first()
+                    .and_then(|screen| screen.sharing.clone()),
+                Some(WHAT.to_owned())
+            );
+        }
+
+        #[tokio::test]
+        async fn stopping_retracts_the_publication() {
+            // Retracted, not muted. A muted screen share leaves every peer
+            // holding a decoder for a stream that will never carry another
+            // frame, and leaves their interface saying somebody is sharing.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on(), share_off()],
+            )
+            .await;
+
+            assert_eq!(log.retracted(), 1);
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT)), sharing(None)]);
+        }
+
+        #[tokio::test]
+        async fn stopping_stops_the_frames() {
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let _said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on(), share_off()],
+            )
+            .await;
+
+            assert_eq!(log.live_cameras(), 0, "something is still pushing frames");
+        }
+
+        #[tokio::test]
+        async fn asking_outside_a_call_publishes_nothing_and_says_why() {
+            // Not latched, for a sharper reason than the camera's: a share
+            // that remembered this would start publishing somebody's screen
+            // the moment they clicked any channel.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![share_on()]).await;
+
+            assert_eq!(log.screens(), Vec::new());
+            let reported = screens(&said);
+            assert_eq!(reported.len(), 1);
+            assert_eq!(reported[0].sharing, None);
+            assert!(
+                reported[0].trouble.is_some(),
+                "a share that did not start has to say so"
+            );
+        }
+
+        #[tokio::test]
+        async fn stopping_outside_a_call_is_not_worth_a_complaint() {
+            let (transport, _log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(transport, vec![share_off()]).await;
+
+            assert_eq!(
+                screens(&said),
+                Vec::new(),
+                "nothing changed, so nothing said"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refused_share_reports_the_reason_and_leaves_nothing_publishing() {
+            let (transport, log) = FakeTransport::whose_camera(Filming::Fails);
+
+            let said = transcript(transport, vec![connect_to(GENERAL), share_on()]).await;
+
+            assert_eq!(log.live_cameras(), 0);
+            let reported = screens(&said);
+            assert_eq!(reported.len(), 1);
+            assert_eq!(reported[0].sharing, None);
+            assert!(
+                reported[0].trouble.is_some(),
+                "a refusal has to carry a reason"
+            );
+        }
+
+        #[tokio::test]
+        async fn asking_twice_publishes_once() {
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said =
+                transcript(transport, vec![connect_to(GENERAL), share_on(), share_on()]).await;
+
+            assert_eq!(log.screens(), vec![SIZE]);
+            assert_eq!(
+                screens(&said),
+                vec![sharing(Some(WHAT))],
+                "and said so once"
+            );
+        }
+
+        #[tokio::test]
+        async fn moving_to_another_channel_stops_the_share() {
+            // The one that matters most. A share that followed somebody into
+            // a new channel would be showing their screen to a different set
+            // of people than the ones they agreed to show it to.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on(), connect_to(MUSIC)],
+            )
+            .await;
+
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT)), sharing(None)]);
+            assert_eq!(
+                log.screens(),
+                vec![SIZE],
+                "and nothing was published in the new channel"
+            );
+        }
+
+        #[tokio::test]
+        async fn leaving_the_call_stops_the_share() {
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on(), Message::Disconnect],
+            )
+            .await;
+
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT)), sharing(None)]);
+            assert_eq!(log.live_cameras(), 0);
+        }
+
+        #[tokio::test]
+        async fn shutting_down_stops_the_share() {
+            // The quit path. `Message::Shutdown` is what
+            // `AppState::leave_call_on_quit` reaches, and a share that
+            // survived it would be a screen still going out after the window
+            // is gone. See the "Quitting has to leave the call" section of
+            // CLAUDE.md.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let _said = transcript(transport, vec![connect_to(GENERAL), share_on()]).await;
+
+            // `transcript` queues a `Shutdown` after every command and the
+            // loop returns only once it has run, so reaching here at all means
+            // the shutdown happened.
+            assert_eq!(log.live_cameras(), 0, "the share outlived the call thread");
+            assert_eq!(log.left(), vec![GENERAL]);
+        }
+
+        #[tokio::test]
+        async fn a_camera_and_a_share_can_be_up_at_once() {
+            // Two publications, not one slot. Somebody presenting usually
+            // wants their face in the call as well as their slides.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    Message::SetCamera(Some(PictureSize {
+                        width: 1280,
+                        height: 720,
+                    })),
+                    share_on(),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.cameras().len(), 1, "the camera did not go up");
+            assert_eq!(log.screens().len(), 1, "the share did not go up");
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT))]);
+            let video: Vec<_> = said
+                .iter()
+                .filter_map(|event| match event {
+                    CallEvent::SelfVideo(video) => Some(video.camera),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(video, vec![true], "starting a share turned the camera off");
+        }
+
+        #[tokio::test]
+        async fn stopping_a_share_leaves_the_camera_alone() {
+            // The other half of the pair above, and the regression a single
+            // slot would produce: stopping one taking the other down with it.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    Message::SetCamera(Some(PictureSize {
+                        width: 1280,
+                        height: 720,
+                    })),
+                    share_on(),
+                    share_off(),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.retracted(), 1, "one retraction, the share's");
+            let video: Vec<_> = said
+                .iter()
+                .filter_map(|event| match event {
+                    CallEvent::SelfVideo(video) => Some(video.camera),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(video, vec![true], "the camera was taken down too");
+        }
+
+        #[tokio::test]
+        async fn stopping_throws_away_the_frame_that_was_waiting() {
+            // The privacy-relevant one, and sharper for a screen than for a
+            // camera: the frame waiting when somebody stopped sharing is the
+            // one they most want not sent when they start again.
+            //
+            // Driven directly rather than through `transcript`, because the
+            // frame has to arrive between the stop and the restart and a
+            // queued command list gives nothing a turn in between.
+            let local = tokio::task::LocalSet::new();
+            local
+                .run_until(async {
+                    let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                    let screen = Camera::new();
+                    let mut call = joined(&transport).await;
+                    let (events, _said) = unbounded_channel();
+
+                    let on = || {
+                        Some(ScreenShare {
+                            size: SIZE,
+                            title: WHAT.to_owned(),
+                        })
+                    };
+
+                    set_screen(&events, SelfScreen::default(), call.as_mut(), on(), &screen).await;
+                    screen.offer(frame_of(1));
+                    set_screen(&events, sharing(Some(WHAT)), call.as_mut(), None, &screen).await;
+
+                    set_screen(&events, SelfScreen::default(), call.as_mut(), on(), &screen).await;
+                    pushed(&log, 1).await;
+
+                    assert_eq!(
+                        log.frames(),
+                        0,
+                        "a frame from before the share stopped was sent"
+                    );
+                })
+                .await;
+        }
+
+        /// One frame, for the queue tests above.
+        fn frame_of(nth: u8) -> OutgoingPicture {
+            OutgoingPicture {
+                width: 2,
+                height: 2,
+                y: vec![nth; 4],
+                u: vec![128],
+                v: vec![128],
+                timestamp_us: i64::from(nth),
+            }
+        }
+    }
+
     mod the_camera {
         use super::*;
 
@@ -2732,37 +3295,6 @@ mod tests {
             assert_eq!(log.live_cameras(), 0);
         }
 
-        /// Yield until `reached` frames have been pushed, or give up.
-        ///
-        /// The pump is a `spawn_local` task, so it runs only when the loop
-        /// awaits. [`transcript`] queues every command up front and shuts the
-        /// loop down, which never gives the task a turn, so the two frame
-        /// tests below drive `set_camera` directly instead.
-        async fn pushed(log: &Log, reached: usize) {
-            for _ in 0..8 {
-                if log.frames() >= reached {
-                    return;
-                }
-                tokio::task::yield_now().await;
-            }
-        }
-
-        /// Join a call, with the plumbing the loop would otherwise own.
-        async fn joined(transport: &FakeTransport) -> Option<Joined<FakeSession>> {
-            let (events, _said) = unbounded_channel();
-            let (from_roster, _said) = unbounded_channel();
-            connect(
-                transport,
-                None,
-                GENERAL.to_owned(),
-                &events,
-                &Microphone::new(),
-                &from_roster,
-                &(Arc::new(Deaf::default()) as Ears),
-            )
-            .await
-        }
-
         #[tokio::test]
         async fn queued_frames_reach_the_publication() {
             let local = tokio::task::LocalSet::new();
@@ -2919,6 +3451,7 @@ mod tests {
                         events,
                         Microphone::new(),
                         Camera::new(),
+                        Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
 
@@ -2963,6 +3496,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Camera::new(),
                         Arc::new(heard),
                     ));
@@ -3343,6 +3877,7 @@ mod tests {
                     events,
                     Microphone::new(),
                     Camera::new(),
+                    Camera::new(),
                     Arc::new(ears.clone()),
                 ))
                 .await;
@@ -3387,6 +3922,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Camera::new(),
                         Arc::new(Deaf::default()),
                     ));
@@ -3479,6 +4015,7 @@ mod tests {
                     events,
                     Microphone::new(),
                     Camera::new(),
+                    Camera::new(),
                     Arc::new(Deaf::default()),
                 ))
                 .await;
@@ -3516,6 +4053,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Camera::new(),
                         Arc::new(ears),
                     ));
@@ -3727,6 +4265,7 @@ mod tests {
                         inbox,
                         events,
                         Microphone::new(),
+                        Camera::new(),
                         Camera::new(),
                         Arc::new(Deaf::default()),
                     ));

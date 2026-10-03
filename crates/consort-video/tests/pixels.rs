@@ -13,7 +13,7 @@ use std::io::Cursor;
 use image::ExtendedColorType;
 use image::codecs::jpeg::JpegEncoder;
 
-use consort_video::{FrameError, Picture, PixelFormat, decode, to_rgb};
+use consort_video::{FrameError, Picture, PixelFormat, decode, from_bgra, to_rgb};
 
 /// One YUYV macropixel: two pixels sharing a U and a V.
 fn macropixel(y0: u8, u: u8, y1: u8, v: u8) -> [u8; 4] {
@@ -291,6 +291,117 @@ mod planes {
         let picture = yuyv(2, 5, &rows).unwrap();
 
         assert_eq!(picture.u.len(), 3, "five rows rounds up to three");
+    }
+}
+
+mod screen_frames {
+    use super::*;
+
+    /// One row of BGRA, plus `pad` bytes of whatever the server left there.
+    ///
+    /// X11 pads rows to a four-byte boundary, so a capture's stride is not its
+    /// width, and the padding holds nothing a frame should read.
+    fn row(pixels: &[[u8; 3]], pad: usize) -> Vec<u8> {
+        let mut bytes: Vec<u8> = pixels
+            .iter()
+            .flat_map(|[r, g, b]| [*b, *g, *r, 0xff])
+            .collect();
+        bytes.extend(std::iter::repeat_n(0xcc, pad));
+        bytes
+    }
+
+    fn bgra(width: u32, height: u32, rows: &[Vec<u8>]) -> Result<Picture, FrameError> {
+        let stride = rows.first().map_or(0, Vec::len);
+        from_bgra(width, height, stride, &rows.concat())
+    }
+
+    /// A frame of one flat colour, `height` identical rows of it.
+    fn flat(width: u32, height: u32, rgb: [u8; 3]) -> Result<Picture, FrameError> {
+        let pixels = vec![rgb; width as usize];
+        let rows = vec![row(&pixels, 0); height as usize];
+        bgra(width, height, &rows)
+    }
+
+    fn near(got: u8, wanted: u8, label: &str) {
+        let off = i32::from(got).abs_diff(i32::from(wanted));
+        assert!(off <= 2, "{label}: got {got}, wanted about {wanted}");
+    }
+
+    #[test]
+    fn the_blue_and_red_channels_are_not_swapped() {
+        // The whole reason this entry point exists. X11 hands over BGRA, and
+        // reading it as RGB turns a red window blue, which is a bug nobody can
+        // attribute from a call.
+        let red = flat(2, 2, [255, 0, 0]).unwrap();
+        let blue = flat(2, 2, [0, 0, 255]).unwrap();
+
+        near(red.v[0], 240, "red should sit at the top of Cr");
+        near(red.u[0], 90, "red should sit near the bottom of Cb");
+        near(blue.u[0], 240, "blue should sit at the top of Cb");
+        near(blue.v[0], 110, "blue should sit near the bottom of Cr");
+    }
+
+    #[test]
+    fn padding_at_the_end_of_a_row_is_not_read_as_pixels() {
+        // A stride wider than the width. Reading the padding would put the
+        // 0xcc filler into the right-hand column of every row.
+        let black = row(&[[0, 0, 0], [0, 0, 0]], 8);
+
+        let picture = bgra(2, 2, &[black.clone(), black]).unwrap();
+
+        near(picture.y[1], 16, "the second pixel read into the padding");
+        near(picture.y[3], 16, "the last pixel read into the padding");
+    }
+
+    #[test]
+    fn black_and_white_land_in_the_studio_range() {
+        let black = flat(2, 2, [0, 0, 0]).unwrap();
+        let white = flat(2, 2, [255, 255, 255]).unwrap();
+
+        near(black.y[0], 16, "black");
+        near(white.y[0], 235, "white");
+    }
+
+    #[test]
+    fn a_stride_shorter_than_the_width_is_refused_rather_than_read_past() {
+        // A capture whose geometry disagrees with its buffer. Trusting it reads
+        // off the end of a shared memory segment.
+        let refused = from_bgra(4, 2, 8, &[0u8; 16]);
+
+        assert!(
+            matches!(refused, Err(FrameError::Geometry { .. })),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_buffer_shorter_than_the_frame_is_refused() {
+        let refused = from_bgra(2, 2, 8, &[0u8; 8]);
+
+        assert!(
+            matches!(refused, Err(FrameError::Geometry { .. })),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn a_frame_with_no_pixels_in_it_is_refused() {
+        assert_eq!(from_bgra(0, 4, 0, &[]), Err(FrameError::Empty));
+        assert_eq!(from_bgra(4, 0, 16, &[]), Err(FrameError::Empty));
+    }
+
+    #[test]
+    fn an_odd_size_still_fills_every_chroma_sample() {
+        // A window can be any size at all, unlike a camera's negotiated modes.
+        // The transport reads ceil(w/2) by ceil(h/2) out of each chroma plane
+        // and refuses a buffer that cannot supply it.
+        let three = row(&[[10, 20, 30], [10, 20, 30], [10, 20, 30]], 0);
+
+        let picture = bgra(3, 3, &[three.clone(), three.clone(), three]).unwrap();
+
+        assert_eq!(picture.y.len(), 9);
+        assert_eq!(picture.u.len(), 4, "a 3x3 frame needs a 2x2 chroma plane");
+        assert_eq!(picture.v.len(), 4);
     }
 }
 

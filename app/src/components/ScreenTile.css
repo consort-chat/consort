@@ -1,0 +1,85 @@
+/*
+  One shared screen waiting its turn, drawn as the square a face sits in.
+
+  Everything about the size comes from `--avatar-size` at the call site, the
+  way `CallFace` does it, so a screen and a person are the same size on the
+  strip and grow together when the card is expanded.
+*/
+.call-screen {
+  display: block;
+  min-width: 0;
+}
+
+/*
+  The same flex-wrapped column a face uses in tile layout: a square, then a
+  line for the name under it. Written here rather than shared, because the two
+  differ in what the square holds and in nothing else.
+*/
+.call-screen__button {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: center;
+  width: 100%;
+  padding: var(--space-2) var(--space-1);
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  /* On the compositor, so promoting a tile never reflows the strip beside it. */
+  transition: transform var(--duration-fast) var(--ease-out-expo);
+}
+
+.call-screen__button:hover {
+  background: var(--surface-overlay);
+}
+
+/* Pressed, and the press is what sends this one to the stage. */
+.call-screen__button:active {
+  transform: scale(0.96);
+}
+
+.call-screen__button:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  The square, holding the glyph and whatever picture covers it. `relative`
+  because the picture is laid over the glyph: see `SelfPicture.css`.
+*/
+.call-screen__stage {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  overflow: hidden;
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* Its colour is `ScreenGlyph.css`; the square it sits in owns how big it is. */
+.call-screen__stage .call-screen-glyph {
+  width: 55%;
+  height: 55%;
+}
+
+/*
+  The mint, which is the colour reserved for voice and presence. A share is the
+  other live thing a call carries. Smaller than the stage's own caption, which
+  is the half of the hierarchy the type scale carries.
+*/
+.call-screen__what {
+  flex: 0 0 100%;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--mint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

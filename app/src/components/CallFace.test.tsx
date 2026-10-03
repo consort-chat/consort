@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -207,6 +207,30 @@ describe("CallFace", () => {
 
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it("draws a picture inside the person's own square", () => {
+      // #140's review: a camera belongs in the square the avatar was in, not
+      // in a strip of its own above the faces.
+      draw({
+        layout: "tile",
+        picture: <img src={PNG} alt="Your camera" />,
+      });
+
+      const face = screen.getByRole("button");
+      expect(
+        within(face).getByRole("img", { name: "Your camera" }),
+      ).toBeVisible();
+    });
+
+  it("keeps the avatar under a picture that has not arrived", async () => {
+      // Whatever draws the picture answers null until its first frame, and
+      // only it knows that. An avatar taken away to make room would leave an
+      // empty square for however long the device takes to wake up.
+      draw({ layout: "tile", picture: null });
+
+      expect(screen.getByRole("listitem")).toHaveTextContent("AAda");
+      await waitFor(() => expect(memberAvatar).toHaveBeenCalled());
+    });
 
   it("stacks the name under the face when asked for a tile", () => {
     // The card wants a grid of faces rather than a column of rows. One

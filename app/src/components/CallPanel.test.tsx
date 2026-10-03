@@ -3,7 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { CallPanel } from "./CallPanel";
-import { HEARING, NOT_FILMING, type Call, type SelfAudio, type SelfVideo } from "../lib/api";
+import {
+  HEARING,
+  NOT_FILMING,
+  NOT_SHARING,
+  type Call,
+  type SelfAudio,
+  type SelfScreen,
+  type SelfVideo,
+} from "../lib/api";
 
 const LOUNGE = "!lounge:example.org";
 
@@ -13,12 +21,14 @@ function panel(
   selfAudio: SelfAudio = HEARING,
   cardShown = true,
   selfVideo: SelfVideo = NOT_FILMING,
+  selfScreen: SelfScreen = NOT_SHARING,
 ) {
   const onDisconnect = vi.fn();
   const onSetMuted = vi.fn();
   const onSetDeafened = vi.fn();
   const onSetAway = vi.fn();
   const onSetCamera = vi.fn();
+  const onShare = vi.fn();
   const onToggleCard = vi.fn();
   const { container } = render(
     <CallPanel
@@ -26,6 +36,7 @@ function panel(
       channelName={channelName}
       selfAudio={selfAudio}
       selfVideo={selfVideo}
+      selfScreen={selfScreen}
       cardShown={cardShown}
       onToggleCard={onToggleCard}
       onDisconnect={onDisconnect}
@@ -33,6 +44,7 @@ function panel(
       onSetDeafened={onSetDeafened}
       onSetAway={onSetAway}
       onSetCamera={onSetCamera}
+      onShare={onShare}
     />,
   );
   return {
@@ -42,6 +54,7 @@ function panel(
     onSetDeafened,
     onSetAway,
     onSetCamera,
+    onShare,
     onToggleCard,
   };
 }
@@ -611,11 +624,14 @@ describe("CallPanel", () => {
     });
 
     it("can be reached and opened from the keyboard", async () => {
-      // Third in the strip, behind the state line, the microphone and the
-      // camera. A control only a pointer can reach is a control some people do
-      // not have.
+      // Fourth in the strip, behind the state line, the microphone, the
+      // camera and the screen share. The three publishing controls come
+      // first because they are the ones reached for in a hurry; this holds
+      // the two nobody does. A control only a pointer can reach is a control
+      // some people do not have.
       panel(CONNECTED);
 
+      await userEvent.tab();
       await userEvent.tab();
       await userEvent.tab();
       await userEvent.tab();
@@ -1069,5 +1085,175 @@ describe("CallPanel", () => {
         screen.queryByRole("button", { name: /more voice actions/i }),
       ).toBeNull();
     });
+  });
+});
+
+describe("sharing a screen", () => {
+  const CONNECTED: Call = {
+    state: "connected",
+    roomId: LOUNGE,
+    participants: [],
+    trouble: null,
+  };
+
+  /** What is being shared, named, as the state channel reports it. */
+  function showing(what: string): SelfScreen {
+    return { sharing: what, trouble: null };
+  }
+
+  function shareButton() {
+    return screen.getByRole("button", { name: /share your screen/i });
+  }
+
+  /** The glyph on the share control, which is the whole of what it says. */
+  function shareGlyph() {
+    const glyph = shareButton().querySelector("svg");
+    if (glyph === null) throw new Error("the share control drew no glyph");
+    return glyph;
+  }
+
+  it("offers a way to start sharing while in a call", async () => {
+    panel(CONNECTED);
+
+    expect(shareButton()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("does not start sharing on the press that opens the picker", async () => {
+    // Opening a picker is not consent. The press has to choose a source
+    // before anything is captured.
+    const { onShare } = panel(CONNECTED);
+
+    await userEvent.click(shareButton());
+
+    expect(onShare).not.toHaveBeenCalled();
+  });
+
+  it("says what is being shared for as long as it is being shared", async () => {
+    // The requirement from #70 that the indicator exists for. The picker is
+    // long gone by this point; this has to be on screen anyway, and it has to
+    // name the window rather than only say that something is going out.
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("Bank statement.pdf"));
+
+    const indicator = screen.getByRole("status", { name: /sharing your screen/i });
+
+    expect(indicator).toHaveTextContent("Bank statement.pdf");
+  });
+
+  it("draws no indicator when nothing is being shared", async () => {
+    // The other half. An indicator that is always there is an indicator
+    // nobody reads.
+    panel(CONNECTED);
+
+    expect(
+      screen.queryByRole("status", { name: /sharing your screen/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stops the share in one press from the indicator", async () => {
+    // One action from wherever they are. The indicator is in the sidebar,
+    // which is on screen for the whole of a call.
+    const { onShare } = panel(
+      CONNECTED,
+      "Lounge",
+      HEARING,
+      true,
+      NOT_FILMING,
+      showing("DP-0 (2560x1440)"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /stop sharing/i }));
+
+    expect(onShare).toHaveBeenCalledWith(null);
+  });
+
+  it("stops the share in one press from the control that started it", async () => {
+    // The same control, both directions. Somebody who started a share by
+    // pressing this reaches for it again to stop.
+    const { onShare } = panel(
+      CONNECTED,
+      "Lounge",
+      HEARING,
+      true,
+      NOT_FILMING,
+      showing("DP-0 (2560x1440)"),
+    );
+
+    await userEvent.click(shareButton());
+
+    expect(onShare).toHaveBeenCalledWith(null);
+  });
+
+  it("does not open the picker while a share is running", async () => {
+    // Pressing it is a stop, not a second choice. A picker over a live share
+    // would make the control mean two things at once.
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("DP-0"));
+
+    await userEvent.click(shareButton());
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows the control as pressed while a share is running", async () => {
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("DP-0"));
+
+    expect(shareButton()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("says why a share did not start", async () => {
+    // An icon with no words of its own, so without this a press that failed
+    // does nothing visible and there is nothing to argue with.
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, {
+      sharing: null,
+      trouble: "sharing a screen needs an X11 session",
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/X11/);
+  });
+
+  it("keeps the camera trouble and the share trouble apart", async () => {
+    // Three independent failures, and a call can have more than one. See the
+    // two alerts already on this strip.
+    panel(
+      CONNECTED,
+      "Lounge",
+      HEARING,
+      true,
+      { camera: false, trouble: "the camera is in use" },
+      { sharing: null, trouble: "that window has gone" },
+    );
+
+    const said = screen.getAllByRole("alert").map((alert) => alert.textContent);
+
+    expect(said).toContain("the camera is in use");
+    expect(said).toContain("that window has gone");
+  });
+
+  it("offers the screen plainly while nothing is going out", async () => {
+    // The control was struck through whenever a share was not running, which
+    // is almost all of a call, so the one thing it ever said was unavailable.
+    panel(CONNECTED);
+
+    expect(shareGlyph()).toHaveAttribute("data-glyph", "screen");
+  });
+
+  it("draws a stop cross while a screen is going out", async () => {
+    // So the way to stop is the control that started it and is readable as a
+    // stop without the colour, which carries nothing on its own.
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("DP-0"));
+
+    expect(shareGlyph()).toHaveAttribute("data-glyph", "stop");
+  });
+
+  it("opens the picker beside the column rather than over it", async () => {
+    // The sidebar clips what leaves it, so a card anchored to this control
+    // came out cut off at the column's edge whatever its z-index said.
+    const { container } = panel(CONNECTED);
+    const column = container.querySelector(".call-panel");
+    if (column === null) throw new Error("no voice strip to measure");
+    column.getBoundingClientRect = () => new DOMRect(0, 0, 272, 96);
+
+    await userEvent.click(shareButton());
+
+    expect(screen.getByRole("dialog")).toHaveStyle({ left: "272px" });
   });
 });

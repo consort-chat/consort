@@ -72,6 +72,34 @@
 }
 
 /*
+  A face peeking out from behind a shared screen. The avatar on its own: the
+  row is shorter than a face and a name under one would be cut off anyway, and
+  the sidebar's roster is still drawing every name and every flag in full.
+*/
+.call-face[data-layout="peek"] .call-face__button {
+  display: block;
+  width: var(--avatar-size, 32px);
+  padding: 0;
+}
+
+/*
+  Clipped rather than removed. The avatar is decorative by design, so this is
+  the only accessible name the button has and `display: none` would take it.
+*/
+.call-face[data-layout="peek"] .call-face__who {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.call-face[data-layout="peek"] .call-face__flag {
+  display: none;
+}
+
+/*
   Somebody who has muted themselves.
 
   Dimmed as well as marked. The glyph is the message and carries the label a
@@ -121,13 +149,33 @@
   }
 }
 
-.call-face__avatar {
-  /*
-    Only the ring below moves, and only in colour. `box-shadow` is on the
-    compositor, so a list of twenty faces lighting up as a room talks costs
-    nothing in layout.
-  */
-  transition: box-shadow var(--duration-fast) var(--ease-out-expo);
+/*
+  The face's own box, holding the avatar and whatever is drawn over it.
+
+  Exactly the avatar's size, so a camera filling it is the square the avatar
+  was in rather than a new thing beside it. `relative` because the picture is
+  laid over the avatar rather than put in its place: see `CallFace`.
+
+  Only the ring below moves, and only in colour. `box-shadow` is on the
+  compositor, so a list of twenty faces lighting up as a room talks costs
+  nothing in layout.
+*/
+.call-face__stage {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--avatar-size, 32px);
+  height: var(--avatar-size, 32px);
+  border-radius: 50%;
+  transition:
+    border-radius var(--duration-normal) var(--ease-out-expo),
+    box-shadow var(--duration-fast) var(--ease-out-expo);
+}
+
+/* A picture is square, so the box around it stops being round. */
+.call-face__stage[data-filled="true"] {
+  border-radius: var(--radius-md);
 }
 
 /*
@@ -144,7 +192,7 @@
   2px and 6px this was first written as. The colour and the argument for it do
   not scale with anything.
 */
-.call-face[data-speaking="true"] .call-face__avatar {
+.call-face[data-speaking="true"] .call-face__stage {
   box-shadow:
     0 0 0 max(2px, calc(var(--avatar-size, 32px) * 0.05)) var(--mint),
     0 0 calc(var(--avatar-size, 32px) * 0.3) 1px var(--mint-glow);

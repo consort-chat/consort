@@ -171,6 +171,17 @@ export interface Participant {
    */
   camera?: boolean;
   /**
+   * Whether a screen or window of theirs is going out.
+   *
+   * Folded like `camera`: sharing if any of their devices is. A different
+   * question from `camera` and never derived from it, because a camera fills
+   * this person's own square and a shared screen earns a square of its own.
+   *
+   * Known only for the call this session is sitting in, with the same caveat
+   * `camera` carries: room state says nothing about publications.
+   */
+  screen?: boolean;
+  /**
    * When they joined the call, in milliseconds since the Unix epoch.
    *
    * The SFU's own record rather than the moment this session noticed them, so
@@ -888,6 +899,46 @@ export interface SelfVideo {
 /** Off and with nothing wrong, which is where every session starts. */
 export const NOT_FILMING: SelfVideo = { camera: false, trouble: null };
 
+/** Whether a share points at a whole screen or at one window. */
+export type ShareKind = "screen" | "window";
+
+/**
+ * One thing that could be shared, mirrored from
+ * `consort_video::ShareSource`.
+ *
+ * `id` is opaque and is handed straight back to start a share. Nothing in the
+ * frontend may parse it: which drawable it names is the capture backend's
+ * business.
+ */
+export interface ShareSource {
+  id: string;
+  /** What to show in the picker, and what the indicator will say. */
+  title: string;
+  kind: ShareKind;
+  /** Whether this window is filling a screen, which is what names a game. */
+  fullscreen: boolean;
+  width: number;
+  height: number;
+}
+
+/**
+ * What this session is putting on the call from its screen, mirrored from
+ * `consort_call::SelfScreen`.
+ *
+ * `sharing` is the name of what is going out rather than a flag, which is what
+ * lets the indicator answer the only question that matters while a share is
+ * live: which window are they seeing.
+ */
+export interface SelfScreen {
+  /** What is being shared, or null when nothing is. */
+  sharing: string | null;
+  /** Why nothing is, when somebody asked and it did not start. */
+  trouble: string | null;
+}
+
+/** Sharing nothing, with nothing wrong. Where every session starts. */
+export const NOT_SHARING: SelfScreen = { sharing: null, trouble: null };
+
 /**
  * The voice gate's thresholds, mirrored from `consort_audio::gate`.
  *
@@ -1096,6 +1147,20 @@ export function onSelfVideo(
 }
 
 /**
+ * Hear what this session is sharing from its screen.
+ *
+ * A state channel, so `resendState` repeats the current value and a webview
+ * that reloaded mid-share comes back knowing what is going out. That is the
+ * point rather than a convenience: an indicator that forgets is an indicator
+ * that stops being the answer to "what am I showing them".
+ */
+export function onSelfScreen(
+  handler: (screen: SelfScreen) => void,
+): Promise<UnlistenFn> {
+  return listen<SelfScreen>("self-screen", (event) => handler(event.payload));
+}
+
+/**
  * The newest frame from this session's camera, as a `data:` URL.
  *
  * Null when no camera is running, and in the moment between opening one and its
@@ -1108,6 +1173,16 @@ export function onSelfVideo(
  */
 export function selfView(): Promise<string | null> {
   return invoke<string | null>("self_view");
+}
+
+/**
+ * The newest frame of what this session is sharing, as a `data:` URL.
+ *
+ * `selfView`'s twin, null on the same terms: nothing being shared, or a capture
+ * whose first frame has not arrived.
+ */
+export function screenView(): Promise<string | null> {
+  return invoke<string | null>("screen_view");
 }
 
 /**
@@ -2813,4 +2888,30 @@ export function callSetAway(away: boolean): Promise<void> {
  */
 export function callSetCamera(on: boolean): Promise<SelfVideo> {
   return invoke<SelfVideo>("set_camera", { on });
+}
+
+/**
+ * Everything on this machine that could be shared, screens then windows.
+ *
+ * Asked every time the picker opens rather than cached: windows open and close
+ * while it is on screen, and a stale list offers a window that has gone.
+ *
+ * Rejects when there is no display server Consort can read, which on a desktop
+ * session means Wayland. The message says so.
+ */
+export function shareSources(): Promise<ShareSource[]> {
+  return invoke<ShareSource[]>("share_sources");
+}
+
+/**
+ * Start sharing `source`, or stop sharing with null.
+ *
+ * Answers with what happened, and the same answer arrives on the `self-screen`
+ * channel. Draw from the channel, for the reason `callSetCamera` gives and a
+ * sharper one: a share also stops when the channel changes or the call ends,
+ * and an indicator drawn from the click would keep claiming a screen is going
+ * out after it has stopped.
+ */
+export function callSetShare(source: string | null): Promise<SelfScreen> {
+  return invoke<SelfScreen>("set_share", { source });
 }
