@@ -173,7 +173,7 @@ jobs:
         run: |
           cargo install cargo-llvm-cov --locked
           cargo llvm-cov --workspace \
-            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|x11_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
+            --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|x11_host\.rs|mf_host\.rs|wgc_host\.rs|consort-video/src/com\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
             --fail-under-lines 90 \
             --lcov --output-path lcov.info
 
@@ -182,6 +182,34 @@ jobs:
         with:
           name: rust-coverage
           path: lcov.info
+
+  windows:
+    name: Windows video
+    # The Rust job above never compiles a line of `mf_host.rs` or
+    # `wgc_host.rs`: they are `cfg(windows)`, and a Linux runner builds the
+    # Linux hosts. Before this job, the first compiler to see them was the
+    # release build, which runs no test and no lint. #163.
+    #
+    # One crate rather than the workspace, because that is where every line
+    # that differs by platform is, and the workspace on Windows means building
+    # libwebrtc for LiveKit, which the release job already pays for. A runner
+    # has no camera and no interactive desktop, so the `#[ignore]` tests that
+    # capture are still run by hand: COVERAGE.md has the command.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy -p consort-video --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p consort-video
 
   advisories:
     name: Advisories

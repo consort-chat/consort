@@ -18,7 +18,8 @@ use crate::capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCap
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Camera {
-    /// The device node, and the identity a saved choice holds.
+    /// The identity a saved choice holds: the device node on Linux, the
+    /// symbolic link on Windows. Both name the device and the port it is in.
     pub id: String,
     /// What the driver calls it, for somebody to read.
     pub name: String,

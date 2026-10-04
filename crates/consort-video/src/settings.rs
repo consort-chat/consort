@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct VideoSettings {
-    /// The chosen camera by device node, or `None` for the first one found.
+    /// The chosen camera by [`crate::Camera::id`], or `None` for the first one
+    /// found.
     ///
     /// `None` rather than an empty string, which is an id that can never match.
     pub camera: Option<String>,
