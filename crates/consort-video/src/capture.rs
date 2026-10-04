@@ -4,7 +4,7 @@
 //! Opening a camera, as a trait, and deciding what to ask it for.
 //!
 //! The trait is what lets everything above it be tested on a machine with no
-//! camera. The real implementation is in [`crate::v4l_host`].
+//! camera. The real implementations are `v4l_host` and `mf_host`.
 
 use std::fmt;
 

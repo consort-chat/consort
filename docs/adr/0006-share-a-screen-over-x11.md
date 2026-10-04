@@ -162,6 +162,7 @@ way.
   is the answer and this ADR is the argument for doing it second rather than
   for not doing it.
 - Windows ships with the feature absent, as it already does for the camera.
+  Superseded for Windows by ADR-0011, which gives it a host of its own.
 - **An occluded window may capture the wrong pixels.** `GetImage` against a
   window drawable returns what is on screen in that rectangle, so a window with
   something on top of it captures the thing on top of it unless a compositing

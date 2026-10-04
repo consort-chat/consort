@@ -37,6 +37,19 @@ at whatever homeserver you already run.
   the first syllable of every word.
 
   [Screenshot of the audio settings with the level meter Here]
+- **Camera and screen sharing.** Turn a camera on in a voice channel, or share
+  a whole screen or one window, chosen from a picker that offers the window you
+  were just looking at first and a fullscreen game ahead of that.
+
+  | | Camera | Screen sharing |
+  |---|---|---|
+  | Windows 10 1903 and later | works | works |
+  | Linux on X11 | works | works |
+  | Linux on Wayland | works | not yet |
+  | macOS | not built, and says so | not built, and says so |
+
+  On Windows the shared screen or window carries a yellow border, which is
+  Windows saying what is being captured.
 - **Text.** Reading and sending messages, with names and avatars. Older
   messages load as you scroll to them. Attachments are drawn and can be saved
   anywhere. Mentions of you are marked.
@@ -238,6 +251,16 @@ resource here. The full standard, and what gets a change sent back, is in
   H.264 and AAC decoders installed on the machine. Where they are missing the
   clip says so and offers to save itself. On Arch that is `gst-libav`,
   `gst-plugins-ugly` and `gst-plugins-bad`.
+- **No screen sharing on Wayland.** The camera is the kernel's and works on
+  any Linux, but reading the screen under Wayland means the desktop portal,
+  which is not built yet. Where there is no X11 at all the picker says so;
+  where XWayland is running, it sees only the windows XWayland draws. Ubuntu
+  and Fedora default to Wayland, so this is most Linux desktops. See
+  [ADR-0006](docs/adr/0006-share-a-screen-over-x11.md).
+- **A Windows camera that will not start may be Windows' privacy switch.**
+  Consort is a desktop app, so it needs "Let desktop apps access your camera"
+  under Settings, Privacy & security, Camera, and says so when that is what
+  refused it.
 - **Notifications have only been run on Linux.** The Linux path is DBus to
   whatever notification daemon the desktop runs. The Windows one is a toast
   attributed to an AppUserModelID that has to match the shortcut the installer
