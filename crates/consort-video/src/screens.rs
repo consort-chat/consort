@@ -223,14 +223,15 @@ pub trait ScreenCapture: Send + Sync {
 
 /// The backend for a build with no screen capture.
 ///
-/// Finds nothing and shares nothing, which is what a Windows build does until
-/// somebody writes a second host. See ADR-0006.
+/// Refuses to list as well as to open. An empty list draws "there is nothing
+/// here to share" over a desktop full of windows, which is #163; a refusal
+/// draws the reason.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoScreens;
 
 impl ScreenCapture for NoScreens {
     fn sources(&self) -> Result<Vec<ShareSource>, ShareError> {
-        Ok(Vec::new())
+        Err(ShareError::Unsupported)
     }
 
     fn open(&self, _id: &str, _on_frame: FrameSink) -> Result<Box<dyn ShareStream>, ShareError> {

@@ -78,6 +78,9 @@ pub fn choose_offer(offers: &[Offer], want: Resolution) -> Option<Offer> {
 pub enum CaptureError {
     /// This machine offers no camera at all.
     NoCamera,
+    /// This build has no camera backend, so whether the machine has a camera
+    /// is not something it can know.
+    Unsupported,
     /// The requested camera is not among the ones this machine offers.
     UnknownCamera {
         requested: String,
@@ -104,6 +107,7 @@ impl fmt::Display for CaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoCamera => write!(f, "there is no camera on this machine"),
+            Self::Unsupported => write!(f, "this build of Consort cannot use a camera"),
             Self::UnknownCamera {
                 requested,
                 available,

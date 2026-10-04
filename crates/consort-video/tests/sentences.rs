@@ -115,6 +115,8 @@ mod what_a_camera_failure_says {
             CaptureError::Busy {
                 camera: "Lid".to_owned(),
             },
+            CaptureError::Blocked,
+            CaptureError::Unsupported,
         ];
 
         for error in errors {
@@ -212,13 +214,21 @@ mod a_platform_with_no_backend {
     }
 
     #[test]
-    fn refuses_to_open_one_rather_than_pretending() {
-        // Exists because the Windows release build has to compile. A settings
-        // screen there should draw an empty picker, and a press should say
-        // there is no camera rather than appear to work.
+    fn refuses_to_open_one_and_blames_the_build_rather_than_the_machine() {
+        // #163. This used to say there was no camera on this machine, on a
+        // Windows machine whose camera worked in every other application. The
+        // camera was never what was missing; the code to read it was.
         let refused = NoCameras.open(None, WANTED, Box::new(|_| {}));
 
-        assert!(matches!(refused, Err(CaptureError::NoCamera)));
+        assert!(matches!(refused, Err(CaptureError::Unsupported)));
+    }
+
+    #[test]
+    fn says_the_build_is_what_is_missing() {
+        let said = CaptureError::Unsupported.user_message();
+
+        assert!(said.contains("this build"), "{said:?}");
+        assert!(!said.contains("on this machine"), "{said:?}");
     }
 
     #[test]
@@ -233,6 +243,6 @@ mod a_platform_with_no_backend {
             Box::new(|_| {}),
         );
 
-        assert!(matches!(refused, Err(CaptureError::NoCamera)));
+        assert!(matches!(refused, Err(CaptureError::Unsupported)));
     }
 }

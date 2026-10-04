@@ -171,10 +171,18 @@ mod what_goes_wrong {
     use consort_video::ShareError;
 
     #[test]
+    fn a_build_with_no_backend_refuses_to_list_rather_than_offering_nothing() {
+        // #163. An empty list draws "there is nothing here to share", which on
+        // a desktop full of windows is false. Refusing draws the reason.
+        use consort_video::{NoScreens, ScreenCapture};
+
+        assert_eq!(NoScreens.sources(), Err(ShareError::Unsupported));
+    }
+
+    #[test]
     fn a_build_with_no_backend_says_so_rather_than_blaming_the_display() {
-        // The Windows build, and any platform without a host. Somebody there
-        // should be told the feature is not built rather than sent to debug
-        // their display server.
+        // Any platform without a host. Somebody there should be told the
+        // feature is not built rather than sent to debug their display server.
         let said = ShareError::Unsupported.user_message();
 
         assert!(
