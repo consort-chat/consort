@@ -656,7 +656,7 @@ mod tests {
 
         use crate::screens::ShareKind;
 
-        let _ = Command::new("notepad.exe").spawn().expect("no Notepad");
+        let mut launched = Command::new("notepad.exe").spawn().expect("no Notepad");
         let deadline = Instant::now() + Duration::from_secs(5);
         let shared = loop {
             let found = WgcHost
@@ -689,6 +689,9 @@ mod tests {
         let closed = Instant::now();
         std::thread::sleep(Duration::from_secs(1));
         drop(share);
+        // Already gone on Windows 11, where this was only the launcher; the
+        // window closing ends it on Windows 10, where it was Notepad itself.
+        let _ = launched.wait();
 
         let arrived = arrived.lock().unwrap();
         assert!(!arrived.is_empty(), "no frames arrived before the close");
