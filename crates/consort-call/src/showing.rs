@@ -14,15 +14,10 @@ use crate::failure::CallFailure;
 /// A live camera publication in a call.
 ///
 /// The seam that keeps the call thread testable without an SFU, like
-/// [`crate::PublishedAudio`]. `Clone` because two things hold one at once: the
-/// task pushing frames, and whatever retracts it when the camera goes off.
-#[allow(
-    async_fn_in_trait,
-    reason = "the returned future is awaited only on the call thread, which is \
-              single-threaded by construction, so a Send bound would be a \
-              promise nothing needs"
-)]
-pub trait PublishedVideo: Clone + 'static {
+/// [`crate::PublishedAudio`]. Frames only: taking it down is
+/// [`crate::CallSession::retract_camera`], because retracting the handle
+/// alone left the camera on this session's own roster entry.
+pub trait PublishedVideo: 'static {
     /// Push one I420 frame.
     ///
     /// Not `async`, unlike the audio counterpart, because the transport's
@@ -30,13 +25,6 @@ pub trait PublishedVideo: Clone + 'static {
     /// is nothing to await: it either hands the frame to the encoder or says
     /// the publication is gone.
     fn send(&self, picture: OutgoingPicture) -> Result<(), CallFailure>;
-
-    /// Retract the publication, so peers drop the stream rather than keeping a
-    /// paused one.
-    ///
-    /// Already retracted is success. The room may have closed and taken every
-    /// publication with it, and a camera that is off twice is off.
-    async fn unpublish(&self) -> Result<(), CallFailure>;
 }
 
 /// Feed `camera` into `track` until the publication stops accepting frames.
@@ -67,7 +55,6 @@ mod tests {
     #[derive(Clone)]
     struct FakeTrack {
         taken: Arc<AtomicUsize>,
-        retracted: Arc<AtomicUsize>,
         accepts: usize,
     }
 
@@ -75,7 +62,6 @@ mod tests {
         fn accepting(accepts: usize) -> Self {
             Self {
                 taken: Arc::new(AtomicUsize::new(0)),
-                retracted: Arc::new(AtomicUsize::new(0)),
                 accepts,
             }
         }
@@ -93,11 +79,6 @@ mod tests {
                 ));
             }
             self.taken.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-
-        async fn unpublish(&self) -> Result<(), CallFailure> {
-            self.retracted.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -147,19 +128,5 @@ mod tests {
         pumping.await.unwrap();
 
         assert_eq!(track.taken(), 2);
-    }
-
-    #[tokio::test]
-    async fn the_pump_does_not_retract_the_publication_it_gives_up_on() {
-        // Retracting is somebody switching the camera off, which happens
-        // somewhere else entirely. A pump that did it here would take the
-        // publication down over one refused frame.
-        let track = FakeTrack::accepting(0);
-        let camera = Camera::new();
-        camera.offer(frame(1));
-
-        pump(track.clone(), camera).await;
-
-        assert_eq!(track.retracted.load(Ordering::Relaxed), 0);
     }
 }

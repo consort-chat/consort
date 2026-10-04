@@ -87,11 +87,20 @@ pub trait CallSession {
     /// Not called at join, unlike the microphone. A camera goes up when
     /// somebody asks for one and comes down when they stop asking, so this is
     /// reached from the command channel rather than from the join path.
-    ///
-    /// Retracting it is [`PublishedVideo::unpublish`] rather than a method
-    /// here: the publication is what has to be taken down, and the session may
-    /// already be gone by the time anything takes it down.
+    /// Taking it down again is [`retract_camera`](Self::retract_camera).
     async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
+
+    /// Take this session's camera down, so peers drop the stream and this
+    /// session's own roster entry stops saying it is filming.
+    ///
+    /// Here rather than on the publication. Retracting LiveKit's track handle
+    /// took the camera off the SFU and left it on the engine's roster, which
+    /// is where this session's own icon is read from, so the camera stayed
+    /// lit after it was switched off. Only the session can reach the engine.
+    ///
+    /// Already retracted is success: the room may have closed and taken every
+    /// publication with it, and a camera that is off twice is off.
+    async fn retract_camera(&self) -> Result<(), CallFailure>;
 
     /// Publish this session's screen and hand back somewhere to push frames.
     ///
@@ -105,6 +114,10 @@ pub trait CallSession {
     /// whatever size that window happens to be rather than one of a device's
     /// negotiated modes.
     async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
+
+    /// Take this session's screen share down. See
+    /// [`retract_camera`](Self::retract_camera), which this mirrors.
+    async fn retract_screen(&self) -> Result<(), CallFailure>;
 
     /// Mute or unmute this session's own microphone at the transport.
     ///
