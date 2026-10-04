@@ -18,8 +18,7 @@ use crate::capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCap
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Camera {
-    /// The identity a saved choice holds: the device node on Linux, the
-    /// symbolic link on Windows. Both name the device and the port it is in.
+    /// The device node, and the identity a saved choice holds.
     pub id: String,
     /// What the driver calls it, for somebody to read.
     pub name: String,
@@ -137,11 +136,9 @@ impl CameraList {
 
 /// The backend for a platform with no camera support compiled in.
 ///
-/// Lists nothing, so a settings screen there draws an empty picker rather
-/// than refusing to open, and refuses to open a camera as
-/// [`CaptureError::Unsupported`] rather than [`CaptureError::NoCamera`]: the
-/// build is what is missing, and #163 is what blaming the machine looked like.
-/// See [`crate::Host`].
+/// Exists because the Windows release build has to compile and a settings
+/// screen there should draw an empty picker rather than refuse to open. See
+/// [`crate::Host`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoCameras;
 
@@ -158,6 +155,6 @@ impl VideoCapture for NoCameras {
         _want: Resolution,
         _on_frame: FrameSink,
     ) -> Result<Box<dyn CameraStream>, CaptureError> {
-        Err(CaptureError::Unsupported)
+        Err(CaptureError::NoCamera)
     }
 }

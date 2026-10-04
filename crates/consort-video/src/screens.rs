@@ -4,8 +4,8 @@
 //! What somebody can share, and the seam that captures it.
 //!
 //! The list is decided here, as data, and read off a window manager in
-//! `x11_host` or off Win32 in `wgc_host`. Why a window list exists on X11 and
-//! not under the Wayland portal: `docs/adr/0006-share-a-screen-over-x11.md`.
+//! `x11_host`. Why a window list exists at all on one platform and not the
+//! other: `docs/adr/0006-share-a-screen-over-x11.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -200,9 +200,9 @@ pub trait ShareStream: Send {
 
 /// Something that can list and capture what is on this machine's screen.
 ///
-/// The seam ADR-0006 describes. One implementation reads X11 and one reads
-/// Windows (ADR-0011); the fallback refuses, so a build on a platform with
-/// neither still starts and its picker says why it is empty.
+/// The seam ADR-0006 describes. One implementation reads X11; the fallback
+/// finds nothing, so a build on a platform with no backend offers an empty
+/// picker rather than failing to start.
 pub trait ScreenCapture: Send + Sync {
     /// Everything shareable right now, screens and windows together.
     ///
@@ -223,15 +223,14 @@ pub trait ScreenCapture: Send + Sync {
 
 /// The backend for a build with no screen capture.
 ///
-/// Refuses to list as well as to open. An empty list draws "there is nothing
-/// here to share" over a desktop full of windows, which is #163; a refusal
-/// draws the reason.
+/// Finds nothing and shares nothing, which is what a Windows build does until
+/// somebody writes a second host. See ADR-0006.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoScreens;
 
 impl ScreenCapture for NoScreens {
     fn sources(&self) -> Result<Vec<ShareSource>, ShareError> {
-        Err(ShareError::Unsupported)
+        Ok(Vec::new())
     }
 
     fn open(&self, _id: &str, _on_frame: FrameSink) -> Result<Box<dyn ShareStream>, ShareError> {

@@ -1046,7 +1046,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "windows 0.62.2",
  "x11rb",
  "zune-jpeg",
 ]

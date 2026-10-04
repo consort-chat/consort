@@ -4,7 +4,7 @@
 //! Opening a camera, as a trait, and deciding what to ask it for.
 //!
 //! The trait is what lets everything above it be tested on a machine with no
-//! camera. The real implementations are `v4l_host` and `mf_host`.
+//! camera. The real implementation is in [`crate::v4l_host`].
 
 use std::fmt;
 
@@ -78,9 +78,6 @@ pub fn choose_offer(offers: &[Offer], want: Resolution) -> Option<Offer> {
 pub enum CaptureError {
     /// This machine offers no camera at all.
     NoCamera,
-    /// This build has no camera backend, so whether the machine has a camera
-    /// is not something it can know.
-    Unsupported,
     /// The requested camera is not among the ones this machine offers.
     UnknownCamera {
         requested: String,
@@ -94,11 +91,6 @@ pub enum CaptureError {
     /// because the fix is to close the other application rather than to
     /// investigate anything.
     Busy { camera: String },
-    /// Windows' camera privacy switch is keeping desktop applications out.
-    ///
-    /// Its own variant because the camera works and the fix is a setting,
-    /// which nothing about "access denied" says.
-    Blocked,
     /// The driver said no.
     Backend(String),
 }
@@ -107,7 +99,6 @@ impl fmt::Display for CaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoCamera => write!(f, "there is no camera on this machine"),
-            Self::Unsupported => write!(f, "this build of Consort cannot use a camera"),
             Self::UnknownCamera {
                 requested,
                 available,
@@ -125,12 +116,6 @@ impl fmt::Display for CaptureError {
             Self::Busy { camera } => {
                 write!(f, "{camera:?} is already in use by another application")
             }
-            Self::Blocked => write!(
-                f,
-                "Windows is keeping desktop apps away from the camera; turn on \
-                 \"Let desktop apps access your camera\" under Settings, \
-                 Privacy & security, Camera"
-            ),
             Self::Backend(message) => write!(f, "the camera failed: {message}"),
         }
     }

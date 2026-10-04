@@ -129,8 +129,7 @@ coverage, which is what `consort-audio` does with `cpal_host.rs`.
 ### Negative
 
 - Linux only. A macOS or Windows build gains voice and not video until a second
-  host implementation exists behind the same `CameraDevices` trait. Windows
-  has had one since ADR-0011.
+  host implementation exists behind the same `CameraDevices` trait.
 - `moq-v4l` is at 0.1.0 with one release. That is the real risk here and it is
   accepted on three grounds: it is a fork of a mature crate rather than new
   code, its two dependencies are already present so the surface added is one

@@ -27,7 +27,7 @@ Run them:
 ```sh
 # Rust, with the same exclusions CI uses
 cargo llvm-cov --workspace \
-  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|x11_host\.rs|mf_host\.rs|wgc_host\.rs|consort-video/src/com\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
+  --ignore-filename-regex '(keyring_store\.rs|cpal_host\.rs|v4l_host\.rs|x11_host\.rs|consort-call/src/livekit\.rs|src-tauri/src/(main|lib)\.rs)' \
   --summary-only
 
 # Frontend, thresholds enforced from vitest.config.ts
@@ -50,7 +50,7 @@ one costs nothing.
 
 ## What is excluded, and why
 
-Ten files are outside the measurement. Each is excluded because a test could
+Six files are outside the measurement. Each is excluded because a test could
 only reach it by pretending, not because the code is uninteresting.
 
 **`crates/consort-audio/src/cpal_host.rs`.** Every line talks to a sound card,
@@ -118,23 +118,6 @@ returns. The second one found a live bug.
 
 ```sh
 cargo test -p consort-video --test screens -- --ignored
-```
-
-**`crates/consort-video/src/mf_host.rs`, `wgc_host.rs` and `com.rs`.** The
-Windows counterparts of `v4l_host.rs` and `x11_host.rs`, and the COM guard they
-share. They are not compiled on the Linux runner that measures coverage, so
-they could not be counted there if they were not listed; they are listed so a
-measurement taken on Windows agrees. What they would otherwise interpret is
-`win32.rs`, which compiles everywhere and is measured normally. The `Windows`
-job in `ci.yml` builds and lints them and runs their unit tests, which pin
-`win32.rs`'s constants against the `windows` crate's own.
-
-The same display tests as `x11_host.rs` run against them by hand, and so do
-the camera ones, plus one that closes a shared window and checks the frames
-stop:
-
-```sh
-cargo test -p consort-video -- --ignored --test-threads=1
 ```
 
 **`crates/consort-call/src/livekit.rs`.** The same shape as `cpal_host.rs`, one
