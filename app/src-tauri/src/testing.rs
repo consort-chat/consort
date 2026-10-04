@@ -382,10 +382,6 @@ impl consort_call::PublishedVideo for FakeCallCamera {
     ) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }
-
-    async fn unpublish(&self) -> Result<(), consort_call::CallFailure> {
-        Ok(())
-    }
 }
 
 pub struct FakeCallRoster(tokio::sync::watch::Receiver<Standing>);
@@ -431,6 +427,14 @@ impl consort_call::CallSession for FakeCallSession {
         _size: consort_call::PictureSize,
     ) -> Result<Self::Video, consort_call::CallFailure> {
         Ok(FakeCallCamera)
+    }
+
+    async fn retract_camera(&self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn retract_screen(&self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
     }
 
     fn listen(&self, _ears: &consort_call::hearing::Ears) -> consort_call::Attached {

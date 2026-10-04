@@ -314,10 +314,10 @@ struct Joined<S: CallSession> {
     watching: AbortOnDrop,
     /// The camera, while one is up. `None` for the whole of a call nobody
     /// switched a camera on in, which is most of them.
-    showing: Option<Showing<S::Video>>,
+    showing: Option<Showing>,
     /// The screen share, while one is up. A second slot rather than a wider
     /// one, because both can be up at the same time.
-    sharing: Option<Showing<S::Video>>,
+    sharing: Option<Showing>,
     /// The retry looking for tracks that have not arrived yet. Dies with the
     /// call it belongs to, like the two tasks above.
     chasing: Chase,
@@ -371,14 +371,12 @@ impl<S: CallSession> Joined<S> {
     }
 }
 
-/// A camera publication and the task feeding it.
+/// A video publication that is up, held as the task feeding it.
 ///
-/// The track is kept beside the task because retracting a publication and
-/// stopping the frames going into it are two different acts: dropping the
-/// handle ends the pump, and peers only drop the stream when something awaits
-/// [`PublishedVideo::unpublish`].
-struct Showing<V> {
-    track: V,
+/// Retracting it and stopping its frames are two different acts: dropping
+/// this ends the pump, and peers only drop the stream when the session
+/// retracts it. See [`publication`].
+struct Showing {
     /// Ends when this is dropped. See [`AbortOnDrop`].
     #[expect(
         dead_code,
@@ -642,7 +640,8 @@ async fn set_camera<S: CallSession>(
         session, showing, ..
     } = joined;
 
-    match publication(showing, camera, size, |at| session.publish_camera(at)).await {
+    let publish = |at| session.publish_camera(at);
+    match publication(showing, camera, size, publish, || session.retract_camera()).await {
         Ok(camera) => show(
             events,
             current,
@@ -700,7 +699,8 @@ async fn set_screen<S: CallSession>(
         session, sharing, ..
     } = joined;
 
-    match publication(sharing, frames, size, |at| session.publish_screen(at)).await {
+    let publish = |at| session.publish_screen(at);
+    match publication(sharing, frames, size, publish, || session.retract_screen()).await {
         Ok(true) => shared(
             events,
             current,
@@ -745,24 +745,33 @@ fn shared(
 /// `size` of `None` means take it down. An already-absent publication is not a
 /// failure, and an already-present one is not republished: the interface may be
 /// asking because it lost track of what it is doing.
-async fn publication<V, F, Fut>(
-    slot: &mut Option<Showing<V>>,
+///
+/// `retract` is the session's, not the publication's: see
+/// [`CallSession::retract_camera`] for what retracting the handle alone left
+/// behind.
+async fn publication<V, F, Fut, R, Gone>(
+    slot: &mut Option<Showing>,
     frames: &Camera,
     size: Option<PictureSize>,
     publish: F,
+    retract: R,
 ) -> Result<bool, CallFailure>
 where
     V: PublishedVideo,
     F: FnOnce(PictureSize) -> Fut,
     Fut: Future<Output = Result<V, CallFailure>>,
+    R: FnOnce() -> Gone,
+    Gone: Future<Output = Result<(), CallFailure>>,
 {
     let Some(size) = size else {
-        if let Some(showing) = slot.take()
-            && let Err(error) = showing.track.unpublish().await
+        // Dropped first, which aborts the pump, so no frame goes out while the
+        // retraction is in flight.
+        if slot.take().is_some()
+            && let Err(error) = retract().await
         {
-            // Logged and no more. The frames have already stopped, because
-            // dropping the handle aborted the pump, so the worst case is a
-            // publication peers see as stalled until the call ends.
+            // Logged and no more. The frames have already stopped, so the
+            // worst case is a publication peers see as stalled until the call
+            // ends.
             tracing::warn!(%error, "could not retract a video publication");
         }
         // So that switching back on does not publish the last thing the source
@@ -777,10 +786,10 @@ where
 
     let track = publish(size).await?;
     let pump = AbortOnDrop(tokio::task::spawn_local(showing::pump(
-        track.clone(),
+        track,
         frames.clone(),
     )));
-    *slot = Some(Showing { track, pump });
+    *slot = Some(Showing { pump });
     Ok(true)
 }
 
@@ -1206,7 +1215,9 @@ mod tests {
         /// A test that watched one could not tell a camera switched off from a
         /// camera whose frames merely stopped.
         live_cameras: Arc<AtomicUsize>,
-        retracted: Arc<AtomicUsize>,
+        /// What the session was asked to retract, in order: `"camera"` or
+        /// `"screen"`.
+        retracted: Arc<Mutex<Vec<&'static str>>>,
         /// Frames the camera publication was handed.
         frames: Arc<AtomicUsize>,
         /// How many times the session was asked to play the call.
@@ -1285,8 +1296,8 @@ mod tests {
             self.live_cameras.load(Ordering::Relaxed)
         }
 
-        fn retracted(&self) -> usize {
-            self.retracted.load(Ordering::Relaxed)
+        fn retracted(&self) -> Vec<&'static str> {
+            self.retracted.lock().unwrap().clone()
         }
 
         fn frames(&self) -> usize {
@@ -1385,11 +1396,6 @@ mod tests {
                 ));
             }
             self.log.frames.fetch_add(1, Ordering::Relaxed);
-            Ok(())
-        }
-
-        async fn unpublish(&self) -> Result<(), CallFailure> {
-            self.log.retracted.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -1648,6 +1654,16 @@ mod tests {
                 alive: Arc::new(Alive(self.log.clone())),
                 accepts: self.filming != Filming::Stalls,
             })
+        }
+
+        async fn retract_camera(&self) -> Result<(), CallFailure> {
+            self.log.retracted.lock().unwrap().push("camera");
+            Ok(())
+        }
+
+        async fn retract_screen(&self) -> Result<(), CallFailure> {
+            self.log.retracted.lock().unwrap().push("screen");
+            Ok(())
         }
 
         async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
@@ -2861,7 +2877,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.retracted(), 1);
+            assert_eq!(log.retracted(), vec!["screen"]);
             assert_eq!(screens(&said), vec![sharing(Some(WHAT)), sharing(None)]);
         }
 
@@ -3046,7 +3062,11 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.retracted(), 1, "one retraction, the share's");
+            assert_eq!(
+                log.retracted(),
+                vec!["screen"],
+                "one retraction, the share's"
+            );
             let video: Vec<_> = said
                 .iter()
                 .filter_map(|event| match event {
@@ -3171,6 +3191,11 @@ mod tests {
         async fn switching_it_off_retracts_the_publication() {
             // Retracted, not muted. Peers drop the stream and draw an avatar,
             // which is what `roster::camera_live` already reads.
+            //
+            // And retracted by the session rather than by the publication's
+            // own handle. Retracting the LiveKit handle took the camera off
+            // the SFU and left it on the engine's roster, so this session's
+            // own camera stayed lit after it was switched off.
             let (transport, log) = FakeTransport::new(Joining::Succeeds);
 
             let said = transcript(
@@ -3179,7 +3204,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.retracted(), 1);
+            assert_eq!(log.retracted(), vec!["camera"]);
             assert_eq!(video(&said), vec![showing(true), showing(false)]);
         }
 

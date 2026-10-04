@@ -372,6 +372,21 @@ impl CallTransport for LiveKitTransport {
 }
 
 impl LiveKitSession {
+    /// Take one of this session's video publications down, through the
+    /// engine.
+    ///
+    /// Through the engine rather than the track handle, which retracts at the
+    /// SFU and nowhere else. The engine does that too, and then drops the
+    /// stream from this session's own roster entry, which is what
+    /// `roster::camera_live` reads for our own icon.
+    async fn retract(&self, kind: MediaStreamKind) -> Result<(), CallFailure> {
+        self.call
+            .engine()
+            .unpublish(kind)
+            .await
+            .map_err(|error| classify(&CallError::Media(error)))
+    }
+
     /// Tell the other Consort clients in the call what this session is doing.
     ///
     /// Failure is logged and swallowed on purpose. This is an indicator on
@@ -534,6 +549,10 @@ impl CallSession for LiveKitSession {
         Ok(CameraTrack(track))
     }
 
+    async fn retract_camera(&self) -> Result<(), CallFailure> {
+        self.retract(MediaStreamKind::Camera).await
+    }
+
     async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure> {
         // `screen_share` rather than `camera`, which is the whole difference
         // peers see: the stream arrives as `MediaStreamKind::ScreenShare`, so
@@ -549,6 +568,10 @@ impl CallSession for LiveKitSession {
             .map_err(|error| classify(&error))?;
 
         Ok(CameraTrack(track))
+    }
+
+    async fn retract_screen(&self) -> Result<(), CallFailure> {
+        self.retract(MediaStreamKind::ScreenShare).await
     }
 
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {
@@ -983,13 +1006,6 @@ impl PublishedVideo for CameraTrack {
 
         self.0
             .capture_video(frame)
-            .map_err(|error| classify(&CallError::Media(error)))
-    }
-
-    async fn unpublish(&self) -> Result<(), CallFailure> {
-        self.0
-            .unpublish()
-            .await
             .map_err(|error| classify(&CallError::Media(error)))
     }
 }
