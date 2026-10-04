@@ -91,6 +91,11 @@ pub enum CaptureError {
     /// because the fix is to close the other application rather than to
     /// investigate anything.
     Busy { camera: String },
+    /// Windows' camera privacy switch is keeping desktop applications out.
+    ///
+    /// Its own variant because the camera works and the fix is a setting,
+    /// which nothing about "access denied" says.
+    Blocked,
     /// The driver said no.
     Backend(String),
 }
@@ -116,6 +121,12 @@ impl fmt::Display for CaptureError {
             Self::Busy { camera } => {
                 write!(f, "{camera:?} is already in use by another application")
             }
+            Self::Blocked => write!(
+                f,
+                "Windows is keeping desktop apps away from the camera; turn on \
+                 \"Let desktop apps access your camera\" under Settings, \
+                 Privacy & security, Camera"
+            ),
             Self::Backend(message) => write!(f, "the camera failed: {message}"),
         }
     }

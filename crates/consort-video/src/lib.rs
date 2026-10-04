@@ -13,6 +13,7 @@ pub mod devices;
 pub mod pixels;
 pub mod screens;
 pub mod settings;
+pub mod win32;
 
 #[cfg(target_os = "linux")]
 pub mod v4l_host;
