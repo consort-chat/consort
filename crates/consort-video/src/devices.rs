@@ -136,9 +136,11 @@ impl CameraList {
 
 /// The backend for a platform with no camera support compiled in.
 ///
-/// Exists because the Windows release build has to compile and a settings
-/// screen there should draw an empty picker rather than refuse to open. See
-/// [`crate::Host`].
+/// Lists nothing, so a settings screen there draws an empty picker rather
+/// than refusing to open, and refuses to open a camera as
+/// [`CaptureError::Unsupported`] rather than [`CaptureError::NoCamera`]: the
+/// build is what is missing, and #163 is what blaming the machine looked like.
+/// See [`crate::Host`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoCameras;
 
@@ -155,6 +157,6 @@ impl VideoCapture for NoCameras {
         _want: Resolution,
         _on_frame: FrameSink,
     ) -> Result<Box<dyn CameraStream>, CaptureError> {
-        Err(CaptureError::NoCamera)
+        Err(CaptureError::Unsupported)
     }
 }
