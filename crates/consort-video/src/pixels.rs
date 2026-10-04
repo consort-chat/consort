@@ -13,15 +13,19 @@ use zune_jpeg::zune_core::options::DecoderOptions;
 
 /// What a camera is handing over.
 ///
-/// The two a V4L2 webcam reliably offers. H.264 is also common and is not
-/// here: decoding it would mean a second codec to carry, and the SFU would
-/// re-encode anyway.
+/// The two a V4L2 webcam reliably offers, and the one a Windows laptop's
+/// built-in camera often offers alone. H.264 is also common and is not here:
+/// decoding it would mean a second codec to carry, and the SFU would re-encode
+/// anyway.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelFormat {
     /// Packed 4:2:2, four bytes per two pixels, `Y0 U Y1 V`.
     Yuyv,
     /// One baseline JPEG per frame.
     Mjpeg,
+    /// Planar 4:2:0 with the chroma interleaved: a luma plane, then one row
+    /// of `U V` pairs for every two rows of picture.
+    Nv12,
 }
 
 impl PixelFormat {
@@ -30,10 +34,14 @@ impl PixelFormat {
         match self {
             Self::Yuyv => *b"YUYV",
             Self::Mjpeg => *b"MJPG",
+            Self::Nv12 => *b"NV12",
         }
     }
 
-    /// The format this `FourCC` names, where it is one this can read.
+    /// The format this V4L2 `FourCC` names, where it is one V4L2 is read in.
+    ///
+    /// Not NV12, which is decoded for Media Foundation and has never been
+    /// tried against a V4L2 driver's strides.
     pub fn from_fourcc(fourcc: &[u8; 4]) -> Option<Self> {
         [Self::Yuyv, Self::Mjpeg]
             .into_iter()
@@ -46,6 +54,7 @@ impl std::fmt::Display for PixelFormat {
         match self {
             Self::Yuyv => write!(f, "YUYV"),
             Self::Mjpeg => write!(f, "MJPEG"),
+            Self::Nv12 => write!(f, "NV12"),
         }
     }
 }
@@ -257,6 +266,7 @@ pub fn decode(
     match format {
         PixelFormat::Yuyv => from_yuyv(width, height, bytes),
         PixelFormat::Mjpeg => from_mjpeg(bytes),
+        PixelFormat::Nv12 => from_nv12(width, height, bytes),
     }
 }
 
@@ -351,6 +361,39 @@ fn from_yuyv(width: u32, height: u32, bytes: &[u8]) -> Result<Picture, FrameErro
         y,
         u,
         v,
+        timestamp_us: 0,
+    })
+}
+
+/// Split NV12's interleaved chroma into I420's two planes.
+///
+/// Both are 4:2:0, so luma is copied as it is and nothing is averaged.
+fn from_nv12(width: u32, height: u32, bytes: &[u8]) -> Result<Picture, FrameError> {
+    if width == 0 || height == 0 {
+        return Err(FrameError::Empty);
+    }
+
+    let (w, h) = (width as usize, height as usize);
+    let (chroma_w, chroma_h) = (w.div_ceil(2), h.div_ceil(2));
+    let wanted = w * h + chroma_w * 2 * chroma_h;
+    // Not equality, for the reason `from_yuyv` gives.
+    if bytes.len() < wanted {
+        return Err(FrameError::Short {
+            wanted,
+            got: bytes.len(),
+            format: PixelFormat::Nv12,
+        });
+    }
+
+    let (luma, chroma) = bytes.split_at(w * h);
+    let pairs = &chroma.as_chunks::<2>().0[..chroma_w * chroma_h];
+
+    Ok(Picture {
+        width,
+        height,
+        y: luma.to_vec(),
+        u: pairs.iter().map(|[u, _]| *u).collect(),
+        v: pairs.iter().map(|[_, v]| *v).collect(),
         timestamp_us: 0,
     })
 }

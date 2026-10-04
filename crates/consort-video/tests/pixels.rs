@@ -139,6 +139,95 @@ mod yuyv_frames {
     }
 }
 
+mod nv12_frames {
+    use super::*;
+
+    /// A luma plane followed by one row of interleaved `U V` pairs per two
+    /// rows of picture, which is the whole of NV12.
+    fn nv12(
+        width: u32,
+        height: u32,
+        luma: &[u8],
+        chroma: &[[u8; 2]],
+    ) -> Result<Picture, FrameError> {
+        let bytes: Vec<u8> = [luma, chroma.concat().as_slice()].concat();
+        decode(PixelFormat::Nv12, width, height, &bytes)
+    }
+
+    #[test]
+    fn luma_is_copied_as_it_arrives() {
+        let picture = nv12(2, 2, &[1, 2, 3, 4], &[[128, 128]]).unwrap();
+
+        assert_eq!(picture.y, vec![1, 2, 3, 4]);
+        assert_eq!((picture.width, picture.height), (2, 2));
+    }
+
+    #[test]
+    fn the_interleaved_chroma_is_split_into_its_two_planes() {
+        // 4x4 is two chroma samples across and two down. Swapping U and V here
+        // turns a face blue, which is the one mistake this conversion has room
+        // for.
+        let luma = [0u8; 16];
+        let chroma = [[10, 20], [30, 40], [50, 60], [70, 80]];
+
+        let picture = nv12(4, 4, &luma, &chroma).unwrap();
+
+        assert_eq!(picture.u, vec![10, 30, 50, 70]);
+        assert_eq!(picture.v, vec![20, 40, 60, 80]);
+    }
+
+    #[test]
+    fn a_short_buffer_is_refused_rather_than_read_past() {
+        let refused = decode(PixelFormat::Nv12, 2, 2, &[0; 5]);
+
+        assert_eq!(
+            refused,
+            Err(FrameError::Short {
+                wanted: 6,
+                got: 5,
+                format: PixelFormat::Nv12,
+            })
+        );
+    }
+
+    #[test]
+    fn a_buffer_longer_than_the_frame_is_accepted_and_the_tail_ignored() {
+        let bytes = [9, 9, 9, 9, 100, 200, 0xff, 0xff, 0xff];
+
+        let picture = decode(PixelFormat::Nv12, 2, 2, &bytes).unwrap();
+
+        assert_eq!(
+            (picture.u.as_slice(), picture.v.as_slice()),
+            (&[100][..], &[200][..])
+        );
+    }
+
+    #[test]
+    fn an_odd_size_still_fills_every_chroma_sample() {
+        // 3x3 rounds up to two chroma samples each way, as every other path
+        // here does, so the planes are the length the transport copies.
+        let luma = [0u8; 9];
+        let chroma = [[1, 2], [3, 4], [5, 6], [7, 8]];
+
+        let picture = nv12(3, 3, &luma, &chroma).unwrap();
+
+        assert_eq!(picture.u, vec![1, 3, 5, 7]);
+        assert_eq!(picture.v, vec![2, 4, 6, 8]);
+    }
+
+    #[test]
+    fn a_frame_with_no_pixels_in_it_is_refused() {
+        assert_eq!(decode(PixelFormat::Nv12, 0, 0, &[]), Err(FrameError::Empty));
+    }
+
+    #[test]
+    fn it_is_not_offered_to_video4linux() {
+        // The V4L2 path decodes what `from_fourcc` admits, and nobody has
+        // pointed it at an NV12 camera to see whether its strides are tight.
+        assert_eq!(PixelFormat::from_fourcc(b"NV12"), None);
+    }
+}
+
 mod mjpeg_frames {
     use super::*;
 
