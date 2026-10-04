@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::sync_channel;
 use std::thread::JoinHandle;
 
-use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFAttributes, IMFMediaSource, IMFMediaType, IMFSourceReader,
     MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
@@ -25,12 +24,11 @@ use windows::Win32::Media::MediaFoundation::{
     MF_SOURCE_READERF_ERROR, MF_VERSION, MFCreateAttributes, MFCreateSourceReaderFromMediaSource,
     MFEnumDeviceSources, MFSTARTUP_LITE, MFShutdown, MFStartup,
 };
-use windows::Win32::System::Com::{
-    COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
-};
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::core::{GUID, PWSTR};
 
 use crate::capture::{CameraStream, CaptureError, FrameSink, Offer, Resolution, VideoCapture};
+use crate::com::Com;
 use crate::devices::{Camera, CameraDevices};
 use crate::pixels::{Picture, PixelFormat, decode};
 use crate::win32::{camera_failure, frame_rate, frame_size, media_subtype};
@@ -173,7 +171,7 @@ struct Session {
 
 impl Session {
     fn start() -> Result<Self, CaptureError> {
-        let com = Com::start()?;
+        let com = Com::start().map_err(failed("COM"))?;
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_LITE) }.map_err(failed("Media Foundation"))?;
         Ok(Self {
             _media: Media,
@@ -188,36 +186,6 @@ struct Media;
 impl Drop for Media {
     fn drop(&mut self) {
         let _ = unsafe { MFShutdown() };
-    }
-}
-
-/// COM on this thread, uninitialised on drop only if this is what started it.
-struct Com {
-    owned: bool,
-}
-
-impl Com {
-    /// Join the multithreaded apartment.
-    ///
-    /// A thread that is already in the single-threaded one, as a Tauri
-    /// command on the main thread is, refuses with `RPC_E_CHANGED_MODE`. COM
-    /// is usable there all the same, and the call that failed must not be
-    /// balanced, so that is not an error.
-    fn start() -> Result<Self, CaptureError> {
-        let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if result == RPC_E_CHANGED_MODE {
-            return Ok(Self { owned: false });
-        }
-        result.ok().map_err(failed("COM"))?;
-        Ok(Self { owned: true })
-    }
-}
-
-impl Drop for Com {
-    fn drop(&mut self) {
-        if self.owned {
-            unsafe { CoUninitialize() };
-        }
     }
 }
 

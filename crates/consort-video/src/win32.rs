@@ -76,11 +76,11 @@ pub struct Rect {
 }
 
 impl Rect {
-    fn width(self) -> u32 {
+    pub fn width(self) -> u32 {
         self.right.saturating_sub(self.left).max(0) as u32
     }
 
-    fn height(self) -> u32 {
+    pub fn height(self) -> u32 {
         self.bottom.saturating_sub(self.top).max(0) as u32
     }
 
