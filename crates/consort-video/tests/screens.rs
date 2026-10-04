@@ -242,19 +242,21 @@ mod what_goes_wrong {
 /// What only a real display can answer.
 ///
 /// `#[ignore]` on the same terms as the keyring and homeserver tests: CI has
-/// no X server, so these are run by hand. They are the coverage for
-/// `x11_host`, which is excluded from measurement for exactly that reason.
+/// no desktop, so these are run by hand. They are the coverage for `x11_host`
+/// on an X11 session and `wgc_host` on Windows, both excluded from measurement
+/// for exactly that reason. Every one is a promise the trait makes, so the
+/// same test holds both hosts to it.
 ///
 /// Run with `cargo test -p consort-video --test screens -- --ignored`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod against_a_real_display {
     use consort_video::{ScreenCapture, Screens, ShareKind};
     use std::sync::{Arc, Mutex};
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn this_machine_offers_at_least_one_screen() {
-        let offered = Screens::default().sources().expect("no X11 display");
+        let offered = Screens::default().sources().expect("no display to read");
 
         let screens: Vec<_> = offered
             .iter()
@@ -269,9 +271,9 @@ mod against_a_real_display {
     }
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn every_window_offered_can_be_named_and_measured() {
-        let offered = Screens::default().sources().expect("no X11 display");
+        let offered = Screens::default().sources().expect("no display to read");
 
         for found in &offered {
             assert!(!found.title.trim().is_empty(), "{found:?} has no label");
@@ -296,7 +298,7 @@ mod against_a_real_display {
         let host = Screens::default();
         let first = host
             .sources()
-            .expect("no X11 display")
+            .expect("no display to read")
             .into_iter()
             .find(|source| source.kind == ShareKind::Screen)
             .expect("no monitors");
@@ -304,7 +306,7 @@ mod against_a_real_display {
     }
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn a_screen_capture_produces_frames_of_the_size_that_screen_was_offered_as() {
         // Measured against the source the picker listed, not against whatever
         // the stream reports about itself. Those two agreeing proves nothing:
@@ -354,7 +356,7 @@ mod against_a_real_display {
     }
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn each_screen_captures_only_itself() {
         // The multi-monitor case, and the reason the test above measures
         // against the listing. Two monitors share one root window, so a
@@ -362,7 +364,7 @@ mod against_a_real_display {
         let host = Screens::default();
         let screens: Vec<_> = host
             .sources()
-            .expect("no X11 display")
+            .expect("no display to read")
             .into_iter()
             .filter(|source| source.kind == ShareKind::Screen)
             .collect();
@@ -382,7 +384,7 @@ mod against_a_real_display {
     }
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn dropping_a_share_stops_the_frames_before_it_returns() {
         // The security property, measured rather than assumed. Somebody
         // pressing stop has said no more of their screen may leave this
@@ -426,7 +428,7 @@ mod against_a_real_display {
     }
 
     #[test]
-    #[ignore = "needs an X11 display"]
+    #[ignore = "needs a display"]
     fn a_source_that_is_not_there_is_refused_rather_than_captured() {
         let refused = Screens::default().open("window:1", Box::new(|_| {}));
 

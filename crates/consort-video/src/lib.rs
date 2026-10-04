@@ -22,7 +22,13 @@ pub mod v4l_host;
 pub mod x11_host;
 
 #[cfg(windows)]
+mod com;
+
+#[cfg(windows)]
 pub mod mf_host;
+
+#[cfg(windows)]
+pub mod wgc_host;
 
 pub use capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
 pub use devices::{Camera, CameraDevices, CameraList, NoCameras, Selection, catalogue, choose};
@@ -50,11 +56,15 @@ pub type Host = devices::NoCameras;
 
 /// The screen capture backend for this build.
 ///
-/// X11 and nothing else, for the same reason [`Host`] is V4L2 and nothing
-/// else. Wayland would be a second host behind the same trait and is not
-/// built: see `docs/adr/0006-share-a-screen-over-x11.md`.
+/// X11 on Linux and Windows.Graphics.Capture on Windows. Wayland would be a
+/// second Linux host behind the same trait and is not built: see
+/// `docs/adr/0006-share-a-screen-over-x11.md`. Anywhere else the host refuses
+/// and says the build is why.
 #[cfg(target_os = "linux")]
 pub type Screens = x11_host::X11Host;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+pub type Screens = wgc_host::WgcHost;
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub type Screens = screens::NoScreens;
