@@ -4,6 +4,30 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.10.0 (2026-10-04)
+
+### Added
+
+- **video:** Decode NV12, which a Windows laptop camera often offers alone (@tominal)
+- **video:** Read what Windows says about cameras and windows, as data (@tominal)
+- **video:** Capture the camera on Windows through Media Foundation (@tominal)
+- **video:** Share a screen or a window on Windows (@tominal)
+- **video:** Decode NV12, which a Windows laptop camera often offers alone (@tominal)
+- **video:** Read what Windows says about cameras and windows, as data (@tominal)
+- **video:** Capture the camera on Windows through Media Foundation (@tominal)
+- **video:** Share a screen or a window on Windows (@tominal)
+
+### Documentation
+
+- **video:** Say where the camera and screen sharing work, and check Windows in CI (@tominal)
+- **video:** Say where the camera and screen sharing work, and check Windows in CI (@tominal)
+
+### Fixed
+
+- **video:** Blame the build, not the machine, where there is no backend (@tominal)
+- **video:** Blame the build, not the machine, where there is no backend (@tominal)
+- **call:** Take our own camera off the roster when it is switched off (@tominal)
+
 ## 0.9.0 (2026-10-03)
 
 ### Added
