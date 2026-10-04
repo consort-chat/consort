@@ -21,6 +21,9 @@ pub mod v4l_host;
 #[cfg(target_os = "linux")]
 pub mod x11_host;
 
+#[cfg(windows)]
+pub mod mf_host;
+
 pub use capture::{CameraStream, CaptureError, FrameSink, Resolution, VideoCapture};
 pub use devices::{Camera, CameraDevices, CameraList, NoCameras, Selection, catalogue, choose};
 pub use pixels::{FrameError, Picture, PixelFormat, decode, from_bgra, to_rgb};
@@ -32,15 +35,17 @@ pub use settings::VideoSettings;
 
 /// The camera backend for this build.
 ///
-/// V4L2 is kernel ioctls on `/dev/videoN`, so it is Linux and nothing else.
-/// The Windows release build has to compile, and a session on a platform with
-/// no backend should offer an empty picker rather than fail to start, so the
-/// absence is a host that finds nothing. One `cfg` pair, here, keeps it out of
-/// every call site.
+/// V4L2 on Linux and Media Foundation on Windows. Anywhere else a session
+/// should still start, so the absence is a host that lists nothing and says
+/// the build is why when asked to open one. The `cfg`s are here and nowhere
+/// else, which keeps them out of every call site.
 #[cfg(target_os = "linux")]
 pub type Host = v4l_host::V4lHost;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(windows)]
+pub type Host = mf_host::MfHost;
+
+#[cfg(not(any(target_os = "linux", windows)))]
 pub type Host = devices::NoCameras;
 
 /// The screen capture backend for this build.
