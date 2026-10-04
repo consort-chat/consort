@@ -78,11 +78,18 @@ fn workspace_manifest() -> String {
     read("Cargo.toml")
 }
 
-/// One file in the repository, by its path from the root.
+/// One file in the repository, by its path from the root, with Unix line
+/// endings.
+///
+/// Normalised because a Windows checkout has CRLF by default, the GitHub
+/// runner's included, and `section` looks for a header between two `\n`s. On
+/// CRLF it found none and reported a profile that is there as missing.
 fn read(relative: &str) -> String {
     let path = repository().join(relative);
 
-    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+        .replace("\r\n", "\n")
 }
 
 /// The repository root.
