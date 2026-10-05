@@ -29,7 +29,9 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::{AppearanceSettings, EmojiSettings, PrivacySettings, SidebarSettings};
+use crate::settings::{
+    AppearanceSettings, EmojiSettings, MAX_SECTIONS, PrivacySettings, SidebarSettings, section_name,
+};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -804,6 +806,78 @@ fn set_section_folded_for(
     let mut settings = state.settings().load();
     settings.sidebar.fold(key, folded);
     state.settings().save(&settings)
+}
+
+/// Make a section of somebody's own under `space`, and hand back its key.
+///
+/// The key rather than nothing, because the caller has to fold it, drag it and
+/// put rooms in it, and all three of those are keyed.
+fn create_section_for(state: &AppState, space: &str, name: &str) -> Result<String, CommandError> {
+    let name = section_name(name).ok_or_else(refused_name)?;
+    let mut settings = state.settings().load();
+    if settings.sidebar.sections.len() >= MAX_SECTIONS {
+        return Err(CommandError::new(
+            "That is as many sections as Consort keeps. Delete one to make another.",
+            format!("the sidebar already holds {MAX_SECTIONS} custom sections"),
+        ));
+    }
+    let key = settings.sidebar.add(space, &name);
+    state.settings().save(&settings)?;
+    Ok(key)
+}
+
+/// Rename the section keyed `key`.
+fn rename_section_for(state: &AppState, key: &str, name: &str) -> Result<(), CommandError> {
+    let name = section_name(name).ok_or_else(refused_name)?;
+    let mut settings = state.settings().load();
+    if !settings.sidebar.rename(key, &name) {
+        return Err(gone(key));
+    }
+    state.settings().save(&settings)?;
+    Ok(())
+}
+
+/// Forget the section keyed `key`. Its rooms go back to Text or Voice.
+fn delete_section_for(state: &AppState, key: &str) -> Result<(), CommandError> {
+    let mut settings = state.settings().load();
+    if !settings.sidebar.remove(key) {
+        return Err(gone(key));
+    }
+    state.settings().save(&settings)?;
+    Ok(())
+}
+
+/// Put `room` in the section keyed `key`, or in none when `key` is absent.
+fn set_room_section_for(
+    state: &AppState,
+    room: &str,
+    key: Option<String>,
+) -> Result<(), CommandError> {
+    let mut settings = state.settings().load();
+    if !settings.sidebar.assign(room, key.as_deref()) {
+        return Err(gone(key.as_deref().unwrap_or_default()));
+    }
+    state.settings().save(&settings)?;
+    Ok(())
+}
+
+/// What a name the file will not hold is answered with.
+fn refused_name() -> CommandError {
+    CommandError::new(
+        "A section needs a name, and a short one.",
+        "the name was blank or longer than a heading holds".to_owned(),
+    )
+}
+
+/// What a key no section answers to is answered with.
+///
+/// Reachable from a second window that deleted the section, so it is a
+/// sentence for a person rather than an `expect`.
+fn gone(key: &str) -> CommandError {
+    CommandError::new(
+        "That section is no longer there.",
+        format!("no custom section is keyed {key}"),
+    )
 }
 
 /// Record the order somebody dragged the sidebar's sections into.
@@ -1997,6 +2071,42 @@ pub fn set_section_order(
     Ok(())
 }
 
+/// See `create_section_for`.
+#[tauri::command]
+pub fn create_section(
+    state: State<'_, AppState>,
+    space: String,
+    name: String,
+) -> Result<String, CommandError> {
+    create_section_for(&state, &space, &name)
+}
+
+/// See `rename_section_for`.
+#[tauri::command]
+pub fn rename_section(
+    state: State<'_, AppState>,
+    key: String,
+    name: String,
+) -> Result<(), CommandError> {
+    rename_section_for(&state, &key, &name)
+}
+
+/// See `delete_section_for`.
+#[tauri::command]
+pub fn delete_section(state: State<'_, AppState>, key: String) -> Result<(), CommandError> {
+    delete_section_for(&state, &key)
+}
+
+/// See `set_room_section_for`.
+#[tauri::command]
+pub fn set_room_section(
+    state: State<'_, AppState>,
+    room: String,
+    key: Option<String>,
+) -> Result<(), CommandError> {
+    set_room_section_for(&state, &room, key)
+}
+
 /// See `appearance_settings_for`.
 #[tauri::command]
 pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
@@ -2617,7 +2727,7 @@ mod tests {
         use super::*;
         use consort_audio::{Device, Direction, GateConfig};
 
-        use crate::settings::{MAX_APPLICATION_SCALE, MIN_TEXT_SCALE};
+        use crate::settings::{MAX_APPLICATION_SCALE, MAX_SECTION_NAME, MIN_TEXT_SCALE};
 
         /// A machine with one microphone and one pair of speakers.
         struct Fake;
@@ -2935,6 +3045,171 @@ mod tests {
             let sidebar = sidebar_settings_for(&state);
             assert_eq!(sidebar.folded, ["voice"]);
             assert_eq!(sidebar.order, ["voice", "text"]);
+        }
+
+        #[test]
+        fn a_section_somebody_made_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            let sections = sidebar_settings_for(&state).sections;
+            assert_eq!(sections.len(), 1);
+            assert_eq!(sections[0].key, key);
+            assert_eq!(sections[0].name, "Projects");
+            assert_eq!(sections[0].space, "!s:example.org");
+        }
+
+        #[test]
+        fn a_name_is_stored_trimmed() {
+            let (_dir, state, _) = state();
+
+            create_section_for(&state, "!s:example.org", "  Projects  ").expect("create");
+
+            assert_eq!(sidebar_settings_for(&state).sections[0].name, "Projects");
+        }
+
+        #[test]
+        fn a_section_with_no_name_is_refused_rather_than_stored_blank() {
+            let (_dir, state, _) = state();
+
+            let error = create_section_for(&state, "!s:example.org", "   ").expect_err("refused");
+
+            assert!(
+                !error.message().is_empty(),
+                "a refusal has to say something"
+            );
+            assert!(sidebar_settings_for(&state).sections.is_empty());
+        }
+
+        #[test]
+        fn a_name_too_long_for_a_heading_is_refused() {
+            let (_dir, state, _) = state();
+            let long = "n".repeat(MAX_SECTION_NAME + 1);
+
+            create_section_for(&state, "!s:example.org", &long).expect_err("refused");
+
+            assert!(sidebar_settings_for(&state).sections.is_empty());
+        }
+
+        #[test]
+        fn sections_stop_at_a_bound_rather_than_growing_without_end() {
+            let (_dir, state, _) = state();
+            for _ in 0..MAX_SECTIONS {
+                create_section_for(&state, "!s:example.org", "Projects").expect("create");
+            }
+
+            create_section_for(&state, "!s:example.org", "One too many").expect_err("refused");
+
+            assert_eq!(sidebar_settings_for(&state).sections.len(), MAX_SECTIONS);
+        }
+
+        #[test]
+        fn a_rename_is_what_loads_back() {
+            let (_dir, state, _) = state();
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            rename_section_for(&state, &key, " Clients ").expect("rename");
+
+            assert_eq!(sidebar_settings_for(&state).sections[0].name, "Clients");
+        }
+
+        #[test]
+        fn renaming_a_section_that_is_gone_is_refused() {
+            let (_dir, state, _) = state();
+
+            rename_section_for(&state, "custom-1", "Clients").expect_err("refused");
+        }
+
+        #[test]
+        fn renaming_a_section_to_nothing_is_refused() {
+            let (_dir, state, _) = state();
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            rename_section_for(&state, &key, "  ").expect_err("refused");
+
+            assert_eq!(sidebar_settings_for(&state).sections[0].name, "Projects");
+        }
+
+        #[test]
+        fn a_deleted_section_is_gone_after_a_reload() {
+            let (_dir, state, _) = state();
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            delete_section_for(&state, &key).expect("delete");
+
+            assert!(sidebar_settings_for(&state).sections.is_empty());
+        }
+
+        #[test]
+        fn deleting_a_section_that_is_gone_is_refused() {
+            let (_dir, state, _) = state();
+
+            delete_section_for(&state, "custom-1").expect_err("refused");
+        }
+
+        #[test]
+        fn a_room_put_in_a_section_is_what_loads_back() {
+            let (_dir, state, _) = state();
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            set_room_section_for(&state, "!r:example.org", Some(key.clone())).expect("assign");
+
+            assert_eq!(
+                sidebar_settings_for(&state).sections[0].rooms,
+                ["!r:example.org"]
+            );
+        }
+
+        #[test]
+        fn taking_a_room_out_of_its_section_is_what_loads_back() {
+            let (_dir, state, _) = state();
+            let key = create_section_for(&state, "!s:example.org", "Projects").expect("create");
+            set_room_section_for(&state, "!r:example.org", Some(key)).expect("assign");
+
+            set_room_section_for(&state, "!r:example.org", None).expect("unassign");
+
+            assert!(sidebar_settings_for(&state).sections[0].rooms.is_empty());
+        }
+
+        #[test]
+        fn putting_a_room_in_a_section_that_is_gone_is_refused() {
+            let (_dir, state, _) = state();
+
+            set_room_section_for(&state, "!r:example.org", Some("custom-1".to_owned()))
+                .expect_err("refused");
+        }
+
+        #[test]
+        fn making_a_section_leaves_a_folded_one_folded() {
+            // The three preferences share a key in one file, and a write that
+            // took the whole section would be a new section that unfolded
+            // something.
+            let (_dir, state, _) = state();
+            set_section_folded_for(&state, "voice", true).expect("save");
+
+            create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            assert_eq!(sidebar_settings_for(&state).folded, ["voice"]);
+        }
+
+        #[test]
+        fn making_a_section_leaves_the_audio_section_alone() {
+            // One file, several screens. See the picker's own version of this.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            create_section_for(&state, "!s:example.org", "Projects").expect("create");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+            assert_eq!(sidebar_settings_for(&state).sections.len(), 1);
         }
 
         #[test]
