@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { asCommandError, screenView, selfView } from "./api";
+import { asCommandError, screenView, selfView, theirView } from "./api";
 
 /**
  * How long to wait between frames, in milliseconds.
@@ -43,33 +43,83 @@ const ASK: Record<Sending, () => Promise<string | null>> = {
 export function usePicture(of: Sending): string | null {
   const [picture, setPicture] = useState<string | null>(null);
 
-  useEffect(() => {
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function draw() {
-      try {
-        const next = await ASK[of]();
-        if (stopped) return;
-        setPicture(next);
-      } catch (raw) {
-        // Once, and then stop. Twelve of these a second is not a report.
-        console.error(
-          `could not read the ${of} picture`,
-          asCommandError(raw).detail,
-        );
-        return;
-      }
-      timer = setTimeout(draw, EVERY);
-    }
-
-    void draw();
-
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [of]);
+  useEffect(() => poll(() => ASK[of](), setPicture, of), [of]);
 
   return picture;
+}
+
+/**
+ * The newest frame of what somebody else in the call is sending, for as long as
+ * this is mounted.
+ *
+ * `usePicture`'s twin, null on the same terms and polled the same way. The one
+ * difference is `bound`: the long edge in pixels of the box this is being drawn
+ * into, which Rust samples the frame to. Changing it restarts the poll, so a
+ * card that grew asks for a bigger picture on its next frame rather than on its
+ * next call.
+ *
+ * That argument is the seam issue #167 is built on. A cap somebody chooses goes
+ * over the top of it, and the same number is what tells the SFU which layer to
+ * send: `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
+ */
+export function useTheirPicture(
+  userId: string,
+  of: Sending,
+  bound: number,
+): string | null {
+  const [picture, setPicture] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      poll(
+        () => theirView(userId, of, bound),
+        setPicture,
+        `${userId} ${of}`,
+      ),
+    [userId, of, bound],
+  );
+
+  return picture;
+}
+
+/**
+ * Keep asking `ask` and handing what comes back to `draw`, until the function
+ * this answers with is called.
+ *
+ * Shared by both hooks above so there is one answer to how often a picture is
+ * asked for and what happens when an ask fails.
+ *
+ * Chained rather than on an interval, so an answer slower than `EVERY` delays
+ * the next ask instead of queueing one behind it.
+ */
+function poll(
+  ask: () => Promise<string | null>,
+  draw: (picture: string | null) => void,
+  what: string,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  async function next() {
+    try {
+      const picture = await ask();
+      if (stopped) return;
+      draw(picture);
+    } catch (raw) {
+      // Once, and then stop. Twelve of these a second is not a report.
+      console.error(
+        `could not read the ${what} picture`,
+        asCommandError(raw).detail,
+      );
+      return;
+    }
+    timer = setTimeout(next, EVERY);
+  }
+
+  void next();
+
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
 }

@@ -52,6 +52,7 @@ use crate::showing::PublishedVideo;
 use crate::thread::AbortOnDrop;
 use crate::transport::{CallSession, CallTransport, Roster};
 use crate::trouble::{Faults, is_the_end, what_it_says};
+use crate::watching::{self, Eyes, Kind};
 use tokio::sync::{broadcast, watch};
 
 /// A MatrixRTC call over LiveKit.
@@ -215,18 +216,19 @@ impl LiveKitTransport {
     }
 }
 
-/// One participant's audio, and the track it is being pulled from.
+/// One stream being pulled out of the call, and the track it comes from.
 ///
-/// The track handle is kept for one job: telling this stream apart from a
-/// later one for the same person. Being in the map is not evidence that
-/// anything is playing, and there are two ways it stops being true without
-/// anybody leaving the call. See [`Playing::still_going`].
-struct Playing {
+/// Audio or a picture: both are a task reading a frame stream, and both stop
+/// being true in the same two ways. The track handle is kept for one job:
+/// telling this stream apart from a later one for the same person. Being in
+/// the map is not evidence that anything is arriving. See
+/// [`Pulling::still_going`].
+struct Pulling {
     track: Arc<dyn RemoteTrackHandle>,
     pump: AbortOnDrop,
 }
 
-impl Playing {
+impl Pulling {
     /// Whether this is still pulling the engine's current track for its owner.
     ///
     /// `current` is what `remote_track` answers for them now. Two things make
@@ -273,7 +275,10 @@ pub struct LiveKitSession {
     /// A `RefCell` rather than a `Mutex` because a session never leaves the
     /// call thread. That is not a shortcut, it is the same constraint that put
     /// the call on a thread of its own: `Call::join` drives `!Send` futures.
-    playing: RefCell<HashMap<String, Playing>>,
+    playing: RefCell<HashMap<String, Pulling>>,
+    /// One task per remote picture being pulled, keyed by membership and kind.
+    /// Two entries for somebody sending a camera and a screen at once.
+    watching: RefCell<HashMap<(String, Kind), Pulling>>,
     /// What this session last said about its own audio.
     ///
     /// LiveKit never delivers a data message back to whoever published it, and
@@ -365,6 +370,7 @@ impl CallTransport for LiveKitTransport {
             room_id: room_id.to_owned(),
             microphone: OnceLock::new(),
             playing: RefCell::default(),
+            watching: RefCell::default(),
             saying: watch::channel(SelfAudio::default()).0,
             joined_at: MilliSecondsSinceUnixEpoch::now().0.into(),
         })
@@ -716,7 +722,7 @@ impl CallSession for LiveKitSession {
             tracing::debug!(member_id = %who, "playing a participant");
             playing.insert(
                 who,
-                Playing {
+                Pulling {
                     track,
                     pump: AbortOnDrop(pump),
                 },
@@ -726,6 +732,90 @@ impl CallSession for LiveKitSession {
         Attached {
             playing: playing.len(),
             pending,
+        }
+    }
+
+    fn watch(&self, eyes: &Eyes) {
+        // Asked of the engine rather than tracked from events, for the reason
+        // `listen` asks: this is a statement of what should currently be true
+        // rather than a tally that can drift.
+        let participants = self.call.engine().participants();
+        let mut watching = self.watching.borrow_mut();
+
+        for kind in [Kind::Camera, Kind::Screen] {
+            let wanted = watching::wanted(&participants, kind);
+            let mine = |(who, held): &(String, Kind)| (*held == kind).then(|| who.clone());
+
+            // Before the diff, for the reason the audio sweep is before its
+            // own: a finished pump left in the map reads as a picture, and the
+            // track somebody published on coming back would never be pulled.
+            let stale: Vec<String> = watching
+                .iter()
+                .filter_map(|(key, held)| {
+                    let who = mine(key)?;
+                    let current = self.call.remote_track(&who, kind.stream());
+                    (!held.still_going(current.as_ref())).then_some(who)
+                })
+                .collect();
+            for who in stale {
+                watching.remove(&(who.clone(), kind));
+                eyes.forget(&who, kind);
+                tracing::debug!(member_id = %who, ?kind, "a participant's picture went stale");
+            }
+
+            let held: BTreeSet<String> = watching.keys().filter_map(mine).collect();
+            let (start, stop) = hearing::changes(&held, &wanted);
+
+            for who in stop {
+                // Forgotten as well as dropped. Somebody who has just covered
+                // their camera should not be left drawn by the last frame it
+                // took.
+                watching.remove(&(who.clone(), kind));
+                eyes.forget(&who, kind);
+                tracing::debug!(member_id = %who, ?kind, "stopped pulling a picture");
+            }
+
+            for who in start {
+                let Some(track) = self.call.remote_track(&who, kind.stream()) else {
+                    // The roster knows about the stream before the transport
+                    // has subscribed to it, which is the ordinary order of
+                    // events. The next roster change asks again.
+                    continue;
+                };
+                let Some(mut frames) = track.video_frames() else {
+                    tracing::warn!(member_id = %who, ?kind, "a video track with no frames to pull");
+                    continue;
+                };
+                let Some(user_id) = participants
+                    .iter()
+                    .find(|member| member.member_id == who)
+                    .map(|member| member.user_id.clone())
+                else {
+                    continue;
+                };
+
+                let eyes = Arc::clone(eyes);
+                let member_id = who.clone();
+                let pump = tokio::task::spawn_local(async move {
+                    while let Some(frame) = frames.next().await {
+                        eyes.see(&member_id, &user_id, kind, watching::incoming(frame));
+                    }
+                    // The stream ended, so the track went away rather than the
+                    // camera being pointed at something dull. A still that
+                    // outlived its track is a picture of something that has
+                    // stopped.
+                    eyes.forget(&member_id, kind);
+                });
+
+                tracing::debug!(member_id = %who, ?kind, "pulling a participant's picture");
+                watching.insert(
+                    (who, kind),
+                    Pulling {
+                        track,
+                        pump: AbortOnDrop(pump),
+                    },
+                );
+            }
         }
     }
 

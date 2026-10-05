@@ -29,6 +29,7 @@ use crate::failure::CallFailure;
 use crate::hearing::{Attached, Ears};
 use crate::publish::PublishedAudio;
 use crate::showing::PublishedVideo;
+use crate::watching::Eyes;
 
 /// Something that can put this session into a call.
 ///
@@ -179,6 +180,19 @@ pub trait CallSession {
     /// failure either: a participant whose stream has not arrived yet is the
     /// ordinary case. It is reported because nothing else need ever say so.
     fn listen(&self, ears: &Ears) -> Attached;
+
+    /// Pull everybody else's camera and shared screen into `eyes`, and keep
+    /// doing it as they switch them on and off.
+    ///
+    /// [`listen`](Self::listen)'s sibling, driven by the same roster change and
+    /// idempotent on the same terms. Separate from it because the two ends are
+    /// different: audio is mixed into a sound card as it arrives, and a picture
+    /// is a still the window asks for when it draws one.
+    ///
+    /// Nothing is reported. A video track that has not arrived needs no chase:
+    /// the roster is consulted again whenever anybody switches anything on, and
+    /// a square with no picture in it is what a camera looks like anyway.
+    fn watch(&self, eyes: &Eyes);
 
     /// Start watching who is in the call.
     ///

@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 
 import { NOBODY, type Call, type Participant } from "../lib/api";
@@ -13,6 +14,7 @@ import { PersonMenu } from "./PersonMenu";
 import { ScreenStage } from "./ScreenStage";
 import { ScreenTile } from "./ScreenTile";
 import { SelfPicture } from "./SelfPicture";
+import { TheirPicture } from "./TheirPicture";
 import "./CallCard.css";
 
 /**
@@ -28,6 +30,26 @@ type Size = "card" | "expanded" | "full";
  * count. What the card is wide enough for at each size it floats at.
  */
 const PEEKING: Record<"card" | "expanded", number> = { card: 4, expanded: 7 };
+
+/**
+ * How many pixels to ask a remote picture for, by where it is being drawn.
+ *
+ * Twice the width the box is drawn at while the card floats, so a display at
+ * two device pixels per CSS pixel gets a true pixel for each one, and the
+ * ceiling once it fills the window, where twice would be past it. The squares
+ * are all one size and the stage is three, which is why the stage's are named
+ * after the card's.
+ *
+ * The table and the ceiling above it:
+ * `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`. Issue
+ * #167 replaces this with a measured box and a cap somebody chose.
+ */
+const BOUND: Record<Size | "tile", number> = {
+  tile: 320,
+  card: 480,
+  expanded: 960,
+  full: 1920,
+};
 
 /**
  * Arrows into the corners, or back out of them.
@@ -172,13 +194,33 @@ export function CallCard({
     are filtered out of the rest, or one share would be two squares.
   */
   const screens = [
-    ...(sharing === null ? [] : [{ key: selfId, label: sharing, mine: true }]),
+    ...(sharing === null
+      ? []
+      : [
+          {
+            key: selfId,
+            label: sharing,
+            picture: () => <SelfPicture of="screen" />,
+          },
+        ]),
     ...people
       .filter((person) => person.id !== selfId && person.screen === true)
       .map((person) => ({
         key: person.id,
         label: `${person.name}'s screen`,
-        mine: false,
+        /*
+          A function of the size, because the same share is drawn at two of
+          them: across the stage and as a square in the strip. Ours takes no
+          size, being one local capture bounded where it is sampled.
+        */
+        picture: (bound: number) => (
+          <TheirPicture
+            userId={person.id}
+            name={person.name}
+            of="screen"
+            bound={bound}
+          />
+        ),
       })),
   ];
 
@@ -197,11 +239,12 @@ export function CallCard({
   /*
     Which screen the stage is showing, and which are left waiting under it.
 
-    Ours by default, because it is the only share that can draw a picture:
-    nothing carries a remote frame into this window yet, so staging anybody
-    else's would put a monitor glyph where a live desktop could be. A tile that
-    was clicked wins until that share stops, and `find` is what hands the stage
-    back when it does.
+    Ours by default, which ADR-0009 chose because it was the only share that
+    could draw a picture. That reason has expired with #70 and the rule has not
+    changed: the first screen listed still wins, and picking the newest instead
+    needs the arrival order the roster does not carry. A tile that was clicked
+    wins until that share stops, and `find` is what hands the stage back when
+    it does.
   */
   const [picked, setPicked] = useState<string | null>(null);
   const staged = screens.find((one) => one.key === picked) ?? screens[0] ?? null;
@@ -278,20 +321,37 @@ export function CallCard({
         live
         layout={layout}
         /*
-          The camera in the square the avatar is in, and only in our own: there
-          is one local capture and no path from anybody else's into this window
-          yet. Passed as a node rather than a URL so that a frame arriving
-          redraws it alone, which is the trap #142 found by holding the picture
-          here.
+          The camera in the square the avatar is in. Passed as a node rather
+          than a URL so that a frame arriving redraws it alone, which is the
+          trap #142 found by holding the picture here.
         */
-        picture={
-          participant.id === selfId && cameraOn ? (
-            <SelfPicture of="camera" />
-          ) : undefined
-        }
+        picture={camera(participant)}
         onOpen={(at) => setOpened({ person: participant, at })}
       />
     );
+  }
+
+  /**
+   * Whichever camera belongs in this person's square, if any.
+   *
+   * Ours comes from the local capture and everybody else's from the call,
+   * which is the whole of #69 from out here. Theirs is drawn on the roster's
+   * word: `camera` is only ever true of somebody publishing one unmuted, and
+   * the picture answers nothing until its first frame either way.
+   */
+  function camera(participant: Participant): ReactNode {
+    if (participant.id === selfId) {
+      return cameraOn ? <SelfPicture of="camera" /> : undefined;
+    }
+
+    return participant.camera === true ? (
+      <TheirPicture
+        userId={participant.id}
+        name={participant.name}
+        of="camera"
+        bound={BOUND.tile}
+      />
+    ) : undefined;
   }
 
   /** Back to the floating card, or out to the size beyond it. */
@@ -439,7 +499,7 @@ export function CallCard({
       {staged !== null && (
         <ScreenStage
           label={staged.label}
-          mine={staged.mine}
+          picture={staged.picture(BOUND[size])}
           full={full}
           onToggle={() =>
             setSize((current) => (current === "full" ? "card" : "full"))
@@ -456,7 +516,7 @@ export function CallCard({
             <ScreenTile
               key={shared.key}
               label={shared.label}
-              mine={shared.mine}
+              picture={shared.picture(BOUND.tile)}
               onPick={() => setPicked(shared.key)}
             />
           ))}

@@ -13,7 +13,7 @@ use consort_audio::{
     AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, GateConfig, catalogue,
     choose,
 };
-use consort_call::{LiveKitTransport, SelfScreen, SelfVideo};
+use consort_call::{Kind, LiveKitTransport, SelfScreen, SelfVideo};
 use consort_matrix::{
     BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
 };
@@ -1517,6 +1517,21 @@ pub fn self_view(state: State<'_, AppState>) -> Option<String> {
 #[tauri::command]
 pub fn screen_view(state: State<'_, AppState>) -> Option<String> {
     state.screen_view()
+}
+
+/// The newest picture somebody else in the call is sending, as a `data:` URL.
+///
+/// `bound` is the long edge, in pixels, of the box it is being drawn into: a
+/// square on the card asks for little and the stage asks for a lot. See
+/// `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`.
+#[tauri::command]
+pub fn their_view(
+    state: State<'_, AppState>,
+    user_id: String,
+    kind: Kind,
+    bound: u32,
+) -> Option<String> {
+    state.their_view(&user_id, kind, bound)
 }
 
 #[tauri::command]

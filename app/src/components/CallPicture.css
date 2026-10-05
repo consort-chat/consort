@@ -1,11 +1,16 @@
 /*
-  A still of what this session is sending, filling the box it was put in.
+  A still of what somebody in the call is sending, filling the box it was put
+  in.
+
+  One stylesheet for our own picture and everybody else's, because they are the
+  same thing in the same square: `SelfPicture` and `TheirPicture` differ only
+  in where the frames come from.
 
   Absolute, so it covers whatever is behind it: a face in `CallFace` waits
   under the camera until the first frame arrives. Its host owns the shape and
   the clipping, which is why the radius is inherited rather than set.
 */
-.self-picture {
+.call-picture {
   position: absolute;
   inset: 0;
   /* Not `inset` alone: a replaced element takes its intrinsic size from the
@@ -17,17 +22,11 @@
 }
 
 /*
-  Mirrored, which is what every self view does and what people expect of
-  anything standing in for a mirror: raising your left hand should raise the
-  hand on the left. Only the preview is flipped. What the call receives is the
-  frame as the camera read it.
-
   `cover` so a camera that negotiated 4:3 fills the square rather than
   letterboxing inside it. A cropped face is still a face.
 */
-.self-picture[data-of="camera"] {
+.call-picture[data-of="camera"] {
   object-fit: cover;
-  transform: scaleX(-1);
 }
 
 /*
@@ -35,6 +34,17 @@
   square it is drawn in, and cropping it would hide the half of somebody's
   slides that happens to be on the right.
 */
-.self-picture[data-of="screen"] {
+.call-picture[data-of="screen"] {
   object-fit: contain;
+}
+
+/*
+  Mirrored, which is what every self view does and what people expect of
+  anything standing in for a mirror: raising your left hand should raise the
+  hand on the left. Only our own preview, and only the preview. What the call
+  receives is the frame as the camera read it, and somebody else's camera is
+  not a mirror of anything.
+*/
+.call-picture[data-mine="true"][data-of="camera"] {
+  transform: scaleX(-1);
 }

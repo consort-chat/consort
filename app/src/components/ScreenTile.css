@@ -49,7 +49,7 @@
 
 /*
   The square, holding the glyph and whatever picture covers it. `relative`
-  because the picture is laid over the glyph: see `SelfPicture.css`.
+  because the picture is laid over the glyph: see `CallPicture.css`.
 */
 .call-screen__stage {
   position: relative;

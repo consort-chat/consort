@@ -17,7 +17,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 const usePicture = vi.hoisted(() => vi.fn());
-vi.mock("../lib/usePicture", () => ({ usePicture }));
+const useTheirPicture = vi.hoisted(() => vi.fn());
+vi.mock("../lib/usePicture", () => ({ usePicture, useTheirPicture }));
 
 import { CallCard } from "./CallCard";
 import type { Call, Participant } from "../lib/api";
@@ -116,6 +117,7 @@ function stubLayout(box: { left: number; top: number; width?: number }) {
 beforeEach(() => {
   resetAvatarCache();
   usePicture.mockReset().mockReturnValue(null);
+  useTheirPicture.mockReset().mockReturnValue(null);
   memberAvatar.mockReset().mockResolvedValue(null);
   audioSettings.mockReset().mockResolvedValue(SETTINGS);
   setPersonVolume.mockReset().mockResolvedValue(undefined);
@@ -691,6 +693,166 @@ describe("your own camera on the card", () => {
   });
 });
 
+describe("what other people are sending", () => {
+  const THEIRS = "data:image/jpeg;base64,cccc";
+
+  function filming(id: string, name: string): Participant {
+    return { id, name, muted: false, camera: true };
+  }
+
+  function sharer(id: string, name: string): Participant {
+    return { id, name, muted: false, screen: true };
+  }
+
+  function face(name: string) {
+    return screen.getByRole("button", { name: new RegExp(name) });
+  }
+
+  function stage() {
+    return screen.getByRole("button", { name: /, fill the window$/ });
+  }
+
+  it("draws somebody else's camera in their own square", () => {
+    // The whole of #69 from out here. Both halves of the call were built and
+    // neither end ever asked for the other's picture, so two people with
+    // cameras on saw a pair of avatars.
+    useTheirPicture.mockReturnValue(THEIRS);
+
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          filming("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+
+    expect(
+      within(face("Ada")).getByRole("img", { name: "Ada's camera" }),
+    ).toHaveAttribute("src", THEIRS);
+  });
+
+  it("asks for nothing from somebody whose camera is off", () => {
+    // The roster's word, and the only word there is: a square is not a place
+    // to go looking for a stream nobody published.
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          person("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+
+    expect(useTheirPicture).not.toHaveBeenCalled();
+  });
+
+  it("asks for a square's worth of pixels and no more", () => {
+    // A face is seventy pixels across on the card. Asking for the stage's
+    // picture per face would be a core of somebody's machine spent on tiles
+    // nobody can read anything off.
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          filming("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@ada:example.org",
+      "camera",
+      320,
+    );
+  });
+
+  it("keeps our own square on the local capture", () => {
+    // There is one camera open on this machine and the SFU does not send it
+    // back. Reading our own square off the call would be a square that waits
+    // forever.
+    render(
+      card(inCall([filming("@bob:example.org", "Bob")]), undefined, {
+        cameraOn: true,
+      }),
+    );
+
+    expect(usePicture).toHaveBeenCalledWith("camera");
+    expect(useTheirPicture).not.toHaveBeenCalled();
+  });
+
+  it("draws somebody else's screen on the stage", () => {
+    // #70's half. The stage was ours by default because it was the only share
+    // that could draw anything.
+    useTheirPicture.mockReturnValue(THEIRS);
+
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+
+    expect(
+      within(stage()).getByRole("img", { name: "Ada's screen" }),
+    ).toHaveAttribute("src", THEIRS);
+  });
+
+  it("asks for a bigger picture once the stage fills the window", async () => {
+    // Issue #165 in the shape it takes for somebody else's share: the stage
+    // goes from a couple of hundred pixels to the whole window, and a picture
+    // made for the small one is unreadable blown up.
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+      ),
+    );
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@ada:example.org",
+      "screen",
+      480,
+    );
+
+    await userEvent.click(stage());
+
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@ada:example.org",
+      "screen",
+      1920,
+    );
+  });
+
+  it("asks for only a square's worth for a screen waiting under the stage", () => {
+    // Two shares, so one of them is in the strip. A tile down there is the
+    // same square a face is in and should cost the same.
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+          sharer("@cyd:example.org", "Cyd"),
+        ]),
+      ),
+    );
+
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@ada:example.org",
+      "screen",
+      480,
+    );
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@cyd:example.org",
+      "screen",
+      320,
+    );
+  });
+});
+
 describe("screens being shared on the card", () => {
   const PICTURE = "data:image/jpeg;base64,bbbb";
 
@@ -790,11 +952,18 @@ describe("screens being shared on the card", () => {
     expect(strip()).toBe(null);
   });
 
-  it("asks for no picture for anybody else's screen", () => {
-    // One local capture, and no path from anybody else's into this window.
+  it("reads somebody else's screen off the call rather than the local capture", () => {
+    // There is one capture on this machine and the SFU does not send it back.
+    // Drawing anybody else's from it would be this client showing its own
+    // desktop under somebody else's name.
     render(card(inCall([sharer("@ada:example.org", "Ada")])));
 
     expect(usePicture).not.toHaveBeenCalled();
+    expect(useTheirPicture).toHaveBeenCalledWith(
+      "@ada:example.org",
+      "screen",
+      480,
+    );
   });
 
   it("keeps the people out of the screens and the screens out of the people", () => {
@@ -848,9 +1017,10 @@ describe("choosing which screen gets the stage", () => {
   }
 
   it("stages this session's own share before anybody else's", () => {
-    // It is the only share that can draw a picture: nothing carries a remote
-    // frame into this window yet. Staging a monitor glyph over a live desktop
-    // would be the card choosing the emptier of the two.
+    // The first screen listed, which is ours while we are sharing. ADR-0009
+    // chose it because it was the only one that could draw a picture and
+    // ADR-0014 has retired that reason; staging the newest instead needs the
+    // arrival order the roster does not carry.
     render(two());
 
     expect(stage()).toHaveTextContent("DP-0");
