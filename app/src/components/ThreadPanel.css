@@ -127,10 +127,16 @@
   align-items: end;
   padding: 0 var(--space-6) var(--space-4);
   /*
-    The same height for the control beside the box as the room's composer
-    gives its own, worked out the same way. See `.timeline__composer`, which
-    explains the arithmetic; two boxes on one screen whose controls were
-    different heights would read as two different kinds of thing.
+    Set on the row rather than on the two controls that want it, because the
+    height below is built from `1lh` and every control has to resolve that
+    against the same size.
+  */
+  font-size: var(--text-sm);
+  /*
+    The same height for all three controls as the room's composer gives its
+    own, worked out the same way. See `.timeline__composer`, which explains
+    the arithmetic; two boxes on one screen whose controls were different
+    heights would read as two different kinds of thing.
   */
   --composer-control: calc(1lh + 2 * (var(--space-3) + 1px));
 }
@@ -149,19 +155,20 @@
 }
 
 .thread__draft {
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
   background: var(--surface-raised);
   border: 1px solid var(--line-subtle);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--text-sm);
   /*
     Grows with what is typed, up to a point, then scrolls. The cap is lower
     than the room's: this column is narrow, and a box that took half of it
     would leave the thread it is answering off the top of the panel.
   */
   field-sizing: content;
+  /* What one row already comes to, pinned rather than left to agree by luck. */
+  min-height: var(--composer-control);
   max-height: 25vh;
   resize: none;
 }
@@ -173,13 +180,17 @@
 }
 
 .thread__send {
-  padding: var(--space-2) var(--space-3);
+  min-height: var(--composer-control);
+  padding: var(--space-3);
   background: var(--violet);
-  border: none;
+  /*
+    Transparent rather than absent, so this spends the same pixel on a border
+    that the two bordered surfaces beside it do.
+  */
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font: inherit;
-  font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
   transition: background var(--duration-fast) ease;
