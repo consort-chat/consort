@@ -20,12 +20,19 @@ function everyRule(): readonly string[] {
   );
 }
 
-/** The control a section heading now holds, on its own. */
-function foldControl(): HTMLElement {
-  const { container } = render(
-    <button type="button" className="channels__fold" />,
-  );
+/** One of the controls a section heading now holds, on its own. */
+function control(name: string): HTMLElement {
+  const { container } = render(<button type="button" className={name} />);
   return container.firstElementChild as HTMLElement;
+}
+
+/** The text of one rule, which is where a length can still be read as written. */
+function rule(selector: string): string {
+  const matching = everyRule().filter((one) =>
+    one.startsWith(`${selector} {`),
+  );
+  expect(matching).toHaveLength(1);
+  return matching.join("");
 }
 
 describe("the control that folds a section away", () => {
@@ -34,19 +41,16 @@ describe("the control that folds a section away", () => {
     // floor below at the ordinary size and is wrong at 150%. Read off the rule
     // rather than the element, because jsdom resolves a `rem` to pixels before
     // `getComputedStyle` can be asked which it was.
-    const rule = everyRule().filter((one) =>
-      one.startsWith(".channels__fold {"),
-    );
-
-    expect(rule).toHaveLength(1);
-    expect(rule.join("")).toMatch(/min-height:\s*[\d.]+rem/);
+    expect(rule(".channels__fold")).toMatch(/min-height:\s*[\d.]+rem/);
   });
 
   it("is big enough to hit at the ordinary text size", () => {
     // The heading used to be a word. Now it is something to press, and this
     // repository has been under 24 by 24 three times (#82, and #102 twice).
     // jsdom resolves the `rem` above against a 16px root, so this is pixels.
-    const height = parseFloat(getComputedStyle(foldControl()).minHeight);
+    const height = parseFloat(
+      getComputedStyle(control("channels__fold")).minHeight,
+    );
 
     expect(height).toBeGreaterThanOrEqual(FLOOR);
   });
@@ -57,11 +61,29 @@ describe("the control that folds a section away", () => {
     // still draws every channel in it. Read off the rule, because jsdom
     // answers `display: none` for a hidden element either way and so cannot
     // tell the two apart.
-    const rule = everyRule().filter((one) =>
-      one.startsWith(".channels__list[hidden] {"),
-    );
+    expect(rule(".channels__list[hidden]")).toContain("display: none");
+  });
+});
 
-    expect(rule).toHaveLength(1);
-    expect(rule.join("")).toContain("display: none");
+describe("the handle that moves a section", () => {
+  it("is big enough to take hold of at the ordinary text size", () => {
+    // The same floor the fold control clears, for the same reason. A grip is
+    // the smallest thing in this column and the one most worth aiming at.
+    const style = getComputedStyle(control("channels__grip"));
+
+    expect(parseFloat(style.minHeight)).toBeGreaterThanOrEqual(FLOOR);
+    expect(parseFloat(style.minWidth)).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("measures itself against the text size rather than in pixels", () => {
+    expect(rule(".channels__grip")).toMatch(/min-height:\s*[\d.]+rem/);
+    expect(rule(".channels__grip")).toMatch(/min-width:\s*[\d.]+rem/);
+  });
+
+  it("is visible without being hovered", () => {
+    // A control revealed only under the pointer is one a keyboard finds by
+    // accident and a reader of the screen never sees at all.
+    expect(parseFloat(getComputedStyle(control("channels__grip")).opacity))
+      .toBeGreaterThan(0);
   });
 });

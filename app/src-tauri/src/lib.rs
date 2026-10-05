@@ -332,6 +332,7 @@ pub fn run() {
             commands::set_emoji_tone,
             commands::sidebar_settings,
             commands::set_section_folded,
+            commands::set_section_order,
             commands::appearance_settings,
             commands::set_appearance_settings,
             commands::preview_application_scale,

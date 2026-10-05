@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,7 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 // than only the ones about folding, because every render reaches it.
 const sidebarSettings = vi.hoisted(() => vi.fn());
 const setSectionFolded = vi.hoisted(() => vi.fn());
+const setSectionOrder = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
@@ -24,6 +25,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPersonVolume,
   sidebarSettings,
   setSectionFolded,
+  setSectionOrder,
 }));
 
 import { ChannelList } from "./ChannelList";
@@ -119,8 +121,9 @@ describe("ChannelList", () => {
     // the menu, because any click on a name reaches it.
     audioSettings.mockReset().mockResolvedValue(SETTINGS);
     setPersonVolume.mockReset().mockResolvedValue(undefined);
-    sidebarSettings.mockReset().mockResolvedValue({ folded: [] });
+    sidebarSettings.mockReset().mockResolvedValue({ folded: [], order: [] });
     setSectionFolded.mockReset().mockResolvedValue(undefined);
+    setSectionOrder.mockReset().mockResolvedValue(undefined);
   });
 
   /** Render one space's channels, with the props every test shares. */
@@ -1492,7 +1495,7 @@ describe("ChannelList", () => {
     it("draws a section the settings file says is folded", async () => {
       // The whole point of writing it down. A fold that came back open is the
       // preference not being remembered.
-      sidebarSettings.mockResolvedValue({ folded: ["voice"] });
+      sidebarSettings.mockResolvedValue({ folded: ["voice"], order: [] });
       both();
 
       await waitFor(() =>
@@ -1511,7 +1514,7 @@ describe("ChannelList", () => {
     });
 
     it("unfolds a folded one, and writes that down too", async () => {
-      sidebarSettings.mockResolvedValue({ folded: ["voice"] });
+      sidebarSettings.mockResolvedValue({ folded: ["voice"], order: [] });
       both();
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
@@ -1580,6 +1583,283 @@ describe("ChannelList", () => {
           expect.stringContaining("remember"),
           expect.anything(),
         ),
+      );
+    });
+  });
+  describe("dragging a section into a different order", () => {
+    /** One of each kind, so an order is something that can be read off. */
+    function both() {
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+    }
+
+    /** The headings in the order they are drawn. */
+    function order(): string[] {
+      return screen
+        .getAllByRole("region")
+        .map((section) => section.getAttribute("aria-label") ?? "");
+    }
+
+    /** The handle in a section's heading. */
+    function grip(label: string): HTMLElement {
+      return screen.getByRole("button", { name: `Move ${label}` });
+    }
+
+    /** The section itself, which is what a drag is dropped on. */
+    function region(label: string): HTMLElement {
+      return screen.getByRole("region", { name: label });
+    }
+
+    /**
+     * A clipboard for a drag, which jsdom does not provide.
+     *
+     * It really stores, so that a drag started on a handle is carried by
+     * whatever that handle wrote rather than by what the test wanted. `types`
+     * is a getter for the same reason: it is the half readable mid-drag, and
+     * it is what decides whether a drop is offered at all.
+     */
+    function carrying(payload: Record<string, string> = {}) {
+      return {
+        get types() {
+          return Object.keys(payload);
+        },
+        getData: (type: string) => payload[type] ?? "",
+        setData: (type: string, value: string) => {
+          payload[type] = value;
+        },
+        effectAllowed: "all",
+        dropEffect: "none",
+      };
+    }
+
+    /** Drag one section onto another, by heading, the way a pointer would. */
+    function drag(from: string, onto: string) {
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip(from), { dataTransfer });
+      fireEvent.dragOver(region(onto), { dataTransfer });
+      fireEvent.drop(region(onto), { dataTransfer });
+    }
+
+    it("draws text above voice until somebody says otherwise", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(order()).toEqual(["Text", "Voice"]);
+    });
+
+    it("draws the order the settings file holds", async () => {
+      // The whole point of writing it down. Sections back where they started
+      // is the drag not being remembered.
+      sidebarSettings.mockResolvedValue({ folded: [], order: ["voice", "text"] });
+      both();
+
+      await waitFor(() => expect(order()).toEqual(["Voice", "Text"]));
+    });
+
+    it("moves a section dropped on another one into its place", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+    });
+
+    it("writes the whole new order down", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+    });
+
+    it("ignores a drag carrying something that is not a section", async () => {
+      // A drag can come from outside the application, and the sidebar is what
+      // it would otherwise rearrange.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying({ "text/plain": "a file" });
+
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+      fireEvent.drop(region("Text"), { dataTransfer });
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("moves a section up with the arrow keys", async () => {
+      // Drag is not a route everybody has. See the handle's own label.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+    });
+
+    it("moves a section down with the arrow keys", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+    });
+
+    it("keeps the handle focused across a move, so a second press follows", async () => {
+      // Otherwise the list moves out from under the keyboard and the next
+      // press goes to the page.
+      list([
+        text("!a:example.org", "general"),
+        voice(LOUNGE, "Lounge"),
+      ]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(grip("Voice")).toHaveFocus();
+    });
+
+    it("does nothing at the top of the list", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("does nothing at the bottom of the list", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("stays where it was dropped when the write fails", async () => {
+      // The list has already moved by then, on the fold's terms: putting it
+      // back because the file would not take it is a drag that undoes itself.
+      setSectionOrder.mockReset().mockRejectedValue(new Error("read only"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("order"),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("offers itself as a place to drop a section", async () => {
+      // `preventDefault` on the drag over is the whole of what makes a drop
+      // possible, and nothing else in these tests would notice it missing.
+      // `fireEvent` answers false when the handler prevented the default.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+
+      expect(fireEvent.dragOver(region("Text"), { dataTransfer })).toBe(false);
+    });
+
+    it("does not offer itself as a place to drop a file", async () => {
+      // The other half. A file dragged into the window must not be told the
+      // sidebar will take it.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying({ Files: "" });
+
+      expect(fireEvent.dragOver(region("Text"), { dataTransfer })).toBe(true);
+    });
+
+    it("marks the section a dragged one would land on", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+
+      expect(region("Text")).toHaveAttribute("data-over", "true");
+      // Not the one being dragged, which is where it already is.
+      fireEvent.dragOver(region("Voice"), { dataTransfer });
+      expect(region("Voice")).toHaveAttribute("data-over", "false");
+    });
+
+    it("stops looking carried once a drag is abandoned", async () => {
+      // A drag let go of over nothing never reaches a drop, so this is the
+      // only thing that puts the section back.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      expect(region("Voice")).toHaveAttribute("data-dragged", "true");
+
+      fireEvent.dragEnd(grip("Voice"), { dataTransfer });
+
+      expect(region("Voice")).toHaveAttribute("data-dragged", "false");
+      expect(order()).toEqual(["Text", "Voice"]);
+    });
+
+    it("stops marking a section once the drag leaves it", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+
+      fireEvent.dragLeave(region("Text"), { dataTransfer });
+
+      expect(region("Text")).toHaveAttribute("data-over", "false");
+    });
+
+    it("does nothing when it is the only section drawn", async () => {
+      // The arrow keys move a section past the ones somebody can see. An
+      // empty section is not drawn, so moving past one would be a press that
+      // rearranges the file and changes nothing on screen.
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Text"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("says which section a handle moves", async () => {
+      // A row of identical grips is a row of controls a screen reader reads
+      // out as the same thing.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(grip("Voice")).toHaveAccessibleName("Move Voice");
+      expect(grip("Text")).toHaveAccessibleName("Move Text");
+    });
+
+    it("says that the arrow keys are a way to move it", async () => {
+      // The only place the keyboard route is announced. Dragging is the
+      // obvious half and the one some people cannot use.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(grip("Voice")).toHaveAccessibleDescription(
+        expect.stringContaining("arrow"),
       );
     });
   });
