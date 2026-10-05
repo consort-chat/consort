@@ -96,8 +96,9 @@ impl SelfView {
 ///
 /// `data:` rather than a scheme of its own because `img-src` in the policy
 /// already allows it, and a picture this size is kilobytes rather than the
-/// megabytes `crate::media` exists to stream.
-fn encode(picture: &Picture) -> Option<String> {
+/// megabytes `crate::media` exists to stream. Shared with
+/// [`crate::theirview`], which draws everybody else's the same way.
+pub(crate) fn encode(picture: &Picture) -> Option<String> {
     let rgb = to_rgb(picture);
     let mut jpeg = Vec::new();
 

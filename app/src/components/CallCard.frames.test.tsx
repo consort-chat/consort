@@ -12,6 +12,9 @@ const drawn = vi.hoisted(() => ({ faces: 0 }));
 const frame = vi.hoisted(() => ({
   show: undefined as undefined | ((url: string | null) => void),
 }));
+const theirs = vi.hoisted(() => ({
+  show: undefined as undefined | ((url: string | null) => void),
+}));
 
 vi.mock("./CallFace", () => ({
   CallFace: ({
@@ -39,6 +42,11 @@ vi.mock("../lib/usePicture", async () => {
       frame.show = setUrl;
       return url;
     },
+    useTheirPicture: () => {
+      const [url, setUrl] = useState<string | null>(null);
+      theirs.show = setUrl;
+      return url;
+    },
   };
 });
 
@@ -59,9 +67,19 @@ const CALL: Call = {
   ],
 };
 
+/** The same call with somebody else's camera on. */
+const FILMING: Call = {
+  ...CALL,
+  participants: [
+    { id: "@bob:example.org", name: "Bob", muted: false },
+    { id: "@ann:example.org", name: "Ann", muted: false, camera: true },
+  ],
+};
+
 beforeEach(() => {
   drawn.faces = 0;
   frame.show = undefined;
+  theirs.show = undefined;
 });
 
 describe("what a frame arriving redraws", () => {
@@ -87,6 +105,29 @@ describe("what a frame arriving redraws", () => {
     act(() => frame.show?.(PICTURE));
 
     expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
+    expect(drawn.faces).toBe(before);
+  });
+
+  it("redraws somebody else's picture and not the faces beside it", async () => {
+    // The same trap on the receiving side, and worse: one poll per person with
+    // a camera on, every one of them landing in the card if the picture were
+    // held here.
+    render(
+      <CallCard
+        call={FILMING}
+        channelName="Lounge"
+        selfId="@bob:example.org"
+        shown
+        onHide={vi.fn()}
+        onOpenRoom={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(theirs.show).toBeDefined());
+    const before = drawn.faces;
+
+    act(() => theirs.show?.(PICTURE));
+
+    expect(screen.getByRole("img", { name: "Ann's camera" })).toBeVisible();
     expect(drawn.faces).toBe(before);
   });
 });

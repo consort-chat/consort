@@ -1,20 +1,18 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const usePicture = vi.hoisted(() => vi.fn());
-vi.mock("../lib/usePicture", () => ({ usePicture }));
+import { describe, expect, it, vi } from "vitest";
 
 import { ScreenStage } from "./ScreenStage";
 
-const PICTURE = "data:image/jpeg;base64,aaaa";
+/** Whatever the card put on the stage. Which screen it is is the card's call. */
+const PICTURE = <img src="data:image/jpeg;base64,aaaa" alt="DP-0" />;
 
 function draw(overrides: Partial<Parameters<typeof ScreenStage>[0]> = {}) {
   const onToggle = vi.fn();
   render(
     <ScreenStage
       label="DP-0 (2560x1440)"
-      mine
+      picture={PICTURE}
       full={false}
       onToggle={onToggle}
       {...overrides}
@@ -23,10 +21,6 @@ function draw(overrides: Partial<Parameters<typeof ScreenStage>[0]> = {}) {
   return onToggle;
 }
 
-beforeEach(() => {
-  usePicture.mockReset().mockReturnValue(PICTURE);
-});
-
 describe("the screen on the stage", () => {
   it("says what is being shared", () => {
     draw();
@@ -34,23 +28,22 @@ describe("the screen on the stage", () => {
     expect(screen.getByRole("button")).toHaveTextContent("DP-0 (2560x1440)");
   });
 
-  it("draws this session's own screen", () => {
+  it("draws the picture it was handed, over the glyph", () => {
     draw();
 
     expect(
-      within(screen.getByRole("button")).getByRole("img", {
-        name: "Your screen",
-      }),
+      within(screen.getByRole("button")).getByRole("img", { name: "DP-0" }),
     ).toBeVisible();
   });
 
-  it("names somebody else's screen and asks for no picture", () => {
-    // One local capture, and no path from anybody else's into this window.
-    draw({ label: "Ada's screen", mine: false });
+  it("is still a named stage with no picture to draw", () => {
+    // Every share starts here: the stream is known before its first frame, and
+    // somebody else's may never arrive. A stage that drew nothing until one
+    // did would make a share look like it had not started.
+    draw({ label: "Ada's screen", picture: undefined });
 
     expect(screen.getByRole("button")).toHaveTextContent("Ada's screen");
-    expect(screen.queryByRole("img", { name: "Your screen" })).toBeNull();
-    expect(usePicture).not.toHaveBeenCalled();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
   it("fills the window when clicked", async () => {

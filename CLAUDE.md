@@ -16,17 +16,18 @@ go where they point, editing a message, both sent and drawn, an opening screen
 offering the rooms you were last in, an icon in the system tray that brings the
 window back, publishing a camera into a call from a webcam chosen in
 settings, and sharing a screen or a window into a call, picked from a card that
-lists what this machine has. The floating call card draws both of those back at
-you: a camera fills its owner's own square, and a shared screen takes the stage
-across the width of the card, with every other screen and everybody in the call
-on a strip of squares beneath it. Clicking the stage fills the window; clicking
-a screen on the strip puts that one on the stage. Drawing somebody else's camera
-or screen is not built yet, so they get a square with their name and no picture:
-see docs/PLAN-webcam.md for the half that is and the half that is not,
+lists what this machine has. The floating call card draws all of it back at
+you, this session's own and everybody else's: a camera fills its owner's own
+square, and a shared screen takes the stage across the width of the card, with
+every other screen and everybody in the call on a strip of squares beneath it.
+Clicking the stage fills the window; clicking a screen on the strip puts that
+one on the stage. Every picture is a still asked for at the size of the box it
+is drawn in: see docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md,
 docs/adr/0008-one-square-for-everything-in-a-call.md for why the card is
-squares, docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
-them is not, and docs/PLAN-receiving-quality.md for whether a receiver can ask
-for less of a picture than is being sent, which waits on the same half.
+squares, and docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
+them is not. Choosing how good a received picture is is not built: that is
+#167, the size the card asks for is where it goes, and
+docs/PLAN-receiving-quality.md is the research behind it.
 Sharing system audio alongside a screen is not built either,
 and docs/PLAN-screen-share.md says what it would take. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a

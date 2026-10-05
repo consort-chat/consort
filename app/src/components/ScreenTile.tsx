@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
+
 import { ScreenGlyph } from "./ScreenGlyph";
-import { SelfPicture } from "./SelfPicture";
 import "./ScreenTile.css";
 
 interface Props {
@@ -8,14 +9,8 @@ interface Props {
    * whose it is for anybody else's.
    */
   label: string;
-  /**
-   * Whether this is the screen this session is sending.
-   *
-   * Only this one has a picture. Frames come from one local capture, and
-   * nothing carries anybody else's into this window yet: see
-   * `docs/PLAN-screen-share.md`.
-   */
-  mine: boolean;
+  /** The screen itself, over the glyph. See [`ScreenStage`]'s own. */
+  picture?: ReactNode;
   /** Put this one on the stage, and whatever was there back in the strip. */
   onPick: () => void;
 }
@@ -27,7 +22,7 @@ interface Props {
  * same kind of thing down here: something the call is carrying that is not
  * what the call is currently about.
  */
-export function ScreenTile({ label, mine, onPick }: Props) {
+export function ScreenTile({ label, picture, onPick }: Props) {
   return (
     <li className="call-screen">
       {/*
@@ -44,7 +39,7 @@ export function ScreenTile({ label, mine, onPick }: Props) {
       >
         <span className="call-screen__stage">
           <ScreenGlyph />
-          {mine && <SelfPicture of="screen" />}
+          {picture}
         </span>
         <span className="call-screen__what">{label}</span>
       </button>

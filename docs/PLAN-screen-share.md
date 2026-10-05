@@ -61,8 +61,9 @@ review of #140 asked for both halves.
 a second newest-wins slot feeding a second command, polled by the same hook the
 camera uses. [ADR-0009](adr/0009-a-shared-screen-takes-the-stage.md) records the
 layout they are drawn in, and why the still's 320 pixel bound is the next thing
-to move. Somebody else sharing gets a square with their name and no picture,
-because nothing carries a remote frame into this window yet.
+to move. Somebody else sharing is drawn too, off the same kind of still asked
+for at the size of the box it goes in:
+[ADR-0014](adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md).
 
 **Dropping a capture joins its thread.** Not just signals it. A grab takes long
 enough that a stop lands inside one, so without the join a frame captured before

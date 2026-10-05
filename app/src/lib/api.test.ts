@@ -34,6 +34,7 @@ import {
   callSetCamera,
   selfView,
   screenView,
+  theirView,
   callSetMuted,
   cameras,
   onCallReadiness,
@@ -1272,6 +1273,30 @@ describe("the call commands", () => {
     invoke.mockResolvedValue(null);
 
     expect(await selfView()).toBe(null);
+  });
+
+  it("asks for somebody else's picture at the size it will be drawn", async () => {
+    // The size travels with the ask, which is the whole of ADR-0014: a square
+    // on the card and a screen somebody is reading text off come off the same
+    // frame.
+    invoke.mockResolvedValue("data:image/jpeg;base64,cccc");
+
+    const picture = await theirView("@ada:example.org", "screen", 1920);
+
+    expect(invoke).toHaveBeenCalledWith("their_view", {
+      userId: "@ada:example.org",
+      kind: "screen",
+      bound: 1920,
+    });
+    expect(picture).toBe("data:image/jpeg;base64,cccc");
+  });
+
+  it("passes on somebody having no picture to draw", async () => {
+    // Their camera is off, or its first frame has not arrived. The square is
+    // drawn either way.
+    invoke.mockResolvedValue(null);
+
+    expect(await theirView("@ada:example.org", "camera", 320)).toBe(null);
   });
 
   it("asks Rust for the newest frame of what is being shared", async () => {

@@ -59,6 +59,7 @@ pub mod showing;
 pub mod thread;
 pub mod transport;
 pub mod trouble;
+pub mod watching;
 
 pub use arrivals::{Arrivals, Movement};
 pub use camera::{Camera, OutgoingPicture, PictureSize};
@@ -71,6 +72,7 @@ pub use microphone::{Microphone, OutgoingFrame, QUEUE_FRAMES};
 pub use notices::{Announced, Flags, Notice};
 pub use publish::PublishedAudio;
 pub use showing::PublishedVideo;
-pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT, SHUTDOWN_LEAVE_TIMEOUT};
+pub use thread::{CallThread, JOIN_TIMEOUT, LEAVE_TIMEOUT, SHUTDOWN_LEAVE_TIMEOUT, Senses};
 pub use transport::{CallSession, CallTransport, Roster};
 pub use trouble::{Fault, Faults};
+pub use watching::{Eyes, IncomingPicture, Kind, Seen};

@@ -57,28 +57,22 @@ See `consort_video::capture::choose_offer`.
 What is true at the end: the picture appears where the icon is now, and the
 floating card shows it.
 
-**The local half is done.** Your own camera is drawn in the floating card, and
-the question below about how a frame reaches the webview is settled for it by
-[ADR-0007](adr/0007-draw-the-self-view-from-a-still.md): sampled down on the
-capture thread, converted and encoded when the card asks, carried as a `data:`
-URL. The measurement that decided it is in the ADR. What is left of phase 2 is
-other people's cameras, where the bytes are multiplied by a roster and the answer
-may well be different.
+**Done, both halves.** Your own camera is drawn in the floating card, sampled
+down on the capture thread and encoded when the card asks, which is
+[ADR-0007](adr/0007-draw-the-self-view-from-a-still.md). Everybody else's is
+drawn the same way with the size as a parameter of the ask, which is
+[ADR-0014](adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md): one
+pump per remote stream in `consort_call::watching`, one slot per membership per
+kind in `app/src-tauri/src/theirview.rs`, and `TheirPicture` drawing it.
 
-The problem phase 2 solves is not signalling, it is transport. Decoded frames
+The problem phase 2 solved was not signalling, it was transport. Decoded frames
 arrive in Rust, where the SFU connection is, and have to be drawn in the
-webview, where the interface is. That crossing is the one video crossing this
-architecture accepts, and the shape for it already exists: `app/src-tauri/src/media.rs`
-serves attachments over a URI scheme the webview can range-request, with the
-CSP entry and the `mediaUrl` builder that go with it.
+webview, where the interface is. ADR-0014 has the measurements that chose the
+polled still over the URI scheme `app/src-tauri/src/media.rs` uses for
+attachments, and says what would reopen that.
 
-Still open, and to be settled in phase 2 rather than guessed at now:
+What phase 2 did not settle:
 
-- Whether a frame is served over that scheme, pushed over an IPC channel, or
-  encoded once per visible tile and polled. The answer depends on measurement
-  rather than taste. Settled for the self view, which is polled: see
-  [ADR-0007](adr/0007-draw-the-self-view-from-a-still.md). Still open for remote
-  tiles, and the ADR says why the answer there may not be the same one.
 - What the card shows when several people have a camera on. The issue asks for
   the active speaker's, and that question is already answered here:
   [ADR-0003](adr/0003-measure-who-is-talking-locally.md) rejected the SFU's
@@ -92,7 +86,9 @@ Still open, and to be settled in phase 2 rather than guessed at now:
 - What `#71` asked for and did not get: double-click to expand the card, a
   streamer's content filling their own card, and double-click on a person for
   full screen. All three need a picture to act on, so none of them could land
-  before this.
+  before this. They can now.
+- How good that picture is, which is #167 and #165. The size travels with the
+  ask, so the lever exists: ADR-0014's consequences say where it is.
 
 ## Out of scope in both phases
 
