@@ -6,9 +6,10 @@ answered automatically, and says the first job is finding out if Matrix can do
 this at all.
 
 It can. The control surface exists in the pinned SDK, Consort already drives it
-for something else, and the one thing missing is the thing #167 is really
-waiting on: nothing in this window draws a remote picture, so there is no
-picture whose quality anybody could change.
+for something else, and the picture it needs something to act on now draws:
+[ADR-0014](adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md) landed
+remote cameras and shared screens, and asks for each one at the size of the box
+it goes in, which is the number `Dimensions` wants.
 
 ## The short answer
 
@@ -18,7 +19,7 @@ picture whose quality anybody could change.
 | Does it reach the SFU? | Yes. `UpdateTrackSettings`, the same message deafen already sends. |
 | Is the publisher involved? | No. Receive-side only, which is why #167 is separable from publish-side quality. |
 | Can a bad connection be detected? | Partly. `Call::receive_stats` gives cumulative RTP counters to sample and compare. There is no connection-quality verdict to read. |
-| Can it ship now? | No. There is no remote video to apply it to. |
+| Can it ship now? | Yes, now that ADR-0014 draws a remote picture and carries the size it is drawn at. |
 
 ## What the pin can do
 
@@ -67,7 +68,8 @@ is not.
 
 The cost of `Dimensions` is that a person picking "low" is not picking a layer,
 they are picking a size, and the ceiling has to be chosen for them. That is
-[ADR-0013](adr/0013-ask-for-a-picture-in-pixels.md).
+[ADR-0013](adr/0013-ask-for-a-picture-in-pixels.md). ADR-0014 is where the
+drawn size a cap sits under comes from.
 
 ## What neither of them can do
 
@@ -118,65 +120,57 @@ Two things worth settling before writing one:
   floor. An automatic cap that drops on loss, on top of an SFU already
   dropping, is two controllers on one loop.
 - **Loss on a screen share is not the same signal as loss on audio.** The
-  thresholds cannot be shared, and one of the two has nowhere to be shown yet.
+  thresholds cannot be shared.
 
-## Why none of it ships yet
+## What was blocking it, and what cleared it
 
-Nothing carries a remote frame into this window.
-`docs/PLAN-webcam.md` phase 2 is where that lands, and ADR-0008 and ADR-0009
-record the layout waiting for it: somebody else's camera or screen is a square
-with their name in it. `consort-call` reads exactly one remote track kind,
-`MediaStreamKind::Microphone`, in `LiveKitSession::listen`.
+This was researched while nothing carried a remote frame into this window, so
+every part of #167 a person could see waited on `docs/PLAN-webcam.md` phase 2.
+That has landed, and it supplied all three things the waiting was about:
 
-So every part of #167 that a person could see depends on phase 2 of the webcam
-plan:
+- A tile with a picture in it. `consort_call::watching` pumps each remote
+  camera and shared screen and `TheirPicture` draws it.
+- The size of the box the picture is drawn into. `their_view(user, kind,
+  bound)` is already asked at the pixels that box wants, so the number
+  `Dimensions` needs is a parameter that exists rather than one to invent.
+- Somewhere for an automatic downgrade to say it happened, which is the tile.
 
-- A quality control on a tile needs a tile with a picture in it.
-- `Dimensions` needs the size of the box the picture is drawn into, which is
-  the one number the webview has and Rust does not.
-- An automatic downgrade needs somewhere to say it happened, or it is a setting
-  that changes itself and never admits it.
+What is left of #167 is a cap over that bound and the `set_constraints` call
+that sends it.
 
-Building the Rust half now would be a seam, a thread command and a Tauri
-command with no caller, and a `Dimensions` value invented from a box size
-nobody has measured. The honest order is phase 2 first.
-
-## Phase 1: stop paying for video nobody draws
+## Phase 1: stop paying for more video than is drawn
 
 Not part of #167, and worth its own issue. Recorded here because the research
 turned it up and it is the same one function.
 
 `LiveKitConnection` connects with `auto_subscribe: true` and the transport sets
 no adaptive-stream option, so a subscribed track is a track the SFU is
-forwarding. Consort subscribes to every remote camera and every remote screen
-share, reads frames from neither, and draws neither. A Consort client in a call
-with somebody sharing a 1080p desktop is paying for that desktop in order to
-discard it.
+forwarding at whatever the publisher sends. A 1080p share pulled down to draw a
+320 pixel square is paid for in full and then thrown away, which ADR-0014 says
+outright it neither adds nor fixes.
 
-`MediaConstraints { visible: false }` on `Camera` and `ScreenShare` for every
-remote membership would stop it, in the loop `set_deafened` already walks.
-`dynacast: true` is set, so if every receiver in the call pauses, the publisher
-stops encoding the layer too. Nothing Consort draws reads subscription state:
-the camera and screen indicators come from MatrixRTC membership signalling, in
-`consort_call::roster`.
+A `MediaConstraints { detail: Dimensions }` per remote camera and screen,
+matching the bound the card is already asking `their_view` for, would stop it,
+in the loop `set_deafened` already walks. A blanket
+`MediaConstraints { visible: false }` would have stopped it when nothing drew,
+and is now the wrong tool: it would pause the picture.
 
-The catch is that it has to be undone in the same change that draws a remote
-picture, or phase 2 starts by debugging a stream that is paused on purpose.
+Which makes phase 1 the same call as phase 2 with nobody choosing the number,
+so the two are one change if they are done together.
 
 ## Phase 2: a control on a tile
-
-Only once a remote picture draws.
 
 | Piece | Where |
 | --- | --- |
 | The chosen cap, and what it is in pixels | `consort-call`, a module of its own |
 | The call to `set_constraints` | `consort-call`: `livekit.rs`, `transport.rs` |
 | The command and the state | `thread.rs`, `app/src-tauri/src/state.rs` |
-| The control | wherever phase 2 of the webcam plan puts a tile |
+| The control | on the tile `TheirPicture` draws |
 
-What is true at the end: a stream drawn in a tile is asked for at the size of
-that tile, a person can cap it below that, and the cap survives the stream
-going away and coming back because the engine re-applies it.
+What is true at the end: a stream is asked of the SFU at the size it is drawn
+rather than only sampled down to it, a person can cap it below that, and the
+cap survives the stream going away and coming back because the engine
+re-applies it.
 
 ## Phase 3: an automatic cap
 
