@@ -1356,6 +1356,27 @@ mod tests {
     }
 
     #[test]
+    fn a_section_is_written_with_the_keys_the_frontend_reads() {
+        // `SidebarSettings` is mirrored by hand in `app/src/lib/api.ts`, so the
+        // names on disk are the contract. See the room DTO's version of this.
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        let json = serde_json::to_value(&sidebar).expect("serialise");
+
+        assert_eq!(
+            json["sections"][0],
+            serde_json::json!({
+                "key": "custom-1",
+                "name": "Projects",
+                "space": "!s:example.org",
+                "rooms": ["!r:example.org"],
+            })
+        );
+    }
+
+    #[test]
     fn a_settings_file_written_before_sections_existed_still_reads_back() {
         let (dir, store) = store();
         std::fs::write(

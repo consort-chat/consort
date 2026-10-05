@@ -18,6 +18,12 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 const sidebarSettings = vi.hoisted(() => vi.fn());
 const setSectionFolded = vi.hoisted(() => vi.fn());
 const setSectionOrder = vi.hoisted(() => vi.fn());
+// #170's four, for the same reason: every render reads the sections back and
+// every press on one writes.
+const createSection = vi.hoisted(() => vi.fn());
+const renameSection = vi.hoisted(() => vi.fn());
+const deleteSection = vi.hoisted(() => vi.fn());
+const setRoomSection = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
@@ -26,6 +32,10 @@ vi.mock("../lib/api", async (importOriginal) => ({
   sidebarSettings,
   setSectionFolded,
   setSectionOrder,
+  createSection,
+  renameSection,
+  deleteSection,
+  setRoomSection,
 }));
 
 import { ChannelList } from "./ChannelList";
@@ -93,6 +103,14 @@ const IDLE: Call = { state: "disconnected" };
 
 const LOUNGE = "!lounge:example.org";
 
+/** A sidebar nobody has touched, which is what `sidebarSettings` answers with. */
+const STORED = { folded: [], order: [], sections: [] };
+
+/** A section somebody made under the space these tests render. */
+function made(key: string, name: string, rooms: string[] = []) {
+  return { key, name, space: "!s:example.org", rooms };
+}
+
 /** What `audioSettings` answers with, for the menu a name opens. */
 const SETTINGS = {
   input: null,
@@ -121,9 +139,13 @@ describe("ChannelList", () => {
     // the menu, because any click on a name reaches it.
     audioSettings.mockReset().mockResolvedValue(SETTINGS);
     setPersonVolume.mockReset().mockResolvedValue(undefined);
-    sidebarSettings.mockReset().mockResolvedValue({ folded: [], order: [] });
+    sidebarSettings.mockReset().mockResolvedValue(STORED);
     setSectionFolded.mockReset().mockResolvedValue(undefined);
     setSectionOrder.mockReset().mockResolvedValue(undefined);
+    createSection.mockReset().mockResolvedValue("custom-1");
+    renameSection.mockReset().mockResolvedValue(undefined);
+    deleteSection.mockReset().mockResolvedValue(undefined);
+    setRoomSection.mockReset().mockResolvedValue(undefined);
   });
 
   /** Render one space's channels, with the props every test shares. */
@@ -1495,7 +1517,7 @@ describe("ChannelList", () => {
     it("draws a section the settings file says is folded", async () => {
       // The whole point of writing it down. A fold that came back open is the
       // preference not being remembered.
-      sidebarSettings.mockResolvedValue({ folded: ["voice"], order: [] });
+      sidebarSettings.mockResolvedValue({ ...STORED, folded: ["voice"] });
       both();
 
       await waitFor(() =>
@@ -1514,7 +1536,7 @@ describe("ChannelList", () => {
     });
 
     it("unfolds a folded one, and writes that down too", async () => {
-      sidebarSettings.mockResolvedValue({ folded: ["voice"], order: [] });
+      sidebarSettings.mockResolvedValue({ ...STORED, folded: ["voice"] });
       both();
       await waitFor(() =>
         expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
@@ -1649,7 +1671,7 @@ describe("ChannelList", () => {
     it("draws the order the settings file holds", async () => {
       // The whole point of writing it down. Sections back where they started
       // is the drag not being remembered.
-      sidebarSettings.mockResolvedValue({ folded: [], order: ["voice", "text"] });
+      sidebarSettings.mockResolvedValue({ ...STORED, order: ["voice", "text"] });
       both();
 
       await waitFor(() => expect(order()).toEqual(["Voice", "Text"]));
@@ -1861,6 +1883,294 @@ describe("ChannelList", () => {
       expect(grip("Voice")).toHaveAccessibleDescription(
         expect.stringContaining("arrow"),
       );
+    });
+  });
+
+  describe("sections somebody made", () => {
+    /** Drag a channel onto a section's heading, as the browser would. */
+    function dragOnto(section: string, roomId: string) {
+      const data = { "application/x-consort-room": roomId };
+      const transfer = {
+        types: Object.keys(data),
+        getData: (type: string) => data[type as keyof typeof data] ?? "",
+      };
+      const heading = screen.getByRole("region", { name: section });
+      fireEvent.dragOver(heading, { dataTransfer: transfer });
+      fireEvent.drop(heading, { dataTransfer: transfer });
+    }
+
+    it("draws a stored section with the name somebody gave it", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+      expect(namesIn("Projects")).toEqual(["#general"]);
+    });
+
+    it("takes a channel out of Text once it is in a section of its own", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general"), text("!b:example.org", "random")]);
+
+      await screen.findByRole("region", { name: "Projects" });
+      expect(namesIn("Text")).toEqual(["#random"]);
+    });
+
+    it("draws a section with nothing in it, so something can be put there", async () => {
+      // The one place the rule differs from Text and Voice, which are dropped
+      // when empty: a section nothing drew would be one nothing could fill.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("makes a section with the name that was typed", async () => {
+      const user = userEvent.setup();
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(
+        screen.getByLabelText("Name for the new section"),
+        "Projects",
+      );
+      await user.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(createSection).toHaveBeenCalledWith("!s:example.org", "Projects");
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("will not make a section with no name", async () => {
+      const user = userEvent.setup();
+      list([text("!a:example.org", "general")]);
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(screen.getByLabelText("Name for the new section"), "  ");
+
+      expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+      expect(createSection).not.toHaveBeenCalled();
+    });
+
+    it("says so when the section could not be made", async () => {
+      const user = userEvent.setup();
+      createSection.mockImplementation(() =>
+        Promise.reject({ message: "A section needs a name, and a short one." }),
+      );
+      list([text("!a:example.org", "general")]);
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(
+        screen.getByLabelText("Name for the new section"),
+        "Projects",
+      );
+      await user.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "A section needs a name",
+      );
+    });
+
+    it("renames a section somebody made", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Rename Projects" }));
+      await user.clear(screen.getByLabelText("Rename Projects"));
+      await user.type(screen.getByLabelText("Rename Projects"), "Clients");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(renameSection).toHaveBeenCalledWith("custom-1", "Clients");
+      expect(
+        await screen.findByRole("region", { name: "Clients" }),
+      ).toBeInTheDocument();
+    });
+
+    it("leaves the name alone when a rename is abandoned", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Rename Projects" }));
+      await user.type(screen.getByLabelText("Rename Projects"), "nonsense");
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(renameSection).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("gives a deleted section's channels back to Text", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Delete Projects" }));
+
+      expect(deleteSection).toHaveBeenCalledWith("custom-1");
+      await waitFor(() => expect(namesIn("Text")).toEqual(["#general"]));
+      expect(
+        screen.queryByRole("region", { name: "Projects" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("offers no rename or delete on Text and Voice", async () => {
+      // They follow `m.room.type` rather than a choice, so there is no name of
+      // theirs to change and nothing to delete.
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(
+        screen.queryByRole("button", { name: "Rename Text" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Delete Text" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("puts a channel in a section when its box is ticked", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Choose channels for Projects" }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "general" }));
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", "custom-1");
+      await waitFor(() => expect(namesIn("Projects")).toEqual(["#general"]));
+    });
+
+    it("takes a channel back out when its box is unticked", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Choose channels for Projects" }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "general" }));
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", null);
+      await waitFor(() => expect(namesIn("Text")).toEqual(["#general"]));
+    });
+
+    it("holds a text and a voice channel side by side", async () => {
+      // The point of the feature: a project is the channel and the call about
+      // it, and splitting those by kind is what #170 undoes.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [
+          made("custom-1", "Projects", ["!a:example.org", LOUNGE]),
+        ],
+      });
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+
+      await screen.findByRole("region", { name: "Projects" });
+      expect(namesIn("Projects")).toEqual(["#general", "Lounge"]);
+    });
+
+    it("takes a channel dragged onto its heading", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      dragOnto("Projects", "!a:example.org");
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", "custom-1");
+      await waitFor(() => expect(namesIn("Projects")).toEqual(["#general"]));
+    });
+
+    it("gives a channel dragged onto Text back to Text", async () => {
+      // Text and Voice hold whatever is left over, so dropping on one is how a
+      // pointer takes a channel out of a section.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+        order: ["text", "custom-1"],
+      });
+      list([text("!a:example.org", "general"), text("!b:example.org", "random")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      dragOnto("Text", "!a:example.org");
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", null);
+      await waitFor(() =>
+        expect(namesIn("Text")).toEqual(["#general", "#random"]),
+      );
+    });
+
+    it("folds a section somebody made like any other", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Projects" }),
+      );
+
+      expect(setSectionFolded).toHaveBeenCalledWith("custom-1", true);
+    });
+
+    it("keeps a section out of a space it was not made in", async () => {
+      // Otherwise "Projects" would follow somebody into every other space,
+      // where none of its channels are.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [
+          { key: "custom-1", name: "Projects", space: "!other:example.org", rooms: [] },
+        ],
+      });
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(
+        screen.queryByRole("region", { name: "Projects" }),
+      ).not.toBeInTheDocument();
     });
   });
 });
