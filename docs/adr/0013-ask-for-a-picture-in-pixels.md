@@ -1,4 +1,4 @@
-# 12. Ask for a received picture in pixels, not in a quality level
+# 13. Ask for a received picture in pixels, not in a quality level
 
 Date: 2026-10-05
 

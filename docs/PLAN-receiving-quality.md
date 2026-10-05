@@ -67,7 +67,7 @@ is not.
 
 The cost of `Dimensions` is that a person picking "low" is not picking a layer,
 they are picking a size, and the ceiling has to be chosen for them. That is
-[ADR-0012](adr/0012-ask-for-a-picture-in-pixels.md).
+[ADR-0013](adr/0013-ask-for-a-picture-in-pixels.md).
 
 ## What neither of them can do
 
