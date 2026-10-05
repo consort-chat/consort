@@ -66,13 +66,17 @@ at whatever homeserver you already run.
   above the composer says what is being answered, the reply is drawn as a
   reply, and pressing it jumps to what it answers.
 
-  [Screenshot of the thread panel open beside a room Here]
+  <img width="325" alt="image" src="https://github.com/user-attachments/assets/4365982e-d8fc-40ec-9a04-7a8dfc1d6447" />
+
 - **Links into Matrix.** A `matrix.to` link to a room or to a message is drawn
   as a badge naming where it goes, and pressing it goes there rather than
   opening a browser. Every message carries a Copy link control that puts its
   own address on the clipboard.
 - **Reactions.** Twelve keys to pick from, and any key anybody else sends draws
   correctly. Custom emoji from other clients are shown.
+
+  <img width="325" alt="image" src="https://github.com/user-attachments/assets/57938bf1-725a-4548-abf5-2e5792ffdce7" />
+  
 - **What you have not read.** A channel with something waiting in it is drawn
   in white, a channel where somebody said your name carries a count, and a room
   you come back to opens where you left off with a line across it. Read
