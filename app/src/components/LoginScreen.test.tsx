@@ -8,6 +8,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   login,
 }));
 
+import iconSvg from "../../src-tauri/icons/icon.svg?raw";
 import { LoginScreen } from "./LoginScreen";
 import type { Profile } from "../lib/api";
 
@@ -245,5 +246,65 @@ describe("LoginScreen", () => {
     await screen.findByRole("alert");
 
     expect(consoleError).toHaveBeenCalledWith("login failed", "M_FORBIDDEN");
+  });
+});
+
+/*
+  The brand mark, read against the artwork it is a copy of.
+
+  It was drawn in CSS before #172: a bordered box with one side knocked out and
+  rotated, which put the opening of the C where no bar could sit in it. Pinning
+  the two files together is what stops a hand-drawn approximation coming back.
+*/
+describe("the brand mark on the login page", () => {
+  /** Where a shape sits and how big it is, as the attributes were written. */
+  function geometry(shape: Element) {
+    return {
+      x: shape.getAttribute("x"),
+      y: shape.getAttribute("y"),
+      width: shape.getAttribute("width"),
+      height: shape.getAttribute("height"),
+    };
+  }
+
+  /** The glyph the shipped app icon draws. */
+  function theAppIcon() {
+    const icon = new DOMParser().parseFromString(iconSvg, "image/svg+xml");
+    return {
+      arc: icon.querySelector("path")?.getAttribute("d"),
+      // The tile is a rect too, and the only one without an `x` on it.
+      bars: Array.from(icon.querySelectorAll("rect[x]")).map(geometry),
+    };
+  }
+
+  function theMark() {
+    const { container } = render(<LoginScreen onSignedIn={vi.fn()} />);
+    const svg = container.querySelector("svg.login__mark");
+    if (svg === null) throw new Error("the login page draws no brand mark");
+    return svg;
+  }
+
+  it("draws the C as the arc the app icon draws, not as a rotated border", () => {
+    const path = theMark().querySelector("path");
+
+    expect(path?.getAttribute("d")).toBe(theAppIcon().arc);
+  });
+
+  it("puts the level bars where the icon puts them, in the mouth of the C", () => {
+    const bars = Array.from(theMark().querySelectorAll("rect")).map(geometry);
+
+    expect(bars).toEqual(theAppIcon().bars);
+  });
+
+  it("crops the tile away, keeping every bar inside the box", () => {
+    const [minX, , width] = (theMark().getAttribute("viewBox") ?? "")
+      .split(/\s+/)
+      .map(Number);
+
+    expect(width).toBeLessThan(512);
+    for (const bar of theAppIcon().bars) {
+      expect(Number(bar.x)).toBeGreaterThanOrEqual(minX!);
+      expect(Number(bar.x) + Number(bar.width)).toBeLessThanOrEqual(minX! + width!);
+    }
   });
 });
