@@ -336,6 +336,8 @@ pub fn run() {
             commands::set_appearance_settings,
             commands::preview_application_scale,
             commands::set_person_volume,
+            commands::person_quality,
+            commands::set_person_quality,
             commands::audio_test_start,
             commands::audio_test_stop,
             commands::audio_tone_play,

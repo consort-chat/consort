@@ -28,9 +28,9 @@ use std::time::Duration;
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
-    VideoSourceConfig,
+    AudioFrame, AudioSourceConfig, Dimensions, I420Buffer, LocalTrackHandle, MediaConstraints,
+    MediaStreamKind, Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
+    VideoDetail, VideoFrame, VideoRotation, VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -40,6 +40,7 @@ use livekit::DataPacket;
 use futures_util::StreamExt;
 
 use crate::camera::{OutgoingPicture, PictureSize};
+use crate::detail::Wanted;
 use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
@@ -813,6 +814,40 @@ impl CallSession for LiveKitSession {
                     Pulling {
                         track,
                         pump: AbortOnDrop(pump),
+                    },
+                );
+            }
+        }
+    }
+
+    fn request(&self, wanted: &Wanted) {
+        // Per membership, because that is what a constraint is keyed by, and a
+        // cap is chosen per person: somebody in from a laptop and a phone is
+        // two asks carrying the same number.
+        for participant in self.call.engine().participants() {
+            // Ours is not something the SFU sends back. See `set_deafened`.
+            if participant.is_local {
+                continue;
+            }
+
+            for kind in [Kind::Camera, Kind::Screen] {
+                let Some(pixels) = wanted.pixels(&participant.user_id, kind) else {
+                    // Nothing is drawing this one, so there is no box to name.
+                    continue;
+                };
+
+                self.call.set_constraints(
+                    &participant.member_id,
+                    kind.stream(),
+                    MediaConstraints {
+                        // A square, because the still is sampled to fit one:
+                        // ADR-0014. The transport picks the smallest layer
+                        // that covers it.
+                        detail: VideoDetail::Dimensions(Dimensions {
+                            width: pixels,
+                            height: pixels,
+                        }),
+                        ..MediaConstraints::default()
                     },
                 );
             }

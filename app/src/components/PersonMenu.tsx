@@ -5,9 +5,12 @@ import {
   audioSettings,
   directRoom,
   memberProfile,
+  personQuality,
+  setPersonQuality,
   setPersonVolume,
   type MemberProfile,
   type Participant,
+  type PictureQuality,
 } from "../lib/api";
 import { keptOnScreen } from "../lib/floating";
 import { elapsedLabel, presenceLabel } from "../lib/labels";
@@ -35,6 +38,20 @@ const LOUDEST = 250;
 
 /** How long to wait after a slider stops moving before writing it down. */
 const SETTLE_MS = 150;
+
+/**
+ * What each cap is called, in the order the menu offers them.
+ *
+ * Words rather than pixel counts, because what somebody is choosing is "less".
+ * The ceilings behind the words are
+ * `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
+ */
+const QUALITIES: { value: PictureQuality; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "high", label: "High" },
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" },
+];
 
 export interface PersonMenuProps {
   /**
@@ -124,6 +141,7 @@ export function PersonMenu({
   onOpenRoom,
 }: PersonMenuProps) {
   const [percent, setPercent] = useState<number | null>(null);
+  const [capped, setCapped] = useState<PictureQuality | null>(null);
   const [profile, setProfile] = useState<MemberProfile | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -133,6 +151,11 @@ export function PersonMenu({
   const writing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef<number | null>(null);
   const userId = person.id;
+  // Whether there is a received picture to cap at all. This card also opens
+  // from a name in a timeline, where nobody is in a call, and the SFU sends
+  // nobody their own camera back.
+  const capping =
+    person.id !== selfId && (person.camera === true || person.screen === true);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,6 +177,30 @@ export function PersonMenu({
       cancelled = true;
     };
   }, [userId]);
+
+  // Only when something will be drawn with it, so a card opened over a
+  // message author costs one request rather than two.
+  useEffect(() => {
+    if (!capping) return;
+    let cancelled = false;
+
+    void personQuality(userId)
+      .then((chosen) => {
+        if (cancelled) return;
+        setCapped(chosen);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Drawn as uncapped rather than left blank, for the reason the slider
+        // falls back to full: a control that never resolves is worse than one
+        // showing what almost everybody is at.
+        setCapped("auto");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, capping]);
 
   // The one request this panel makes of the homeserver. Its failure is not
   // reported: the command already degrades every part of the answer to
@@ -248,6 +295,14 @@ export function PersonMenu({
         setProblem(asCommandError(raw).message);
       });
     }, SETTLE_MS);
+  }
+
+  function cap(next: PictureQuality) {
+    setCapped(next);
+    setProblem(null);
+    void setPersonQuality(userId, next).catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
   }
 
   /**
@@ -384,6 +439,32 @@ export function PersonMenu({
           <p className="person-menu__note">
             {percent === FULL
               ? "Just for you, on this computer."
+              : "Just for you, on this computer. Remembered for next time."}
+          </p>
+        </>
+      )}
+      {capping && capped !== null && (
+        <>
+          <div className="person-menu__row">
+            <label className="person-menu__label" htmlFor="person-menu-quality">
+              Video
+            </label>
+          </div>
+          <select
+            id="person-menu-quality"
+            className="person-menu__select"
+            value={capped}
+            onChange={(event) => cap(event.target.value as PictureQuality)}
+          >
+            {QUALITIES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <p className="person-menu__note">
+            {capped === "auto"
+              ? "As big as it is drawn. Just for you, on this computer."
               : "Just for you, on this computer. Remembered for next time."}
           </p>
         </>

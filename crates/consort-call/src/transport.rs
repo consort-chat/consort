@@ -24,6 +24,7 @@
 use consort_matrix::Participant;
 
 use crate::camera::PictureSize;
+use crate::detail::Wanted;
 use crate::event::SelfAudio;
 use crate::failure::CallFailure;
 use crate::hearing::{Attached, Ears};
@@ -193,6 +194,23 @@ pub trait CallSession {
     /// the roster is consulted again whenever anybody switches anything on, and
     /// a square with no picture in it is what a camera looks like anyway.
     fn watch(&self, eyes: &Eyes);
+
+    /// Ask for everybody else's picture at the size it is drawn, under
+    /// whatever cap was chosen for them.
+    ///
+    /// [`watch`](Self::watch)'s sibling, driven by the same roster change, and
+    /// restated on every one of them rather than set once: a constraint is
+    /// keyed by membership, so somebody who rejoins arrives without theirs.
+    ///
+    /// Not fallible and not `async`. What this asks for is a cap rather than a
+    /// demand: the transport underneath is debounced, answers nothing, and is
+    /// free to deliver less than this under congestion.
+    ///
+    /// Which memberships to ask about is the implementation's business, for
+    /// the reason [`listen`](Self::listen) reads its own roster. A cap is
+    /// chosen per person and a stream belongs to a device, so a person on a
+    /// laptop and a phone is two asks.
+    fn request(&self, wanted: &Wanted);
 
     /// Start watching who is in the call.
     ///

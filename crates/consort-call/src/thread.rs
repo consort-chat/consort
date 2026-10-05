@@ -41,6 +41,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::arrivals::Arrivals;
 use crate::camera::{Camera, PictureSize};
+use crate::detail::{Cap, Wanted};
 use crate::event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 use crate::failure::CallFailure;
 use crate::hearing::{Attached, Cue, Ears};
@@ -48,7 +49,7 @@ use crate::microphone::Microphone;
 use crate::publish::pump;
 use crate::showing::{self, PublishedVideo};
 use crate::transport::{CallSession, CallTransport, Roster};
-use crate::watching::Eyes;
+use crate::watching::{Eyes, Kind};
 
 /// How long a join may take before it is abandoned.
 ///
@@ -138,6 +139,18 @@ enum Message {
     /// anything is published and the transport needs the negotiated size to
     /// set its encoder up. See [`PictureSize`].
     SetCamera(Option<PictureSize>),
+    /// Somebody else's picture is being drawn into a box this many pixels on
+    /// its long edge.
+    DrawnAt {
+        user_id: String,
+        kind: Kind,
+        bound: u32,
+    },
+    /// Ask for no more of this person's pictures than `cap` allows.
+    SetCap {
+        user_id: String,
+        cap: Cap,
+    },
     Shutdown,
 }
 
@@ -255,6 +268,28 @@ impl CallThread {
     /// was started in. See [`crate::SelfScreen`].
     pub fn set_screen(&self, share: Option<ScreenShare>) {
         self.send(Message::SetScreen(share));
+    }
+
+    /// Say that `user_id`'s `kind` is drawn into a box `bound` pixels on its
+    /// long edge, so the SFU can be asked for a layer that size.
+    ///
+    /// Only when it changes. A card polls for a still many times a second and
+    /// a message per poll would be a command channel carrying frames.
+    pub fn drawn_at(&self, user_id: String, kind: Kind, bound: u32) {
+        self.send(Message::DrawnAt {
+            user_id,
+            kind,
+            bound,
+        });
+    }
+
+    /// Ask for no more of `user_id`'s pictures than `cap` allows.
+    ///
+    /// Remembered across calls, like mute and deafen and unlike a camera:
+    /// somebody who turned a share down has not asked for it back up by
+    /// clicking a different channel.
+    pub fn set_cap(&self, user_id: String, cap: Cap) {
+        self.send(Message::SetCap { user_id, cap });
     }
 
     /// Post a command, ignoring a thread that has already gone.
@@ -427,6 +462,10 @@ async fn serve<T: CallTransport>(
     let mut audio = SelfAudio::default();
     let mut video = SelfVideo::default();
     let mut sharing = SelfScreen::default();
+    // Outlives a call, like `audio` above and for the same reason. Restated at
+    // every join and on every roster change, because a constraint is keyed by
+    // the membership it was set on.
+    let mut wanted = Wanted::default();
 
     // What the roster watcher tells this loop.
     //
@@ -460,6 +499,7 @@ async fn serve<T: CallTransport>(
                             &microphone,
                             &ears,
                             &eyes,
+                            &wanted,
                             &chase,
                         )
                         .await
@@ -485,7 +525,7 @@ async fn serve<T: CallTransport>(
                 // The attachment half alone, never the whole of `apply`: a
                 // retry must not re-announce this session to every peer in the
                 // call on each attempt. See issue #157.
-                let attached = attach(current.as_ref(), &ears, &eyes);
+                let attached = attach(current.as_ref(), &ears, &eyes, &wanted);
                 if let Some(joined) = current.as_mut() {
                     joined.chase(attached, &chase);
                 }
@@ -533,7 +573,16 @@ async fn serve<T: CallTransport>(
                 // state whose other half is already drawn, and repeating it as
                 // part of joining would make it look like something a call
                 // decides.
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
+                apply_and_chase(
+                    current.as_mut(),
+                    audio,
+                    &microphone,
+                    &ears,
+                    &eyes,
+                    &wanted,
+                    &chase,
+                )
+                .await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -561,11 +610,29 @@ async fn serve<T: CallTransport>(
             }
             Message::SetMuted(muted) => {
                 audio = announce(&events, audio, SelfAudio { muted, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
+                apply_and_chase(
+                    current.as_mut(),
+                    audio,
+                    &microphone,
+                    &ears,
+                    &eyes,
+                    &wanted,
+                    &chase,
+                )
+                .await;
             }
             Message::SetDeafened(deafened) => {
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
+                apply_and_chase(
+                    current.as_mut(),
+                    audio,
+                    &microphone,
+                    &ears,
+                    &eyes,
+                    &wanted,
+                    &chase,
+                )
+                .await;
             }
             Message::SetAway(away) => {
                 // Only on the way back, and only from having actually been
@@ -576,7 +643,16 @@ async fn serve<T: CallTransport>(
                 // broken.
                 let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
+                apply_and_chase(
+                    current.as_mut(),
+                    audio,
+                    &microphone,
+                    &ears,
+                    &eyes,
+                    &wanted,
+                    &chase,
+                )
+                .await;
                 if returning {
                     ears.cue(Cue::Returned);
                 }
@@ -586,6 +662,20 @@ async fn serve<T: CallTransport>(
             }
             Message::SetScreen(share) => {
                 sharing = set_screen(&events, sharing, current.as_mut(), share, &screen).await;
+            }
+            Message::DrawnAt {
+                user_id,
+                kind,
+                bound,
+            } => {
+                if wanted.drawn_at(&user_id, kind, bound) {
+                    ask(current.as_ref(), &wanted);
+                }
+            }
+            Message::SetCap { user_id, cap } => {
+                if wanted.cap(&user_id, cap) {
+                    ask(current.as_ref(), &wanted);
+                }
             }
             Message::Shutdown => {
                 // No `Disconnected` on the way out. Whatever asked for this is
@@ -831,6 +921,7 @@ async fn apply<S: CallSession>(
     microphone: &Microphone,
     ears: &Ears,
     eyes: &Eyes,
+    wanted: &Wanted,
 ) -> Attached {
     // Before the call, and before the early return. Every mute below here is
     // applied to the publication, which is downstream of the frames this
@@ -862,7 +953,7 @@ async fn apply<S: CallSession>(
     // tracks are subscribed. This runs again on every roster change, which is
     // exactly when a track appears, and it leaves anybody already playing
     // alone.
-    let attached = attach(Some(joined), ears, eyes);
+    let attached = attach(Some(joined), ears, eyes, wanted);
 
     // Last, and after `set_deafened` rather than before it. Pausing the
     // subscriptions stops more audio arriving but takes a round trip to the
@@ -873,6 +964,17 @@ async fn apply<S: CallSession>(
     }
 
     attached
+}
+
+/// Push what is wanted of everybody's pictures at the call, if there is one.
+///
+/// Only the one half, unlike [`apply`]: nothing about a box being drawn or a
+/// cap being chosen is anybody else's business, so this must not re-announce
+/// this session or re-attach anything.
+fn ask<S: CallSession>(current: Option<&Joined<S>>, wanted: &Wanted) {
+    if let Some(joined) = current {
+        joined.session.request(wanted);
+    }
 }
 
 /// Whether to ask again for a track that has not arrived, and the attempt
@@ -895,12 +997,13 @@ async fn apply_and_chase<S: CallSession>(
     microphone: &Microphone,
     ears: &Ears,
     eyes: &Eyes,
+    wanted: &Wanted,
     chase: &UnboundedSender<()>,
 ) {
     // Applied with or without a call, because `apply` reaches the microphone
     // itself and the buttons work outside one: #132. Only the chase needs a
     // call to belong to.
-    let attached = apply(current.as_deref(), audio, microphone, ears, eyes).await;
+    let attached = apply(current.as_deref(), audio, microphone, ears, eyes, wanted).await;
     if let Some(joined) = current {
         joined.chase(attached, chase);
     }
@@ -916,11 +1019,20 @@ async fn apply_and_chase<S: CallSession>(
 /// Both halves here rather than one, because they are driven by the same roster
 /// change and a site that did one of them would be the bug this exists to stop
 /// for the other.
-fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears, eyes: &Eyes) -> Attached {
+fn attach<S: CallSession>(
+    current: Option<&Joined<S>>,
+    ears: &Ears,
+    eyes: &Eyes,
+    wanted: &Wanted,
+) -> Attached {
     current
         .map(|joined| {
             let attached = joined.session.listen(ears);
             joined.session.watch(eyes);
+            // Last of the three, and restated rather than set once: a
+            // constraint dies with the membership it was set on, so somebody
+            // who rejoined would be back to whatever the publisher sends.
+            joined.session.request(wanted);
             attached
         })
         .unwrap_or_default()
@@ -1204,6 +1316,9 @@ mod tests {
     use crate::hearing::Heard;
     use crate::publish::PublishedAudio;
 
+    /// What one pass of `request` asked for: a size per person per picture.
+    type Pass = Vec<(String, Kind, u32)>;
+
     /// What the fake transport was asked to do, in order.
     ///
     /// Shared rather than returned, because the loop owns the transport and a
@@ -1271,6 +1386,13 @@ mod tests {
         /// roster change has to reach both, and one of the two silently not
         /// being driven is exactly the defect #69 and #70 were.
         watches: Arc<AtomicUsize>,
+        /// What was asked of the SFU for each picture, one entry per pass.
+        ///
+        /// A pass rather than a running total, because the interesting
+        /// question is what the latest one said: a constraint dies with the
+        /// membership it was set on, so a cap that is not in the pass after a
+        /// rejoin is a cap that has been lost.
+        requests: Arc<Mutex<Vec<Pass>>>,
     }
 
     impl Log {
@@ -1346,6 +1468,15 @@ mod tests {
 
         fn frames(&self) -> usize {
             self.frames.load(Ordering::Relaxed)
+        }
+
+        fn requests(&self) -> Vec<Pass> {
+            self.requests.lock().unwrap().clone()
+        }
+
+        /// The last pass, or nothing asked at all.
+        fn asked(&self) -> Pass {
+            self.requests().pop().unwrap_or_default()
         }
     }
 
@@ -1760,6 +1891,23 @@ mod tests {
 
         fn watch(&self, _eyes: &Eyes) {
             self.log.watches.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// Resolved over the roster, like the real one resolves it over the
+        /// engine's. A person nothing is drawing answers nothing.
+        fn request(&self, wanted: &Wanted) {
+            let asked = self
+                .roster
+                .borrow()
+                .0
+                .iter()
+                .flat_map(|person| {
+                    [Kind::Camera, Kind::Screen].into_iter().filter_map(|kind| {
+                        Some((person.id.clone(), kind, wanted.pixels(&person.id, kind)?))
+                    })
+                })
+                .collect();
+            self.log.requests.lock().unwrap().push(asked);
         }
 
         async fn leave(self) -> Result<(), CallFailure> {
@@ -3540,6 +3688,203 @@ mod tests {
         }
     }
 
+    mod asking_for_a_picture {
+        use super::*;
+
+        const ADA: &str = "@ada:example.org";
+        const BOB: &str = "@bob:example.org";
+
+        fn drawn_at(user_id: &str, kind: Kind, bound: u32) -> Message {
+            Message::DrawnAt {
+                user_id: user_id.to_owned(),
+                kind,
+                bound,
+            }
+        }
+
+        fn capped(user_id: &str, cap: Cap) -> Message {
+            Message::SetCap {
+                user_id: user_id.to_owned(),
+                cap,
+            }
+        }
+
+        #[tokio::test]
+        async fn a_picture_is_asked_for_at_the_size_of_the_box_it_is_drawn_in() {
+            // Phase 1 of the plan. Nothing capped anything here: the SFU was
+            // sending a whole desktop to fill a 320 pixel square, and this is
+            // the ask that stops it.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![connect_to(GENERAL), drawn_at(ADA, Kind::Screen, 320)],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 320)]);
+        }
+
+        #[tokio::test]
+        async fn a_cap_somebody_chose_asks_for_less_than_the_box() {
+            // The whole of #167. A share across the full window asks for 1920
+            // and this person's share is wanted at 640 whatever it is drawn at.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                    capped(ADA, Cap::Low),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+        }
+
+        #[tokio::test]
+        async fn a_cap_is_about_one_person_and_leaves_the_rest_of_the_call_alone() {
+            let (transport, log) =
+                FakeTransport::whose_roster_holds(vec![person("Ada"), person("Bob")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                    drawn_at(BOB, Kind::Screen, 1920),
+                    capped(ADA, Cap::Low),
+                ],
+            )
+            .await;
+
+            assert_eq!(
+                log.asked(),
+                vec![
+                    (ADA.to_owned(), Kind::Screen, 640),
+                    (BOB.to_owned(), Kind::Screen, 1920),
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_cap_for_somebody_sending_nothing_asks_for_nothing() {
+            // `Dimensions` is the size of a box. A choice made about somebody
+            // whose camera is off has no box to go under, and a zero sent to
+            // the SFU is a request for a layer with no size.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(transport, vec![connect_to(GENERAL), capped(ADA, Cap::Low)]).await;
+
+            assert!(log.asked().is_empty(), "{:?}", log.asked());
+        }
+
+        #[tokio::test]
+        async fn the_same_box_twice_is_asked_for_once() {
+            // A card polls for a still twelve times a second. Without the
+            // compare, every one of those polls is a message to the call
+            // thread and a round trip to the SFU behind it.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Camera, 320),
+                    drawn_at(ADA, Kind::Camera, 320),
+                ],
+            )
+            .await;
+
+            assert_eq!(
+                log.requests().len(),
+                2,
+                "the join asked once and the first box asked once"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_box_that_grew_is_asked_for_again() {
+            // Clicking a share to fill the window is the case. The still is
+            // already sampled at the new size, and this is what makes the SFU
+            // send a layer worth sampling.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Screen, 320),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 1920)]);
+        }
+
+        #[tokio::test]
+        async fn choosing_a_cap_tells_nobody_else_in_the_call() {
+            // What this session asks the SFU for is its own business, and
+            // `announce_self` goes out to every peer over the data channel.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                    capped(ADA, Cap::Low),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.announcements(), 1, "the join announced once");
+            assert_eq!(log.listens(), 1, "the join attached once");
+        }
+
+        #[tokio::test]
+        async fn a_cap_chosen_outside_a_call_is_kept_for_the_next_one() {
+            // The card outlives a call the way the mute button does, and a
+            // choice made as one ended must not be dropped on the floor.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    capped(ADA, Cap::Low),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                    connect_to(GENERAL),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+        }
+
+        #[tokio::test]
+        async fn a_cap_survives_the_channel_it_was_chosen_in() {
+            // Like mute and deafen and unlike a camera. Somebody who turned a
+            // share down has not asked for it back up by clicking elsewhere.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    drawn_at(ADA, Kind::Screen, 1920),
+                    capped(ADA, Cap::Low),
+                    connect_to(MUSIC),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+        }
+    }
+
     mod roster {
         use super::*;
 
@@ -3633,6 +3978,46 @@ mod tests {
                 .await;
 
             ears.cues()
+        }
+
+        #[tokio::test]
+        async fn a_cap_is_restated_when_the_roster_moves() {
+            // The one clause of #167 with a real bug in it. A constraint is
+            // keyed by membership and a person who rejoins arrives with a new
+            // one, so a cap set once and never restated is a cap that lasts
+            // until they reconnect.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            driving(transport, async |roster, mut driver| {
+                driver.send(connect_to(GENERAL));
+                assert_eq!(driver.next().await, connecting(GENERAL));
+                driver.next().await;
+
+                driver.send(Message::DrawnAt {
+                    user_id: "@ada:example.org".to_owned(),
+                    kind: Kind::Screen,
+                    bound: 1920,
+                });
+                driver.send(Message::SetCap {
+                    user_id: "@ada:example.org".to_owned(),
+                    cap: Cap::Low,
+                });
+
+                // Ada left and came back, which upstream answers with a fresh
+                // member_id and no constraints on it.
+                roster.send((Vec::new(), None)).unwrap();
+                driver.next().await;
+                roster.send((vec![person("Ada")], None)).unwrap();
+                driver.next().await;
+                driver
+            })
+            .await;
+
+            assert_eq!(
+                log.asked(),
+                vec![("@ada:example.org".to_owned(), Kind::Screen, 640)],
+                "the pass after the rejoin asked for the publisher's own size"
+            );
         }
 
         #[tokio::test]

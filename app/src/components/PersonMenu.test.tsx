@@ -7,6 +7,8 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 const memberProfile = vi.hoisted(() => vi.fn());
 const memberAvatar = vi.hoisted(() => vi.fn());
 const directRoom = vi.hoisted(() => vi.fn());
+const personQuality = vi.hoisted(() => vi.fn());
+const setPersonQuality = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   audioSettings,
@@ -14,6 +16,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
   memberAvatar,
   directRoom,
+  personQuality,
+  setPersonQuality,
 }));
 
 import { PersonMenu } from "./PersonMenu";
@@ -85,6 +89,14 @@ function slider() {
   return screen.findByRole("slider");
 }
 
+/** The picture quality control, for somebody who is sending one. */
+function quality() {
+  return screen.findByRole("combobox", { name: /video/i });
+}
+
+/** Somebody sharing their screen with their camera off. */
+const sharing: Participant = { id: ADA_ID, name: "Ada", screen: true };
+
 describe("PersonMenu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -92,6 +104,8 @@ describe("PersonMenu", () => {
     memberProfile.mockResolvedValue(plain);
     memberAvatar.mockResolvedValue(null);
     directRoom.mockReset().mockResolvedValue("!dm:example.org");
+    personQuality.mockResolvedValue("auto");
+    setPersonQuality.mockResolvedValue(undefined);
   });
 
   it("shows the level that was saved for this person", async () => {
@@ -133,7 +147,86 @@ describe("PersonMenu", () => {
     );
   });
 
-  it("names the person it is about", async () => {
+describe("the picture quality", () => {
+    it("offers a cap on the pictures somebody is sending", async () => {
+      // Issue #167. A 1080p desktop over a connection that cannot carry one
+      // is unreadable, and the only repair before this was to stop looking.
+      open({}, sharing);
+
+      expect(await quality()).toHaveValue("auto");
+    });
+
+    it("shows the cap already chosen for this person", async () => {
+      personQuality.mockResolvedValue("low");
+
+      open({}, sharing);
+
+      expect(await quality()).toHaveValue("low");
+    });
+
+    it("asks for less when a cap is chosen", async () => {
+      open({}, sharing);
+      const control = await quality();
+
+      fireEvent.change(control, { target: { value: "medium" } });
+
+      await waitFor(() =>
+        expect(setPersonQuality).toHaveBeenCalledWith(ADA_ID, "medium"),
+      );
+    });
+
+    it("is not offered for somebody sending no picture at all", async () => {
+      // A control that says it did something and did not is worse than one
+      // that is absent, and this card also opens from a name in a timeline
+      // where nobody is in a call.
+      open();
+
+      await slider();
+      expect(
+        screen.queryByRole("combobox", { name: /video/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("asks nothing about a person with no picture to cap", async () => {
+      // This card opens from every name in a timeline. A read per open for a
+      // control that will not be drawn is a request for nothing.
+      open();
+
+      await slider();
+      expect(personQuality).not.toHaveBeenCalled();
+    });
+
+    it("is not offered about yourself", async () => {
+      // There is no stream to cap. The SFU does not send this session its own
+      // camera back, which is why the self view is a local capture.
+      open({}, { id: ADA_ID, name: "Ada", camera: true }, plain, {
+        selfId: ADA_ID,
+      });
+
+      await slider();
+      expect(
+        screen.queryByRole("combobox", { name: /video/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("says what a failed save could not do", async () => {
+      // The select has already moved by then, so without this it reads as a
+      // control that worked.
+      setPersonQuality.mockRejectedValue({
+        message: "the settings file is read only",
+      });
+      open({}, sharing);
+      const control = await quality();
+
+      fireEvent.change(control, { target: { value: "low" } });
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "the settings file is read only",
+      );
+    });
+  });
+
+    it("names the person it is about", async () => {
     // One menu at a time, opened from a list of similar rows. Without the name
     // on it there is nothing to say which row it belongs to.
     open();

@@ -1209,6 +1209,43 @@ export function theirView(
 }
 
 /**
+ * How much of somebody else's pictures to ask the SFU for.
+ *
+ * A word rather than a number of pixels, because somebody choosing this is
+ * choosing "less". Which pixels each word means is Rust's, and is
+ * `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
+ */
+export type PictureQuality = "auto" | "high" | "medium" | "low";
+
+/**
+ * How much of one person's pictures this session is asking for.
+ *
+ * `"auto"` for almost everybody: it is the absence of a choice, and what it
+ * asks for is the size of the box the picture is drawn into.
+ */
+export function personQuality(userId: string): Promise<PictureQuality> {
+  return invoke<PictureQuality>("person_quality", { userId });
+}
+
+/**
+ * Ask for no more of one person's pictures than `quality` allows.
+ *
+ * Receive-side only: nothing is asked of whoever is sending, and nobody else
+ * in the call is told. What it changes is which simulcast layer the SFU
+ * forwards, so a stream published as one layer is unaffected.
+ *
+ * Kept per machine, like `setPersonVolume`, and for the same reason: it is a
+ * fact about this connection rather than about the account. `"auto"` removes
+ * the entry rather than storing it.
+ */
+export function setPersonQuality(
+  userId: string,
+  quality: PictureQuality,
+): Promise<void> {
+  return invoke<void>("set_person_quality", { userId, quality });
+}
+
+/**
  * Set how loud one person should be, as a percentage, and remember it.
  *
  * Its own call rather than part of `setAudioSettings`, because it is set from

@@ -4,11 +4,11 @@ Date: 2026-10-05
 
 ## Status
 
-Accepted, and not yet acted on. Issue #167 asked whether a receiver can choose
-the quality of somebody else's screen share. It can, and this is which of the
-two available controls it should use. Nothing applies it until a remote picture
-draws: `docs/PLAN-receiving-quality.md` has the order, and
-`docs/PLAN-webcam.md` phase 2 is the blocker.
+Accepted and acted on. Issue #167 asked whether a receiver can choose the
+quality of somebody else's screen share. It can, and this is which of the two
+available controls it should use. `consort_call::detail` holds the ceilings
+below and the drawn size they sit over, and the control is on the card about
+one person. The ceilings are still a guess: see the consequences.
 
 ## Context
 

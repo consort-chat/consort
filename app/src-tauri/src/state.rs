@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use consort_call::{
-    CallEvent, CallTransport, Camera as ConsortCamera, Kind, Microphone, PictureSize, ScreenShare,
-    SelfScreen, SelfVideo, Senses,
+    CallEvent, CallTransport, Camera as ConsortCamera, Cap, Kind, Microphone, PictureSize,
+    ScreenShare, SelfScreen, SelfVideo, Senses,
 };
 use consort_matrix::{
     CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, Typing, backup,
@@ -624,6 +624,9 @@ impl AppState {
         // is acknowledged.
         *self.locked_called() = Some(room_id.clone());
 
+        // Read before the lock, because loading touches the file.
+        let chosen = self.settings().load().calls.person_quality;
+
         let mut slot = self.locked_call();
         let bridge = slot.get_or_insert_with(|| {
             CallBridge::spawn(
@@ -644,6 +647,14 @@ impl AppState {
                 self.call_reporter(),
             )
         });
+
+        // Restated at every join rather than only when the thread is built. A
+        // restatement of what it already holds costs nothing, and this is the
+        // one path a choice made before any call was started arrives by.
+        for (user_id, cap) in chosen {
+            bridge.set_cap(user_id, cap);
+        }
+
         bridge.connect(room_id);
     }
 
@@ -1031,7 +1042,29 @@ impl AppState {
     /// in no call at all. `bound` is the long edge in pixels of the box it is
     /// being drawn into: see [`crate::theirview`].
     pub fn their_view(&self, user_id: &str, kind: Kind, bound: u32) -> Option<String> {
+        // Every poll, rather than only when the size changes. The call thread
+        // holds the only record of what was last asked for, so a second one
+        // here would be a copy that can disagree with it; what it is for is
+        // deciding whether anything reaches the SFU, and it does that.
+        //
+        // The same clamp the still is made at, so what is asked of the SFU and
+        // what is drawn cannot disagree.
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.drawn_at(user_id.to_owned(), kind, crate::theirview::clamped(bound));
+        }
+
         self.their_views.latest(user_id, kind, bound)
+    }
+
+    /// Ask for no more of one person's pictures than `cap` allows.
+    ///
+    /// Pushed at the call rather than remembered here. The call thread holds
+    /// the choices, because it is the only thing that can restate them when a
+    /// membership comes back: see [`consort_call::Wanted`].
+    pub fn set_person_cap(&self, user_id: String, cap: Cap) {
+        if let Some(bridge) = self.locked_call().as_ref() {
+            bridge.set_cap(user_id, cap);
+        }
     }
 
     /// Whether a camera is open right now. Test-only.
@@ -2914,6 +2947,111 @@ mod tests {
     /// Joining and leaving a voice channel, and what the microphone does.
     mod calls {
         use super::*;
+
+        mod what_is_asked_of_the_sfu {
+            use super::*;
+
+            const ADA: &str = "@ada:example.org";
+
+            /// A joined call whose roster holds Ada, and the record of what it
+            /// was asked for.
+            fn with_ada(state: &AppState, sink: &Arc<RecordingSink>) -> crate::testing::Asks {
+                let transport = FakeCallTransport::joining();
+                transport.set_roster(vec![consort_matrix::Participant::named(ADA, "Ada")]);
+                let asks = transport.asks();
+                state.connect_call(GENERAL.to_owned(), move || transport, call_audio());
+                until_call(sink, "connected");
+                asks
+            }
+
+            #[test]
+            fn drawing_a_picture_asks_for_it_at_the_size_of_the_box() {
+                // Phase 1 of `docs/PLAN-receiving-quality.md`. The SFU was
+                // sending a whole desktop to fill a 320 pixel square.
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+
+                state.their_view(ADA, Kind::Camera, 320);
+
+                wait_for(
+                    "the call to ask for Ada's camera",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Camera, 320)],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+
+            #[test]
+            fn a_cap_somebody_chose_asks_for_less_than_the_box() {
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+                state.their_view(ADA, Kind::Screen, 1920);
+
+                state.set_person_cap(ADA.to_owned(), Cap::Low);
+
+                wait_for(
+                    "the call to cap Ada's screen",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 640)],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+
+            #[test]
+            fn polling_for_a_still_does_not_ask_again() {
+                // A card asks for a picture twelve times a second. Each ask
+                // reaching the call thread would be a round trip to the SFU
+                // per drawn frame.
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+                state.their_view(ADA, Kind::Camera, 320);
+                wait_for(
+                    "the first ask",
+                    || !asks.latest().is_empty(),
+                    || format!("{:?}", asks.latest()),
+                );
+                let after_the_first = asks.passes();
+
+                for _ in 0..12 {
+                    state.their_view(ADA, Kind::Camera, 320);
+                }
+
+                assert_eq!(asks.passes(), after_the_first, "a poll asked again");
+            }
+
+            #[test]
+            fn a_box_past_the_ceiling_asks_for_the_ceiling() {
+                // The same clamp the still is made at. Asking the SFU for more
+                // than will ever be drawn is asking for bytes to throw away.
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+
+                state.their_view(ADA, Kind::Screen, 4096);
+
+                wait_for(
+                    "the clamped ask",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 1920)],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+
+            #[test]
+            fn a_cap_chosen_before_any_call_reaches_the_first_one() {
+                // The one path a choice made while nothing was connected
+                // arrives by: the call thread does not exist until a join.
+                let (_dir, state, sink) = state();
+                let mut stored = state.settings().load();
+                stored.calls.person_quality.insert(ADA.to_owned(), Cap::Low);
+                state.settings().save(&stored).expect("save");
+
+                let asks = with_ada(&state, &sink);
+                state.their_view(ADA, Kind::Screen, 1920);
+
+                wait_for(
+                    "the stored cap to be applied",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 640)],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+        }
 
         #[test]
         fn a_fresh_state_is_in_no_call_and_holds_no_microphone() {

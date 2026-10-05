@@ -25,6 +25,16 @@ use crate::selfview::encode;
 /// this window is worth.
 const MAX_BOUND: u32 = 1920;
 
+/// `bound` brought inside what a picture will ever be made at.
+///
+/// Clamped rather than refused. The frontend asks for the box it is drawing
+/// into, and the honest answer to a box larger than the ceiling is the largest
+/// picture there is. Shared with the SFU side of the same ask, so what is
+/// requested and what is drawn cannot disagree: see `consort_call::detail`.
+pub fn clamped(bound: u32) -> u32 {
+    bound.clamp(1, MAX_BOUND)
+}
+
 /// The newest frame of everything the other people in the call are sending.
 ///
 /// One entry per membership per kind, because that is what a stream belongs to:
@@ -62,10 +72,7 @@ impl TheirViews {
             .find(|((_, held_kind), held)| *held_kind == kind && held.user_id == user_id)?
             .1;
 
-        // Clamped rather than refused. The frontend asks for the box it is
-        // drawing into, and the honest answer to a box larger than the ceiling
-        // is the largest picture there is.
-        let bound = bound.clamp(1, MAX_BOUND);
+        let bound = clamped(bound);
 
         encode(&theirs.picture.thumbnail(bound, bound))
     }

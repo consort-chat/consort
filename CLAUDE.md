@@ -25,9 +25,11 @@ one on the stage. Every picture is a still asked for at the size of the box it
 is drawn in: see docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md,
 docs/adr/0008-one-square-for-everything-in-a-call.md for why the card is
 squares, and docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
-them is not. Choosing how good a received picture is is not built: that is
-#167, the size the card asks for is where it goes, and
-docs/PLAN-receiving-quality.md is the research behind it.
+them is not. The SFU is asked for each remote picture at that same size, and
+the card about one person caps it below that: #167,
+docs/adr/0013-ask-for-a-picture-in-pixels.md for the units and the ceilings,
+docs/PLAN-receiving-quality.md for what is left, which is the automatic cap
+from a connection going bad.
 Sharing system audio alongside a screen is not built either,
 and docs/PLAN-screen-share.md says what it would take. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a

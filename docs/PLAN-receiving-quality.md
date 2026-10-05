@@ -140,8 +140,8 @@ that sends it.
 
 ## Phase 1: stop paying for more video than is drawn
 
-Not part of #167, and worth its own issue. Recorded here because the research
-turned it up and it is the same one function.
+Done, with phase 2, because it is the same call with nobody choosing the
+number. Not part of #167 and recorded here because the research turned it up.
 
 `LiveKitConnection` connects with `auto_subscribe: true` and the transport sets
 no adaptive-stream option, so a subscribed track is a track the SFU is
@@ -160,17 +160,26 @@ so the two are one change if they are done together.
 
 ## Phase 2: a control on a tile
 
+Done.
+
 | Piece | Where |
 | --- | --- |
-| The chosen cap, and what it is in pixels | `consort-call`, a module of its own |
-| The call to `set_constraints` | `consort-call`: `livekit.rs`, `transport.rs` |
-| The command and the state | `thread.rs`, `app/src-tauri/src/state.rs` |
-| The control | on the tile `TheirPicture` draws |
+| The chosen cap, and what it is in pixels | `consort_call::detail` |
+| The call to `set_constraints` | `CallSession::request`, in `livekit.rs` |
+| The command and the state | `thread.rs`, `state.rs`, `commands.rs` |
+| The control | `PersonMenu`, the card a face in the call opens |
 
-What is true at the end: a stream is asked of the SFU at the size it is drawn
-rather than only sampled down to it, a person can cap it below that, and the
-cap survives the stream going away and coming back because the engine
-re-applies it.
+What is true now: a stream is asked of the SFU at the size it is drawn rather
+than only sampled down to it, a person can cap it below that, and the cap is
+restated on every roster change. That last part is not the engine's doing. It
+re-applies a constraint when a stream reappears, but a rejoining member gets a
+fresh `member_id` and the constraints die with the old one, so the restatement
+has to be ours.
+
+The control went on `PersonMenu` rather than on the tile itself. The stage and
+the screen squares are each one `<button>`, so a picker inside one would be a
+control inside a control, and `PersonMenu` is already the panel holding this
+session's other receive-side choice about one person.
 
 ## Phase 3: an automatic cap
 
