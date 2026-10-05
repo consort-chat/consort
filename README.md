@@ -8,7 +8,7 @@ alternative that actually works. The protocol underneath is Matrix, all the way
 down. There is no proprietary backend and there is no Consort server. Point it
 at whatever homeserver you already run.
 
-[Screenshot of the main window in a text room Here]
+<img width="1280" height="786" alt="image" src="https://github.com/user-attachments/assets/101fae9f-31a0-45ec-b170-ef1346dba9ea" />
 
 > **Status: early.** It signs you in and keeps you signed in, verifies itself,
 > draws your rooms, joins voice channels, and reads and writes text, threads,
@@ -27,16 +27,19 @@ at whatever homeserver you already run.
 - **Verification.** Emoji verification in both directions, or a recovery key.
   Key backup means history older than this session decrypts.
 
-  [Screenshot of emoji verification mid-flow Here]
+  <img width="325" alt="image" src="https://github.com/user-attachments/assets/10b877d8-f2ff-453d-8dda-07ac5f48a740" />
+
 - **Voice.** Persistent channels over MatrixRTC and LiveKit. You can see who is
   already in one before joining, who is speaking, and who has gone deaf.
 
-  [Screenshot of a voice channel with somebody speaking Here]
+  <img width="325" height="278" alt="image" src="https://github.com/user-attachments/assets/9ddc0c4e-9283-4f05-a801-9937301ca6a8" />
+
 - **Sound.** Device pickers, a level meter, an output test, and RNNoise voice
   activity detection with hysteresis gating, so the gate does not chatter on
   the first syllable of every word.
 
-  [Screenshot of the audio settings with the level meter Here]
+  <img width="325" alt="image" src="https://github.com/user-attachments/assets/45e2a213-ffe2-4d1e-b6f7-1e182cc61602" />
+
 - **Camera and screen sharing.** Turn a camera on in a voice channel, or share
   a whole screen or one window, chosen from a picker that offers the window you
   were just looking at first and a fullscreen game ahead of that.
@@ -46,7 +49,7 @@ at whatever homeserver you already run.
   | Windows 10 1903 and later | works | works |
   | Linux on X11 | works | works |
   | Linux on Wayland | works | not yet |
-  | macOS | not built, and says so | not built, and says so |
+  | macOS | not built | not built |
 
   On Windows the shared screen or window carries a yellow border, which is
   Windows saying what is being captured.
@@ -286,7 +289,7 @@ resource here. The full standard, and what gets a change sent back, is in
 [GNU Affero General Public License, version 3](LICENSE), and only version 3.
 
 Inherited rather than chosen: Consort links
-[`matrix-rust-rtc`](https://github.com/BillCarsonFr/matrix-rust-rtc), which is
+[`matrix-rust-rtc`](https://github.com/BillCarsonFr/matrix-rust-rtc) (now https://github.com/element-hq/matrix-rust-rtc), which is
 AGPL-3.0-only. If you run a modified Consort as a network service, the AGPL
 requires you to offer that modified source to its users.
 
