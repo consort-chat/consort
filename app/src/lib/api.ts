@@ -2274,6 +2274,35 @@ export function setEmojiTone(tone: number): Promise<void> {
 }
 
 /**
+ * Which sidebar sections are drawn folded away.
+ *
+ * Mirrors `crate::settings::SidebarSettings`. A list of the folded keys rather
+ * than a flag per section, because the sections are not a fixed pair for much
+ * longer: #169 reorders them and #170 lets somebody make their own, and both
+ * of those are keys nothing has seen yet.
+ */
+export interface SidebarSettings {
+  /** The keys of the sections drawn folded, in no particular order. */
+  folded: string[];
+}
+
+/** Which sections are folded away right now. */
+export function sidebarSettings(): Promise<SidebarSettings> {
+  return invoke<SidebarSettings>("sidebar_settings");
+}
+
+/**
+ * Fold a section away, or unfold it.
+ *
+ * Nothing comes back, the way the skin tone is saved. The press has already
+ * moved the list, and an answer arriving after a second press would be the
+ * first one undoing it.
+ */
+export function setSectionFolded(key: string, folded: boolean): Promise<void> {
+  return invoke<void>("set_section_folded", { key, folded });
+}
+
+/**
  * How big the application is drawn.
  *
  * Two numbers because these are two knobs. `applicationScale` is the webview's

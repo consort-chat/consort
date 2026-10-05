@@ -1,8 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   NOBODY,
+  asCommandError,
   callRoomId,
+  setSectionFolded,
+  sidebarSettings,
   type Call,
   type Channel,
   type Participant,
@@ -60,6 +63,32 @@ function ChatIcon() {
       aria-hidden="true"
     >
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
+
+/** Nothing folded, which is how a fresh account finds the sidebar. */
+const NO_SECTIONS: ReadonlySet<string> = new Set();
+
+/**
+ * A chevron, pointing the way the section will move.
+ *
+ * The same device the sidebar's own fold uses, turned a quarter: down means
+ * the channels are under it, right means they are put away.
+ */
+function FoldGlyph({ folded }: { folded: boolean }) {
+  return (
+    <svg
+      className="channels__fold-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={folded ? "M9 6l6 6-6 6" : "M6 9l6 6 6-6"} />
     </svg>
   );
 }
@@ -424,10 +453,12 @@ function ChannelRow({
 function Group({
   label,
   channels,
+  folded,
   selectedId,
   call,
   speaking,
   joining,
+  onToggleFold,
   onSelect,
   onJoin,
   onOpenChat,
@@ -435,10 +466,14 @@ function Group({
 }: {
   label: string;
   channels: Channel[];
+  /** Whether the channels under the heading are put away right now. */
+  folded: boolean;
   selectedId: string | null;
   call: Call;
   speaking: ReadonlySet<string>;
   joining: Joining | null;
+  /** Fold this section away, or bring it back. */
+  onToggleFold: () => void;
   onSelect: (id: string) => void;
   /** Ask to be let into a channel this account is not in. */
   onJoin: (id: string) => void;
@@ -450,14 +485,41 @@ function Group({
     at: { x: number; y: number },
   ) => void;
 }) {
+  const listId = useId();
+
   // An empty group is no group. A "VOICE" header over nothing reads as a
   // channel list that failed to load rather than a space with no voice rooms.
   if (channels.length === 0) return null;
 
   return (
     <section className="channels__group" aria-label={label}>
-      <h2 className="channels__label">{label}</h2>
-      <ul className="channels__list">
+      <h2 className="channels__label">
+        {/*
+          A real disclosure control inside the heading, rather than a clickable
+          heading. `aria-expanded` carries the state and the name stays put
+          across a press, the way the call panel does it: a button renamed
+          under the cursor is announced as a different button each time. The
+          tooltip is where the wording is allowed to follow the state.
+        */}
+        <button
+          type="button"
+          className="channels__fold"
+          aria-expanded={!folded}
+          aria-controls={listId}
+          title={
+            folded ? `Show the ${label} channels` : `Hide the ${label} channels`
+          }
+          onClick={onToggleFold}
+        >
+          <FoldGlyph folded={folded} />
+          {label}
+        </button>
+      </h2>
+      {/*
+        Hidden rather than unmounted, so the heading's `aria-controls` points
+        at something that exists in both states.
+      */}
+      <ul className="channels__list" id={listId} hidden={folded}>
         {channels.map((channel) => (
           <ChannelRow
             key={channel.id}
@@ -476,6 +538,19 @@ function Group({
     </section>
   );
 }
+
+/**
+ * The sections the sidebar draws, in the order they are drawn.
+ *
+ * One list rather than two calls, so that #169 reordering them and #170 adding
+ * to them are changes to data rather than to markup. The key is what the
+ * settings file holds, so it is not the label: a label is wording and can be
+ * reworded.
+ */
+const SECTIONS: { key: string; label: string; kind: Channel["kind"] }[] = [
+  { key: "text", label: "Text", kind: "text" },
+  { key: "voice", label: "Voice", kind: "voice" },
+];
 
 interface Props {
   space: Space;
@@ -537,8 +612,10 @@ export function ChannelList({
   onOpenRoom,
   onFold,
 }: Props) {
-  const text = space.channels.filter((channel) => channel.kind === "text");
-  const voice = space.channels.filter((channel) => channel.kind === "voice");
+  // Which sections are put away. Read from the settings file rather than kept
+  // in the webview's storage, which is where every other preference here
+  // lives; see `SidebarSettings`.
+  const [folded, setFolded] = useState<ReadonlySet<string>>(NO_SECTIONS);
   // Which name was clicked, and where to draw the card about them. One at a
   // time: two open menus about two people would be two sliders somebody has to
   // tell apart by the heading.
@@ -548,6 +625,39 @@ export function ChannelList({
     at: { x: number; y: number };
   } | null>(null);
   const list = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    sidebarSettings().then(
+      (settings) => setFolded(new Set(settings.folded)),
+      (raw: unknown) => {
+        // Drawn with everything open. Failing to remember a fold is not a
+        // reason to draw a sidebar with nothing in it.
+        console.error(
+          "could not read which sections are folded",
+          asCommandError(raw).detail,
+        );
+      },
+    );
+  }, []);
+
+  /** Put a section away, or bring it back, and write that down. */
+  function toggleFold(key: string) {
+    const away = !folded.has(key);
+    const next = new Set(folded);
+    if (away) next.add(key);
+    else next.delete(key);
+    setFolded(next);
+
+    // The list has already moved, and it stays moved if the write fails:
+    // putting it back because the file would not take the fold would be a
+    // press that undoes itself.
+    setSectionFolded(key, away).catch((raw: unknown) => {
+      console.error(
+        "could not remember the folded sections",
+        asCommandError(raw).detail,
+      );
+    });
+  }
 
   /*
     Beside the sidebar rather than under the pointer, which is where this used
@@ -585,32 +695,25 @@ export function ChannelList({
       {space.channels.length === 0 ? (
         <p className="channels__empty">Nothing in here yet.</p>
       ) : (
-        <>
+        SECTIONS.map((section) => (
           <Group
-            label="Text"
-            channels={text}
+            key={section.key}
+            label={section.label}
+            channels={space.channels.filter(
+              (channel) => channel.kind === section.kind,
+            )}
+            folded={folded.has(section.key)}
             selectedId={selectedId}
             call={call}
             speaking={speaking}
             joining={joining}
+            onToggleFold={() => toggleFold(section.key)}
             onSelect={onSelect}
             onJoin={onJoin}
             onOpenChat={onOpenRoom}
             onOpenPerson={open}
           />
-          <Group
-            label="Voice"
-            channels={voice}
-            selectedId={selectedId}
-            call={call}
-            speaking={speaking}
-            joining={joining}
-            onSelect={onSelect}
-            onJoin={onJoin}
-            onOpenChat={onOpenRoom}
-            onOpenPerson={open}
-          />
-        </>
+        ))
       )}
 
       {/*

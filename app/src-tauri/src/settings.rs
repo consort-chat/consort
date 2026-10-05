@@ -71,6 +71,7 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub emoji: EmojiSettings,
     pub appearance: AppearanceSettings,
+    pub sidebar: SidebarSettings,
     /// The rooms this account has opened, most recently first.
     ///
     /// Here rather than in a file of its own because it is the same kind of
@@ -131,6 +132,35 @@ impl Default for EmojiSettings {
             .map(str::to_owned)
             .to_vec(),
             tone: 0,
+        }
+    }
+}
+
+/// Which sidebar sections are drawn folded away.
+///
+/// A list of the folded ones rather than a flag per section, because the
+/// sections are not a fixed pair for much longer: #169 reorders them and #170
+/// lets somebody make their own, and both of those are keys this file has never
+/// seen. A list says nothing about which sections exist.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SidebarSettings {
+    /// The keys of the sections drawn folded, in no particular order.
+    ///
+    /// A key this build draws no section for is kept rather than dropped. It
+    /// may be a section that arrives in a later one.
+    pub folded: Vec<String>,
+}
+
+impl SidebarSettings {
+    /// Record that the section keyed `key` is folded away, or that it is not.
+    ///
+    /// Removing first is what keeps two presses of the one control from
+    /// leaving two copies of its key behind.
+    pub fn fold(&mut self, key: &str, folded: bool) {
+        self.folded.retain(|one| one != key);
+        if folded {
+            self.folded.push(key.to_owned());
         }
     }
 }
@@ -422,6 +452,7 @@ mod tests {
             notifications: NotificationSettings::default(),
             emoji: EmojiSettings::default(),
             appearance: AppearanceSettings::default(),
+            sidebar: SidebarSettings::default(),
             recent: RecentRooms::default(),
         }
     }
@@ -562,6 +593,56 @@ mod tests {
         store.save(&chosen).expect("save");
 
         assert_eq!(store.load().appearance, chosen.appearance);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_the_sidebar_existed_still_loads() {
+        // And loads with every section open, which is what every build before
+        // this one drew. Somebody who never folded anything must not find
+        // something folded.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"audio":{"input":"Yeti"}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert!(loaded.sidebar.folded.is_empty());
+    }
+
+    #[test]
+    fn a_folded_section_survives_a_round_trip() {
+        // The whole point of it being in this file. A section folded away and
+        // open again next launch is the preference not being remembered.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings.sidebar.fold("voice", true);
+        store.save(&settings).expect("save");
+
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(next_launch.load().sidebar.folded, ["voice"]);
+    }
+
+    #[test]
+    fn unfolding_a_section_takes_it_back_out() {
+        let mut sidebar = SidebarSettings::default();
+        sidebar.fold("text", true);
+
+        sidebar.fold("text", false);
+
+        assert!(sidebar.folded.is_empty());
+    }
+
+    #[test]
+    fn folding_the_same_section_twice_lists_it_once() {
+        // Two presses of the same control cannot leave the list with two
+        // copies of a key, because the half that unfolds removes one.
+        let mut sidebar = SidebarSettings::default();
+
+        sidebar.fold("voice", true);
+        sidebar.fold("voice", true);
+
+        assert_eq!(sidebar.folded, ["voice"]);
     }
 
     #[test]

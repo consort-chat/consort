@@ -12,11 +12,18 @@ const memberAvatar = vi.hoisted(() => vi.fn());
 // and the test would pass having exercised the failure path.
 const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
+// Which sections are folded is a preference in the settings file, so the list
+// reads it on mount and writes a press down. Answered for every test rather
+// than only the ones about folding, because every render reaches it.
+const sidebarSettings = vi.hoisted(() => vi.fn());
+const setSectionFolded = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
   audioSettings,
   setPersonVolume,
+  sidebarSettings,
+  setSectionFolded,
 }));
 
 import { ChannelList } from "./ChannelList";
@@ -112,6 +119,8 @@ describe("ChannelList", () => {
     // the menu, because any click on a name reaches it.
     audioSettings.mockReset().mockResolvedValue(SETTINGS);
     setPersonVolume.mockReset().mockResolvedValue(undefined);
+    sidebarSettings.mockReset().mockResolvedValue({ folded: [] });
+    setSectionFolded.mockReset().mockResolvedValue(undefined);
   });
 
   /** Render one space's channels, with the props every test shares. */
@@ -1453,6 +1462,124 @@ describe("ChannelList", () => {
 
       await waitFor(() =>
         expect(screen.queryByRole("dialog", { name: /Ada/ })).toBeNull(),
+      );
+    });
+  });
+
+  describe("folding a section away", () => {
+    /** One of each kind, which is what folding one of them is visible against. */
+    function both() {
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+    }
+
+    /** The control in a section's heading. */
+    function heading(label: string): HTMLElement {
+      return screen.getByRole("button", { name: label });
+    }
+
+    it("hides the channels in the section that was pressed", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull();
+      // The other section is untouched. A control that folded both would be
+      // one control for two sections.
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    });
+
+    it("draws a section the settings file says is folded", async () => {
+      // The whole point of writing it down. A fold that came back open is the
+      // preference not being remembered.
+      sidebarSettings.mockResolvedValue({ folded: ["voice"] });
+      both();
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
+      );
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    });
+
+    it("writes a fold down", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(setSectionFolded).toHaveBeenCalledWith("voice", true);
+    });
+
+    it("unfolds a folded one, and writes that down too", async () => {
+      sidebarSettings.mockResolvedValue({ folded: ["voice"] });
+      both();
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
+      );
+
+      await userEvent.click(heading("Voice"));
+
+      expect(setSectionFolded).toHaveBeenCalledWith("voice", false);
+      expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    });
+
+    it("says whether the section it heads is open", async () => {
+      // The state is on the control rather than in its name, the way the call
+      // panel does it: a button renamed under the cursor is announced as a
+      // different button each press.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(heading("Voice")).toHaveAttribute("aria-expanded", "true");
+
+      await userEvent.click(heading("Voice"));
+
+      expect(heading("Voice")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("names the list it folds, so the heading points at it", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      const controls = heading("Voice").getAttribute("aria-controls");
+
+      expect(controls).not.toBeNull();
+      expect(document.getElementById(controls ?? "")).toBeVisible();
+    });
+
+    it("draws every section open when the preference cannot be read", async () => {
+      // Failing to remember a fold is not a reason to draw a sidebar with
+      // nothing in it.
+      sidebarSettings.mockReset().mockRejectedValue(new Error("no file"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+
+      expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("folded"),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("stays folded when the write fails", async () => {
+      // The press has already moved the list by then. Putting it back because
+      // the file would not take the fold would be a press that undoes itself.
+      setSectionFolded.mockReset().mockRejectedValue(new Error("read only"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull();
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("remember"),
+          expect.anything(),
+        ),
       );
     });
   });
