@@ -24,8 +24,10 @@ a screen on the strip puts that one on the stage. Drawing somebody else's camera
 or screen is not built yet, so they get a square with their name and no picture:
 see docs/PLAN-webcam.md for the half that is and the half that is not,
 docs/adr/0008-one-square-for-everything-in-a-call.md for why the card is
-squares, and docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
-them is not. Sharing system audio alongside a screen is not built either,
+squares, docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
+them is not, and docs/PLAN-receiving-quality.md for whether a receiver can ask
+for less of a picture than is being sent, which waits on the same half.
+Sharing system audio alongside a screen is not built either,
 and docs/PLAN-screen-share.md says what it would take. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a
 clip somebody sends, or a count on the icon when something is unread.

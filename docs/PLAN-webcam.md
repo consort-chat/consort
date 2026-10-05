@@ -86,6 +86,9 @@ Still open, and to be settled in phase 2 rather than guessed at now:
   Consort is built for, and `AppEvent::Speaking` already carries who is audible,
   measured locally. The card should read that rather than subscribe to
   `CallEvent::ActiveSpeakers`, which the pinned transport does offer.
+- Whether a tile reports its drawn size back to Rust, which is what a receiver
+  needs in order to ask for less than is being sent: #167 and
+  [PLAN-receiving-quality.md](PLAN-receiving-quality.md) are blocked on it.
 - What `#71` asked for and did not get: double-click to expand the card, a
   streamer's content filling their own card, and double-click on a person for
   full screen. All three need a picture to act on, so none of them could land
