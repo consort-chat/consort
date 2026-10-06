@@ -531,6 +531,20 @@ mod a_picture_for_the_card {
     }
 
     #[test]
+    fn the_size_of_a_thumbnail_is_known_without_making_one() {
+        // What is asked of an SFU is the box a still is drawn in, and that
+        // box is this. Measured through the same arithmetic the thumbnail
+        // uses, so the two cannot disagree.
+        let picture = flat(1280, 720, 100, 110, 120);
+
+        let size = picture.thumbnail_size(320, 320);
+
+        let small = picture.thumbnail(320, 320);
+        assert_eq!(size, (small.width, small.height));
+        assert_eq!(size, (320, 180));
+    }
+
+    #[test]
     fn a_thumbnail_is_bounded_by_whichever_side_binds() {
         // Taller than it is wide, so the height is the limit and the width has
         // to come down with it rather than being left at the bound.

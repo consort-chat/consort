@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use consort_call::{IncomingPicture, Kind, Seen};
+use consort_call::{Asked, IncomingPicture, Kind, Seen};
 use consort_video::Picture;
 
 use crate::selfview::encode;
@@ -75,6 +75,27 @@ impl TheirViews {
         let bound = clamped(bound);
 
         encode(&theirs.picture.thumbnail(bound, bound))
+    }
+
+    /// The box a still of `user_id`'s `kind` is drawn in at `bound`.
+    ///
+    /// What the SFU is asked for, so it is the box rather than the square the
+    /// box fits inside: ADR-0015. A square is the answer before the first
+    /// frame, when the shape of what is coming is not known yet.
+    pub fn drawn_at(&self, user_id: &str, kind: Kind, bound: u32) -> Asked {
+        let bound = clamped(bound);
+        let square = Asked {
+            width: bound,
+            height: bound,
+        };
+
+        self.held()
+            .iter()
+            .find(|((_, held_kind), held)| *held_kind == kind && held.user_id == user_id)
+            .map_or(square, |(_, held)| {
+                let (width, height) = held.picture.thumbnail_size(bound, bound);
+                Asked { width, height }
+            })
     }
 
     fn held(&self) -> MutexGuard<'_, BTreeMap<(String, Kind), Held>> {
@@ -179,6 +200,66 @@ mod tests {
 
         assert_eq!((tile.width(), tile.height()), (320, 180));
         assert_eq!((stage.width(), stage.height()), (960, 540));
+    }
+
+    #[test]
+    fn the_box_asked_of_the_sfu_is_the_one_the_still_is_drawn_in() {
+        // The bug on #182. A square asks for a picture as tall as the box is
+        // wide, and an SFU picks a layer by height, so every cap collapsed
+        // onto the layer the publisher was already sending.
+        let views = alices_camera();
+
+        assert_eq!(
+            views.drawn_at(ALICE, Kind::Camera, 320),
+            Asked {
+                width: 320,
+                height: 180
+            }
+        );
+    }
+
+    #[test]
+    fn the_box_matches_the_picture_that_is_made_in_it() {
+        // Two answers to one question, so a drift between them is a cap that
+        // does not match what it is a cap on.
+        let views = alices_camera();
+
+        for bound in [320, 480, 960, 1920, 4096] {
+            let made = drawn(&views.latest(ALICE, Kind::Camera, bound).unwrap());
+            let box_ = views.drawn_at(ALICE, Kind::Camera, bound);
+
+            assert_eq!(
+                (box_.width, box_.height),
+                (made.width(), made.height()),
+                "at {bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_box_before_the_first_frame_is_the_square_that_was_asked_for() {
+        // Nothing has arrived, so there is no shape to go on. The square is
+        // the safe over-ask, and the next poll after the first frame corrects
+        // it.
+        let views = TheirViews::new();
+
+        assert_eq!(
+            views.drawn_at(ALICE, Kind::Screen, 480),
+            Asked {
+                width: 480,
+                height: 480
+            }
+        );
+    }
+
+    #[test]
+    fn a_box_is_never_larger_than_the_ceiling() {
+        // The same clamp the still is made at: what is asked of the SFU and
+        // what is drawn cannot disagree.
+        let views = TheirViews::new();
+        views.see("alice-laptop", ALICE, Kind::Screen, frame(3840, 2160, 90));
+
+        assert_eq!(views.drawn_at(ALICE, Kind::Screen, 4096).width, MAX_BOUND);
     }
 
     #[test]

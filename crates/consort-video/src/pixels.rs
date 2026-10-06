@@ -86,13 +86,21 @@ pub struct Picture {
 const SMALLEST: u32 = 2;
 
 impl Picture {
+    /// The size [`Self::thumbnail`] would make, without making one.
+    ///
+    /// For asking an SFU for a layer worth sampling: what gets drawn is this
+    /// box rather than the square it fits inside. See ADR-0015.
+    pub fn thumbnail_size(&self, max_width: u32, max_height: u32) -> (u32, u32) {
+        fitted(self.width, self.height, max_width, max_height)
+    }
+
     /// A copy sampled down to fit inside `max_width` by `max_height`.
     ///
     /// Nearest neighbour, because the one reader is a self view a couple of
     /// hundred pixels wide and the cost is paid on the capture thread. A frame
     /// already inside the bound is copied at the size it is.
     pub fn thumbnail(&self, max_width: u32, max_height: u32) -> Self {
-        let (width, height) = fitted(self.width, self.height, max_width, max_height);
+        let (width, height) = self.thumbnail_size(max_width, max_height);
         let (w, h) = (width as usize, height as usize);
         let (source_w, source_h) = (self.width as usize, self.height as usize);
         let (chroma_w, chroma_h) = (w.div_ceil(2), h.div_ceil(2));

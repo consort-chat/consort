@@ -291,8 +291,8 @@ pub struct FakeCallTransport {
 #[derive(Clone, Default)]
 pub struct Asks(Arc<std::sync::Mutex<Vec<Pass>>>);
 
-/// What one pass of `request` asked for: a size per person per picture.
-pub type Pass = Vec<(String, consort_call::Kind, u32)>;
+/// What one pass of `request` asked for: a box per person per picture.
+pub type Pass = Vec<(String, consort_call::Kind, consort_call::Asked)>;
 
 impl Asks {
     /// How many passes there have been.
@@ -488,7 +488,7 @@ impl consort_call::CallSession for FakeCallSession {
                 [consort_call::Kind::Camera, consort_call::Kind::Screen]
                     .into_iter()
                     .filter_map(|kind| {
-                        Some((person.id.clone(), kind, wanted.pixels(&person.id, kind)?))
+                        Some((person.id.clone(), kind, wanted.asked(&person.id, kind)?))
                     })
             })
             .collect();

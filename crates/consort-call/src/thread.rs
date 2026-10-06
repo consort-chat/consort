@@ -41,7 +41,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::arrivals::Arrivals;
 use crate::camera::{Camera, PictureSize};
-use crate::detail::{Cap, Wanted};
+use crate::detail::{Asked, Cap, Wanted};
 use crate::event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 use crate::failure::CallFailure;
 use crate::hearing::{Attached, Cue, Ears};
@@ -139,12 +139,11 @@ enum Message {
     /// anything is published and the transport needs the negotiated size to
     /// set its encoder up. See [`PictureSize`].
     SetCamera(Option<PictureSize>),
-    /// Somebody else's picture is being drawn into a box this many pixels on
-    /// its long edge.
+    /// Somebody else's picture is being drawn into this box.
     DrawnAt {
         user_id: String,
         kind: Kind,
-        bound: u32,
+        drawn: Asked,
     },
     /// Ask for no more of this person's pictures than `cap` allows.
     SetCap {
@@ -270,16 +269,16 @@ impl CallThread {
         self.send(Message::SetScreen(share));
     }
 
-    /// Say that `user_id`'s `kind` is drawn into a box `bound` pixels on its
-    /// long edge, so the SFU can be asked for a layer that size.
+    /// Say what box `user_id`'s `kind` is drawn into, so the SFU can be asked
+    /// for a layer that size.
     ///
     /// Only when it changes. A card polls for a still many times a second and
     /// a message per poll would be a command channel carrying frames.
-    pub fn drawn_at(&self, user_id: String, kind: Kind, bound: u32) {
+    pub fn drawn_at(&self, user_id: String, kind: Kind, drawn: Asked) {
         self.send(Message::DrawnAt {
             user_id,
             kind,
-            bound,
+            drawn,
         });
     }
 
@@ -666,9 +665,9 @@ async fn serve<T: CallTransport>(
             Message::DrawnAt {
                 user_id,
                 kind,
-                bound,
+                drawn,
             } => {
-                if wanted.drawn_at(&user_id, kind, bound) {
+                if wanted.drawn_at(&user_id, kind, drawn) {
                     ask(current.as_ref(), &wanted);
                 }
             }
@@ -1316,8 +1315,8 @@ mod tests {
     use crate::hearing::Heard;
     use crate::publish::PublishedAudio;
 
-    /// What one pass of `request` asked for: a size per person per picture.
-    type Pass = Vec<(String, Kind, u32)>;
+    /// What one pass of `request` asked for: a box per person per picture.
+    type Pass = Vec<(String, Kind, Asked)>;
 
     /// What the fake transport was asked to do, in order.
     ///
@@ -1903,7 +1902,7 @@ mod tests {
                 .iter()
                 .flat_map(|person| {
                     [Kind::Camera, Kind::Screen].into_iter().filter_map(|kind| {
-                        Some((person.id.clone(), kind, wanted.pixels(&person.id, kind)?))
+                        Some((person.id.clone(), kind, wanted.asked(&person.id, kind)?))
                     })
                 })
                 .collect();
@@ -3698,7 +3697,7 @@ mod tests {
             Message::DrawnAt {
                 user_id: user_id.to_owned(),
                 kind,
-                bound,
+                drawn: wide(bound),
             }
         }
 
@@ -3706,6 +3705,22 @@ mod tests {
             Message::SetCap {
                 user_id: user_id.to_owned(),
                 cap,
+            }
+        }
+
+        /// A 16 by 9 box `bound` wide, which is the shape a share is drawn in.
+        fn wide(bound: u32) -> Asked {
+            Asked {
+                width: bound,
+                height: bound * 9 / 16,
+            }
+        }
+
+        /// What `Cap::Low` leaves of a box wider than its ceiling.
+        fn low() -> Asked {
+            Asked {
+                width: 640,
+                height: 360,
             }
         }
 
@@ -3722,7 +3737,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 320)]);
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, wide(320))]);
         }
 
         #[tokio::test]
@@ -3741,7 +3756,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, low())]);
         }
 
         #[tokio::test]
@@ -3763,8 +3778,8 @@ mod tests {
             assert_eq!(
                 log.asked(),
                 vec![
-                    (ADA.to_owned(), Kind::Screen, 640),
-                    (BOB.to_owned(), Kind::Screen, 1920),
+                    (ADA.to_owned(), Kind::Screen, low()),
+                    (BOB.to_owned(), Kind::Screen, wide(1920)),
                 ]
             );
         }
@@ -3822,7 +3837,10 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 1920)]);
+            assert_eq!(
+                log.asked(),
+                vec![(ADA.to_owned(), Kind::Screen, wide(1920))]
+            );
         }
 
         #[tokio::test]
@@ -3861,7 +3879,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, low())]);
         }
 
         #[tokio::test]
@@ -3881,7 +3899,7 @@ mod tests {
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, 640)]);
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, low())]);
         }
     }
 
@@ -3996,7 +4014,10 @@ mod tests {
                 driver.send(Message::DrawnAt {
                     user_id: "@ada:example.org".to_owned(),
                     kind: Kind::Screen,
-                    bound: 1920,
+                    drawn: Asked {
+                        width: 1920,
+                        height: 1080,
+                    },
                 });
                 driver.send(Message::SetCap {
                     user_id: "@ada:example.org".to_owned(),
@@ -4015,7 +4036,14 @@ mod tests {
 
             assert_eq!(
                 log.asked(),
-                vec![("@ada:example.org".to_owned(), Kind::Screen, 640)],
+                vec![(
+                    "@ada:example.org".to_owned(),
+                    Kind::Screen,
+                    Asked {
+                        width: 640,
+                        height: 360
+                    }
+                )],
                 "the pass after the rejoin asked for the publisher's own size"
             );
         }

@@ -27,7 +27,7 @@
 use std::thread::JoinHandle;
 
 use consort_call::{
-    CallEvent, CallThread, CallTransport, Cap, Kind, PictureSize, ScreenShare, Senses,
+    Asked, CallEvent, CallThread, CallTransport, Cap, Kind, PictureSize, ScreenShare, Senses,
 };
 
 /// A running call thread, with its events wired to the webview.
@@ -128,10 +128,10 @@ impl CallBridge {
         }
     }
 
-    /// Say how big the box drawing `user_id`'s `kind` is, in pixels.
-    pub fn drawn_at(&self, user_id: String, kind: Kind, bound: u32) {
+    /// Say what box is drawing `user_id`'s `kind`, in pixels.
+    pub fn drawn_at(&self, user_id: String, kind: Kind, drawn: Asked) {
         if let Some(thread) = &self.thread {
-            thread.drawn_at(user_id, kind, bound);
+            thread.drawn_at(user_id, kind, drawn);
         }
     }
 
