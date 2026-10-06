@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import "./CallCard.css";
 import "./ScreenStage.css";
 import "./ScreenTile.css";
-import "./SelfPicture.css";
+import "./CallPicture.css";
 
 /** Every rule jsdom parsed, for the ones no element can be asked about. */
 function everyRule(): readonly string[] {
@@ -53,7 +53,7 @@ describe("the shape the stage letterboxes into", () => {
   it("never crops the picture to fill that shape", () => {
     // `contain` is the whole no-stretch, no-crop guarantee: a 4:3 desktop
     // pillarboxes in a 16:9 stage rather than losing its edges.
-    expect(ruleFor('.self-picture[data-of="screen"]')).toContain(
+    expect(ruleFor('.call-picture[data-of="screen"]')).toContain(
       "object-fit: contain",
     );
   });

@@ -25,6 +25,7 @@ mod sound;
 mod state;
 #[cfg(test)]
 mod testing;
+mod theirview;
 mod tray;
 mod video;
 
@@ -321,6 +322,7 @@ pub fn run() {
             commands::set_camera,
             commands::self_view,
             commands::screen_view,
+            commands::their_view,
             commands::share_sources,
             commands::set_share,
             commands::privacy_settings,

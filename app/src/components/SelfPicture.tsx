@@ -1,5 +1,5 @@
 import { usePicture, type Sending } from "../lib/usePicture";
-import "./SelfPicture.css";
+import "./CallPicture.css";
 
 /** What each picture is called, for somebody who cannot see it. */
 const ALT: Record<Sending, string> = {
@@ -18,7 +18,8 @@ const ALT: Record<Sending, string> = {
  * A still on a timer rather than a `<video>`: there is no stream for one to
  * play, because the device is open in Rust and V4L2 gives it to one process.
  * See `docs/adr/0007-draw-the-self-view-from-a-still.md`, and `0008` for the
- * second picture.
+ * second picture. Everybody else's is [`TheirPicture`], which is the same
+ * still from a different source.
  */
 export function SelfPicture({ of }: { of: Sending }) {
   const picture = usePicture(of);
@@ -27,8 +28,9 @@ export function SelfPicture({ of }: { of: Sending }) {
 
   return (
     <img
-      className="self-picture"
+      className="call-picture"
       data-of={of}
+      data-mine="true"
       src={picture}
       /*
         Named rather than decorative. These are the two things on the card that

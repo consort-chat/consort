@@ -48,6 +48,7 @@ use crate::microphone::Microphone;
 use crate::publish::pump;
 use crate::showing::{self, PublishedVideo};
 use crate::transport::{CallSession, CallTransport, Roster};
+use crate::watching::Eyes;
 
 /// How long a join may take before it is abandoned.
 ///
@@ -145,6 +146,27 @@ enum Message {
 // voice channel has not asked to be heard again, and a mute button that
 // silently releases itself when you move is a mute button nobody can trust.
 
+/// Where a call's media comes from, and where it goes.
+///
+/// One value rather than five arguments in a row, because they travel together
+/// through every layer of this module. All of them are handed over once, at
+/// [`CallThread::spawn`], because the threads holding the other end have to be
+/// able to hold it whether or not a call is up: every one of them outlives any
+/// one call.
+pub struct Senses {
+    /// Where this session's captured audio arrives from.
+    pub microphone: Microphone,
+    /// Where its camera frames arrive from.
+    pub camera: Camera,
+    /// Where its screen frames arrive from. A second queue rather than a wider
+    /// one, because both can be publishing at the same time.
+    pub screen: Camera,
+    /// Where everybody else's audio goes.
+    pub ears: Ears,
+    /// Where everybody else's pictures go.
+    pub eyes: Eyes,
+}
+
 /// A handle on the call thread.
 ///
 /// Dropping it leaves any call in progress and ends the thread.
@@ -157,28 +179,18 @@ pub struct CallThread {
 impl CallThread {
     /// Start the thread. It idles until told to [`connect`](Self::connect).
     ///
-    /// `microphone` is where captured audio arrives from, `camera` and
-    /// `screen` are where captured frames do, and `ears` is where everybody
-    /// else's audio goes. All of them are taken here rather than at each
-    /// connect because the threads filling them have to be able to hold the
-    /// other end whether or not a call is up: they are started once, and what
-    /// is between them outlives any one call.
-    ///
-    /// `camera` and `screen` are two queues rather than one because both can
-    /// be publishing at the same time.
+    /// Where the media comes from and goes is [`Senses`], handed over once
+    /// here rather than at each connect.
     pub fn spawn<T: CallTransport>(
         transport: T,
         events: UnboundedSender<CallEvent>,
-        microphone: Microphone,
-        camera: Camera,
-        screen: Camera,
-        ears: Ears,
+        senses: Senses,
     ) -> Self {
         let (commands, inbox) = unbounded_channel::<Message>();
 
         let join = std::thread::Builder::new()
             .name("consort-call".to_owned())
-            .spawn(move || run(transport, inbox, events, microphone, camera, screen, ears))
+            .spawn(move || run(transport, inbox, events, senses))
             .expect("the operating system refused a thread");
 
         Self {
@@ -278,10 +290,7 @@ fn run<T: CallTransport>(
     transport: T,
     inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
-    microphone: Microphone,
-    camera: Camera,
-    screen: Camera,
-    ears: Ears,
+    senses: Senses,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -299,9 +308,7 @@ fn run<T: CallTransport>(
     };
 
     let local = tokio::task::LocalSet::new();
-    runtime.block_on(local.run_until(serve(
-        transport, inbox, events, microphone, camera, screen, ears,
-    )));
+    runtime.block_on(local.run_until(serve(transport, inbox, events, senses)));
 }
 
 /// A call this session is in, and the task carrying its microphone.
@@ -407,11 +414,15 @@ async fn serve<T: CallTransport>(
     transport: T,
     mut inbox: UnboundedReceiver<Message>,
     events: UnboundedSender<CallEvent>,
-    microphone: Microphone,
-    camera: Camera,
-    screen: Camera,
-    ears: Ears,
+    senses: Senses,
 ) {
+    let Senses {
+        microphone,
+        camera,
+        screen,
+        ears,
+        eyes,
+    } = senses;
     let mut current: Option<Joined<T::Session>> = None;
     let mut audio = SelfAudio::default();
     let mut video = SelfVideo::default();
@@ -443,8 +454,15 @@ async fn serve<T: CallTransport>(
                     // one thing deafen must never do, let somebody through, is
                     // exactly what happens to whoever walks in next.
                     FromRoster::Moved => {
-                        apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase)
-                            .await
+                        apply_and_chase(
+                            current.as_mut(),
+                            audio,
+                            &microphone,
+                            &ears,
+                            &eyes,
+                            &chase,
+                        )
+                        .await
                     }
                     FromRoster::Gone { room_id }
                         if ended_the_current_call(current.as_ref(), &room_id) =>
@@ -454,6 +472,7 @@ async fn serve<T: CallTransport>(
                         // answer the homeserver could give that would undo it.
                         emit(&events, CallEvent::Disconnected);
                         ears.silence();
+                        eyes.clear();
                         leave(current.take(), LEAVE_TIMEOUT).await;
                         video = show(&events, video, SelfVideo::default());
                         camera.clear();
@@ -466,7 +485,7 @@ async fn serve<T: CallTransport>(
                 // The attachment half alone, never the whole of `apply`: a
                 // retry must not re-announce this session to every peer in the
                 // call on each attempt. See issue #157.
-                let attached = attach(current.as_ref(), &ears);
+                let attached = attach(current.as_ref(), &ears, &eyes);
                 if let Some(joined) = current.as_mut() {
                     joined.chase(attached, &chase);
                 }
@@ -479,8 +498,10 @@ async fn serve<T: CallTransport>(
             Message::Connect { room_id } => {
                 // Whatever the last channel was still saying is not something
                 // to hear in the new one. `connect` leaves the old call on the
-                // way past, and its queued audio goes with it.
+                // way past, and its queued audio goes with it. The pictures go
+                // the same way: a camera square belongs to the call it was in.
                 ears.silence();
+                eyes.clear();
                 current = connect(
                     &transport,
                     current,
@@ -512,7 +533,7 @@ async fn serve<T: CallTransport>(
                 // state whose other half is already drawn, and repeating it as
                 // part of joining would make it look like something a call
                 // decides.
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
             }
             Message::Disconnect => {
                 if let Some(joined) = current.take() {
@@ -530,6 +551,7 @@ async fn serve<T: CallTransport>(
                     // they already queued would otherwise be played into the
                     // silence after the call, or into the next one.
                     ears.silence();
+                    eyes.clear();
                     leave(Some(joined), LEAVE_TIMEOUT).await;
                     video = show(&events, video, SelfVideo::default());
                     camera.clear();
@@ -539,11 +561,11 @@ async fn serve<T: CallTransport>(
             }
             Message::SetMuted(muted) => {
                 audio = announce(&events, audio, SelfAudio { muted, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
             }
             Message::SetDeafened(deafened) => {
                 audio = announce(&events, audio, SelfAudio { deafened, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
             }
             Message::SetAway(away) => {
                 // Only on the way back, and only from having actually been
@@ -554,7 +576,7 @@ async fn serve<T: CallTransport>(
                 // broken.
                 let returning = audio.away && !away;
                 audio = announce(&events, audio, SelfAudio { away, ..audio });
-                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &chase).await;
+                apply_and_chase(current.as_mut(), audio, &microphone, &ears, &eyes, &chase).await;
                 if returning {
                     ears.cue(Cue::Returned);
                 }
@@ -808,6 +830,7 @@ async fn apply<S: CallSession>(
     audio: SelfAudio,
     microphone: &Microphone,
     ears: &Ears,
+    eyes: &Eyes,
 ) -> Attached {
     // Before the call, and before the early return. Every mute below here is
     // applied to the publication, which is downstream of the frames this
@@ -839,7 +862,7 @@ async fn apply<S: CallSession>(
     // tracks are subscribed. This runs again on every roster change, which is
     // exactly when a track appears, and it leaves anybody already playing
     // alone.
-    let attached = attach(Some(joined), ears);
+    let attached = attach(Some(joined), ears, eyes);
 
     // Last, and after `set_deafened` rather than before it. Pausing the
     // subscriptions stops more audio arriving but takes a round trip to the
@@ -871,25 +894,35 @@ async fn apply_and_chase<S: CallSession>(
     audio: SelfAudio,
     microphone: &Microphone,
     ears: &Ears,
+    eyes: &Eyes,
     chase: &UnboundedSender<()>,
 ) {
     // Applied with or without a call, because `apply` reaches the microphone
     // itself and the buttons work outside one: #132. Only the chase needs a
     // call to belong to.
-    let attached = apply(current.as_deref(), audio, microphone, ears).await;
+    let attached = apply(current.as_deref(), audio, microphone, ears, eyes).await;
     if let Some(joined) = current {
         joined.chase(attached, chase);
     }
 }
 
-/// Attach the audio of everybody in `current` whose track has arrived.
+/// Attach the audio and the pictures of everybody in `current` whose track has
+/// arrived.
 ///
 /// Separate from [`apply`] because a retry must reach only this half: going
 /// through the whole of `apply` would re-announce this session to every peer in
 /// the call on every attempt. `None` is a retry whose send beat its own abort.
-fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears) -> Attached {
+///
+/// Both halves here rather than one, because they are driven by the same roster
+/// change and a site that did one of them would be the bug this exists to stop
+/// for the other.
+fn attach<S: CallSession>(current: Option<&Joined<S>>, ears: &Ears, eyes: &Eyes) -> Attached {
     current
-        .map(|joined| joined.session.listen(ears))
+        .map(|joined| {
+            let attached = joined.session.listen(ears);
+            joined.session.watch(eyes);
+            attached
+        })
         .unwrap_or_default()
 }
 
@@ -1159,6 +1192,7 @@ fn emit(events: &UnboundedSender<CallEvent>, event: CallEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::watching::{IncomingPicture, Kind, Seen};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1231,6 +1265,12 @@ mod tests {
         /// standing for every pass after it. So one pending value is a track
         /// that never arrives, and empty is nothing ever pending.
         attachments: Arc<Mutex<VecDeque<Attached>>>,
+        /// How many times the session was asked to pull everybody's pictures.
+        ///
+        /// Counted for the reason `listens` is, and separately from it: a
+        /// roster change has to reach both, and one of the two silently not
+        /// being driven is exactly the defect #69 and #70 were.
+        watches: Arc<AtomicUsize>,
     }
 
     impl Log {
@@ -1272,6 +1312,10 @@ mod tests {
 
         fn listens(&self) -> usize {
             self.listens.load(Ordering::Relaxed)
+        }
+
+        fn watches(&self) -> usize {
+            self.watches.load(Ordering::Relaxed)
         }
 
         /// What this pass of `listen` reports, spending the script by one.
@@ -1340,6 +1384,32 @@ mod tests {
         }
 
         fn attribute(&self, _whose: &[(String, String)]) {}
+    }
+
+    /// Somewhere for a call's pictures to go that a test can look inside.
+    ///
+    /// Only what the call thread decides is counted. What a frame becomes is
+    /// `watching.rs` and the app's own still; what this is for is when the
+    /// pictures are thrown away.
+    #[derive(Clone, Default)]
+    struct Blind {
+        clears: Arc<AtomicUsize>,
+    }
+
+    impl Blind {
+        fn clears(&self) -> usize {
+            self.clears.load(Ordering::Relaxed)
+        }
+    }
+
+    impl Seen for Blind {
+        fn see(&self, _member_id: &str, _user_id: &str, _kind: Kind, _picture: IncomingPicture) {}
+
+        fn forget(&self, _member_id: &str, _kind: Kind) {}
+
+        fn clear(&self) {
+            self.clears.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A publication that does nothing but count itself alive.
@@ -1688,6 +1758,10 @@ mod tests {
             self.log.attachment()
         }
 
+        fn watch(&self, _eyes: &Eyes) {
+            self.log.watches.fetch_add(1, Ordering::Relaxed);
+        }
+
         async fn leave(self) -> Result<(), CallFailure> {
             self.log.left.lock().unwrap().push(self.room_id);
 
@@ -1812,10 +1886,13 @@ mod tests {
                 transport,
                 inbox,
                 events,
-                microphone,
-                camera,
-                screen,
-                Arc::new(Deaf::default()),
+                Senses {
+                    microphone,
+                    camera,
+                    screen,
+                    ears: Arc::new(Deaf::default()),
+                    eyes: Arc::new(Blind::default()),
+                },
             ))
             .await;
 
@@ -2061,10 +2138,13 @@ mod tests {
                 transport,
                 inbox,
                 events,
-                Microphone::new(),
-                Camera::new(),
-                Camera::new(),
-                Arc::new(Deaf::default()),
+                Senses {
+                    microphone: Microphone::new(),
+                    camera: Camera::new(),
+                    screen: Camera::new(),
+                    ears: Arc::new(Deaf::default()),
+                    eyes: Arc::new(Blind::default()),
+                },
             ))
             .await;
 
@@ -2121,10 +2201,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(Deaf::default()),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(Deaf::default()),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ),
                     watching
                 );
@@ -2182,10 +2265,13 @@ mod tests {
         let thread = CallThread::spawn(
             transport,
             events,
-            Microphone::new(),
-            Camera::new(),
-            Camera::new(),
-            Arc::new(Deaf::default()),
+            Senses {
+                microphone: Microphone::new(),
+                camera: Camera::new(),
+                screen: Camera::new(),
+                ears: Arc::new(Deaf::default()),
+                eyes: Arc::new(Blind::default()),
+            },
         );
         thread.connect(GENERAL.to_owned());
         // Dropping is what ends the thread, and its `Drop` joins, so by the
@@ -2210,10 +2296,13 @@ mod tests {
         let mut thread = CallThread::spawn(
             transport,
             events,
-            Microphone::new(),
-            Camera::new(),
-            Camera::new(),
-            Arc::new(Deaf::default()),
+            Senses {
+                microphone: Microphone::new(),
+                camera: Camera::new(),
+                screen: Camera::new(),
+                ears: Arc::new(Deaf::default()),
+                eyes: Arc::new(Blind::default()),
+            },
         );
 
         // Stand the handle down the way `Drop` does, then keep using it.
@@ -2718,10 +2807,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(Deaf::default()),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(Deaf::default()),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     // Somebody walks in after the decision. The watcher is
@@ -3474,10 +3566,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(Deaf::default()),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(Deaf::default()),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     let driver = act(roster, Driver { to_loop, said }).await;
@@ -3520,10 +3615,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(heard),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(heard),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     let Driver { to_loop, said } = act(roster, Driver { to_loop, said }).await;
@@ -3884,8 +3982,15 @@ mod tests {
 
         /// Run `commands` and report what the call was asked to play, and where.
         async fn ending_with(commands: Vec<Message>) -> (Log, Deaf) {
+            let (log, ears, _) = ending_with_both(commands).await;
+            (log, ears)
+        }
+
+        /// The same, with the pictures as well: #69 and #70's half.
+        pub(super) async fn ending_with_both(commands: Vec<Message>) -> (Log, Deaf, Blind) {
             let (transport, log) = FakeTransport::new(Joining::Succeeds);
             let ears = Deaf::default();
+            let eyes = Blind::default();
 
             let (to_loop, inbox) = unbounded_channel();
             for command in commands {
@@ -3900,14 +4005,17 @@ mod tests {
                     transport,
                     inbox,
                     events,
-                    Microphone::new(),
-                    Camera::new(),
-                    Camera::new(),
-                    Arc::new(ears.clone()),
+                    Senses {
+                        microphone: Microphone::new(),
+                        camera: Camera::new(),
+                        screen: Camera::new(),
+                        ears: Arc::new(ears.clone()),
+                        eyes: Arc::new(eyes.clone()),
+                    },
                 ))
                 .await;
 
-            (log, ears)
+            (log, ears, eyes)
         }
 
         #[tokio::test]
@@ -3946,10 +4054,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(Deaf::default()),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(Deaf::default()),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     to_loop.send(connect_to(GENERAL)).unwrap();
@@ -4038,14 +4149,83 @@ mod tests {
                     transport,
                     inbox,
                     events,
-                    Microphone::new(),
-                    Camera::new(),
-                    Camera::new(),
-                    Arc::new(Deaf::default()),
+                    Senses {
+                        microphone: Microphone::new(),
+                        camera: Camera::new(),
+                        screen: Camera::new(),
+                        ears: Arc::new(Deaf::default()),
+                        eyes: Arc::new(Blind::default()),
+                    },
                 ))
                 .await;
 
             assert_eq!(log.listens(), 0);
+        }
+    }
+
+    /// Drawing the other people's cameras and shared screens.
+    ///
+    /// The receiving half of #69 and #70, which was missing in the same shape
+    /// the audio once was: every remote camera and screen share was
+    /// subscribed, decoded and dropped. This is the call thread's part, which
+    /// is knowing when to ask and when to throw the pictures away.
+    mod watching_the_call {
+        use super::hearing_the_call::ending_with_both;
+        use super::*;
+
+        #[tokio::test]
+        async fn joining_a_call_starts_pulling_the_pictures() {
+            let (log, _, _) = ending_with_both(vec![connect_to(GENERAL)]).await;
+
+            assert!(
+                log.watches() > 0,
+                "nobody's camera was ever asked for, which is #69"
+            );
+        }
+
+        #[tokio::test]
+        async fn every_roster_change_asks_again() {
+            // A membership is known before its tracks are subscribed, so a
+            // camera switched on mid-call is only ever noticed by asking
+            // again. Asking once at the join would draw whoever happened to
+            // have a camera up at that moment and nobody afterwards.
+            let (log, _, _) = ending_with_both(vec![connect_to(GENERAL)]).await;
+            let joined = log.watches();
+
+            let (log, _, _) =
+                ending_with_both(vec![connect_to(GENERAL), Message::SetMuted(true)]).await;
+
+            assert!(
+                log.watches() > joined,
+                "a change that re-applied the audio left the pictures alone"
+            );
+        }
+
+        #[tokio::test]
+        async fn the_pictures_go_with_the_call_they_belonged_to() {
+            // A camera square belongs to one call. Left behind, the next
+            // channel draws the last frame of somebody who is not in it.
+            //
+            // Counted against joining alone rather than against zero, because
+            // joining clears them too: a test that only asked whether
+            // anything had been cleared would pass with the leave doing
+            // nothing at all.
+            let (_, _, joining) = ending_with_both(vec![connect_to(GENERAL)]).await;
+            let (_, _, leaving) =
+                ending_with_both(vec![connect_to(GENERAL), Message::Disconnect]).await;
+
+            assert!(
+                leaving.clears() > joining.clears(),
+                "a call that ended left its pictures behind"
+            );
+        }
+
+        #[tokio::test]
+        async fn switching_channel_throws_the_pictures_away() {
+            let (_, _, one) = ending_with_both(vec![connect_to(GENERAL)]).await;
+            let (_, _, two) = ending_with_both(vec![connect_to(GENERAL), connect_to(MUSIC)]).await;
+
+            assert!(two.clears() > one.clears());
         }
     }
 
@@ -4077,10 +4257,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(ears),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(ears),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     let Driver { to_loop, mut said } = act(Driver { to_loop, said }).await;
@@ -4289,10 +4472,13 @@ mod tests {
                         transport,
                         inbox,
                         events,
-                        Microphone::new(),
-                        Camera::new(),
-                        Camera::new(),
-                        Arc::new(Deaf::default()),
+                        Senses {
+                            microphone: Microphone::new(),
+                            camera: Camera::new(),
+                            screen: Camera::new(),
+                            ears: Arc::new(Deaf::default()),
+                            eyes: Arc::new(Blind::default()),
+                        },
                     ));
 
                     act(roster, to_loop.clone()).await;

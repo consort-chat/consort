@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use consort_call::{
-    CallEvent, CallTransport, Camera as ConsortCamera, Microphone, PictureSize, ScreenShare,
-    SelfScreen, SelfVideo,
+    CallEvent, CallTransport, Camera as ConsortCamera, Kind, Microphone, PictureSize, ScreenShare,
+    SelfScreen, SelfVideo, Senses,
 };
 use consort_matrix::{
     CallReadiness, Client, Connection, Rooms, SessionStore, StopReason, Timeline, Typing, backup,
@@ -28,6 +28,7 @@ use crate::screen::{ScreenBridge, ShareTrouble};
 use crate::selfview::SelfView;
 use crate::settings::SettingsStore;
 use crate::sound::Sound;
+use crate::theirview::TheirViews;
 use crate::video::{CameraTrouble, VideoBridge};
 use consort_video::{ScreenCapture, ShareSource, VideoCapture};
 
@@ -311,6 +312,12 @@ pub struct AppState {
     /// call pump holds one too: a share has to stop when the call ends, and
     /// the call ends for reasons that are not a click.
     screens: Arc<std::sync::Mutex<Option<ScreenBridge>>>,
+    /// The newest frame of everything everybody else is sending.
+    ///
+    /// Beside the two slots above rather than inside the call bridge, for the
+    /// reason `self_view` is: the command that draws these has to have
+    /// somewhere to ask whether or not a call is up.
+    their_views: Arc<TheirViews>,
     /// The mixer carrying everybody else's audio from the call to the audio
     /// thread.
     ///
@@ -519,6 +526,7 @@ impl AppState {
             screen: ConsortCamera::new(),
             screen_view: SelfView::new(),
             screens: Arc::new(std::sync::Mutex::new(None)),
+            their_views: Arc::new(TheirViews::new()),
             voices,
             chiming,
             speaking,
@@ -620,16 +628,19 @@ impl AppState {
         let bridge = slot.get_or_insert_with(|| {
             CallBridge::spawn(
                 transport(),
-                self.microphone.clone(),
-                self.camera.clone(),
-                self.screen.clone(),
-                speakers(
-                    self.voices.clone(),
-                    self.chiming.clone(),
-                    self.speaking.clone(),
-                    self.levels.clone(),
-                    self.talking.clone(),
-                ),
+                Senses {
+                    microphone: self.microphone.clone(),
+                    camera: self.camera.clone(),
+                    screen: self.screen.clone(),
+                    ears: speakers(
+                        self.voices.clone(),
+                        self.chiming.clone(),
+                        self.speaking.clone(),
+                        self.levels.clone(),
+                        self.talking.clone(),
+                    ),
+                    eyes: Arc::clone(&self.their_views) as consort_call::Eyes,
+                },
                 self.call_reporter(),
             )
         });
@@ -1012,6 +1023,15 @@ impl AppState {
     /// capture starting and its first frame.
     pub fn screen_view(&self) -> Option<String> {
         self.screen_view.latest()
+    }
+
+    /// The newest picture somebody else is sending, at the size asked for.
+    ///
+    /// `None` when they are sending nothing of that kind, which covers being
+    /// in no call at all. `bound` is the long edge in pixels of the box it is
+    /// being drawn into: see [`crate::theirview`].
+    pub fn their_view(&self, user_id: &str, kind: Kind, bound: u32) -> Option<String> {
+        self.their_views.latest(user_id, kind, bound)
     }
 
     /// Whether a camera is open right now. Test-only.
@@ -2264,6 +2284,38 @@ mod tests {
             assert!(said.camera, "{said:?}");
             assert_eq!(backend.opens(), 1);
             assert!(state.camera_running());
+        }
+
+        #[test]
+        fn a_picture_the_call_left_is_the_one_the_card_is_handed() {
+            // One store, cloned into the call bridge. Two would be a card that
+            // draws nothing while frames arrive, which is the shape #69 and
+            // #70 were.
+            use consort_call::Seen;
+
+            let (_dir, state, _sink) = state();
+            state.their_views.see(
+                "alice-laptop",
+                "@alice:example.org",
+                Kind::Camera,
+                consort_call::IncomingPicture {
+                    width: 4,
+                    height: 4,
+                    y: vec![120; 16],
+                    u: vec![128; 4],
+                    v: vec![128; 4],
+                },
+            );
+
+            assert!(
+                state
+                    .their_view("@alice:example.org", Kind::Camera, 320)
+                    .is_some()
+            );
+            assert_eq!(
+                state.their_view("@bob:example.org", Kind::Camera, 320),
+                None
+            );
         }
 
         #[test]

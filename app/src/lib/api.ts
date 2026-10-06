@@ -1186,6 +1186,29 @@ export function screenView(): Promise<string | null> {
 }
 
 /**
+ * The newest picture somebody else in the call is sending, as a `data:` URL.
+ *
+ * Null when they are sending nothing of that kind, and in the moment between a
+ * stream appearing and its first frame, so a caller draws its square either
+ * way.
+ *
+ * `bound` is the long edge, in pixels, of the box it is being drawn into. The
+ * size travels with the ask rather than being fixed in Rust, which is what
+ * lets one frame answer both a square on the card and a shared screen somebody
+ * is reading text off: see
+ * `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`. Rust
+ * never upsamples and caps what it will make, so asking for more than there is
+ * costs nothing.
+ */
+export function theirView(
+  userId: string,
+  kind: "camera" | "screen",
+  bound: number,
+): Promise<string | null> {
+  return invoke<string | null>("their_view", { userId, kind, bound });
+}
+
+/**
  * Set how loud one person should be, as a percentage, and remember it.
  *
  * Its own call rather than part of `setAudioSettings`, because it is set from

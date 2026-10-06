@@ -38,7 +38,7 @@
 
 /*
   16:9, because that is the shape of a desktop. The picture inside is `contain`
-  (see `SelfPicture.css`), so a 4:3 or 16:10 source letterboxes in here rather
+  (see `CallPicture.css`), so a 4:3 or 16:10 source letterboxes in here rather
   than stretching or losing its edges.
 */
 .call-stage__picture {
