@@ -441,7 +441,9 @@ impl consort_call::CallSession for FakeCallSession {
         consort_call::Attached::default()
     }
 
-    fn watch(&self, _eyes: &consort_call::Eyes) {}
+    fn watch(&self, _eyes: &consort_call::Eyes) -> consort_call::Attached {
+        consort_call::Attached::default()
+    }
 
     fn roster(&self) -> Self::Roster {
         FakeCallRoster(self.roster.subscribe())
