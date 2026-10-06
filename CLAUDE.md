@@ -26,7 +26,8 @@ is drawn in: see docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.
 docs/adr/0008-one-square-for-everything-in-a-call.md for why the card is
 squares, and docs/adr/0009-a-shared-screen-takes-the-stage.md for why one of
 them is not. Choosing how good a received picture is is not built: that is
-#167, and the size the card asks for is where it goes.
+#167, the size the card asks for is where it goes, and
+docs/PLAN-receiving-quality.md is the research behind it.
 Sharing system audio alongside a screen is not built either,
 and docs/PLAN-screen-share.md says what it would take. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a
