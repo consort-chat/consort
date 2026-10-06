@@ -72,6 +72,7 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub emoji: EmojiSettings,
     pub appearance: AppearanceSettings,
+    pub sidebar: SidebarSettings,
     /// The rooms this account has opened, most recently first.
     ///
     /// Here rather than in a file of its own because it is the same kind of
@@ -133,6 +134,147 @@ impl Default for EmojiSettings {
             .to_vec(),
             tone: 0,
         }
+    }
+}
+
+/// How the sidebar's sections are arranged.
+///
+/// Lists of keys rather than a flag or a number per section, because the
+/// sections are not a fixed pair for much longer: #170 lets somebody make
+/// their own, and those are keys this file has never seen. A list says nothing
+/// about which sections exist.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SidebarSettings {
+    /// The keys of the sections drawn folded, in no particular order.
+    ///
+    /// A key this build draws no section for is kept rather than dropped. It
+    /// may be a section that arrives in a later one.
+    pub folded: Vec<String>,
+    /// The keys of the sections, top first, as somebody dragged them.
+    ///
+    /// Empty means the order the sidebar itself picks, which is what every
+    /// file written before #169 holds. A known key missing from a list that is
+    /// not empty is drawn after the ones in it.
+    pub order: Vec<String>,
+    /// The sections somebody made, in no particular order. See [`Self::order`].
+    pub sections: Vec<CustomSection>,
+}
+
+/// A section somebody made, and the rooms they put in it.
+///
+/// Keyed as well as named, because [`SidebarSettings::folded`] and
+/// [`SidebarSettings::order`] hold keys: a rename that changed the key would
+/// move the section and unfold it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CustomSection {
+    pub key: String,
+    pub name: String,
+    /// The rail entry it is drawn under, so a section made in one space does
+    /// not follow somebody into every other one.
+    pub space: String,
+    /// The rooms in it, by ID. A room is in one section at most; see
+    /// [`SidebarSettings::assign`].
+    pub rooms: Vec<String>,
+}
+
+/// The longest a section's name may be, in characters.
+///
+/// What the heading can hold before it is an ellipsis with a tooltip behind
+/// it. Characters rather than bytes so an emoji costs one of them.
+pub(crate) const MAX_SECTION_NAME: usize = 40;
+
+/// How many sections one account may make.
+///
+/// Not a limit anybody will reach by hand. It is here so that a loop in
+/// somebody's own tooling cannot grow the settings file without bound.
+pub(crate) const MAX_SECTIONS: usize = 100;
+
+/// The name to store for `raw`, or `None` when it is not one.
+///
+/// Trimmed, because a heading cannot show a leading space and somebody who
+/// typed one did not mean it to be part of the name.
+pub(crate) fn section_name(raw: &str) -> Option<String> {
+    let name = raw.trim();
+    (!name.is_empty() && name.chars().count() <= MAX_SECTION_NAME).then(|| name.to_owned())
+}
+
+impl SidebarSettings {
+    /// Record that the section keyed `key` is folded away, or that it is not.
+    ///
+    /// Removing first is what keeps two presses of the one control from
+    /// leaving two copies of its key behind.
+    pub fn fold(&mut self, key: &str, folded: bool) {
+        self.folded.retain(|one| one != key);
+        if folded {
+            self.folded.push(key.to_owned());
+        }
+    }
+
+    /// Make a section named `name` under `space`, and hand back its key.
+    pub fn add(&mut self, space: &str, name: &str) -> String {
+        let key = self.free_key();
+        self.sections.push(CustomSection {
+            key: key.clone(),
+            name: name.to_owned(),
+            space: space.to_owned(),
+            rooms: Vec::new(),
+        });
+        key
+    }
+
+    /// Rename the section keyed `key`. False when there is no such section.
+    pub fn rename(&mut self, key: &str, name: &str) -> bool {
+        let Some(section) = self.sections.iter_mut().find(|one| one.key == key) else {
+            return false;
+        };
+        section.name = name.to_owned();
+        true
+    }
+
+    /// Forget the section keyed `key`, along with its fold and its place.
+    ///
+    /// Clearing those two is what stops a section made later under the same
+    /// key arriving folded away or somewhere nobody put it. The rooms it held
+    /// are not touched, because holding them was its only claim on them: they
+    /// are drawn under Text or Voice again.
+    pub fn remove(&mut self, key: &str) -> bool {
+        let before = self.sections.len();
+        self.sections.retain(|one| one.key != key);
+        if self.sections.len() == before {
+            return false;
+        }
+        self.folded.retain(|one| one != key);
+        self.order.retain(|one| one != key);
+        true
+    }
+
+    /// Put `room` in the section keyed `key`, or in none when `key` is `None`.
+    ///
+    /// Taken out of whatever held it first, which is what keeps a room in one
+    /// section at a time. False only when `key` names a section that is gone.
+    pub fn assign(&mut self, room: &str, key: Option<&str>) -> bool {
+        if key.is_some_and(|key| !self.sections.iter().any(|one| one.key == key)) {
+            return false;
+        }
+        for section in &mut self.sections {
+            section.rooms.retain(|one| one != room);
+        }
+        if let Some(section) =
+            key.and_then(|key| self.sections.iter_mut().find(|one| one.key == key))
+        {
+            section.rooms.push(room.to_owned());
+        }
+        true
+    }
+
+    /// A key no section holds, which a deletion frees for the next one.
+    fn free_key(&self) -> String {
+        (1..)
+            .map(|n| format!("custom-{n}"))
+            .find(|key| !self.sections.iter().any(|one| one.key == *key))
+            .expect("the range is unbounded")
     }
 }
 
@@ -433,6 +575,7 @@ mod tests {
             notifications: NotificationSettings::default(),
             emoji: EmojiSettings::default(),
             appearance: AppearanceSettings::default(),
+            sidebar: SidebarSettings::default(),
             recent: RecentRooms::default(),
         }
     }
@@ -574,6 +717,84 @@ mod tests {
         store.save(&chosen).expect("save");
 
         assert_eq!(store.load().appearance, chosen.appearance);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_the_sidebar_existed_still_loads() {
+        // And loads with every section open, which is what every build before
+        // this one drew. Somebody who never folded anything must not find
+        // something folded.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"audio":{"input":"Yeti"}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert!(loaded.sidebar.folded.is_empty());
+    }
+
+    #[test]
+    fn a_folded_section_survives_a_round_trip() {
+        // The whole point of it being in this file. A section folded away and
+        // open again next launch is the preference not being remembered.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings.sidebar.fold("voice", true);
+        store.save(&settings).expect("save");
+
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(next_launch.load().sidebar.folded, ["voice"]);
+    }
+
+    #[test]
+    fn unfolding_a_section_takes_it_back_out() {
+        let mut sidebar = SidebarSettings::default();
+        sidebar.fold("text", true);
+
+        sidebar.fold("text", false);
+
+        assert!(sidebar.folded.is_empty());
+    }
+
+    #[test]
+    fn folding_the_same_section_twice_lists_it_once() {
+        // Two presses of the same control cannot leave the list with two
+        // copies of a key, because the half that unfolds removes one.
+        let mut sidebar = SidebarSettings::default();
+
+        sidebar.fold("voice", true);
+        sidebar.fold("voice", true);
+
+        assert_eq!(sidebar.folded, ["voice"]);
+    }
+
+    #[test]
+    fn a_sidebar_nobody_has_rearranged_has_no_order_of_its_own() {
+        // Empty means the sidebar's own order, not an empty sidebar. Every
+        // build before this one drew the sections in one fixed order, and a
+        // file written by one of them must still draw that.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"sidebar":{"folded":["voice"]}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.sidebar.folded, ["voice"]);
+        assert!(loaded.sidebar.order.is_empty());
+    }
+
+    #[test]
+    fn a_rearranged_sidebar_survives_a_round_trip() {
+        // The whole point of it being in this file. Sections back in their old
+        // order next launch is the drag not being remembered.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings.sidebar.order = vec!["voice".to_owned(), "text".to_owned()];
+        store.save(&settings).expect("save");
+
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(next_launch.load().sidebar.order, ["voice", "text"]);
     }
 
     #[test]
@@ -958,5 +1179,227 @@ mod tests {
             result.is_err(),
             "a failed save must not look like a saved one"
         );
+    }
+
+    #[test]
+    fn a_fresh_sidebar_has_no_sections_of_its_own() {
+        assert!(SidebarSettings::default().sections.is_empty());
+    }
+
+    #[test]
+    fn a_section_somebody_made_is_keyed_rather_than_named() {
+        // A rename must not move the section or unfold it, and both of those
+        // are stored by key.
+        let mut sidebar = SidebarSettings::default();
+
+        let key = sidebar.add("!s:example.org", "Projects");
+
+        assert_eq!(sidebar.sections[0].key, key);
+        assert_eq!(sidebar.sections[0].name, "Projects");
+        assert_eq!(sidebar.sections[0].space, "!s:example.org");
+        assert!(sidebar.sections[0].rooms.is_empty());
+    }
+
+    #[test]
+    fn two_sections_of_the_same_name_still_get_their_own_keys() {
+        let mut sidebar = SidebarSettings::default();
+
+        let one = sidebar.add("!s:example.org", "Projects");
+        let other = sidebar.add("!s:example.org", "Projects");
+
+        assert_ne!(one, other);
+    }
+
+    #[test]
+    fn a_key_freed_by_a_deletion_is_handed_out_again() {
+        // Which is exactly why `remove` has to clear the fold and the order
+        // too. See `remaking_a_section_does_not_inherit_the_old_ones_fold`.
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.remove(&key);
+
+        assert_eq!(sidebar.add("!s:example.org", "Clients"), key);
+    }
+
+    #[test]
+    fn renaming_a_section_leaves_its_key_and_its_rooms_alone() {
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        assert!(sidebar.rename(&key, "Clients"));
+
+        assert_eq!(sidebar.sections[0].key, key);
+        assert_eq!(sidebar.sections[0].name, "Clients");
+        assert_eq!(sidebar.sections[0].rooms, ["!r:example.org"]);
+    }
+
+    #[test]
+    fn renaming_a_section_that_is_gone_says_so() {
+        assert!(!SidebarSettings::default().rename("custom-1", "Clients"));
+    }
+
+    #[test]
+    fn deleting_a_section_that_is_gone_says_so() {
+        assert!(!SidebarSettings::default().remove("custom-1"));
+    }
+
+    #[test]
+    fn remaking_a_section_does_not_inherit_the_old_ones_fold() {
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.fold(&key, true);
+        sidebar.order = vec![key.clone(), "text".to_owned()];
+
+        sidebar.remove(&key);
+
+        assert!(sidebar.folded.is_empty());
+        assert_eq!(sidebar.order, ["text"]);
+    }
+
+    #[test]
+    fn a_room_put_in_a_section_is_in_that_section() {
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+
+        assert!(sidebar.assign("!r:example.org", Some(&key)));
+
+        assert_eq!(sidebar.sections[0].rooms, ["!r:example.org"]);
+    }
+
+    #[test]
+    fn a_room_is_in_one_section_at_a_time() {
+        // The partition #170 chose. A room in two sections would be two rows
+        // that do the same thing and two badges counting the same messages.
+        let mut sidebar = SidebarSettings::default();
+        let one = sidebar.add("!s:example.org", "Projects");
+        let other = sidebar.add("!s:example.org", "Clients");
+        sidebar.assign("!r:example.org", Some(&one));
+
+        sidebar.assign("!r:example.org", Some(&other));
+
+        assert!(sidebar.sections[0].rooms.is_empty());
+        assert_eq!(sidebar.sections[1].rooms, ["!r:example.org"]);
+    }
+
+    #[test]
+    fn putting_a_room_in_the_section_it_is_already_in_leaves_one_copy() {
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        sidebar.assign("!r:example.org", Some(&key));
+
+        assert_eq!(sidebar.sections[0].rooms, ["!r:example.org"]);
+    }
+
+    #[test]
+    fn taking_a_room_out_of_every_section_is_what_none_means() {
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        assert!(sidebar.assign("!r:example.org", None));
+
+        assert!(sidebar.sections[0].rooms.is_empty());
+    }
+
+    #[test]
+    fn putting_a_room_in_a_section_that_is_gone_says_so() {
+        let mut sidebar = SidebarSettings::default();
+
+        assert!(!sidebar.assign("!r:example.org", Some("custom-1")));
+    }
+
+    #[test]
+    fn deleting_a_section_lets_its_rooms_go_rather_than_hiding_them() {
+        // Nothing here hides a room. A room whose section is deleted is drawn
+        // under Text or Voice again, which is what dropping its only mention
+        // of the room achieves.
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        assert!(sidebar.remove(&key));
+
+        assert!(sidebar.sections.is_empty());
+    }
+
+    #[test]
+    fn a_name_is_taken_with_its_surrounding_space_trimmed_off() {
+        assert_eq!(section_name("  Projects \n").as_deref(), Some("Projects"));
+    }
+
+    #[test]
+    fn a_name_that_is_only_space_is_no_name_at_all() {
+        assert!(section_name("   ").is_none());
+        assert!(section_name("").is_none());
+    }
+
+    #[test]
+    fn a_name_longer_than_a_heading_can_hold_is_refused() {
+        let long = "n".repeat(MAX_SECTION_NAME + 1);
+
+        assert!(section_name(&long).is_none());
+        assert!(section_name(&"n".repeat(MAX_SECTION_NAME)).is_some());
+    }
+
+    #[test]
+    fn a_name_is_measured_in_characters_rather_than_bytes() {
+        // Otherwise an emoji costs four of somebody's forty.
+        let emoji = "\u{1F680}".repeat(MAX_SECTION_NAME);
+
+        assert!(section_name(&emoji).is_some());
+    }
+
+    #[test]
+    fn the_sections_an_account_made_survive_a_restart() {
+        // The whole point of #170 being in this file rather than in memory.
+        let (_dir, store) = store();
+        let mut settings = Settings::default();
+        let key = settings.sidebar.add("!s:example.org", "Projects");
+        settings.sidebar.assign("!r:example.org", Some(&key));
+        store.save(&settings).expect("save");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.sidebar.sections[0].name, "Projects");
+        assert_eq!(loaded.sidebar.sections[0].rooms, ["!r:example.org"]);
+    }
+
+    #[test]
+    fn a_section_is_written_with_the_keys_the_frontend_reads() {
+        // `SidebarSettings` is mirrored by hand in `app/src/lib/api.ts`, so the
+        // names on disk are the contract. See the room DTO's version of this.
+        let mut sidebar = SidebarSettings::default();
+        let key = sidebar.add("!s:example.org", "Projects");
+        sidebar.assign("!r:example.org", Some(&key));
+
+        let json = serde_json::to_value(&sidebar).expect("serialise");
+
+        assert_eq!(
+            json["sections"][0],
+            serde_json::json!({
+                "key": "custom-1",
+                "name": "Projects",
+                "space": "!s:example.org",
+                "rooms": ["!r:example.org"],
+            })
+        );
+    }
+
+    #[test]
+    fn a_settings_file_written_before_sections_existed_still_reads_back() {
+        let (dir, store) = store();
+        std::fs::write(
+            dir.path().join(FILE),
+            br#"{"sidebar":{"folded":["voice"]}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.sidebar.folded, ["voice"]);
+        assert!(loaded.sidebar.sections.is_empty());
     }
 }
