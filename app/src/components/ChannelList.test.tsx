@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,11 +12,30 @@ const memberAvatar = vi.hoisted(() => vi.fn());
 // and the test would pass having exercised the failure path.
 const audioSettings = vi.hoisted(() => vi.fn());
 const setPersonVolume = vi.hoisted(() => vi.fn());
+// Which sections are folded is a preference in the settings file, so the list
+// reads it on mount and writes a press down. Answered for every test rather
+// than only the ones about folding, because every render reaches it.
+const sidebarSettings = vi.hoisted(() => vi.fn());
+const setSectionFolded = vi.hoisted(() => vi.fn());
+const setSectionOrder = vi.hoisted(() => vi.fn());
+// #170's four, for the same reason: every render reads the sections back and
+// every press on one writes.
+const createSection = vi.hoisted(() => vi.fn());
+const renameSection = vi.hoisted(() => vi.fn());
+const deleteSection = vi.hoisted(() => vi.fn());
+const setRoomSection = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   memberAvatar,
   audioSettings,
   setPersonVolume,
+  sidebarSettings,
+  setSectionFolded,
+  setSectionOrder,
+  createSection,
+  renameSection,
+  deleteSection,
+  setRoomSection,
 }));
 
 import { ChannelList } from "./ChannelList";
@@ -84,6 +103,14 @@ const IDLE: Call = { state: "disconnected" };
 
 const LOUNGE = "!lounge:example.org";
 
+/** A sidebar nobody has touched, which is what `sidebarSettings` answers with. */
+const STORED = { folded: [], order: [], sections: [] };
+
+/** A section somebody made under the space these tests render. */
+function made(key: string, name: string, rooms: string[] = []) {
+  return { key, name, space: "!s:example.org", rooms };
+}
+
 /** What `audioSettings` answers with, for the menu a name opens. */
 const SETTINGS = {
   input: null,
@@ -112,6 +139,13 @@ describe("ChannelList", () => {
     // the menu, because any click on a name reaches it.
     audioSettings.mockReset().mockResolvedValue(SETTINGS);
     setPersonVolume.mockReset().mockResolvedValue(undefined);
+    sidebarSettings.mockReset().mockResolvedValue(STORED);
+    setSectionFolded.mockReset().mockResolvedValue(undefined);
+    setSectionOrder.mockReset().mockResolvedValue(undefined);
+    createSection.mockReset().mockResolvedValue("custom-1");
+    renameSection.mockReset().mockResolvedValue(undefined);
+    deleteSection.mockReset().mockResolvedValue(undefined);
+    setRoomSection.mockReset().mockResolvedValue(undefined);
   });
 
   /** Render one space's channels, with the props every test shares. */
@@ -1454,6 +1488,689 @@ describe("ChannelList", () => {
       await waitFor(() =>
         expect(screen.queryByRole("dialog", { name: /Ada/ })).toBeNull(),
       );
+    });
+  });
+
+  describe("folding a section away", () => {
+    /** One of each kind, which is what folding one of them is visible against. */
+    function both() {
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+    }
+
+    /** The control in a section's heading. */
+    function heading(label: string): HTMLElement {
+      return screen.getByRole("button", { name: label });
+    }
+
+    it("hides the channels in the section that was pressed", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull();
+      // The other section is untouched. A control that folded both would be
+      // one control for two sections.
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    });
+
+    it("draws a section the settings file says is folded", async () => {
+      // The whole point of writing it down. A fold that came back open is the
+      // preference not being remembered.
+      sidebarSettings.mockResolvedValue({ ...STORED, folded: ["voice"] });
+      both();
+
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
+      );
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    });
+
+    it("writes a fold down", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(setSectionFolded).toHaveBeenCalledWith("voice", true);
+    });
+
+    it("unfolds a folded one, and writes that down too", async () => {
+      sidebarSettings.mockResolvedValue({ ...STORED, folded: ["voice"] });
+      both();
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull(),
+      );
+
+      await userEvent.click(heading("Voice"));
+
+      expect(setSectionFolded).toHaveBeenCalledWith("voice", false);
+      expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+    });
+
+    it("says whether the section it heads is open", async () => {
+      // The state is on the control rather than in its name, the way the call
+      // panel does it: a button renamed under the cursor is announced as a
+      // different button each press.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(heading("Voice")).toHaveAttribute("aria-expanded", "true");
+
+      await userEvent.click(heading("Voice"));
+
+      expect(heading("Voice")).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("names the list it folds, so the heading points at it", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      const controls = heading("Voice").getAttribute("aria-controls");
+
+      expect(controls).not.toBeNull();
+      expect(document.getElementById(controls ?? "")).toBeVisible();
+    });
+
+    it("draws every section open when the preference cannot be read", async () => {
+      // Failing to remember a fold is not a reason to draw a sidebar with
+      // nothing in it.
+      sidebarSettings.mockReset().mockRejectedValue(new Error("no file"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+
+      expect(screen.getByRole("button", { name: "Lounge" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("folded"),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("stays folded when the write fails", async () => {
+      // The press has already moved the list by then. Putting it back because
+      // the file would not take the fold would be a press that undoes itself.
+      setSectionFolded.mockReset().mockRejectedValue(new Error("read only"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading("Voice"));
+
+      expect(screen.queryByRole("button", { name: "Lounge" })).toBeNull();
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("remember"),
+          expect.anything(),
+        ),
+      );
+    });
+  });
+  describe("dragging a section into a different order", () => {
+    /** One of each kind, so an order is something that can be read off. */
+    function both() {
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+    }
+
+    /** The headings in the order they are drawn. */
+    function order(): string[] {
+      return screen
+        .getAllByRole("region")
+        .map((section) => section.getAttribute("aria-label") ?? "");
+    }
+
+    /** The handle in a section's heading. */
+    function grip(label: string): HTMLElement {
+      return screen.getByRole("button", { name: `Move ${label}` });
+    }
+
+    /** The section itself, which is what a drag is dropped on. */
+    function region(label: string): HTMLElement {
+      return screen.getByRole("region", { name: label });
+    }
+
+    /**
+     * A clipboard for a drag, which jsdom does not provide.
+     *
+     * It really stores, so that a drag started on a handle is carried by
+     * whatever that handle wrote rather than by what the test wanted. `types`
+     * is a getter for the same reason: it is the half readable mid-drag, and
+     * it is what decides whether a drop is offered at all.
+     */
+    function carrying(payload: Record<string, string> = {}) {
+      return {
+        get types() {
+          return Object.keys(payload);
+        },
+        getData: (type: string) => payload[type] ?? "",
+        setData: (type: string, value: string) => {
+          payload[type] = value;
+        },
+        effectAllowed: "all",
+        dropEffect: "none",
+      };
+    }
+
+    /** Drag one section onto another, by heading, the way a pointer would. */
+    function drag(from: string, onto: string) {
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip(from), { dataTransfer });
+      fireEvent.dragOver(region(onto), { dataTransfer });
+      fireEvent.drop(region(onto), { dataTransfer });
+    }
+
+    it("draws text above voice until somebody says otherwise", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(order()).toEqual(["Text", "Voice"]);
+    });
+
+    it("draws the order the settings file holds", async () => {
+      // The whole point of writing it down. Sections back where they started
+      // is the drag not being remembered.
+      sidebarSettings.mockResolvedValue({ ...STORED, order: ["voice", "text"] });
+      both();
+
+      await waitFor(() => expect(order()).toEqual(["Voice", "Text"]));
+    });
+
+    it("moves a section dropped on another one into its place", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+    });
+
+    it("writes the whole new order down", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+    });
+
+    it("ignores a drag carrying something that is not a section", async () => {
+      // A drag can come from outside the application, and the sidebar is what
+      // it would otherwise rearrange.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying({ "text/plain": "a file" });
+
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+      fireEvent.drop(region("Text"), { dataTransfer });
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("moves a section up with the arrow keys", async () => {
+      // Drag is not a route everybody has. See the handle's own label.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+    });
+
+    it("moves a section down with the arrow keys", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+    });
+
+    it("keeps the handle focused across a move, so a second press follows", async () => {
+      // Otherwise the list moves out from under the keyboard and the next
+      // press goes to the page.
+      list([
+        text("!a:example.org", "general"),
+        voice(LOUNGE, "Lounge"),
+      ]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(grip("Voice")).toHaveFocus();
+    });
+
+    it("does nothing at the top of the list", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowUp}");
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("does nothing at the bottom of the list", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Voice").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Text", "Voice"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("stays where it was dropped when the write fails", async () => {
+      // The list has already moved by then, on the fold's terms: putting it
+      // back because the file would not take it is a drag that undoes itself.
+      setSectionOrder.mockReset().mockRejectedValue(new Error("read only"));
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Voice", "Text");
+
+      expect(order()).toEqual(["Voice", "Text"]);
+      await waitFor(() =>
+        expect(logged).toHaveBeenCalledWith(
+          expect.stringContaining("order"),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it("offers itself as a place to drop a section", async () => {
+      // `preventDefault` on the drag over is the whole of what makes a drop
+      // possible, and nothing else in these tests would notice it missing.
+      // `fireEvent` answers false when the handler prevented the default.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+
+      expect(fireEvent.dragOver(region("Text"), { dataTransfer })).toBe(false);
+    });
+
+    it("does not offer itself as a place to drop a file", async () => {
+      // The other half. A file dragged into the window must not be told the
+      // sidebar will take it.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying({ Files: "" });
+
+      expect(fireEvent.dragOver(region("Text"), { dataTransfer })).toBe(true);
+    });
+
+    it("marks the section a dragged one would land on", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+
+      expect(region("Text")).toHaveAttribute("data-over", "true");
+      // Not the one being dragged, which is where it already is.
+      fireEvent.dragOver(region("Voice"), { dataTransfer });
+      expect(region("Voice")).toHaveAttribute("data-over", "false");
+    });
+
+    it("stops looking carried once a drag is abandoned", async () => {
+      // A drag let go of over nothing never reaches a drop, so this is the
+      // only thing that puts the section back.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      expect(region("Voice")).toHaveAttribute("data-dragged", "true");
+
+      fireEvent.dragEnd(grip("Voice"), { dataTransfer });
+
+      expect(region("Voice")).toHaveAttribute("data-dragged", "false");
+      expect(order()).toEqual(["Text", "Voice"]);
+    });
+
+    it("stops marking a section once the drag leaves it", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+      const dataTransfer = carrying();
+      fireEvent.dragStart(grip("Voice"), { dataTransfer });
+      fireEvent.dragOver(region("Text"), { dataTransfer });
+
+      fireEvent.dragLeave(region("Text"), { dataTransfer });
+
+      expect(region("Text")).toHaveAttribute("data-over", "false");
+    });
+
+    it("does nothing when it is the only section drawn", async () => {
+      // The arrow keys move a section past the ones somebody can see. An
+      // empty section is not drawn, so moving past one would be a press that
+      // rearranges the file and changes nothing on screen.
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      grip("Text").focus();
+      await userEvent.keyboard("{ArrowDown}");
+
+      expect(order()).toEqual(["Text"]);
+      expect(setSectionOrder).not.toHaveBeenCalled();
+    });
+
+    it("says which section a handle moves", async () => {
+      // A row of identical grips is a row of controls a screen reader reads
+      // out as the same thing.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(grip("Voice")).toHaveAccessibleName("Move Voice");
+      expect(grip("Text")).toHaveAccessibleName("Move Text");
+    });
+
+    it("says that the arrow keys are a way to move it", async () => {
+      // The only place the keyboard route is announced. Dragging is the
+      // obvious half and the one some people cannot use.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(grip("Voice")).toHaveAccessibleDescription(
+        expect.stringContaining("arrow"),
+      );
+    });
+  });
+
+  describe("sections somebody made", () => {
+    /** Drag a channel onto a section's heading, as the browser would. */
+    function dragOnto(section: string, roomId: string) {
+      const data = { "application/x-consort-room": roomId };
+      const transfer = {
+        types: Object.keys(data),
+        getData: (type: string) => data[type as keyof typeof data] ?? "",
+      };
+      const heading = screen.getByRole("region", { name: section });
+      fireEvent.dragOver(heading, { dataTransfer: transfer });
+      fireEvent.drop(heading, { dataTransfer: transfer });
+    }
+
+    it("draws a stored section with the name somebody gave it", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+      expect(namesIn("Projects")).toEqual(["#general"]);
+    });
+
+    it("takes a channel out of Text once it is in a section of its own", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general"), text("!b:example.org", "random")]);
+
+      await screen.findByRole("region", { name: "Projects" });
+      expect(namesIn("Text")).toEqual(["#random"]);
+    });
+
+    it("draws a section with nothing in it, so something can be put there", async () => {
+      // The one place the rule differs from Text and Voice, which are dropped
+      // when empty: a section nothing drew would be one nothing could fill.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("makes a section with the name that was typed", async () => {
+      const user = userEvent.setup();
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(
+        screen.getByLabelText("Name for the new section"),
+        "Projects",
+      );
+      await user.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(createSection).toHaveBeenCalledWith("!s:example.org", "Projects");
+      expect(
+        await screen.findByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("will not make a section with no name", async () => {
+      const user = userEvent.setup();
+      list([text("!a:example.org", "general")]);
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(screen.getByLabelText("Name for the new section"), "  ");
+
+      expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+      expect(createSection).not.toHaveBeenCalled();
+    });
+
+    it("says so when the section could not be made", async () => {
+      const user = userEvent.setup();
+      createSection.mockImplementation(() =>
+        Promise.reject({ message: "A section needs a name, and a short one." }),
+      );
+      list([text("!a:example.org", "general")]);
+
+      await user.click(screen.getByRole("button", { name: "New section" }));
+      await user.type(
+        screen.getByLabelText("Name for the new section"),
+        "Projects",
+      );
+      await user.click(screen.getByRole("button", { name: "Add" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "A section needs a name",
+      );
+    });
+
+    it("renames a section somebody made", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Rename Projects" }));
+      await user.clear(screen.getByLabelText("Rename Projects"));
+      await user.type(screen.getByLabelText("Rename Projects"), "Clients");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(renameSection).toHaveBeenCalledWith("custom-1", "Clients");
+      expect(
+        await screen.findByRole("region", { name: "Clients" }),
+      ).toBeInTheDocument();
+    });
+
+    it("leaves the name alone when a rename is abandoned", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Rename Projects" }));
+      await user.type(screen.getByLabelText("Rename Projects"), "nonsense");
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      expect(renameSection).not.toHaveBeenCalled();
+      expect(
+        screen.getByRole("region", { name: "Projects" }),
+      ).toBeInTheDocument();
+    });
+
+    it("gives a deleted section's channels back to Text", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(screen.getByRole("button", { name: "Delete Projects" }));
+
+      expect(deleteSection).toHaveBeenCalledWith("custom-1");
+      await waitFor(() => expect(namesIn("Text")).toEqual(["#general"]));
+      expect(
+        screen.queryByRole("region", { name: "Projects" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("offers no rename or delete on Text and Voice", async () => {
+      // They follow `m.room.type` rather than a choice, so there is no name of
+      // theirs to change and nothing to delete.
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(
+        screen.queryByRole("button", { name: "Rename Text" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Delete Text" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("puts a channel in a section when its box is ticked", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Choose channels for Projects" }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "general" }));
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", "custom-1");
+      await waitFor(() => expect(namesIn("Projects")).toEqual(["#general"]));
+    });
+
+    it("takes a channel back out when its box is unticked", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Choose channels for Projects" }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "general" }));
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", null);
+      await waitFor(() => expect(namesIn("Text")).toEqual(["#general"]));
+    });
+
+    it("holds a text and a voice channel side by side", async () => {
+      // The point of the feature: a project is the channel and the call about
+      // it, and splitting those by kind is what #170 undoes.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [
+          made("custom-1", "Projects", ["!a:example.org", LOUNGE]),
+        ],
+      });
+      list([text("!a:example.org", "general"), voice(LOUNGE, "Lounge")]);
+
+      await screen.findByRole("region", { name: "Projects" });
+      expect(namesIn("Projects")).toEqual(["#general", "Lounge"]);
+    });
+
+    it("takes a channel dragged onto its heading", async () => {
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects")],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      dragOnto("Projects", "!a:example.org");
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", "custom-1");
+      await waitFor(() => expect(namesIn("Projects")).toEqual(["#general"]));
+    });
+
+    it("gives a channel dragged onto Text back to Text", async () => {
+      // Text and Voice hold whatever is left over, so dropping on one is how a
+      // pointer takes a channel out of a section.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+        order: ["text", "custom-1"],
+      });
+      list([text("!a:example.org", "general"), text("!b:example.org", "random")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      dragOnto("Text", "!a:example.org");
+
+      expect(setRoomSection).toHaveBeenCalledWith("!a:example.org", null);
+      await waitFor(() =>
+        expect(namesIn("Text")).toEqual(["#general", "#random"]),
+      );
+    });
+
+    it("folds a section somebody made like any other", async () => {
+      const user = userEvent.setup();
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [made("custom-1", "Projects", ["!a:example.org"])],
+      });
+      list([text("!a:example.org", "general")]);
+      await screen.findByRole("region", { name: "Projects" });
+
+      await user.click(
+        screen.getByRole("button", { name: "Projects" }),
+      );
+
+      expect(setSectionFolded).toHaveBeenCalledWith("custom-1", true);
+    });
+
+    it("keeps a section out of a space it was not made in", async () => {
+      // Otherwise "Projects" would follow somebody into every other space,
+      // where none of its channels are.
+      sidebarSettings.mockResolvedValue({
+        ...STORED,
+        sections: [
+          { key: "custom-1", name: "Projects", space: "!other:example.org", rooms: [] },
+        ],
+      });
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(
+        screen.queryByRole("region", { name: "Projects" }),
+      ).not.toBeInTheDocument();
     });
   });
 });

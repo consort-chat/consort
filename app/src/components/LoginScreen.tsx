@@ -57,14 +57,26 @@ export function LoginScreen({ onSignedIn }: Props) {
   return (
     <div className="login">
       <aside className="login__brand">
-        <div className="login__mark" aria-hidden="true">
-          <span className="login__mark-c" />
-          <span className="login__bars">
-            <i style={{ height: "22%" }} />
-            <i style={{ height: "52%" }} />
-            <i style={{ height: "30%" }} />
-          </span>
-        </div>
+        <svg
+          className="login__mark"
+          viewBox="112 112 336 288"
+          aria-hidden="true"
+          focusable="false"
+        >
+          {/* The same arc and the same bars as app/src-tauri/icons/icon.svg. */}
+          <path
+            className="login__mark-c"
+            d="M 330 150 A 118 118 0 1 0 330 362"
+            fill="none"
+            strokeWidth="44"
+            strokeLinecap="round"
+          />
+          <g className="login__mark-bars">
+            <rect x="330" y="228" width="26" height="56" rx="13" />
+            <rect x="374" y="196" width="26" height="120" rx="13" />
+            <rect x="418" y="222" width="26" height="68" rx="13" />
+          </g>
+        </svg>
         <h1 className="login__wordmark">Consort</h1>
         <p className="login__tagline">
           A desktop client for Matrix, with voice that stays out of your way.

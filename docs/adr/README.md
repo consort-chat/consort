@@ -22,4 +22,5 @@ imperfect for now and the terms on which it would be revisited.
 | [0009](0009-a-shared-screen-takes-the-stage.md) | A shared screen takes the stage, and everything else goes under it | accepted |
 | [0010](0010-a-timeline-on-the-base-sdk.md) | Read the timeline off the base SDK, not matrix-sdk-ui | accepted |
 | [0011](0011-capture-on-windows.md) | Capture on Windows through Media Foundation and Windows.Graphics.Capture | accepted |
+| [0012](0012-sections-in-the-settings-file.md) | Keep custom sections in the settings file, not in Matrix account data | accepted |
 | [0014](0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md) | Ask for a remote picture at the size it is drawn | accepted |

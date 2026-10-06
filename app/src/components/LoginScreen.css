@@ -47,34 +47,24 @@
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/><feColorMatrix type='saturate' values='0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.045'/></svg>");
 }
 
+/* The app icon's glyph, without its tile: the brand side is already a gradient
+   and a second one reads as an icon pasted onto a wall. */
 .login__mark {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  /* A flex item stretches, and a stretched SVG centres its own glyph. Without
+     this the mark floats mid-column while the wordmark starts at the edge. */
+  align-self: flex-start;
+  width: auto;
+  height: 40px;
   margin-bottom: var(--space-2);
 }
 
 .login__mark-c {
-  width: 34px;
-  height: 34px;
-  border: 5px solid var(--text-primary);
-  border-right-color: transparent;
-  border-radius: 50%;
-  transform: rotate(-45deg);
+  stroke: var(--text-primary);
 }
 
-.login__bars {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 34px;
-}
-
-.login__bars i {
-  display: block;
-  width: 5px;
-  border-radius: 3px;
-  background: var(--mint);
+/* Mint, as a level meter rather than decoration. See tokens.css. */
+.login__mark-bars {
+  fill: var(--mint);
 }
 
 .login__wordmark {
