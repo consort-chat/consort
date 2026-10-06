@@ -51,6 +51,16 @@ async fn mount_login(server: &MatrixMockServer, access_token: &str) {
     server.mock_query_keys().ok().mount().await;
 }
 
+/// The JSON body of the request a login posted to `/login`.
+async fn what_the_login_posted(server: &MatrixMockServer) -> serde_json::Value {
+    let requests = server.server().received_requests().await.unwrap();
+    let posted = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/login"))
+        .expect("the login should have posted to /login");
+    serde_json::from_slice(&posted.body).unwrap()
+}
+
 fn credentials(server: &MatrixMockServer) -> Credentials {
     Credentials {
         server: server.uri(),
@@ -407,6 +417,54 @@ async fn a_login_with_a_nonsense_server_never_reaches_the_network() {
     .expect_err("an empty server should be rejected up front");
 
     assert!(error.user_message().contains("does not look like"));
+}
+
+#[tokio::test]
+async fn a_username_typed_with_spaces_reaches_the_homeserver_trimmed() {
+    let server = MatrixMockServer::new().await;
+    mount_login(&server, "syt_first").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+
+    auth::login(
+        &store,
+        &Credentials {
+            server: server.uri(),
+            username: "  bob ".to_owned(),
+            password: "hunter2".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        what_the_login_posted(&server).await["identifier"]["user"],
+        "bob"
+    );
+}
+
+#[tokio::test]
+async fn a_password_reaches_the_homeserver_exactly_as_it_was_typed() {
+    let server = MatrixMockServer::new().await;
+    mount_login(&server, "syt_first").await;
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = store(&dir);
+
+    auth::login(
+        &store,
+        &Credentials {
+            server: server.uri(),
+            username: "bob".to_owned(),
+            password: "  hunter2 ".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        what_the_login_posted(&server).await["password"],
+        "  hunter2 "
+    );
 }
 
 #[tokio::test]
