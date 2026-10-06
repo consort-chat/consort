@@ -2286,6 +2286,23 @@ export interface SidebarSettings {
   folded: string[];
   /** The keys of the sections, top first. Empty until somebody drags one. */
   order: string[];
+  /** The sections somebody made, in no particular order. See `order`. */
+  sections: CustomSection[];
+}
+
+/**
+ * A section somebody made, and the rooms they put in it.
+ *
+ * Mirrors `crate::settings::CustomSection`. Keyed as well as named because the
+ * fold and the order are stored by key, so a rename must not touch the key.
+ */
+export interface CustomSection {
+  key: string;
+  name: string;
+  /** The rail entry it is drawn under, by room ID. */
+  space: string;
+  /** The rooms in it, by ID. A room is in one section at most. */
+  rooms: string[];
 }
 
 /** How the sections are folded and arranged right now. */
@@ -2313,6 +2330,39 @@ export function setSectionFolded(key: string, folded: boolean): Promise<void> {
  */
 export function setSectionOrder(keys: string[]): Promise<void> {
   return invoke<void>("set_section_order", { keys });
+}
+
+/**
+ * Make a section under `space` and hand back its key.
+ *
+ * The key, unlike the writes above, because the caller has to fold it, drag it
+ * and put rooms in it, and all three of those are keyed. Rejects a blank name
+ * and one too long for a heading.
+ */
+export function createSection(space: string, name: string): Promise<string> {
+  return invoke<string>("create_section", { space, name });
+}
+
+/** Rename the section keyed `key`. Its place and its rooms are untouched. */
+export function renameSection(key: string, name: string): Promise<void> {
+  return invoke<void>("rename_section", { key, name });
+}
+
+/** Forget a section. Its rooms are drawn under Text or Voice again. */
+export function deleteSection(key: string): Promise<void> {
+  return invoke<void>("delete_section", { key });
+}
+
+/**
+ * Put a room in the section keyed `key`, or in none when `key` is null.
+ *
+ * One room per call, and the room leaves whatever section held it before.
+ */
+export function setRoomSection(
+  room: string,
+  key: string | null,
+): Promise<void> {
+  return invoke<void>("set_room_section", { room, key });
 }
 
 /**

@@ -87,3 +87,51 @@ describe("the handle that moves a section", () => {
       .toBeGreaterThan(0);
   });
 });
+
+describe("the controls #170 put on a section somebody made", () => {
+  /** Every control in this column that has to clear the target size floor. */
+  const CONTROLS = [
+    "channels__manage",
+    "channels__new",
+    "channels__choose",
+    "channels__save",
+    "channels__cancel",
+  ];
+
+  it.each(CONTROLS)("%s is big enough to hit", (name) => {
+    // The same floor the fold control clears, for the same reason: this
+    // repository has been under 24 by 24 three times (#82, and #102 twice).
+    const height = parseFloat(getComputedStyle(control(name)).minHeight);
+
+    expect(height).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it.each(["channels__manage", "channels__new", "channels__choose"])(
+    "%s measures itself against the text size",
+    (name) => {
+      expect(rule(`.${name}`)).toMatch(/min-height:\s*[\d.]+rem/);
+    },
+  );
+
+  it("measures the Save and Cancel pair against the text size too", () => {
+    // One rule for the two, so `rule` cannot be asked for either on its own.
+    expect(rule(".channels__save,\n.channels__cancel")).toMatch(
+      /min-height:\s*[\d.]+rem/,
+    );
+  });
+
+  it("leaves the rename and delete controls visible to the keyboard", () => {
+    // Faded rather than hidden, on the grip's terms. `display: none` or
+    // `visibility: hidden` would take them out of the tab order as well.
+    const style = getComputedStyle(control("channels__manage"));
+
+    expect(style.display).not.toBe("none");
+    expect(style.visibility).not.toBe("hidden");
+  });
+
+  it("takes a section's checklist out of the layout when it is put away", () => {
+    // A grid, so an author `display` beats the browser's own `[hidden]` rule.
+    // The same trap `.channels__list[hidden]` is here for.
+    expect(rule(".channels__choices[hidden]")).toContain("display: none");
+  });
+});

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { arrange, moved } from "./sections";
+import { arrange, moved, sectionsOf } from "./sections";
+import type { Channel, CustomSection } from "./api";
+import type { Drawn } from "./sections";
 
 /** What the sidebar itself orders the sections in, before anybody drags one. */
 const BUILT_IN = [{ key: "text" }, { key: "voice" }];
@@ -84,5 +86,143 @@ describe("moved", () => {
 
   it("changes nothing when it is dropped on something that is not a section", () => {
     expect(moved(["a", "b", "c"], "a", "elsewhere")).toEqual(["a", "b", "c"]);
+  });
+});
+
+/** A channel, reduced to what `sectionsOf` reads off one. */
+function channel(id: string, kind: Channel["kind"] = "text"): Channel {
+  return {
+    id,
+    name: id,
+    kind,
+    avatar: null,
+    joined: true,
+    participants: [],
+    unread: 0,
+    mentions: 0,
+  };
+}
+
+/** A section somebody made, under the one space these tests use. */
+function custom(key: string, name: string, rooms: string[]): CustomSection {
+  return { key, name, space: "!s:example.org", rooms };
+}
+
+/** The keys and the room IDs of what was drawn, which is what is under test. */
+function shapeOf(sections: readonly Drawn[]) {
+  return sections.map((section) => ({
+    key: section.key,
+    rooms: section.channels.map((one) => one.id),
+  }));
+}
+
+describe("sectionsOf", () => {
+  it("splits a space into Text and Voice when nobody has made a section", () => {
+    const channels = [channel("!a"), channel("!b", "voice")];
+
+    expect(shapeOf(sectionsOf(channels, [], []))).toEqual([
+      { key: "text", rooms: ["!a"] },
+      { key: "voice", rooms: ["!b"] },
+    ]);
+  });
+
+  it("omits a built-in section with nothing in it", () => {
+    // A "VOICE" heading over nothing reads as a list that failed to load.
+    expect(shapeOf(sectionsOf([channel("!a")], [], []))).toEqual([
+      { key: "text", rooms: ["!a"] },
+    ]);
+  });
+
+  it("draws a section somebody made even when it is empty", () => {
+    // The opposite rule, and deliberately: an empty section that was not
+    // drawn would be one nothing could ever be put into.
+    expect(
+      shapeOf(sectionsOf([], [custom("custom-1", "Projects", [])], [])),
+    ).toEqual([{ key: "custom-1", rooms: [] }]);
+  });
+
+  it("takes a room out of Text once it is in a section of its own", () => {
+    const channels = [channel("!a"), channel("!b")];
+
+    expect(
+      shapeOf(sectionsOf(channels, [custom("custom-1", "Projects", ["!a"])], [])),
+    ).toEqual([
+      { key: "text", rooms: ["!b"] },
+      { key: "custom-1", rooms: ["!a"] },
+    ]);
+  });
+
+  it("takes a voice room out of Voice the same way", () => {
+    const channels = [channel("!a", "voice")];
+
+    expect(
+      shapeOf(sectionsOf(channels, [custom("custom-1", "Projects", ["!a"])], [])),
+    ).toEqual([{ key: "custom-1", rooms: ["!a"] }]);
+  });
+
+  it("holds text and voice rooms side by side in one section", () => {
+    // The point of a section of your own: a project is the channel and the
+    // call about it, and splitting those by kind is what #170 is undoing.
+    const channels = [channel("!a"), channel("!b", "voice")];
+
+    expect(
+      shapeOf(
+        sectionsOf(channels, [custom("custom-1", "Projects", ["!a", "!b"])], []),
+      ),
+    ).toEqual([{ key: "custom-1", rooms: ["!a", "!b"] }]);
+  });
+
+  it("ignores a room a section claims that this space does not have", () => {
+    // A room left behind by a leave, or one whose space changed. The section
+    // is still drawn, because the claim is stale rather than the section.
+    expect(
+      shapeOf(sectionsOf([], [custom("custom-1", "Projects", ["!gone"])], [])),
+    ).toEqual([{ key: "custom-1", rooms: [] }]);
+  });
+
+  it("keeps the order rooms arrive in rather than the order they were added", () => {
+    // The order comes from Rust, which follows MSC1772. A section that drew
+    // its rooms in the order somebody dragged them in would disagree with
+    // every other section about where a channel sits.
+    const channels = [channel("!a"), channel("!b")];
+
+    expect(
+      shapeOf(
+        sectionsOf(channels, [custom("custom-1", "Projects", ["!b", "!a"])], []),
+      ),
+    ).toEqual([{ key: "custom-1", rooms: ["!a", "!b"] }]);
+  });
+
+  it("follows the order somebody dragged the sections into", () => {
+    const channels = [channel("!a"), channel("!b")];
+    const sections = sectionsOf(
+      channels,
+      [custom("custom-1", "Projects", ["!a"])],
+      ["custom-1", "text"],
+    );
+
+    expect(shapeOf(sections)).toEqual([
+      { key: "custom-1", rooms: ["!a"] },
+      { key: "text", rooms: ["!b"] },
+    ]);
+  });
+
+  it("says which sections can be renamed and deleted", () => {
+    const sections = sectionsOf(
+      [channel("!a")],
+      [custom("custom-1", "Projects", [])],
+      [],
+    );
+
+    expect(sections.map((one) => ({ key: one.key, custom: one.custom }))).toEqual([
+      { key: "text", custom: false },
+      { key: "custom-1", custom: true },
+    ]);
+  });
+
+  it("labels a section somebody made with the name they gave it", () => {
+    const sections = sectionsOf([], [custom("custom-1", "Projects", [])], []);
+
+    expect(sections.map((one) => one.label)).toEqual(["Projects"]);
   });
 });
