@@ -1,10 +1,17 @@
-import { useEffect, useId, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+} from "react";
 
 import {
   NOBODY,
   asCommandError,
   callRoomId,
   setSectionFolded,
+  setSectionOrder,
   sidebarSettings,
   type Call,
   type Channel,
@@ -12,6 +19,7 @@ import {
   type Space,
 } from "../lib/api";
 import { channelLabel, joinLabel } from "../lib/labels";
+import { arrange, moved } from "../lib/sections";
 import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
 import { SidebarToggle } from "./SidebarToggle";
@@ -70,6 +78,9 @@ function ChatIcon() {
 /** Nothing folded, which is how a fresh account finds the sidebar. */
 const NO_SECTIONS: ReadonlySet<string> = new Set();
 
+/** Nothing dragged, which means the order `SECTIONS` is written in. */
+const NO_ORDER: readonly string[] = [];
+
 /**
  * A chevron, pointing the way the section will move.
  *
@@ -89,6 +100,38 @@ function FoldGlyph({ folded }: { folded: boolean }) {
       aria-hidden="true"
     >
       <path d={folded ? "M9 6l6 6-6 6" : "M6 9l6 6 6-6"} />
+    </svg>
+  );
+}
+
+/**
+ * What a drag of a section carries.
+ *
+ * A type of our own rather than `text/plain`, so that a drag from anywhere
+ * else cannot be read as a section and dropping a section somewhere else
+ * cannot paste a key into it.
+ */
+const SECTION = "application/x-consort-section";
+
+/**
+ * The grip on a section's heading, which is what takes hold of it.
+ *
+ * Two short bars rather than the usual six dots, because at this size dots
+ * come out as a smudge and the heading beside them is already lettering.
+ */
+function GripGlyph() {
+  return (
+    <svg
+      className="channels__grip-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M5 9h14" />
+      <path d="M5 15h14" />
     </svg>
   );
 }
@@ -451,29 +494,50 @@ function ChannelRow({
 }
 
 function Group({
+  sectionKey,
   label,
   channels,
   folded,
+  dragged,
+  over,
   selectedId,
   call,
   speaking,
   joining,
   onToggleFold,
+  onTake,
+  onDrop,
+  onOver,
+  onMove,
   onSelect,
   onJoin,
   onOpenChat,
   onOpenPerson,
 }: {
+  /** What the settings file calls this section. See [`SECTIONS`]. */
+  sectionKey: string;
   label: string;
   channels: Channel[];
   /** Whether the channels under the heading are put away right now. */
   folded: boolean;
+  /** Whether this is the section being dragged right now. */
+  dragged: boolean;
+  /** Whether a dragged section is over this one, so it is where it would land. */
+  over: boolean;
   selectedId: string | null;
   call: Call;
   speaking: ReadonlySet<string>;
   joining: Joining | null;
   /** Fold this section away, or bring it back. */
   onToggleFold: () => void;
+  /** Take hold of this section, or let go of it. */
+  onTake: (dragging: boolean) => void;
+  /** Put the section keyed `key` where this one is. */
+  onDrop: (key: string) => void;
+  /** A dragged section is over this one, or has left it. */
+  onOver: (over: boolean) => void;
+  /** Move this section one place up (-1) or down (1). */
+  onMove: (by: number) => void;
   onSelect: (id: string) => void;
   /** Ask to be let into a channel this account is not in. */
   onJoin: (id: string) => void;
@@ -487,12 +551,34 @@ function Group({
 }) {
   const listId = useId();
 
-  // An empty group is no group. A "VOICE" header over nothing reads as a
-  // channel list that failed to load rather than a space with no voice rooms.
-  if (channels.length === 0) return null;
+  /** Whether a drag over this section is one of ours. See [`SECTION`]. */
+  function ours(event: ReactDragEvent): boolean {
+    return event.dataTransfer.types.includes(SECTION);
+  }
 
   return (
-    <section className="channels__group" aria-label={label}>
+    <section
+      className="channels__group"
+      aria-label={label}
+      data-dragged={dragged}
+      data-over={over}
+      /*
+        `preventDefault` on a drag over is what offers the drop at all, so it
+        is deliberately conditional: without the check a file dragged into the
+        window would be told the sidebar will take it.
+      */
+      onDragOver={(event) => {
+        if (!ours(event)) return;
+        event.preventDefault();
+        onOver(true);
+      }}
+      onDragLeave={() => onOver(false)}
+      onDrop={(event) => {
+        if (!ours(event)) return;
+        event.preventDefault();
+        onDrop(event.dataTransfer.getData(SECTION));
+      }}
+    >
       <h2 className="channels__label">
         {/*
           A real disclosure control inside the heading, rather than a clickable
@@ -513,6 +599,37 @@ function Group({
         >
           <FoldGlyph folded={folded} />
           {label}
+        </button>
+        {/*
+          A handle of its own rather than the heading being draggable. The
+          heading is already the control that folds the section, and a press
+          that has to be told apart from the start of a drag is a press that
+          sometimes does neither.
+
+          The arrow keys do the same job, because a drag is a route some people
+          do not have. Said in the tooltip, which an `aria-label` beside it
+          turns into the control's description rather than a second name.
+        */}
+        <button
+          type="button"
+          className="channels__grip"
+          draggable
+          aria-label={`Move ${label}`}
+          title="Drag to move, or press the up and down arrows"
+          onDragStart={(event) => {
+            event.dataTransfer.setData(SECTION, sectionKey);
+            event.dataTransfer.effectAllowed = "move";
+            onTake(true);
+          }}
+          onDragEnd={() => onTake(false)}
+          onKeyDown={(event) => {
+            const by = { ArrowUp: -1, ArrowDown: 1 }[event.key];
+            if (by === undefined) return;
+            event.preventDefault();
+            onMove(by);
+          }}
+        >
+          <GripGlyph />
         </button>
       </h2>
       {/*
@@ -542,10 +659,11 @@ function Group({
 /**
  * The sections the sidebar draws, in the order they are drawn.
  *
- * One list rather than two calls, so that #169 reordering them and #170 adding
- * to them are changes to data rather than to markup. The key is what the
- * settings file holds, so it is not the label: a label is wording and can be
- * reworded.
+ * One list rather than two calls, so that reordering them and #170 adding to
+ * them are changes to data rather than to markup. The key is what the settings
+ * file holds, so it is not the label: a label is wording and can be reworded.
+ *
+ * The order here is only the one nobody has changed. See [`arrange`].
  */
 const SECTIONS: { key: string; label: string; kind: Channel["kind"] }[] = [
   { key: "text", label: "Text", kind: "text" },
@@ -616,6 +734,12 @@ export function ChannelList({
   // in the webview's storage, which is where every other preference here
   // lives; see `SidebarSettings`.
   const [folded, setFolded] = useState<ReadonlySet<string>>(NO_SECTIONS);
+  // The keys somebody dragged these into, or none, which means the order
+  // `SECTIONS` is written in.
+  const [order, setOrder] = useState<readonly string[]>(NO_ORDER);
+  // The section being dragged and the one it is over, for the stylesheet.
+  const [dragged, setDragged] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
   // Which name was clicked, and where to draw the card about them. One at a
   // time: two open menus about two people would be two sliders somebody has to
   // tell apart by the heading.
@@ -626,12 +750,34 @@ export function ChannelList({
   } | null>(null);
   const list = useRef<HTMLDivElement | null>(null);
 
+  const arranged = arrange(SECTIONS, order);
+  /*
+    The sections with something in them, which is all that is drawn. An empty
+    group is no group: a "VOICE" header over nothing reads as a channel list
+    that failed to load rather than a space with no voice rooms.
+
+    Separate from `arranged` because a move is between neighbours somebody can
+    see, while what gets written down is the whole order.
+  */
+  const drawn = arranged
+    .map((section) => ({
+      ...section,
+      channels: space.channels.filter(
+        (channel) => channel.kind === section.kind,
+      ),
+    }))
+    .filter((section) => section.channels.length > 0);
+
   useEffect(() => {
     sidebarSettings().then(
-      (settings) => setFolded(new Set(settings.folded)),
+      (settings) => {
+        setFolded(new Set(settings.folded));
+        setOrder(settings.order);
+      },
       (raw: unknown) => {
-        // Drawn with everything open. Failing to remember a fold is not a
-        // reason to draw a sidebar with nothing in it.
+        // Drawn open and in the order `SECTIONS` is written in. Failing to
+        // remember a fold is not a reason to draw a sidebar with nothing in
+        // it.
         console.error(
           "could not read which sections are folded",
           asCommandError(raw).detail,
@@ -657,6 +803,34 @@ export function ChannelList({
         asCommandError(raw).detail,
       );
     });
+  }
+
+  /** Put `key` where the section keyed `onto` is, and write that down. */
+  function rearrange(key: string, onto: string) {
+    const next = moved(
+      arranged.map((section) => section.key),
+      key,
+      onto,
+    );
+    setOrder(next);
+
+    // The list has already moved, on the fold's terms: putting it back
+    // because the file would not take the order would be a drag that undoes
+    // itself.
+    setSectionOrder(next).catch((raw: unknown) => {
+      console.error(
+        "could not remember the order of the sections",
+        asCommandError(raw).detail,
+      );
+    });
+  }
+
+  /** Move a section one place up or down the list, past the drawn ones only. */
+  function shift(key: string, by: number) {
+    const at = drawn.findIndex((section) => section.key === key);
+    const neighbour = drawn[at + by];
+    if (neighbour === undefined) return;
+    rearrange(key, neighbour.key);
   }
 
   /*
@@ -695,19 +869,30 @@ export function ChannelList({
       {space.channels.length === 0 ? (
         <p className="channels__empty">Nothing in here yet.</p>
       ) : (
-        SECTIONS.map((section) => (
+        drawn.map((section) => (
           <Group
             key={section.key}
+            sectionKey={section.key}
             label={section.label}
-            channels={space.channels.filter(
-              (channel) => channel.kind === section.kind,
-            )}
+            channels={section.channels}
             folded={folded.has(section.key)}
+            dragged={dragged === section.key}
+            over={over === section.key && dragged !== section.key}
             selectedId={selectedId}
             call={call}
             speaking={speaking}
             joining={joining}
             onToggleFold={() => toggleFold(section.key)}
+            onTake={(taken) => {
+              setDragged(taken ? section.key : null);
+              if (!taken) setOver(null);
+            }}
+            onOver={(on) => setOver(on ? section.key : null)}
+            onDrop={(key) => {
+              setOver(null);
+              rearrange(key, section.key);
+            }}
+            onMove={(by) => shift(section.key, by)}
             onSelect={onSelect}
             onJoin={onJoin}
             onOpenChat={onOpenRoom}

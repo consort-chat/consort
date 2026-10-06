@@ -806,6 +806,19 @@ fn set_section_folded_for(
     state.settings().save(&settings)
 }
 
+/// Record the order somebody dragged the sidebar's sections into.
+///
+/// Replaces rather than merges, and so drops a key for a section the caller
+/// draws none of. The caller puts a key it does not know back at the end.
+fn set_section_order_for(
+    state: &AppState,
+    keys: Vec<String>,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.sidebar.order = keys;
+    state.settings().save(&settings)
+}
+
 /// How big the application is drawn.
 ///
 /// Already in range: the store clamps on the way in, so a hand-edited file
@@ -1974,6 +1987,16 @@ pub fn set_section_folded(
     Ok(())
 }
 
+/// See `set_section_order_for`.
+#[tauri::command]
+pub fn set_section_order(
+    state: State<'_, AppState>,
+    keys: Vec<String>,
+) -> Result<(), CommandError> {
+    set_section_order_for(&state, keys)?;
+    Ok(())
+}
+
 /// See `appearance_settings_for`.
 #[tauri::command]
 pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
@@ -2880,6 +2903,57 @@ mod tests {
 
             assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
             assert_eq!(sidebar_settings_for(&state).folded, ["text"]);
+        }
+
+        #[test]
+        fn a_sidebar_nobody_has_dragged_has_no_order_of_its_own() {
+            let (_dir, state, _) = state();
+
+            assert!(sidebar_settings_for(&state).order.is_empty());
+        }
+
+        #[test]
+        fn a_dragged_order_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_section_order_for(&state, vec!["voice".to_owned(), "text".to_owned()])
+                .expect("save");
+
+            assert_eq!(sidebar_settings_for(&state).order, ["voice", "text"]);
+        }
+
+        #[test]
+        fn dragging_a_section_leaves_a_folded_one_folded() {
+            // The two preferences share a key in one file, and a write that
+            // took the whole section would be a drag that unfolded something.
+            let (_dir, state, _) = state();
+            set_section_folded_for(&state, "voice", true).expect("save");
+
+            set_section_order_for(&state, vec!["voice".to_owned(), "text".to_owned()])
+                .expect("save");
+
+            let sidebar = sidebar_settings_for(&state);
+            assert_eq!(sidebar.folded, ["voice"]);
+            assert_eq!(sidebar.order, ["voice", "text"]);
+        }
+
+        #[test]
+        fn dragging_a_section_leaves_the_audio_section_alone() {
+            // One file, several screens. See the picker's own version of this.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            set_section_order_for(&state, vec!["voice".to_owned()]).expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+            assert_eq!(sidebar_settings_for(&state).order, ["voice"]);
         }
 
         #[test]

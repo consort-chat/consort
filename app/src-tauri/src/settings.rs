@@ -136,12 +136,12 @@ impl Default for EmojiSettings {
     }
 }
 
-/// Which sidebar sections are drawn folded away.
+/// How the sidebar's sections are arranged.
 ///
-/// A list of the folded ones rather than a flag per section, because the
-/// sections are not a fixed pair for much longer: #169 reorders them and #170
-/// lets somebody make their own, and both of those are keys this file has never
-/// seen. A list says nothing about which sections exist.
+/// Lists of keys rather than a flag or a number per section, because the
+/// sections are not a fixed pair for much longer: #170 lets somebody make
+/// their own, and those are keys this file has never seen. A list says nothing
+/// about which sections exist.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SidebarSettings {
@@ -150,6 +150,12 @@ pub struct SidebarSettings {
     /// A key this build draws no section for is kept rather than dropped. It
     /// may be a section that arrives in a later one.
     pub folded: Vec<String>,
+    /// The keys of the sections, top first, as somebody dragged them.
+    ///
+    /// Empty means the order the sidebar itself picks, which is what every
+    /// file written before #169 holds. A known key missing from a list that is
+    /// not empty is drawn after the ones in it.
+    pub order: Vec<String>,
 }
 
 impl SidebarSettings {
@@ -643,6 +649,34 @@ mod tests {
         sidebar.fold("voice", true);
 
         assert_eq!(sidebar.folded, ["voice"]);
+    }
+
+    #[test]
+    fn a_sidebar_nobody_has_rearranged_has_no_order_of_its_own() {
+        // Empty means the sidebar's own order, not an empty sidebar. Every
+        // build before this one drew the sections in one fixed order, and a
+        // file written by one of them must still draw that.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"sidebar":{"folded":["voice"]}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.sidebar.folded, ["voice"]);
+        assert!(loaded.sidebar.order.is_empty());
+    }
+
+    #[test]
+    fn a_rearranged_sidebar_survives_a_round_trip() {
+        // The whole point of it being in this file. Sections back in their old
+        // order next launch is the drag not being remembered.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings.sidebar.order = vec!["voice".to_owned(), "text".to_owned()];
+        store.save(&settings).expect("save");
+
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert_eq!(next_launch.load().sidebar.order, ["voice", "text"]);
     }
 
     #[test]
