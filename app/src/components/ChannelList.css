@@ -43,12 +43,117 @@
 }
 
 .channels__label {
-  margin: 0 0 var(--space-1) var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/*
+  The whole heading is the target, not just the word in it. A section header is
+  a row of mostly empty space and a control the width of four letters is one
+  somebody has to aim at.
+*/
+.channels__fold {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  /* The word and the space after it, so the grip keeps the end of the row. */
+  flex: 1;
+  min-width: 0;
+  /* SC 2.5.8, in `rem` so it grows with the text size slider (#122). */
+  min-height: 1.5rem;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) linear,
+    background var(--duration-fast) linear;
+}
+
+.channels__fold:hover {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+}
+
+.channels__fold:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__fold-glyph {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/*
+  Quiet rather than hidden until hovered. A grip revealed only under the
+  pointer is one a keyboard finds by accident, and this column is narrow enough
+  that two faint ones are not noise.
+*/
+.channels__grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  /* The fold control's floor, in `rem` for the same reason. */
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0.4;
+  cursor: grab;
+  transition: color var(--duration-fast) linear,
+    opacity var(--duration-fast) linear;
+}
+
+.channels__grip:hover,
+.channels__label:hover .channels__grip {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.channels__grip:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__grip:active {
+  cursor: grabbing;
+}
+
+.channels__grip-glyph {
+  width: 14px;
+  height: 14px;
+}
+
+/* The one being carried, which is no longer where it is drawn. */
+.channels__group[data-dragged="true"] {
+  opacity: 0.45;
+}
+
+/*
+  Where it would land. An inset ring rather than an outline, because this
+  column scrolls and an outline on a section at the edge of it is clipped.
+*/
+.channels__group[data-over="true"] {
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--violet);
 }
 
 .channels__list {
@@ -57,6 +162,11 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* The grid above wins over the browser's own `[hidden]` rule without this. */
+.channels__list[hidden] {
+  display: none;
 }
 
 /*
@@ -307,7 +417,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .channels__entry {
+  .channels__entry,
+  .channels__fold,
+  .channels__grip {
     transition: none;
   }
 }
@@ -397,4 +509,216 @@
 .channels__row[data-chat="true"] .channels__mentions,
 .channels__row[data-chat="true"] .channels__unread {
   margin-right: calc(24px + var(--space-1));
+}
+
+/*
+  The controls that rename and delete a section somebody made. Quiet until the
+  section is hovered or holds focus, on the grip's terms: faint rather than
+  hidden, so the keyboard never finds one by accident.
+*/
+.channels__manage {
+  display: grid;
+  flex: none;
+  place-items: center;
+  /* The fold control's floor, in `rem` so the text size slider moves it. */
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0.4;
+  cursor: pointer;
+  transition: color var(--duration-fast) linear,
+    opacity var(--duration-fast) linear;
+}
+
+.channels__manage:hover,
+.channels__label:hover .channels__manage {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.channels__manage:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__manage-glyph {
+  width: 13px;
+  height: 13px;
+}
+
+/* The handle that drags a channel onto a section. Pointer only; see the row. */
+.channels__room-grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.25rem;
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: grab;
+  transition: opacity var(--duration-fast) linear;
+}
+
+.channels__row:hover .channels__room-grip {
+  opacity: 0.5;
+}
+
+.channels__room-grip:active {
+  cursor: grabbing;
+}
+
+/* The box a section's name is typed into, whether new or being corrected. */
+.channels__name-box {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-primary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.channels__name-box:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__rename,
+.channels__new-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.channels__new-form {
+  padding: 0 var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.channels__save,
+.channels__cancel {
+  flex: none;
+  /* SC 2.5.8, in `rem` so it grows with the text size slider. */
+  min-height: 1.5rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.channels__save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.channels__save:focus-visible,
+.channels__cancel:focus-visible,
+.channels__new:focus-visible,
+.channels__choose:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+/*
+  At the foot of the list. Dashed, because it makes a thing rather than
+  operating on one: the only control in this column that is not a channel, a
+  section, or a person.
+*/
+.channels__new {
+  margin: var(--space-3) var(--space-2) var(--space-2);
+  /* SC 2.5.8, in `rem` for the reason above. */
+  min-height: 1.5rem;
+  padding: var(--space-2);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: none;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) linear,
+    border-color var(--duration-fast) linear;
+}
+
+.channels__new:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+}
+
+.channels__picker {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+}
+
+.channels__choose {
+  /* SC 2.5.8, in `rem` for the reason above. */
+  min-height: 1.5rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.channels__choose:hover {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+}
+
+.channels__choices {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 14rem;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+  margin: 0;
+  list-style: none;
+}
+
+.channels__choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  /* SC 2.5.8, in `rem` for the reason above. */
+  min-height: 1.5rem;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.channels__choice:hover {
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .channels__manage,
+  .channels__room-grip,
+  .channels__new {
+    transition: none;
+  }
+}
+
+/*
+  A grid, so the browser's own `[hidden]` rule loses to the `display` above.
+  The same trap `.channels__list[hidden]` is here for.
+*/
+.channels__choices[hidden] {
+  display: none;
 }

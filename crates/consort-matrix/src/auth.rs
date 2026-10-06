@@ -142,7 +142,10 @@ pub async fn login(store: &SessionStore, credentials: &Credentials) -> Result<(C
     // to be somewhere they can copy it from.
     client
         .matrix_auth()
-        .login_username(&credentials.username, &credentials.password)
+        // Trimmed, because a username pasted with a space either side is a
+        // user the homeserver has never heard of. The password is not: a space
+        // in one can be deliberate.
+        .login_username(credentials.username.trim(), &credentials.password)
         .initial_device_display_name(DEVICE_DISPLAY_NAME)
         .send()
         .await
@@ -399,7 +402,8 @@ fn normalise_server(input: &str) -> Result<String> {
 ///
 /// Only used to key the local store directory, so that the same account typed
 /// two different ways does not produce two devices. The homeserver still
-/// receives the untouched input and remains the authority on what it means.
+/// receives the sigil, the domain and the original case, and remains the
+/// authority on what they mean.
 fn normalise_localpart(username: &str) -> String {
     let trimmed = username.trim();
     let without_sigil = trimmed.strip_prefix('@').unwrap_or(trimmed);
