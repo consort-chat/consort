@@ -29,7 +29,7 @@ use tauri::State;
 use crate::attaching;
 use crate::audio::Backends;
 use crate::notify::NotificationSettings;
-use crate::settings::{AppearanceSettings, EmojiSettings, PrivacySettings};
+use crate::settings::{AppearanceSettings, EmojiSettings, PrivacySettings, SidebarSettings};
 use crate::state::{AppState, CallAudio};
 
 /// An error in the shape the frontend consumes.
@@ -783,6 +783,26 @@ fn emoji_used_for(
 fn set_emoji_tone_for(state: &AppState, tone: u8) -> Result<(), crate::settings::SettingsError> {
     let mut settings = state.settings().load();
     settings.emoji.tone = tone;
+    state.settings().save(&settings)
+}
+
+/// Which sidebar sections are folded away.
+fn sidebar_settings_for(state: &AppState) -> SidebarSettings {
+    state.settings().load().sidebar
+}
+
+/// Fold the section keyed `key` away, or unfold it.
+///
+/// Nothing is handed back, on `set_emoji_tone_for`'s terms. The press has
+/// already moved the list, and an answer arriving after a second press would
+/// be the first one undoing it.
+fn set_section_folded_for(
+    state: &AppState,
+    key: &str,
+    folded: bool,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    settings.sidebar.fold(key, folded);
     state.settings().save(&settings)
 }
 
@@ -1937,6 +1957,23 @@ pub fn set_emoji_tone(state: State<'_, AppState>, tone: u8) -> Result<(), Comman
     Ok(())
 }
 
+/// See `sidebar_settings_for`.
+#[tauri::command]
+pub fn sidebar_settings(state: State<'_, AppState>) -> SidebarSettings {
+    sidebar_settings_for(&state)
+}
+
+/// See `set_section_folded_for`.
+#[tauri::command]
+pub fn set_section_folded(
+    state: State<'_, AppState>,
+    key: String,
+    folded: bool,
+) -> Result<(), CommandError> {
+    set_section_folded_for(&state, &key, folded)?;
+    Ok(())
+}
+
 /// See `appearance_settings_for`.
 #[tauri::command]
 pub fn appearance_settings(state: State<'_, AppState>) -> AppearanceSettings {
@@ -2801,6 +2838,51 @@ mod tests {
         }
 
         #[test]
+        fn a_fresh_sidebar_has_every_section_open() {
+            let (_dir, state, _) = state();
+
+            assert!(sidebar_settings_for(&state).folded.is_empty());
+        }
+
+        #[test]
+        fn a_folded_section_is_what_loads_back() {
+            let (_dir, state, _) = state();
+
+            set_section_folded_for(&state, "voice", true).expect("save");
+
+            assert_eq!(sidebar_settings_for(&state).folded, ["voice"]);
+        }
+
+        #[test]
+        fn unfolding_a_section_is_remembered_too() {
+            let (_dir, state, _) = state();
+            set_section_folded_for(&state, "voice", true).expect("save");
+
+            set_section_folded_for(&state, "voice", false).expect("save");
+
+            assert!(sidebar_settings_for(&state).folded.is_empty());
+        }
+
+        #[test]
+        fn folding_a_section_leaves_the_audio_section_alone() {
+            // One file, several screens. See the picker's own version of this.
+            let (_dir, state, _) = state();
+            set_audio_settings_for(
+                &state,
+                AudioSettings {
+                    input: Some("Yeti".to_owned()),
+                    ..AudioSettings::default()
+                },
+            )
+            .expect("save");
+
+            set_section_folded_for(&state, "text", true).expect("save");
+
+            assert_eq!(audio_settings_for(&state).input.as_deref(), Some("Yeti"));
+            assert_eq!(sidebar_settings_for(&state).folded, ["text"]);
+        }
+
+        #[test]
         fn saving_the_picker_leaves_the_audio_section_alone() {
             // One file, several screens. A write from the picker that took the
             // whole file with it would undo somebody's microphone.
@@ -3076,6 +3158,7 @@ mod tests {
                 notifications: NotificationSettings::default(),
                 emoji: crate::settings::EmojiSettings::default(),
                 appearance: crate::settings::AppearanceSettings::default(),
+                sidebar: crate::settings::SidebarSettings::default(),
                 recent: crate::recent::RecentRooms::default(),
             };
             state.settings().save(&stored).expect("save");

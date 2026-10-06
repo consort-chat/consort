@@ -330,6 +330,8 @@ pub fn run() {
             commands::emoji_settings,
             commands::emoji_used,
             commands::set_emoji_tone,
+            commands::sidebar_settings,
+            commands::set_section_folded,
             commands::appearance_settings,
             commands::set_appearance_settings,
             commands::preview_application_scale,

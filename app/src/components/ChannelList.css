@@ -43,12 +43,54 @@
 }
 
 .channels__label {
-  margin: 0 0 var(--space-1) var(--space-2);
+  margin: 0 0 var(--space-1);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/*
+  The whole heading is the target, not just the word in it. A section header is
+  a row of mostly empty space and a control the width of four letters is one
+  somebody has to aim at.
+*/
+.channels__fold {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  width: 100%;
+  /* SC 2.5.8, in `rem` so it grows with the text size slider (#122). */
+  min-height: 1.5rem;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--duration-fast) linear,
+    background var(--duration-fast) linear;
+}
+
+.channels__fold:hover {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+}
+
+.channels__fold:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.channels__fold-glyph {
+  flex: none;
+  width: 14px;
+  height: 14px;
 }
 
 .channels__list {
@@ -57,6 +99,11 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* The grid above wins over the browser's own `[hidden]` rule without this. */
+.channels__list[hidden] {
+  display: none;
 }
 
 /*
@@ -307,7 +354,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .channels__entry {
+  .channels__entry,
+  .channels__fold {
     transition: none;
   }
 }
