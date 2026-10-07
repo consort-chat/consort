@@ -21,6 +21,9 @@ const onRooms = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
 const onThread = vi.hoisted(() => vi.fn(() => Promise.resolve(() => {})));
 const resendState = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const quit = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+// Mocked for the reason the listeners above are: the update bar asks on mount,
+// and a build that does not update itself is what a test environment is.
+const updatesItself = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
 const appearanceSettings = vi.hoisted(() => vi.fn());
 const setAppearanceSettings = vi.hoisted(() => vi.fn());
 vi.mock("./lib/api", async (importOriginal) => ({
@@ -36,6 +39,7 @@ vi.mock("./lib/api", async (importOriginal) => ({
   onRooms,
   onThread,
   resendState,
+  updatesItself,
   quit,
   appearanceSettings,
   setAppearanceSettings,

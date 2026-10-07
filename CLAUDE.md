@@ -130,6 +130,34 @@ needed. A grab is slow enough that a stop lands inside one, and without them a
 picture of somebody's screen reaches the call after they pressed stop. There is
 a hand-run test for exactly that in `crates/consort-video/tests/screens.rs`.
 
+### Only the Windows build updates itself, and that is not a gap
+
+`tauri-plugin-updater` is behind a Cargo feature, `self-update`, off by default,
+and only `release.yml`'s Windows job turns it on. Do not widen it to Linux and do
+not "fix" the fact that a `.deb` draws no update bar.
+
+The plugin does handle `.deb` and `.rpm`: `install_inner` dispatches on the
+bundle type and `install_deb` runs `pkexec dpkg -i`. Overwriting a package `apt`
+is tracking from inside a chat client is the thing #47 exists to replace with a
+repository. On Arch it is worse: `packaging/arch/PKGBUILD` builds with plain
+`cargo build`, never through `tauri-bundler`, so the bundle-type marker is never
+stamped, detection returns `None`, and the dispatch falls through to the AppImage
+arm on a binary that is not an AppImage. There is no AppImage on purpose either,
+for the reason `README.md` gives.
+
+Two more things worth not rediscovering. `bundle.createUpdaterArtifacts` is not
+in `tauri.conf.json` and must not be put there: it applies to every bundle, so it
+would make the `.deb` job and every local `pnpm tauri build` demand a signing key.
+It lives in `tauri.updater.conf.json`, passed with `--config` on the one command
+line that needs it. And `plugins.updater.requireSignedVersion` is on, which needs
+`@tauri-apps/cli` 2.11.5 or newer to have signed the artifact: 2.11.4 does not
+write `version:` into minisign's trusted comment, and a release signed by it is
+one every client refuses after downloading it. `app/package.json` carries the
+floor and `scripts/manifest.test.sh` catches it slipping.
+
+[docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the rest, including the
+signing keypair, which nobody but Thomas holds.
+
 ### The matrix-sdk pin is load-bearing
 
 `Cargo.toml` pins `matrix-sdk` to git rev `3773300` of

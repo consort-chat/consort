@@ -681,6 +681,26 @@ impl AppState {
         self.events.emit(AppEvent::Dropped(files));
     }
 
+    /// Publish what is happening about a newer Consort.
+    ///
+    /// Narrow on purpose. The updater is the one thing here with no client, no
+    /// call and no room behind it, so it has nothing to hold in `AppState` and
+    /// needs only somewhere to say what it found.
+    #[cfg(feature = "self-update")]
+    pub fn announce(&self, update: crate::updating::Update) {
+        self.events.emit(AppEvent::Update(update));
+    }
+
+    /// Whether this session is in a voice call right now.
+    ///
+    /// The room rather than the bridge, because the bridge outlives the call:
+    /// it is kept across channel switches so a mute survives one. Read by the
+    /// updater, which must not restart Consort out from under a call.
+    #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
+    pub fn in_a_call(&self) -> bool {
+        self.locked_called().is_some()
+    }
+
     /// Leave the voice channel, if this session is in one.
     ///
     /// A no-op when no call was ever started, which is what a stray click on a
@@ -1818,6 +1838,39 @@ mod tests {
         let sink = Arc::new(RecordingSink::new());
         let settings = SettingsStore::at(dir.path());
         (dir, AppState::new(store, settings, sink.clone()), sink)
+    }
+
+    mod whether_a_call_is_up {
+        use super::*;
+
+        #[test]
+        fn nothing_joined_is_no_call() {
+            let (_dir, state, _sink) = state();
+
+            assert!(!state.in_a_call());
+        }
+
+        #[test]
+        fn a_joined_channel_is_a_call() {
+            let (_dir, state, sink) = state();
+
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(state.in_a_call());
+        }
+
+        #[test]
+        fn hanging_up_ends_it() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            state.disconnect_call();
+            until_call(&sink, "disconnected");
+
+            assert!(!state.in_a_call());
+        }
     }
 
     mod the_screen {

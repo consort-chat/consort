@@ -82,6 +82,10 @@ permissions:
   contents: write
   # `gh run list`, for the CI gate below.
   actions: read
+  # The update manifest, which GitHub Pages serves. Why Pages and not the
+  # release page: docs/PLAN-self-update.md.
+  pages: write
+  id-token: write
 
 # One release at a time, and never cancelled: a run interrupted between the
 # commit and the tag leaves main carrying a version that was never released.
@@ -325,6 +329,8 @@ jobs:
     name: Windows installer
     runs-on: windows-latest
     needs: release
+    outputs:
+      signature: ${{ steps.installer.outputs.signature }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -352,21 +358,137 @@ jobs:
       # two Linux ones, and without an override this tries to build a .deb on
       # Windows. The frontend is not built separately either, because
       # `beforeBuildCommand` is already `pnpm build`.
+      #
+      # This is the only build in this repository that carries an updater, and
+      # the only one that signs anything. `--features self-update` compiles the
+      # plugin in; the config overlay asks the bundler for the artifacts, which
+      # for NSIS means the installer itself plus a detached signature beside it.
+      # Both are needed together: the overlay alone would sign an installer
+      # whose binary cannot check for an update, and the feature alone would
+      # check for one that nothing signed.
+      #
+      # Neither happens unless the signing key and the public key are both in
+      # place. Half a setup produces a plain installer and a warning naming the
+      # missing half, rather than a release that cannot be updated from and
+      # does not say so. docs/PLAN-self-update.md has what Thomas has to run.
       - name: Build the installer
+        id: installer
         working-directory: app
-        run: pnpm tauri build --bundles nsis
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          pubkey=$(node -e 'process.stdout.write(require("./src-tauri/tauri.conf.json").plugins.updater.pubkey)')
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set, so this installer cannot update itself."
+            pubkey=PUBLIC_KEY_NOT_SET
+          fi
+          if [ "$pubkey" = PUBLIC_KEY_NOT_SET ]; then
+            echo "::warning::plugins.updater.pubkey is not set, so this installer cannot update itself."
+            echo "updating=false" >> "$GITHUB_OUTPUT"
+            pnpm tauri build --bundles nsis
+            exit 0
+          fi
+          echo "updating=true" >> "$GITHUB_OUTPUT"
+          pnpm tauri build --bundles nsis \
+            --features self-update \
+            --config src-tauri/tauri.updater.conf.json
+          sig="../target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe.sig"
+          test -s "$sig"
+          # The signature is one line of base64 and goes into the manifest the
+          # job below publishes. It is a signature, not a secret.
+          echo "signature=$(cat "$sig")" >> "$GITHUB_OUTPUT"
 
       - name: Attach it to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           VERSION: ${{ needs.release.outputs.version }}
+          UPDATING: ${{ steps.installer.outputs.updating }}
         shell: bash
         run: |
           set -euo pipefail
           exe="target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe"
           test -f "$exe"
           gh release upload "$TAG" "$exe" --clobber
+          # The .sig too, so the artifact and what vouches for it are in the
+          # same place and anybody can check one against the other.
+          if [ "$UPDATING" = true ]; then
+            gh release upload "$TAG" "${exe}.sig" --clobber
+          fi
+
+  # The manifest the installed clients poll.
+  #
+  # On GitHub Pages rather than as a release asset, and that is not a style
+  # choice: `releases/latest/download/` resolves to the newest release that is
+  # not a prerelease, every 0.x release here is published `--prerelease`, and so
+  # that permalink 404s. Pages gives one URL that no release flag can move.
+  #
+  # The artifacts stay on the release page, where GitHub documents bandwidth as
+  # unmetered. What crosses Pages is under a kilobyte. docs/PLAN-self-update.md
+  # has the arithmetic.
+  #
+  # Nothing is published when the Windows job did not sign anything, because a
+  # manifest pointing at an unsigned installer is a manifest every client
+  # rejects after downloading it.
+  manifest:
+    name: Update manifest
+    runs-on: ubuntu-latest
+    needs: [release, windows]
+    if: needs.windows.outputs.signature != ''
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+
+      # `site/` is whatever this repository wants on the web, and the manifest
+      # is laid on top of it. A Pages deployment replaces the whole site, so
+      # building it this way is what keeps a future website and the update path
+      # from evicting each other.
+      - name: Build the site
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          SIGNATURE: ${{ needs.windows.outputs.signature }}
+        run: |
+          set -euo pipefail
+          mkdir -p public/updater
+          cp -r site/. public/
+          exe="Consort_${VERSION}_x64-setup.exe"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${exe}" \
+            --arg signature "$SIGNATURE" \
+            '{
+               version: $version,
+               notes: $notes,
+               pub_date: $pub_date,
+               platforms: {
+                 "windows-x86_64": { url: $url, signature: $signature }
+               }
+             }' > public/updater/latest.json
+          cat public/updater/latest.json
+
+      # The manifest is the thing clients trust to point at the right artifact,
+      # so it is checked for being the right shape before it is served rather
+      # than after somebody reports that updating stopped working.
+      - name: It is the manifest the plugin reads
+        run: scripts/manifest.test.sh public/updater/latest.json
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+      - id: pages
+        uses: actions/deploy-pages@v4
 
   # Named for what they are rather than for the file behind them, because this
   # is what a person watching a release run sees.

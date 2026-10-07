@@ -27,6 +27,15 @@
       "csp": "default-src 'self'; img-src 'self' data: consortmedia: http://consortmedia.localhost; media-src 'self' consortmedia: http://consortmedia.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; base-uri 'self'; form-action 'none'"
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://consort-chat.github.io/consort/updater/latest.json"
+      ],
+      "pubkey": "PUBLIC_KEY_NOT_SET",
+      "requireSignedVersion": true
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [

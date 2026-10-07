@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { LoginScreen } from "./components/LoginScreen";
 import { SignedIn } from "./components/SignedIn";
 import { Splash } from "./components/Splash";
+import { UpdateNotice } from "./components/UpdateNotice";
 import {
   appearanceSettings,
   asCommandError,
@@ -177,12 +178,34 @@ export function App() {
     setView({ name: "signedOut" });
   }, []);
 
+  /*
+    The update bar sits above all three views rather than inside the signed-in
+    shell, for the reason Ctrl+Q is handled here: a newer Consort is worth
+    offering to somebody stuck on a login that will not go through, and a bar
+    that only appeared once you were signed in would be missing exactly then.
+
+    It draws nothing in a build that does not update itself, which is every
+    Linux package. See `UpdateNotice`.
+  */
+  return (
+    <>
+      <UpdateNotice />
+      {body(view, handleSignedIn, handleSignedOut)}
+    </>
+  );
+}
+
+function body(
+  view: View,
+  onSignedIn: (profile: Profile) => void,
+  onSignedOut: () => void,
+) {
   switch (view.name) {
     case "checking":
       return <Splash />;
     case "signedOut":
-      return <LoginScreen onSignedIn={handleSignedIn} />;
+      return <LoginScreen onSignedIn={onSignedIn} />;
     case "signedIn":
-      return <SignedIn profile={view.profile} onSignedOut={handleSignedOut} />;
+      return <SignedIn profile={view.profile} onSignedOut={onSignedOut} />;
   }
 }

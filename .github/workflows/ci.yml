@@ -166,6 +166,16 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The updater is behind a feature that is off by default, because a .deb
+      # and an Arch package must not carry one. Only the Windows release job
+      # asks for it, so without these two steps nothing in CI ever compiles the
+      # code behind it. See docs/PLAN-self-update.md.
+      - name: Clippy, with the updater compiled in
+        run: cargo clippy -p consort-app --all-targets --features self-update -- -D warnings
+
+      - name: Test, with the updater compiled in
+        run: cargo test -p consort-app --features self-update
+
       - name: Coverage
         # There is no keyring daemon in a container, so the secrets backend
         # under test is the file fallback and the keyring adapter is skipped.
