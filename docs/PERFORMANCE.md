@@ -101,3 +101,42 @@ that sits still while people read it and one that does not.
 Both conversations, the room's and whatever thread is open, travel in one
 value. The channel keeps only its latest for a late subscriber, so two values
 on one channel would mean the second erasing the first.
+
+## A remote picture is encoded outside the lock it is held under
+
+`TheirViews` is a map of the newest frame per remote stream. The call thread
+writes it on every decoded frame, and each drawn picture reads it twelve and a
+half times a second to make a JPEG. Sampling is cheap and encoding is not, so
+holding the lock across both put the call thread behind the card's draw.
+
+Measured with `measure_what_a_remote_picture_costs`, a 1080p source:
+
+| Box asked for | Sample | Whole poll, dev | Whole poll, release |
+|---|---|---|---|
+| 320 | 0.09 ms | 8.1 ms | 1.3 ms |
+| 480 | 0.20 ms | 17.6 ms | 2.8 ms |
+| 960 | 0.77 ms | 66 ms | 10.2 ms |
+| 1920 | 3.05 ms | 250 ms | 36 ms |
+
+At 1920 the JPEG alone is 239 ms of the 250 in a dev build and 28 ms of the 36
+in release. `consort-video` is at opt-level 2 in both, which is why the
+sampling column does not move between them; the encoder is `image`, which is
+not.
+
+### What that cost the call thread
+
+A stage at the window-filling size and two tiles, each chained at 80 ms, wanted
+the lock for about 940 ms of every second in a dev build. The thread that calls
+`see` is the thread running the microphone publish pump, and
+`consort_call::microphone` holds eight frames, which is 80 ms of audio. So a
+single hold at that size overflowed the queue by itself.
+
+`a_frame_arriving_does_not_wait_for_an_encode` measured the wait at **632 ms**
+for one frame, against a 214 ms poll: a `std::sync::Mutex` is not fair, so the
+drawing thread kept reacquiring it while the call thread starved. The symptom
+was the comment on #189, 54 drops a second out of 100 frames offered, with
+libwebrtc reporting its own capacity-1 video queues overflowing alongside.
+
+Sampling under the lock and encoding outside it leaves a 3.5 ms hold at the
+worst size. The encode still costs what the table says, but it costs it on a
+Tauri worker rather than on the thread carrying the call.

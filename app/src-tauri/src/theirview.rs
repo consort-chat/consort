@@ -65,16 +65,21 @@ impl TheirViews {
     ///
     /// The frame is kept rather than taken, so a card asking faster than a
     /// camera sends redraws the same picture instead of blinking off and on.
+    ///
+    /// Sampled under the lock and encoded outside it. The call thread leaves
+    /// frames here, and an encode is a hundred times the cost of the sampling.
     pub fn latest(&self, user_id: &str, kind: Kind, bound: u32) -> Option<String> {
-        let held = self.held();
-        let theirs = held
-            .iter()
-            .find(|((_, held_kind), held)| *held_kind == kind && held.user_id == user_id)?
-            .1;
-
         let bound = clamped(bound);
+        let sampled = {
+            let held = self.held();
+            held.iter()
+                .find(|((_, held_kind), held)| *held_kind == kind && held.user_id == user_id)?
+                .1
+                .picture
+                .thumbnail(bound, bound)
+        };
 
-        encode(&theirs.picture.thumbnail(bound, bound))
+        encode(&sampled)
     }
 
     fn held(&self) -> MutexGuard<'_, BTreeMap<(String, Kind), Held>> {
@@ -132,6 +137,47 @@ mod tests {
             u: vec![128; cw * ch],
             v: vec![128; cw * ch],
         }
+    }
+
+    #[test]
+    fn a_frame_arriving_does_not_wait_for_an_encode() {
+        // `see` runs on the call thread, which is also publishing the
+        // microphone a hundred frames a second. Holding this lock across an
+        // encode stalled that pump behind the card's draw: #189's comment.
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let views = Arc::new(TheirViews::new());
+        views.see("alice-laptop", ALICE, Kind::Screen, frame(1920, 1080, 120));
+        let at = Instant::now();
+        views.latest(ALICE, Kind::Screen, 1920).expect("a picture");
+        let a_poll = at.elapsed();
+
+        let drawing = Arc::clone(&views);
+        let until = Instant::now() + Duration::from_millis(500);
+        let polling = std::thread::spawn(move || {
+            while Instant::now() < until {
+                drawing
+                    .latest(ALICE, Kind::Screen, 1920)
+                    .expect("a picture");
+            }
+        });
+        let mut worst = Duration::ZERO;
+        while !polling.is_finished() {
+            let arriving = frame(1920, 1080, 120);
+            let at = Instant::now();
+            views.see("alice-laptop", ALICE, Kind::Screen, arriving);
+            worst = worst.max(at.elapsed());
+        }
+        polling.join().expect("the drawing thread");
+
+        // Relative to the encode rather than an absolute bound, so the margin
+        // holds in a release build too, where the encode is seven times
+        // cheaper.
+        assert!(
+            worst * 3 < a_poll,
+            "a frame waited {worst:?} of a {a_poll:?} poll"
+        );
     }
 
     /// What is actually in a data URL, decoded back to a picture.
