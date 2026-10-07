@@ -392,7 +392,7 @@ impl<S: CallSession> Joined<S> {
                 tracing::warn!(
                     room_id = %self.room_id,
                     pending = attached.pending,
-                    "gave up on audio whose track never arrived"
+                    "gave up on a stream whose track never arrived"
                 );
             }
             self.chasing = Chase::default();
@@ -1441,12 +1441,12 @@ mod tests {
 
         /// What this pass of `listen` reports, spending the script by one.
         fn attachment(&self) -> Attached {
-            let mut scripted = self.attachments.lock().unwrap();
-            let reported = scripted.front().copied().unwrap_or_default();
-            if scripted.len() > 1 {
-                scripted.pop_front();
-            }
-            reported
+            spend(&self.attachments)
+        }
+
+        /// What this pass of `watch` has, spending its own script by one.
+        fn picture(&self) -> Attached {
+            spend(&self.pictures)
         }
 
         fn cameras(&self) -> Vec<PictureSize> {
@@ -1477,6 +1477,16 @@ mod tests {
         fn asked(&self) -> Pass {
             self.requests().pop().unwrap_or_default()
         }
+    }
+
+    /// The front of a script, left standing once it is down to its last entry.
+    fn spend(scripted: &Mutex<VecDeque<Attached>>) -> Attached {
+        let mut scripted = scripted.lock().unwrap();
+        let reported = scripted.front().copied().unwrap_or_default();
+        if scripted.len() > 1 {
+            scripted.pop_front();
+        }
+        reported
     }
 
     /// Somewhere for a call's audio to go that a test can look inside.
@@ -1524,16 +1534,26 @@ mod tests {
     #[derive(Clone, Default)]
     struct Blind {
         clears: Arc<AtomicUsize>,
+        /// Every picture that reached the far end, whose it is and which.
+        /// What a frame becomes is `watching.rs`; whether one arrived at all
+        /// is the whole of issue #185.
+        seen: Arc<Mutex<Vec<(String, Kind)>>>,
     }
 
     impl Blind {
         fn clears(&self) -> usize {
             self.clears.load(Ordering::Relaxed)
         }
+
+        fn seen(&self) -> Vec<(String, Kind)> {
+            self.seen.lock().unwrap().clone()
+        }
     }
 
     impl Seen for Blind {
-        fn see(&self, _member_id: &str, _user_id: &str, _kind: Kind, _picture: IncomingPicture) {}
+        fn see(&self, member_id: &str, _user_id: &str, kind: Kind, _picture: IncomingPicture) {
+            self.seen.lock().unwrap().push((member_id.to_owned(), kind));
+        }
 
         fn forget(&self, _member_id: &str, _kind: Kind) {}
 
@@ -1698,6 +1718,15 @@ mod tests {
             (transport, log)
         }
 
+        /// A call whose remote pictures arrive on the schedule in `pictures`.
+        ///
+        /// See `Log::pictures` for what the last entry means.
+        fn whose_pictures(pictures: Vec<Attached>) -> (Self, Log) {
+            let (transport, log) = Self::new(Joining::Succeeds);
+            *log.pictures.lock().unwrap() = pictures.into();
+            (transport, log)
+        }
+
         /// A call somebody is already in.
         fn whose_roster_holds(people: Vec<Participant>) -> (Self, Log) {
             let (mut transport, log) = Self::new(Joining::Succeeds);
@@ -1782,6 +1811,20 @@ mod tests {
                 // has ended, which is what `trouble::is_the_end` makes it do.
                 _ = ending.changed() => None,
             }
+        }
+    }
+
+    /// The membership whose camera the fake session pulls.
+    const WATCHED: &str = "ada:LAPTOP";
+
+    /// A frame with nothing in it. What it carries is `watching.rs`'s business.
+    fn blank() -> IncomingPicture {
+        IncomingPicture {
+            width: 2,
+            height: 2,
+            y: vec![0; 4],
+            u: vec![0; 1],
+            v: vec![0; 1],
         }
     }
 
@@ -1888,8 +1931,14 @@ mod tests {
             self.log.attachment()
         }
 
-        fn watch(&self, _eyes: &Eyes) {
+        fn watch(&self, eyes: &Eyes) -> Attached {
             self.log.watches.fetch_add(1, Ordering::Relaxed);
+
+            let held = self.log.picture();
+            for _ in 0..held.playing {
+                eyes.see(WATCHED, "@ada:example.org", Kind::Camera, blank());
+            }
+            held
         }
 
         /// Resolved over the roster, like the real one resolves it over the
@@ -4828,7 +4877,10 @@ mod tests {
     /// Chasing a track that arrives after the roster has stopped changing.
     ///
     /// The bug is issue #157: upstream inserts a late subscription without
-    /// publishing a roster or emitting an event, so nothing asks again.
+    /// publishing a roster or emitting an event, so nothing asks again. Issue
+    /// #185 is the same bug in the pictures, where the only roster change a
+    /// camera switched on mid-call produces is the announcement that comes
+    /// before its track.
     mod chasing_a_late_track {
         use super::*;
 
@@ -4875,6 +4927,15 @@ mod tests {
             F: FnOnce(watch::Sender<Standing>, UnboundedSender<Message>) -> Fut,
             Fut: Future<Output = ()>,
         {
+            attaching_with(transport, Blind::default(), act).await;
+        }
+
+        /// The same, with somewhere to look at the pictures that arrived.
+        async fn attaching_with<F, Fut>(transport: FakeTransport, eyes: Blind, act: F)
+        where
+            F: FnOnce(watch::Sender<Standing>, UnboundedSender<Message>) -> Fut,
+            Fut: Future<Output = ()>,
+        {
             let roster = transport.roster.clone();
             let (to_loop, inbox) = unbounded_channel();
             let (events, mut said) = unbounded_channel();
@@ -4890,7 +4951,7 @@ mod tests {
                             camera: Camera::new(),
                             screen: Camera::new(),
                             ears: Arc::new(Deaf::default()),
-                            eyes: Arc::new(Blind::default()),
+                            eyes: Arc::new(eyes),
                         },
                     ));
 
@@ -4965,6 +5026,28 @@ mod tests {
                 log.listens(),
                 2,
                 "a join that left a track pending never asked again"
+            );
+        }
+
+        #[tokio::test(start_paused = true)]
+        async fn a_picture_whose_track_lands_after_the_roster_settles_is_still_drawn() {
+            // Issue #185, which is #157 in the pictures. A camera switched on
+            // mid-call publishes one roster change, the announcement, and its
+            // track lands after it, so a `watch` that reported nothing was
+            // never asked again.
+            let (transport, _log) = FakeTransport::whose_pictures(vec![pending(1), all_playing(1)]);
+            let eyes = Blind::default();
+
+            attaching_with(transport, eyes.clone(), async |_roster, to_loop| {
+                to_loop.send(connect_to(GENERAL)).unwrap();
+                retries_land(2).await;
+            })
+            .await;
+
+            assert_eq!(
+                eyes.seen(),
+                vec![(WATCHED.to_owned(), Kind::Camera)],
+                "a camera whose track arrived after the join was never pulled"
             );
         }
 

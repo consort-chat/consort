@@ -474,7 +474,9 @@ impl consort_call::CallSession for FakeCallSession {
         consort_call::Attached::default()
     }
 
-    fn watch(&self, _eyes: &consort_call::Eyes) {}
+    fn watch(&self, _eyes: &consort_call::Eyes) -> consort_call::Attached {
+        consort_call::Attached::default()
+    }
 
     /// Resolved over the roster, like the real one resolves it over the
     /// engine's. Somebody nothing is drawing answers nothing.
