@@ -1017,7 +1017,8 @@ async fn apply_and_chase<S: CallSession>(
 ///
 /// Both halves here rather than one, because they are driven by the same roster
 /// change and a site that did one of them would be the bug this exists to stop
-/// for the other.
+/// for the other. Both are reported, too: a picture whose track has not landed
+/// is chased exactly as audio is, which is issue #185.
 fn attach<S: CallSession>(
     current: Option<&Joined<S>>,
     ears: &Ears,
@@ -1026,8 +1027,7 @@ fn attach<S: CallSession>(
 ) -> Attached {
     current
         .map(|joined| {
-            let attached = joined.session.listen(ears);
-            joined.session.watch(eyes);
+            let attached = joined.session.listen(ears).and(joined.session.watch(eyes));
             // Last of the three, and restated rather than set once: a
             // constraint dies with the membership it was set on, so somebody
             // who rejoined would be back to whatever the publisher sends.
@@ -1385,6 +1385,10 @@ mod tests {
         /// roster change has to reach both, and one of the two silently not
         /// being driven is exactly the defect #69 and #70 were.
         watches: Arc<AtomicUsize>,
+        /// Which passes of `watch` have a track to pull, in order, the last
+        /// entry standing for every pass after it. A pass with one pushes a
+        /// frame at the eyes; a pass without one reports it pending.
+        pictures: Arc<Mutex<VecDeque<Attached>>>,
         /// What was asked of the SFU for each picture, one entry per pass.
         ///
         /// A pass rather than a running total, because the interesting
