@@ -1801,6 +1801,10 @@ pub async fn update_install(
 /// soon as it is launched without going through the shutdown that leaves a call.
 /// So the question is asked again with the bytes already in hand, which is the
 /// last moment it can be asked at all.
+///
+/// Nothing that goes wrong from here leaves the channel describing it. A press
+/// gets its answer as this function's error; the channel goes back to the offer,
+/// which is still true and is what the next reload has to come back to.
 #[cfg(feature = "self-update")]
 pub async fn update_install_for<R: tauri::Runtime>(
     state: &AppState,
@@ -1815,6 +1819,11 @@ pub async fn update_install_for<R: tauri::Runtime>(
         // release's assets looks like from here.
         state.announce(Update::UpToDate);
         return Ok(());
+    };
+
+    let offered = Update::Ready {
+        version: waiting.version.clone(),
+        notes: waiting.body.clone().unwrap_or_default(),
     };
 
     // `on_chunk` is handed this chunk's length, not the running total, so the
@@ -1835,28 +1844,20 @@ pub async fn update_install_for<R: tauri::Runtime>(
         )
         .await
         .map_err(|error| {
-            let trouble = crate::updating::Trouble::of(&error);
             tracing::warn!(%error, "downloading the update did not work");
-            state.announce(Update::Failed {
-                reason: trouble.message(),
-            });
-            trouble
-        })?;
+            crate::updating::Trouble::of(&error)
+        });
 
-    let offered = Update::Ready {
-        version: waiting.version.clone(),
-        notes: waiting.body.clone().unwrap_or_default(),
+    let outcome = match bytes {
+        Ok(bytes) => crate::updating::put_in_place(state.in_a_call(), || {
+            state.announce(Update::Installing);
+            waiting.install(bytes)
+        }),
+        Err(trouble) => Err(trouble.into()),
     };
-    let outcome = crate::updating::put_in_place(state.in_a_call(), || {
-        state.announce(Update::Installing);
-        waiting.install(bytes)
-    });
 
     if let Err(failure) = &outcome {
         tracing::warn!(detail = failure.detail(), "the update was not installed");
-        // Still waiting, whether a call stopped it or the installer did. The
-        // sentence goes back to whoever pressed the button; what must not be
-        // left behind is a channel saying "installing" to the next reload.
         state.announce(offered);
     }
 
