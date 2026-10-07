@@ -735,12 +735,13 @@ impl CallSession for LiveKitSession {
         }
     }
 
-    fn watch(&self, eyes: &Eyes) {
+    fn watch(&self, eyes: &Eyes) -> Attached {
         // Asked of the engine rather than tracked from events, for the reason
         // `listen` asks: this is a statement of what should currently be true
         // rather than a tally that can drift.
         let participants = self.call.engine().participants();
         let mut watching = self.watching.borrow_mut();
+        let mut pending = 0;
 
         for kind in [Kind::Camera, Kind::Screen] {
             let wanted = watching::wanted(&participants, kind);
@@ -779,11 +780,14 @@ impl CallSession for LiveKitSession {
                 let Some(track) = self.call.remote_track(&who, kind.stream()) else {
                     // The roster knows about the stream before the transport
                     // has subscribed to it, which is the ordinary order of
-                    // events. The next roster change asks again.
+                    // events. Counted, because no roster change follows the
+                    // subscription itself: issue #185.
+                    pending += 1;
                     continue;
                 };
                 let Some(mut frames) = track.video_frames() else {
                     tracing::warn!(member_id = %who, ?kind, "a video track with no frames to pull");
+                    pending += 1;
                     continue;
                 };
                 let Some(user_id) = participants
@@ -816,6 +820,11 @@ impl CallSession for LiveKitSession {
                     },
                 );
             }
+        }
+
+        Attached {
+            playing: watching.len(),
+            pending,
         }
     }
 
