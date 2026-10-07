@@ -202,12 +202,7 @@ pub async fn look<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Update {
 mod tests {
     use super::*;
 
-    /// Handing verified bytes to the installer, which is the last moment a call
-    /// can be noticed.
-    ///
-    /// Its own tests rather than the command's, because the command cannot reach
-    /// this line without a signed artifact to download and a key to have signed
-    /// it with, and neither belongs in a test.
+    /// The last moment a call can be noticed. See [`put_in_place`].
     #[cfg(feature = "self-update")]
     mod the_last_moment {
         use super::*;

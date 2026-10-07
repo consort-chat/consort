@@ -82,11 +82,8 @@ function line(update: Update, inACall: boolean): string {
 }
 
 /**
- * How far along, as a whole percent, or null when that cannot be said.
- *
- * Null for an absent length and for a zero one, which are the same thing to a
- * reader: a server that did not say. Capped, because `Content-Length` is
- * whatever the other end claimed.
+ * How far along, as a whole percent, or null when a server sent no usable length.
+ * Capped, because `Content-Length` is whatever the other end claimed.
  */
 export function progress(received: number, total: number | null): number | null {
   if (total === null || total <= 0) {
