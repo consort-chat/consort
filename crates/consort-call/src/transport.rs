@@ -190,10 +190,12 @@ pub trait CallSession {
     /// different: audio is mixed into a sound card as it arrives, and a picture
     /// is a still the window asks for when it draws one.
     ///
-    /// Nothing is reported. A video track that has not arrived needs no chase:
-    /// the roster is consulted again whenever anybody switches anything on, and
-    /// a square with no picture in it is what a camera looks like anyway.
-    fn watch(&self, eyes: &Eyes);
+    /// Reported on the same terms as [`listen`](Self::listen), and for the
+    /// reason issue #185 was: a camera switched on mid-call publishes one
+    /// roster change, the announcement, and its track lands after it. Upstream
+    /// inserts that subscription into a membership that already carries the
+    /// stream, which publishes no roster, so nothing would ask again.
+    fn watch(&self, eyes: &Eyes) -> Attached;
 
     /// Ask for everybody else's picture at the size it is drawn, under
     /// whatever cap was chosen for them.

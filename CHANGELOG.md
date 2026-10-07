@@ -4,6 +4,29 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.11.0 (2026-10-07)
+
+### Added
+
+- Draw the camera and screen other people are sending (@tominal)
+- Fold a sidebar section away, and remember it (@tominal)
+- Drag a sidebar section into a different order (@tominal)
+- Hold sections of somebody's own in the settings file (@tominal)
+- Make a section of your own, name it, and put rooms in it (@tominal)
+
+### Documentation
+
+- Whether a receiver can choose the quality of a stream (@tominal)
+- Renumber the receiving-quality ADR to 0013 (@tominal)
+- The receiving-quality research after remote pictures draw (@tominal)
+
+### Fixed
+
+- Draw the login mark from the app icon's own geometry (@tominal)
+- Trim a username before sending it to the homeserver (@tominal)
+- One height for the three controls in a thread's composer (@tominal)
+- Chase a remote picture whose track lands late (@tominal)
+
 ## 0.10.0 (2026-10-04)
 
 ### Added

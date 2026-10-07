@@ -121,17 +121,29 @@ pub enum Cue {
 /// A shared handle on somewhere to play a call.
 pub type Ears = Arc<dyn Heard>;
 
-/// What one pass of [`crate::CallSession::listen`] managed.
+/// What one pass of [`crate::CallSession::listen`] or
+/// [`crate::CallSession::watch`] managed.
 ///
-/// `pending` is the roster calling somebody audible while the transport has no
-/// track for them yet, which is the ordinary order of events rather than a
+/// `pending` is the roster calling a stream live while the transport has no
+/// track for it yet, which is the ordinary order of events rather than a
 /// failure. It is reported because nothing else will necessarily ask again.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Attached {
-    /// Memberships now being pumped.
+    /// Streams now being pumped.
     pub playing: usize,
-    /// Memberships the roster calls audible that have no track yet.
+    /// Streams the roster calls live that have no track yet.
     pub pending: usize,
+}
+
+impl Attached {
+    /// The audio and the pictures of one pass, as the one answer the chase is
+    /// armed from. Either half left short is a stream nobody is pulling.
+    pub fn and(self, other: Self) -> Self {
+        Self {
+            playing: self.playing + other.playing,
+            pending: self.pending + other.pending,
+        }
+    }
 }
 
 /// Everybody in `participants` whose audio we should be playing.
