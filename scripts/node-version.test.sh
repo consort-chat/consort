@@ -45,6 +45,12 @@ node_major=24
 # Swatinem/rust-cache is on 2 because its v2 tag already moved to node24 within
 # 2.9.x, so there is no newer major to go to. dtolnay/rust-toolchain runs no
 # Node at all and says `using: composite`.
+#
+# The three Pages actions are the second case worth looking twice at, for the
+# same reason upload-artifact is. Every example of a Pages deployment shows
+# configure-pages@v5 and deploy-pages@v4, and both of those still declare
+# node20: the migration is v6 and v5 respectively.
+# actions/upload-pages-artifact runs no Node either.
 floor_for() {
   case "$1" in
     actions/checkout)        echo 5 ;;
@@ -53,6 +59,9 @@ floor_for() {
     actions/upload-artifact) echo 6 ;;
     Swatinem/rust-cache)     echo 2 ;;
     dtolnay/rust-toolchain)  echo composite ;;
+    actions/configure-pages) echo 6 ;;
+    actions/deploy-pages)    echo 5 ;;
+    actions/upload-pages-artifact) echo composite ;;
     *)                       echo unknown ;;
   esac
 }

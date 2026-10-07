@@ -483,12 +483,14 @@ jobs:
       - name: It is the manifest the plugin reads
         run: scripts/manifest.test.sh public/updater/latest.json
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+      # v6 and v5, not the v5 and v4 most examples show: those still declare
+      # `using: node20`, which scripts/node-version.test.sh fails closed on.
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: public
       - id: pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   # Named for what they are rather than for the file behind them, because this
   # is what a person watching a release run sees.
