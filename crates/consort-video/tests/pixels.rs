@@ -545,6 +545,47 @@ mod a_picture_for_the_card {
     }
 
     #[test]
+    fn the_box_a_shape_fills_is_the_bound_and_not_the_frame() {
+        // What an SFU is asked for is the box on screen, which does not shrink
+        // because the layer it sent last was small. An ask derived from the
+        // frame it produced can only ever ratchet down.
+        let picture = flat(640, 360, 100, 110, 120);
+
+        assert_eq!(picture.shape_in(1920, 1920), (1920, 1080));
+    }
+
+    #[test]
+    fn a_frame_larger_than_the_box_fills_it_where_a_thumbnail_fits_it() {
+        // The two answers agree wherever there is more picture than box, which
+        // is every frame the ceiling is a ceiling on.
+        let picture = flat(2560, 1440, 100, 110, 120);
+
+        assert_eq!(picture.shape_in(960, 960), picture.thumbnail_size(960, 960));
+        assert_eq!(picture.shape_in(960, 960), (960, 540));
+    }
+
+    #[test]
+    fn the_box_a_tall_shape_fills_is_bounded_by_its_height() {
+        // A portrait camera. The long edge is the height, so that is the edge
+        // the box is named by.
+        let picture = flat(480, 640, 100, 110, 120);
+
+        assert_eq!(picture.shape_in(1920, 1920), (1440, 1920));
+    }
+
+    #[test]
+    fn a_box_has_even_sides_the_way_a_thumbnail_does() {
+        // One rounding rule for both, because the same chroma arithmetic reads
+        // whatever either of them names.
+        let picture = flat(1000, 999, 100, 110, 120);
+
+        let (width, height) = picture.shape_in(101, 101);
+
+        assert!(width.is_multiple_of(2), "{width} is odd");
+        assert!(height.is_multiple_of(2), "{height} is odd");
+    }
+
+    #[test]
     fn a_thumbnail_is_bounded_by_whichever_side_binds() {
         // Taller than it is wide, so the height is the limit and the width has
         // to come down with it rather than being left at the bound.

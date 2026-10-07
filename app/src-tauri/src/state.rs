@@ -3033,6 +3033,34 @@ mod tests {
             }
 
             #[test]
+            fn a_cap_lifted_asks_for_the_whole_box_again() {
+                // The ask must not shrink to the layer it was answered with.
+                // Ada is sending the half layer a `Low` cap asked for, and
+                // lifting the cap has to ask for the box again rather than
+                // for what is already arriving. Issue #189's comment.
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Screen, 1920, 1080);
+                state.their_view(ADA, Kind::Screen, 1920);
+                state.set_person_cap(ADA.to_owned(), Cap::Low);
+                wait_for(
+                    "the capped ask",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(640, 360))],
+                    || format!("{:?}", asks.latest()),
+                );
+                ada_sends(&state, Kind::Screen, 960, 540);
+                state.their_view(ADA, Kind::Screen, 1920);
+
+                state.set_person_cap(ADA.to_owned(), Cap::Auto);
+
+                wait_for(
+                    "the whole box to be asked for again",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+
+            #[test]
             fn polling_for_a_still_does_not_ask_again() {
                 // A card asks for a picture twelve times a second. Each ask
                 // reaching the call thread would be a round trip to the SFU

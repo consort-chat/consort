@@ -47,9 +47,21 @@ resolved to the top layer, so the control moved and the picture did not.
 
 `consort_call::Asked` is a width and a height, `Wanted` holds one per person
 per kind, and a cap brings its long edge down to the ceiling while keeping its
-shape. `TheirViews::drawn_at` answers with `Picture::thumbnail_size`, which is
-the arithmetic `thumbnail` itself uses, so what is asked of the SFU and what is
-drawn cannot drift apart.
+shape. `TheirViews::drawn_at` answers with `Picture::shape_in`, which is the
+box the window has at the shape the frame is, so what is asked of the SFU and
+what is drawn are the same number wherever there is more picture than box.
+
+**And the box is never the frame's own size.** The first build of this answered
+with `Picture::thumbnail_size`, which stops at the frame rather than filling
+the box, on the grounds that the two should be measured identically. They
+should not, because the frame is the answer to the last ask: a box that shrank
+to the layer it was sent made the ask a function of its own output, which can
+only ever ratchet down. A `Low` cap pulled a 1080p share to the half layer,
+`thumbnail_size` then reported a 960 by 540 box, and lifting the cap asked for
+960 by 540 again. Whether that stayed stuck or walked back up a layer at a time
+turned on a rounding rule inside livekit-server that this repository cannot see
+and must not lean on. `shape_in` scales a small frame up, so the ask depends
+only on the window and the aspect ratio.
 
 A square is still the answer in one case: before the first frame, when there is
 no shape to go on. It is the safe over-ask, and the poll after the first frame
@@ -79,6 +91,16 @@ from `Auto`, because its ceiling is 1920 and `theirview::MAX_BOUND` is also
 1920, so the box is never above it. And on a tile and on the floating card,
 which is where a picture is drawn unless somebody has gone looking, all four
 choices are one choice.
+
+**A screen share has two layers, not three.** livekit's
+`compute_default_simulcast_presets` returns a single extra preset for a
+screenshare source ("Only one additional layer for screenshares. (Prioritize
+quality)"), so a share publishes its full resolution and half of it at 3 fps,
+and nothing between. A 1080p share therefore offers 1080 and 540, which puts
+`Medium`'s 1280 ceiling (720 tall) and `High`'s 1920 on the same layer as
+`Auto`: only `Low` reaches the other one. Whatever replaces the ceilings has
+two rungs to aim at for a share and three for a camera, and the lower rung of a
+share costs 3 fps.
 
 A control that offers four options and acts on one combination of the sixteen
 is not a working control. The fix is not another ceiling: it is that a cap has

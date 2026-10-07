@@ -94,6 +94,15 @@ impl Picture {
         fitted(self.width, self.height, max_width, max_height)
     }
 
+    /// The box this frame's shape fills inside `max_width` by `max_height`.
+    ///
+    /// Not [`Self::thumbnail_size`], which stops at the frame: this is the box
+    /// on screen, and an ask that shrank to the layer it was answered with
+    /// could only ratchet down. ADR-0015.
+    pub fn shape_in(&self, max_width: u32, max_height: u32) -> (u32, u32) {
+        filling(self.width, self.height, max_width, max_height)
+    }
+
     /// A copy sampled down to fit inside `max_width` by `max_height`.
     ///
     /// Nearest neighbour, because the one reader is a self view a couple of
@@ -141,13 +150,20 @@ impl Picture {
 /// Rounded down to even and never below [`SMALLEST`], so a chroma plane is a
 /// whole number of 2x2 blocks whatever was asked for.
 fn fitted(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
-    let scaled =
-        |side: u64, by: u64, over: u64| u32::try_from(side * by / over).unwrap_or(u32::MAX) & !1;
-    let even = |side: u32| (side & !1).max(SMALLEST);
-
     if width <= max_width && height <= max_height {
         return (even(width), even(height));
     }
+    filling(width, height, max_width, max_height)
+}
+
+/// The largest even size filling `max_width` by `max_height` that keeps
+/// `width` by `height`'s shape.
+///
+/// [`fitted`] without its floor at the frame, for a caller measuring the box
+/// rather than the picture that will be made in it.
+fn filling(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
+    let scaled =
+        |side: u64, by: u64, over: u64| u32::try_from(side * by / over).unwrap_or(u32::MAX) & !1;
 
     // Whichever bound binds harder, compared as one fraction rather than two
     // divisions so a narrow frame is not rounded to nothing.
@@ -157,6 +173,11 @@ fn fitted(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32
     } else {
         (even(scaled(w, u64::from(max_height), h)), even(max_height))
     }
+}
+
+/// One side rounded down to even, never below [`SMALLEST`].
+fn even(side: u32) -> u32 {
+    (side & !1).max(SMALLEST)
 }
 
 /// Convert planar I420 to packed RGB, three tight bytes a pixel.

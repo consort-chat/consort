@@ -77,11 +77,12 @@ impl TheirViews {
         encode(&theirs.picture.thumbnail(bound, bound))
     }
 
-    /// The box a still of `user_id`'s `kind` is drawn in at `bound`.
+    /// The box `user_id`'s `kind` is drawn into at `bound`, at the shape they
+    /// are sending.
     ///
-    /// What the SFU is asked for, so it is the box rather than the square the
-    /// box fits inside: ADR-0015. A square is the answer before the first
-    /// frame, when the shape of what is coming is not known yet.
+    /// The window's box and not the still's own size, which would make the ask
+    /// a function of the layer it was answered with: ADR-0015. A square is the
+    /// answer before the first frame, there being no shape to go on.
     pub fn drawn_at(&self, user_id: &str, kind: Kind, bound: u32) -> Asked {
         let bound = clamped(bound);
         let square = Asked {
@@ -93,7 +94,7 @@ impl TheirViews {
             .iter()
             .find(|((_, held_kind), held)| *held_kind == kind && held.user_id == user_id)
             .map_or(square, |(_, held)| {
-                let (width, height) = held.picture.thumbnail_size(bound, bound);
+                let (width, height) = held.picture.shape_in(bound, bound);
                 Asked { width, height }
             })
     }
@@ -219,12 +220,30 @@ mod tests {
     }
 
     #[test]
+    fn the_box_asked_for_is_the_window_s_and_not_the_last_frame_s() {
+        // The ask must not be a function of the frame it produced. A box that
+        // shrank to the layer the SFU answered with could only ratchet down,
+        // and a cap somebody lifted would never be lifted.
+        let views = TheirViews::new();
+        views.see("alice-laptop", ALICE, Kind::Screen, frame(640, 360, 120));
+
+        assert_eq!(
+            views.drawn_at(ALICE, Kind::Screen, 1920),
+            Asked {
+                width: 1920,
+                height: 1080
+            }
+        );
+    }
+
+    #[test]
     fn the_box_matches_the_picture_that_is_made_in_it() {
         // Two answers to one question, so a drift between them is a cap that
-        // does not match what it is a cap on.
+        // does not match what it is a cap on. Bounded by what is being sent,
+        // which is where a cap is a cap on anything at all.
         let views = alices_camera();
 
-        for bound in [320, 480, 960, 1920, 4096] {
+        for bound in [320, 480, 960, 1280] {
             let made = drawn(&views.latest(ALICE, Kind::Camera, bound).unwrap());
             let box_ = views.drawn_at(ALICE, Kind::Camera, bound);
 

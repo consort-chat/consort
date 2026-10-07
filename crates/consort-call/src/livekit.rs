@@ -836,6 +836,16 @@ impl CallSession for LiveKitSession {
                     continue;
                 };
 
+                // The one place the number that leaves this session can be
+                // read. Nothing above here knows what the SFU was told.
+                tracing::debug!(
+                    member_id = %participant.member_id,
+                    ?kind,
+                    width = asked.width,
+                    height = asked.height,
+                    "asking the SFU for a picture"
+                );
+
                 self.call.set_constraints(
                     &participant.member_id,
                     kind.stream(),
