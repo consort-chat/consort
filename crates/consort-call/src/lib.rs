@@ -45,6 +45,7 @@
 
 pub mod arrivals;
 pub mod camera;
+pub mod detail;
 pub mod dialect;
 pub mod discovery;
 pub mod event;
@@ -63,6 +64,7 @@ pub mod watching;
 
 pub use arrivals::{Arrivals, Movement};
 pub use camera::{Camera, OutgoingPicture, PictureSize};
+pub use detail::{Asked, Cap, Wanted};
 pub use dialect::{Dialect, detect};
 pub use event::{CallEvent, ScreenShare, SelfAudio, SelfScreen, SelfVideo};
 pub use failure::CallFailure;

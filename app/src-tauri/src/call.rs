@@ -26,7 +26,9 @@
 
 use std::thread::JoinHandle;
 
-use consort_call::{CallEvent, CallThread, CallTransport, PictureSize, ScreenShare, Senses};
+use consort_call::{
+    Asked, CallEvent, CallThread, CallTransport, Cap, Kind, PictureSize, ScreenShare, Senses,
+};
 
 /// A running call thread, with its events wired to the webview.
 pub struct CallBridge {
@@ -123,6 +125,20 @@ impl CallBridge {
     pub fn set_screen(&self, share: Option<ScreenShare>) {
         if let Some(thread) = &self.thread {
             thread.set_screen(share);
+        }
+    }
+
+    /// Say what box is drawing `user_id`'s `kind`, in pixels.
+    pub fn drawn_at(&self, user_id: String, kind: Kind, drawn: Asked) {
+        if let Some(thread) = &self.thread {
+            thread.drawn_at(user_id, kind, drawn);
+        }
+    }
+
+    /// Ask for no more of `user_id`'s pictures than `cap` allows.
+    pub fn set_cap(&self, user_id: String, cap: Cap) {
+        if let Some(thread) = &self.thread {
+            thread.set_cap(user_id, cap);
         }
     }
 }

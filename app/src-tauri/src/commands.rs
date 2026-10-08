@@ -13,7 +13,7 @@ use consort_audio::{
     AudioDeviceReport, AudioDevices, AudioSettings, CpalHost, Direction, GateConfig, catalogue,
     choose,
 };
-use consort_call::{Kind, LiveKitTransport, SelfScreen, SelfVideo};
+use consort_call::{Cap, Kind, LiveKitTransport, SelfScreen, SelfVideo};
 use consort_matrix::{
     BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
 };
@@ -1264,6 +1264,48 @@ fn set_person_volume_for(
     Ok(())
 }
 
+/// How much of one person's pictures this session is asking for.
+///
+/// [`Cap::Auto`] for anybody nobody has chosen for, which is almost everybody.
+/// Its own command rather than part of a settings section, for the reason the
+/// per-person volume is: it is read by a menu beside a person's name, which
+/// knows one user ID and nothing else.
+fn person_quality_for(state: &AppState, user_id: &str) -> Cap {
+    state
+        .settings()
+        .load()
+        .calls
+        .person_quality
+        .get(user_id)
+        .copied()
+        .unwrap_or_default()
+}
+
+/// Ask for no more of one person's pictures than `cap` allows, and remember it.
+///
+/// A read-modify-write of the map, safe here for the reason the volume one is:
+/// everything that touches this file goes through `SettingsStore`, on the main
+/// thread, one command at a time.
+fn set_person_quality_for(
+    state: &AppState,
+    user_id: String,
+    cap: Cap,
+) -> Result<(), crate::settings::SettingsError> {
+    let mut settings = state.settings().load();
+    if cap == Cap::Auto {
+        // Auto is the absence of a choice rather than a choice of "whatever",
+        // on the same terms as full volume above.
+        settings.calls.person_quality.remove(&user_id);
+    } else {
+        settings.calls.person_quality.insert(user_id.clone(), cap);
+    }
+    state.settings().save(&settings)?;
+    // After the save, like every other setter here, so a call in progress and
+    // the file cannot disagree.
+    state.set_person_cap(user_id, cap);
+    Ok(())
+}
+
 /// Which microphone to open, and how to gate it.
 ///
 /// Shared by the settings screen's meter and by a call, deliberately. They are
@@ -1639,6 +1681,22 @@ pub fn their_view(
     bound: u32,
 ) -> Option<String> {
     state.their_view(&user_id, kind, bound)
+}
+
+/// How much of one person's pictures this session is asking for.
+#[tauri::command]
+pub fn person_quality(state: State<'_, AppState>, user_id: String) -> Cap {
+    person_quality_for(&state, &user_id)
+}
+
+/// Ask for no more of one person's pictures than `quality` allows.
+#[tauri::command]
+pub fn set_person_quality(
+    state: State<'_, AppState>,
+    user_id: String,
+    quality: Cap,
+) -> Result<(), CommandError> {
+    Ok(set_person_quality_for(&state, user_id, quality)?)
 }
 
 #[tauri::command]
@@ -2858,6 +2916,74 @@ mod tests {
         }
 
         #[test]
+        fn a_persons_picture_quality_is_remembered() {
+            // There is nowhere else for it either. Nothing in MatrixRTC says
+            // "that one's desktop is more than this connection can carry", so
+            // this file is the only thing between somebody choosing it and
+            // choosing it again tomorrow.
+            let (_dir, state, _) = state();
+
+            set_person_quality_for(&state, "@ada:example.org".to_owned(), Cap::Low).expect("save");
+
+            assert_eq!(person_quality_for(&state, "@ada:example.org"), Cap::Low);
+        }
+
+        #[test]
+        fn nobody_chosen_for_is_on_auto() {
+            // What the control draws for everybody in a call nobody has
+            // touched, and the reason a picture is asked for at the size of
+            // its box rather than at nothing.
+            let (_dir, state, _) = state();
+
+            assert_eq!(person_quality_for(&state, "@ada:example.org"), Cap::Auto);
+        }
+
+        #[test]
+        fn putting_somebody_back_to_auto_forgets_them_rather_than_writing_it_down() {
+            // Auto is the absence of a choice, on the same terms as full
+            // volume above: written down it would grow the file by a line for
+            // everybody anybody ever turned down and put back.
+            let (_dir, state, _) = state();
+            set_person_quality_for(&state, "@ada:example.org".to_owned(), Cap::Low).expect("save");
+
+            set_person_quality_for(&state, "@ada:example.org".to_owned(), Cap::Auto).expect("save");
+
+            assert!(state.settings().load().calls.person_quality.is_empty());
+        }
+
+        #[test]
+        fn a_quality_choice_is_about_one_person() {
+            let (_dir, state, _) = state();
+
+            set_person_quality_for(&state, "@ada:example.org".to_owned(), Cap::Low).expect("save");
+
+            assert_eq!(person_quality_for(&state, "@bob:example.org"), Cap::Auto);
+        }
+
+        #[test]
+        fn a_quality_choice_does_not_disturb_the_dialect_beside_it() {
+            // A read-modify-write of one field of the calls section, which
+            // also holds the two things a deployment can be told by hand.
+            let (_dir, state, _) = state();
+            let mut stored = state.settings().load();
+            stored.calls.service_url_fallback = Some("https://example.org/sfu".to_owned());
+            state.settings().save(&stored).expect("save");
+
+            set_person_quality_for(&state, "@ada:example.org".to_owned(), Cap::Medium)
+                .expect("save");
+
+            assert_eq!(
+                state
+                    .settings()
+                    .load()
+                    .calls
+                    .service_url_fallback
+                    .as_deref(),
+                Some("https://example.org/sfu"),
+            );
+        }
+
+        #[test]
         fn putting_somebody_back_to_full_forgets_them_rather_than_writing_it_down() {
             // Full volume is the absence of a choice. Written down, the file
             // would grow a line for every person anybody ever nudged and put
@@ -3517,6 +3643,7 @@ mod tests {
                 calls: crate::settings::CallSettings {
                     fallback_dialect: consort_call::Dialect::State,
                     service_url_fallback: Some("https://example.org/sfu".to_owned()),
+                    ..crate::settings::CallSettings::default()
                 },
                 privacy: crate::settings::PrivacySettings::default(),
                 notifications: NotificationSettings::default(),

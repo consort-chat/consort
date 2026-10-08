@@ -52,6 +52,8 @@ import {
   audioMonitorStart,
   audioMonitorStop,
   setPersonVolume,
+  personQuality,
+  setPersonQuality,
   login,
   logout,
   onConnection,
@@ -1146,6 +1148,26 @@ describe("the audio commands", () => {
     await audioMonitorStop();
 
     expect(invoke).toHaveBeenCalledWith("audio_monitor_stop");
+  });
+
+  it("passes a person's picture quality under the names Rust expects", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await setPersonQuality("@bob:example.org", "low");
+
+    expect(invoke).toHaveBeenCalledWith("set_person_quality", {
+      userId: "@bob:example.org",
+      quality: "low",
+    });
+  });
+
+  it("reads back the quality chosen for one person", async () => {
+    invoke.mockResolvedValue("medium");
+
+    expect(await personQuality("@bob:example.org")).toBe("medium");
+    expect(invoke).toHaveBeenCalledWith("person_quality", {
+      userId: "@bob:example.org",
+    });
   });
 
   it("passes a person's volume under the names the Rust command expects", async () => {

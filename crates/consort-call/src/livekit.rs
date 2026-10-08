@@ -28,9 +28,9 @@ use std::time::Duration;
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
-    VideoSourceConfig,
+    AudioFrame, AudioSourceConfig, Dimensions, I420Buffer, LocalTrackHandle, MediaConstraints,
+    MediaStreamKind, Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
+    VideoDetail, VideoFrame, VideoRotation, VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -40,6 +40,7 @@ use livekit::DataPacket;
 use futures_util::StreamExt;
 
 use crate::camera::{OutgoingPicture, PictureSize};
+use crate::detail::Wanted;
 use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
@@ -825,6 +826,50 @@ impl CallSession for LiveKitSession {
         Attached {
             playing: watching.len(),
             pending,
+        }
+    }
+
+    fn request(&self, wanted: &Wanted) {
+        // Per membership, because that is what a constraint is keyed by, and a
+        // cap is chosen per person: somebody in from a laptop and a phone is
+        // two asks carrying the same number.
+        for participant in self.call.engine().participants() {
+            // Ours is not something the SFU sends back. See `set_deafened`.
+            if participant.is_local {
+                continue;
+            }
+
+            for kind in [Kind::Camera, Kind::Screen] {
+                let Some(asked) = wanted.asked(&participant.user_id, kind) else {
+                    // Nothing is drawing this one, so there is no box to name.
+                    continue;
+                };
+
+                // The one place the number that leaves this session can be
+                // read. Nothing above here knows what the SFU was told.
+                tracing::debug!(
+                    member_id = %participant.member_id,
+                    ?kind,
+                    width = asked.width,
+                    height = asked.height,
+                    "asking the SFU for a picture"
+                );
+
+                self.call.set_constraints(
+                    &participant.member_id,
+                    kind.stream(),
+                    MediaConstraints {
+                        // The box the still is drawn in, not a square of its
+                        // long edge: ADR-0015. The SFU picks the smallest
+                        // layer that covers it, by height.
+                        detail: VideoDetail::Dimensions(Dimensions {
+                            width: asked.width,
+                            height: asked.height,
+                        }),
+                        ..MediaConstraints::default()
+                    },
+                );
+            }
         }
     }
 

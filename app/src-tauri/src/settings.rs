@@ -14,10 +14,11 @@
 //! do is destroy what it could not read, because that file is the only copy of
 //! choices somebody made by hand.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use consort_audio::AudioSettings;
-use consort_call::Dialect;
+use consort_call::{Cap, Dialect};
 use consort_matrix::atomic;
 use consort_video::VideoSettings;
 use serde::{Deserialize, Serialize};
@@ -392,14 +393,14 @@ impl Default for PrivacySettings {
     }
 }
 
-/// The two things about voice calls that a deployment can get wrong.
+/// What is remembered about voice calls.
 ///
-/// No interface, deliberately. Both of these are properties of a homeserver
-/// and its voice deployment rather than preferences, the right value is the
-/// same for everybody on that server, and a picker offering somebody a choice
-/// between three MatrixRTC generations would be a picker nobody can answer.
-/// They are here so that a deployment this build cannot work out for itself
-/// can be told, by hand, in one file.
+/// The first two have no interface, deliberately: both are properties of a
+/// homeserver and its voice deployment rather than preferences, the right
+/// value is the same for everybody on that server, and a picker offering
+/// somebody a choice between three MatrixRTC generations would be a picker
+/// nobody can answer. They are here so that a deployment this build cannot
+/// work out for itself can be told, by hand, in one file.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CallSettings {
@@ -423,6 +424,16 @@ pub struct CallSettings {
     /// missing, and which needs to be able to say so without waiting for a
     /// release. A value here wins over both.
     pub service_url_fallback: Option<String>,
+    /// How much of each person's pictures to ask the SFU for.
+    ///
+    /// The one preference in here, and kept for the reason the per-person
+    /// volumes are: it is a fact about this machine's connection rather than
+    /// about the account, so it belongs to the computer and not somewhere that
+    /// would carry it between them.
+    ///
+    /// Only the people somebody actually chose for. [`Cap::Auto`] is the
+    /// absence of a choice and is never written down.
+    pub person_quality: BTreeMap<String, Cap>,
 }
 
 /// The settings file.
@@ -650,6 +661,7 @@ mod tests {
                 // the field would still fail this.
                 fallback_dialect: Dialect::Sticky,
                 service_url_fallback: Some("https://example.org/sfu".to_owned()),
+                ..CallSettings::default()
             },
             ..Settings::default()
         };

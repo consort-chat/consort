@@ -236,6 +236,23 @@
   box-shadow: var(--shadow-focus);
 }
 
+.person-menu__select {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  background: var(--surface-void);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.person-menu__select:focus-visible {
+  border-color: var(--violet);
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .person-menu__note {
   margin: 0;
   font-size: var(--text-xs);

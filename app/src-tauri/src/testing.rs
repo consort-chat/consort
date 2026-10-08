@@ -279,6 +279,31 @@ pub struct FakeCallTransport {
     /// handed out, and [`FakeCallTransport::leaves`] is how a test keeps hold
     /// of it.
     left: Leaves,
+    /// What the calls this hands out were asked to request of the SFU.
+    asked: Asks,
+}
+
+/// Everything a [`FakeCallTransport`]'s calls were asked of the SFU.
+///
+/// One entry per pass, shared with every session handed out, for the reason
+/// [`Leaves`] is shared: a test cannot hold the session, which is built inside
+/// the call thread.
+#[derive(Clone, Default)]
+pub struct Asks(Arc<std::sync::Mutex<Vec<Pass>>>);
+
+/// What one pass of `request` asked for: a box per person per picture.
+pub type Pass = Vec<(String, consort_call::Kind, consort_call::Asked)>;
+
+impl Asks {
+    /// How many passes there have been.
+    pub fn passes(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+
+    /// The last pass, or nothing asked at all.
+    pub fn latest(&self) -> Pass {
+        self.0.lock().unwrap().last().cloned().unwrap_or_default()
+    }
 }
 
 /// How many times a [`FakeCallTransport`]'s calls have been left.
@@ -306,6 +331,7 @@ impl FakeCallTransport {
             roster: tokio::sync::watch::channel((Vec::new(), None)).0,
             leave_answers: true,
             left: Leaves::default(),
+            asked: Asks::default(),
         }
     }
 
@@ -326,6 +352,12 @@ impl FakeCallTransport {
     /// how a call is joined.
     pub fn leaves(&self) -> Leaves {
         self.left.clone()
+    }
+
+    /// The record of SFU requests the calls this hands out share. Cloned
+    /// before the transport is handed over, like [`Self::leaves`].
+    pub fn asks(&self) -> Asks {
+        self.asked.clone()
     }
 
     /// Put `people` in the calls this hands out.
@@ -358,6 +390,7 @@ pub struct FakeCallSession {
     roster: tokio::sync::watch::Sender<Standing>,
     leave_answers: bool,
     left: Leaves,
+    asked: Asks,
 }
 
 pub struct FakeCallTrack;
@@ -445,6 +478,25 @@ impl consort_call::CallSession for FakeCallSession {
         consort_call::Attached::default()
     }
 
+    /// Resolved over the roster, like the real one resolves it over the
+    /// engine's. Somebody nothing is drawing answers nothing.
+    fn request(&self, wanted: &consort_call::Wanted) {
+        let pass = self
+            .roster
+            .borrow()
+            .0
+            .iter()
+            .flat_map(|person| {
+                [consort_call::Kind::Camera, consort_call::Kind::Screen]
+                    .into_iter()
+                    .filter_map(|kind| {
+                        Some((person.id.clone(), kind, wanted.asked(&person.id, kind)?))
+                    })
+            })
+            .collect();
+        self.asked.0.lock().unwrap().push(pass);
+    }
+
     fn roster(&self) -> Self::Roster {
         FakeCallRoster(self.roster.subscribe())
     }
@@ -483,6 +535,7 @@ impl consort_call::CallTransport for FakeCallTransport {
                 roster: self.roster.clone(),
                 leave_answers: self.leave_answers,
                 left: self.left.clone(),
+                asked: self.asked.clone(),
             })
         } else {
             Err(consort_call::CallFailure::UnknownRoom {
