@@ -296,9 +296,9 @@ export function VoiceVideoSection({
   */
   const [camerasFound, setCamerasFound] = useState<CameraList | null>(null);
   const [pickedCamera, setPickedCamera] = useState<string | null>(null);
-  /// The rest of the video section as saved, so a write carries it along.
+  // The rest of the video section as saved, so a write carries it along.
   const [video, setVideo] = useState<VideoSettings | null>(null);
-  /// Whether this build can capture what the machine is playing.
+  // Whether this build can capture what the machine is playing.
   const [shareSoundable, setShareSoundable] = useState(false);
   const [meter, setMeter] = useState<Meter>(SILENT);
   const [chime, setChime] = useState<Chime>(QUIET);
