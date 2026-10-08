@@ -844,12 +844,13 @@ impl AppState {
             return Err(CameraTrouble::NoCall);
         }
 
+        let sending = self.settings().load().video.sending;
         let size = {
             let mut slot = self.locked_video();
             let bridge =
                 slot.get_or_insert_with(|| VideoBridge::new(backend(), self.self_view.clone()));
             bridge
-                .start(device.as_deref(), self.camera.clone())
+                .start(device.as_deref(), sending, self.camera.clone())
                 .map_err(CameraTrouble::Device)?
         };
 
@@ -2191,6 +2192,8 @@ mod tests {
             busy: bool,
             /// Whatever sink the last `open` was given.
             sink: Arc<std::sync::Mutex<Option<FrameSink>>>,
+            /// What the last `open` was asked for.
+            wanted: Arc<std::sync::Mutex<Option<Resolution>>>,
         }
 
         impl Backend {
@@ -2253,10 +2256,14 @@ mod tests {
             fn open(
                 &self,
                 _camera: Option<&str>,
-                _want: Resolution,
+                want: Resolution,
                 on_frame: FrameSink,
             ) -> Result<Box<dyn CameraStream>, CaptureError> {
                 self.opens.fetch_add(1, Ordering::Relaxed);
+                *self
+                    .wanted
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(want);
                 if self.busy {
                     return Err(CaptureError::Busy {
                         camera: "/dev/video0".to_owned(),
@@ -2322,6 +2329,35 @@ mod tests {
             assert!(said.camera, "{said:?}");
             assert_eq!(backend.opens(), 1);
             assert!(state.camera_running());
+        }
+
+        #[test]
+        fn the_sending_choice_decides_what_the_device_is_opened_at() {
+            // #196. A receiver can only choose among rungs the publisher
+            // built, so the sender's own control has to reach the capture.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let mut settings = state.settings().load();
+            settings.video.sending = consort_video::Sending::Low;
+            state.settings().save(&settings).expect("save");
+            let backend = Backend::default();
+
+            state.set_camera(
+                {
+                    let backend = backend.clone();
+                    || Box::new(backend)
+                },
+                true,
+            );
+
+            assert_eq!(
+                *backend
+                    .wanted
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                Some(consort_video::Sending::Low.camera())
+            );
         }
 
         #[test]
