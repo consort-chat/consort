@@ -21,6 +21,7 @@ mod renderer;
 mod screen;
 mod selfview;
 mod settings;
+mod sharesound;
 mod sound;
 mod state;
 #[cfg(test)]

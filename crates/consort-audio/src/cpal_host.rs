@@ -17,6 +17,8 @@ use crate::frames::Frames;
 use crate::gate::SAMPLE_RATE;
 use crate::mixing::{Mixing, Voices};
 use crate::playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
+#[cfg(windows)]
+use crate::share::ShareSound;
 use crate::tone::Tone;
 
 /// The default host: ALSA on Linux, CoreAudio on macOS, WASAPI on Windows.
@@ -165,6 +167,101 @@ impl AudioCapture for CpalHost {
 
         tracing::info!(device = %name, channels, format = ?chosen.sample_format(),
             "capturing audio");
+        Ok(Box::new(OpenStream {
+            _stream: stream,
+            device: name,
+        }))
+    }
+}
+
+/// WASAPI loopback: what the machine is playing, read back as a capture.
+///
+/// Windows only, because cpal's loopback flag is the WASAPI backend's alone.
+/// Why there is no Linux twin: `docs/adr/0020-send-a-shares-sound-where-a-build-can-capture-it.md`.
+#[cfg(windows)]
+#[derive(Default)]
+pub struct CpalShareSound;
+
+#[cfg(windows)]
+impl ShareSound for CpalShareSound {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn open(
+        &self,
+        device: Option<&str>,
+        on_frame: FrameSink,
+    ) -> Result<Box<dyn CaptureStream>, CaptureError> {
+        let host = cpal::default_host();
+        // An *output* device, opened for input. That is the whole trick: cpal's
+        // WASAPI backend sets `AUDCLNT_STREAMFLAGS_LOOPBACK` when the endpoint
+        // it is building an input stream on renders.
+        let device = match device {
+            None => host.default_output_device().ok_or(CaptureError::NoDevice)?,
+            Some(wanted) => host
+                .output_devices()
+                .map_err(|error| CaptureError::Backend(error.to_string()))?
+                .find(|candidate| candidate.to_string() == wanted)
+                .ok_or_else(|| CaptureError::UnknownDevice {
+                    requested: wanted.to_owned(),
+                    available: catalogue(&CpalHost, Direction::Output)
+                        .into_iter()
+                        .map(|device| device.name)
+                        .collect(),
+                })?,
+        };
+        let name = device.to_string();
+
+        // The endpoint's own mix format, not a format of our choosing. A
+        // shared-mode loopback client is initialised with it or not at all, and
+        // `supported_input_configs` on a renderer is empty by construction.
+        let chosen = device
+            .default_output_config()
+            .map_err(|error| CaptureError::Backend(error.to_string()))?;
+        if chosen.sample_rate() != SAMPLE_RATE {
+            // Nothing resamples, the same way nothing resamples a microphone.
+            return Err(CaptureError::NoFortyEightKilohertz { device: name });
+        }
+
+        let channels = chosen.channels();
+        let config = StreamConfig {
+            channels,
+            sample_rate: SAMPLE_RATE,
+            buffer_size: BufferSize::Default,
+        };
+        let mut frames = Frames::new(channels);
+        let mut on_frame = on_frame;
+        let on_error = |error: cpal::Error| tracing::error!(kind = ?error.kind(), %error, "share audio loopback stream error");
+
+        let stream = match chosen.sample_format() {
+            SampleFormat::F32 => device.build_input_stream(
+                config,
+                move |data: &[f32], _| frames.push_f32(data, &mut on_frame),
+                on_error,
+                None,
+            ),
+            SampleFormat::I16 => device.build_input_stream(
+                config,
+                move |data: &[i16], _| frames.push_i16(data, &mut on_frame),
+                on_error,
+                None,
+            ),
+            other => {
+                return Err(CaptureError::UnsupportedFormat {
+                    device: name,
+                    format: format!("{other:?}"),
+                });
+            }
+        }
+        .map_err(|error| CaptureError::Backend(error.to_string()))?;
+
+        stream
+            .play()
+            .map_err(|error| CaptureError::Backend(error.to_string()))?;
+
+        tracing::info!(device = %name, channels, format = ?chosen.sample_format(),
+            "capturing what this machine is playing");
         Ok(Box::new(OpenStream {
             _stream: stream,
             device: name,

@@ -527,6 +527,7 @@ async fn watch_notices(
 impl CallSession for LiveKitSession {
     type Track = Arc<dyn LocalTrackHandle>;
     type Video = CameraTrack;
+    type ShareAudio = Arc<dyn LocalTrackHandle>;
     type Roster = LiveKitRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure> {
@@ -579,6 +580,24 @@ impl CallSession for LiveKitSession {
 
     async fn retract_screen(&self) -> Result<(), CallFailure> {
         self.retract(MediaStreamKind::ScreenShare).await
+    }
+
+    async fn publish_share_audio(&self) -> Result<Self::ShareAudio, CallFailure> {
+        // Built by hand because upstream has no constructor for this kind. The
+        // PCM format is the microphone's, which is what `pump` produces.
+        self.call
+            .publish(PublishOptions {
+                kind: MediaStreamKind::ScreenShareAudio,
+                audio: Some(AudioSourceConfig::default()),
+                video: None,
+                simulcast: false,
+            })
+            .await
+            .map_err(|error| classify(&error))
+    }
+
+    async fn retract_share_audio(&self) -> Result<(), CallFailure> {
+        self.retract(MediaStreamKind::ScreenShareAudio).await
     }
 
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure> {

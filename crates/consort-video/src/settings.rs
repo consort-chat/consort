@@ -18,4 +18,8 @@ pub struct VideoSettings {
     ///
     /// `None` rather than an empty string, which is an id that can never match.
     pub camera: Option<String>,
+    /// Whether to send what this machine is playing along with a shared
+    /// screen. Off by default: on the one platform that can capture it the
+    /// capture is the whole output, not one application.
+    pub share_sound: bool,
 }
