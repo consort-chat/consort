@@ -298,10 +298,12 @@ jobs:
       #
       # ripgrep used to be installed here too. Nothing needs it now: git grep
       # searches tracked files without a pipe, which is the point.
+      # jq is not in this image either, and the manifest gate below is built
+      # out of it.
       - name: Install git, before the checkout needs it
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends git ca-certificates
+          apt-get install --yes --no-install-recommends git ca-certificates jq
 
       - uses: actions/checkout@v5
 
