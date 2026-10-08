@@ -8,6 +8,7 @@ import {
 
 import { NOBODY, type Call, type Participant } from "../lib/api";
 import { callLabel } from "../lib/labels";
+import { useStageBound } from "../lib/stageBound";
 import { useDraggable } from "../lib/useDraggable";
 import { CallFace } from "./CallFace";
 import { PersonMenu } from "./PersonMenu";
@@ -32,23 +33,20 @@ type Size = "card" | "expanded" | "full";
 const PEEKING: Record<"card" | "expanded", number> = { card: 4, expanded: 7 };
 
 /**
- * How many pixels to ask a remote picture for, by where it is being drawn.
+ * How many pixels to ask a remote picture for, in the boxes CSS fixes.
  *
- * Twice the width the box is drawn at while the card floats, so a display at
- * two device pixels per CSS pixel gets a true pixel for each one, and the
- * ceiling once it fills the window, where twice would be past it. The squares
- * are all one size and the stage is three, which is why the stage's are named
- * after the card's.
+ * Twice the width each one is drawn at, so a display at two device pixels per
+ * CSS pixel gets a true pixel for each one. The stage is not in here once it
+ * fills the window: that box is whatever the window left it, which only the
+ * window knows, so it is measured instead.
  *
  * The table and the ceiling above it:
- * `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`. Issue
- * #167 replaces this with a measured box and a cap somebody chose.
+ * `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`.
  */
-const BOUND: Record<Size | "tile", number> = {
+const BOUND: Record<"tile" | "card" | "expanded", number> = {
   tile: 320,
   card: 480,
   expanded: 960,
-  full: 1920,
 };
 
 /**
@@ -165,6 +163,7 @@ export function CallCard({
   sharing = null,
 }: Props) {
   const drag = useDraggable();
+  const stage = useStageBound();
   const [size, setSize] = useState<Size>("card");
   // Which face was clicked, and where to draw the card about them. One at a
   // time, for the reason the channel list keeps one.
@@ -258,6 +257,9 @@ export function CallCard({
     Before paint, so it is never drawn in the place it cannot stay.
   */
   useLayoutEffect(() => {
+    // The stage first, because a card growing is a stage growing and the
+    // picture in it is asked for at the box it ends up in.
+    stage.measure();
     // Nothing floats while it fills the window, and measuring it then would
     // clamp a card that had been dragged into the corner for its way back.
     if (full) return;
@@ -267,7 +269,15 @@ export function CallCard({
     //
     // How many screens there are is in here because a row of them changes the
     // card's height, and a card against the bottom edge grows straight off it.
-  }, [size, full, shown, screens.length, drag.keepInView]);
+  }, [
+    size,
+    full,
+    shown,
+    screens.length,
+    people.length,
+    drag.keepInView,
+    stage.measure,
+  ]);
 
   /*
     Filling the window is about one call, the way putting the card away is.
@@ -499,7 +509,8 @@ export function CallCard({
       {staged !== null && (
         <ScreenStage
           label={staged.label}
-          picture={staged.picture(BOUND[size])}
+          boxRef={stage.ref}
+          picture={staged.picture(size === "full" ? stage.bound : BOUND[size])}
           full={full}
           onToggle={() =>
             setSize((current) => (current === "full" ? "card" : "full"))
