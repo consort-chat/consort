@@ -26,3 +26,4 @@ imperfect for now and the terms on which it would be revisited.
 | [0013](0013-ask-for-a-picture-in-pixels.md) | Ask for a received picture in pixels, not in a quality level | accepted |
 | [0014](0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md) | Ask for a remote picture at the size it is drawn | accepted |
 | [0015](0015-ask-for-the-box-not-a-square.md) | Ask the SFU for the box, not a square of its long edge | accepted |
+| [0017](0017-a-sender-may-send-less-camera.md) | A sender may send less camera, and cannot yet send less share | accepted |

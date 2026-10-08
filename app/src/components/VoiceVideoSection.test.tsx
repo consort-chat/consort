@@ -108,7 +108,9 @@ describe("VoiceVideoSection", () => {
     audioMonitorStart.mockReset().mockResolvedValue(undefined);
     audioMonitorStop.mockReset().mockResolvedValue(undefined);
     cameras.mockReset().mockResolvedValue(found);
-    videoSettings.mockReset().mockResolvedValue({ camera: null });
+    videoSettings
+      .mockReset()
+      .mockResolvedValue({ camera: null, sending: "auto" });
     setVideoSettings.mockReset().mockResolvedValue(undefined);
     unlisten.mockReset();
     onAudio.mockReset().mockImplementation((handler) => {
@@ -155,7 +157,48 @@ describe("VoiceVideoSection", () => {
 
     await userEvent.selectOptions(picker, "/dev/video2");
 
-    expect(setVideoSettings).toHaveBeenCalledWith({ camera: "/dev/video2" });
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: "/dev/video2",
+      sending: "auto",
+    });
+  });
+
+  it("lists what this machine will send with the saved choice selected", async () => {
+    videoSettings.mockResolvedValue({ camera: null, sending: "medium" });
+    render(<VoiceVideoSection />);
+
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/send at/i);
+
+    expect(picker.value).toBe("medium");
+  });
+
+  it("saves what the sender chose to send", async () => {
+    // #196. The sender's own ceiling, which is the only control over what
+    // peers can receive: a receiver can only pick among rungs that exist.
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/send at/i);
+
+    await userEvent.selectOptions(picker, "low");
+
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: null,
+      sending: "low",
+    });
+  });
+
+  it("keeps the sending choice when the camera changes", async () => {
+    // One section written whole, so each picker has to carry the other's
+    // value or saving one silently resets the other.
+    videoSettings.mockResolvedValue({ camera: null, sending: "low" });
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: "/dev/video2",
+      sending: "low",
+    });
   });
 
   it("does not reopen anything when the camera changes", async () => {
