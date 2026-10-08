@@ -188,6 +188,21 @@ describe("VoiceVideoSection", () => {
     expect(toggle).toBeChecked();
   });
 
+  it("keeps the share-sound choice when the camera changes", async () => {
+    // The section is written whole, so a camera change that forgot this field
+    // would switch a share's sound off behind somebody's back.
+    videoSettings.mockResolvedValue({ camera: null, shareSound: true });
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: "/dev/video2",
+      shareSound: true,
+    });
+  });
+
   it("saves the share-sound choice without disturbing the camera", async () => {
     // The section is written whole, so a toggle that forgot the camera would
     // reset it to the first one found.

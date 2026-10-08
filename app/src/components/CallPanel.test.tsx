@@ -1101,6 +1101,11 @@ describe("sharing a screen", () => {
     return { sharing: what, trouble: null, sound: false };
   }
 
+  /** The same, with the machine's sound going out alongside it. */
+  function showingWithSound(what: string): SelfScreen {
+    return { ...showing(what), sound: true };
+  }
+
   function shareButton() {
     return screen.getByRole("button", { name: /share your screen/i });
   }
@@ -1147,6 +1152,31 @@ describe("sharing a screen", () => {
     expect(
       screen.queryByRole("status", { name: /sharing your screen/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it("says when a share is carrying this machine's sound", () => {
+    // Beside the name rather than instead of it. Somebody who switched this
+    // on in settings weeks ago has to be able to see that it is happening.
+    panel(
+      CONNECTED,
+      "Lounge",
+      HEARING,
+      true,
+      NOT_FILMING,
+      showingWithSound("Firefox"),
+    );
+
+    expect(
+      screen.getByRole("status", { name: /sharing your screen/i }),
+    ).toHaveTextContent(/with sound/i);
+  });
+
+  it("says nothing about sound when a share is silent", () => {
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, showing("Firefox"));
+
+    expect(
+      screen.getByRole("status", { name: /sharing your screen/i }),
+    ).not.toHaveTextContent(/with sound/i);
   });
 
   it("stops the share in one press from the indicator", async () => {
