@@ -24,6 +24,10 @@ pub enum CaptureError {
     NoFortyEightKilohertz { device: String },
     /// The device offers a sample format this does not handle.
     UnsupportedFormat { device: String, format: String },
+    /// This build has no way to capture what the machine is playing. Its own
+    /// variant because no device is missing and none would help: see
+    /// [`crate::share::NoShareSound`].
+    NoShareSound,
     /// The audio backend said no.
     Backend(String),
 }
@@ -51,6 +55,11 @@ impl fmt::Display for CaptureError {
                 f,
                 "{device:?} offers samples as {format}, and only f32 and i16 are \
                  handled"
+            ),
+            Self::NoShareSound => write!(
+                f,
+                "this build cannot capture what the machine is playing, so a \
+                 shared screen goes out without its sound"
             ),
             Self::Backend(message) => write!(f, "the audio backend failed: {message}"),
         }

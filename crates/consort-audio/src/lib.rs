@@ -18,6 +18,7 @@ pub mod meter;
 pub mod mixing;
 pub mod playback;
 pub mod settings;
+pub mod share;
 pub mod sound;
 pub mod talking;
 pub mod thread;
@@ -41,6 +42,18 @@ pub use mixing::{
 };
 pub use playback::{AudioPlayback, PlaybackError, PlaybackStream, Playing, ToneEnded};
 pub use settings::AudioSettings;
+pub use share::{NoShareSound, ShareSound};
+
+/// The share-sound backend for this build.
+///
+/// WASAPI loopback on Windows and nothing anywhere else, which the host says
+/// out loud rather than by failing to capture: `share::NoShareSound`.
+#[cfg(windows)]
+pub type ShareSoundHost = cpal_host::CpalShareSound;
+
+/// See the Windows one above.
+#[cfg(not(windows))]
+pub type ShareSoundHost = share::NoShareSound;
 pub use sound::{Phrase, Sound};
 pub use talking::{FLOOR, HOLD_FRAMES, Talking};
 pub use thread::{AudioEvent, AudioThread, GatedSink};

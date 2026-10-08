@@ -21,6 +21,7 @@ mod renderer;
 mod screen;
 mod selfview;
 mod settings;
+mod sharesound;
 mod sound;
 mod state;
 #[cfg(test)]
@@ -324,6 +325,7 @@ pub fn run() {
             commands::screen_view,
             commands::their_view,
             commands::share_sources,
+            commands::share_sound_available,
             commands::set_share,
             commands::privacy_settings,
             commands::set_privacy_settings,

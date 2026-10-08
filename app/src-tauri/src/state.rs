@@ -17,7 +17,7 @@ use consort_matrix::{
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 
-use consort_audio::{GateConfig, GatedSink, Talking, Voices};
+use consort_audio::{GateConfig, GatedSink, ShareSoundHost, Talking, Voices};
 
 use crate::audio::Backends;
 use crate::call::CallBridge;
@@ -27,6 +27,7 @@ use crate::notify::{Front, Notifier, worth_drawing};
 use crate::screen::{ScreenBridge, ShareTrouble};
 use crate::selfview::SelfView;
 use crate::settings::SettingsStore;
+use crate::sharesound::ShareSoundBridge;
 use crate::sound::Sound;
 use crate::theirview::TheirViews;
 use crate::video::{CameraTrouble, VideoBridge};
@@ -312,6 +313,15 @@ pub struct AppState {
     /// call pump holds one too: a share has to stop when the call ends, and
     /// the call ends for reasons that are not a click.
     screens: Arc<std::sync::Mutex<Option<ScreenBridge>>>,
+    /// The slot carrying what this machine is playing to the call, for a share
+    /// that is sending its sound. Its own queue for the reason the track is:
+    /// it must never reach the microphone's.
+    share_sound: Microphone,
+    /// The loopback capture, held from the start rather than on first use.
+    ///
+    /// Unlike the screen capture, the settings screen asks this whether the
+    /// build can capture at all before anybody has shared anything.
+    share_sounds: Arc<ShareSoundBridge>,
     /// The newest frame of everything everybody else is sending.
     ///
     /// Beside the two slots above rather than inside the call bridge, for the
@@ -526,6 +536,8 @@ impl AppState {
             screen: ConsortCamera::new(),
             screen_view: SelfView::new(),
             screens: Arc::new(std::sync::Mutex::new(None)),
+            share_sound: Microphone::new(),
+            share_sounds: Arc::new(ShareSoundBridge::new(Box::new(ShareSoundHost::default()))),
             their_views: Arc::new(TheirViews::new()),
             voices,
             chiming,
@@ -635,6 +647,7 @@ impl AppState {
                     microphone: self.microphone.clone(),
                     camera: self.camera.clone(),
                     screen: self.screen.clone(),
+                    share_sound: self.share_sound.clone(),
                     ears: speakers(
                         self.voices.clone(),
                         self.chiming.clone(),
@@ -943,7 +956,7 @@ impl AppState {
             return Err(ShareTrouble::NoCall);
         }
 
-        let share = {
+        let mut share = {
             let mut slot = self.locked_screens();
             let bridge =
                 slot.get_or_insert_with(|| ScreenBridge::new(backend(), self.screen_view.clone()));
@@ -951,6 +964,12 @@ impl AppState {
                 .start(source, self.screen.clone())
                 .map_err(ShareTrouble::Display)?
         };
+
+        // After the picture, so a sound capture that will not open costs
+        // nobody their share. Read from the file here because this is the one
+        // path a share starts by.
+        let wanted = self.settings().load().video.share_sound;
+        share.sound = self.share_sounds.start(wanted, self.share_sound.clone());
 
         if let Some(bridge) = self.locked_call().as_ref() {
             bridge.set_screen(Some(share.clone()));
@@ -979,11 +998,13 @@ impl AppState {
             Ok(share) => SelfScreen {
                 sharing: Some(share.title),
                 trouble: None,
+                sound: share.sound,
             },
             Err(trouble) => {
                 let said = SelfScreen {
                     sharing: None,
                     trouble: Some(trouble.user_message()),
+                    sound: false,
                 };
                 self.events.emit(AppEvent::SelfScreen(said.clone()));
                 said
@@ -1001,6 +1022,7 @@ impl AppState {
         if let Some(bridge) = self.locked_screens().as_ref() {
             bridge.stop();
         }
+        self.share_sounds.stop();
         if let Some(bridge) = self.locked_call().as_ref() {
             bridge.set_screen(None);
         }
@@ -1012,6 +1034,13 @@ impl AppState {
         self.locked_screens()
             .as_ref()
             .and_then(ScreenBridge::sharing)
+    }
+
+    /// Whether this build can send a shared screen's own sound.
+    ///
+    /// Read by the settings screen before it draws the switch.
+    pub fn share_sound_available(&self) -> bool {
+        self.share_sounds.available()
     }
 
     fn locked_screens(&self) -> std::sync::MutexGuard<'_, Option<ScreenBridge>> {

@@ -1645,6 +1645,15 @@ pub fn share_sources(state: State<'_, AppState>) -> Result<Vec<ShareSource>, Com
     share_sources_for(&state, || Box::new(ScreensHost::default()))
 }
 
+/// Whether this build can send a shared screen's own sound.
+///
+/// Read by the settings screen before it draws the switch, because a switch
+/// for a capture that cannot happen is a switch that lies about what it does.
+#[tauri::command]
+pub fn share_sound_available(state: State<'_, AppState>) -> bool {
+    state.share_sound_available()
+}
+
 #[tauri::command]
 pub fn set_share(state: State<'_, AppState>, source: Option<String>) -> SelfScreen {
     state.set_share(|| Box::new(ScreensHost::default()), source)

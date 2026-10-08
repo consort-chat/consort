@@ -173,6 +173,10 @@ pub struct Senses {
     /// Where its screen frames arrive from. A second queue rather than a wider
     /// one, because both can be publishing at the same time.
     pub screen: Camera,
+    /// Where the sound of whatever it is sharing arrives from, on a build that
+    /// can capture one. A queue of its own for the reason the track is: a
+    /// share's sound must never reach the microphone's.
+    pub share_sound: Microphone,
     /// Where everybody else's audio goes.
     pub ears: Ears,
     /// Where everybody else's pictures go.
@@ -359,6 +363,9 @@ struct Joined<S: CallSession> {
     /// The screen share, while one is up. A second slot rather than a wider
     /// one, because both can be up at the same time.
     sharing: Option<Showing>,
+    /// The share's own sound, while it is being published. Up and down with
+    /// `sharing`, because it belongs to the share rather than to the person.
+    speaking: Option<Showing>,
     /// The retry looking for tracks that have not arrived yet. Dies with the
     /// call it belongs to, like the two tasks above.
     chasing: Chase,
@@ -454,6 +461,7 @@ async fn serve<T: CallTransport>(
         microphone,
         camera,
         screen,
+        share_sound,
         ears,
         eyes,
     } = senses;
@@ -660,7 +668,15 @@ async fn serve<T: CallTransport>(
                 video = set_camera(&events, video, current.as_mut(), size, &camera).await;
             }
             Message::SetScreen(share) => {
-                sharing = set_screen(&events, sharing, current.as_mut(), share, &screen).await;
+                sharing = set_screen(
+                    &events,
+                    sharing,
+                    current.as_mut(),
+                    share,
+                    &screen,
+                    &share_sound,
+                )
+                .await;
             }
             Message::DrawnAt {
                 user_id,
@@ -784,6 +800,7 @@ async fn set_screen<S: CallSession>(
     joined: Option<&mut Joined<S>>,
     share: Option<ScreenShare>,
     frames: &Camera,
+    sound_frames: &Microphone,
 ) -> SelfScreen {
     let Some(joined) = joined else {
         // Stopping with no call is how every call ends. Starting is the only
@@ -795,41 +812,100 @@ async fn set_screen<S: CallSession>(
             SelfScreen {
                 sharing: None,
                 trouble,
+                sound: false,
             },
         );
     };
 
-    let (size, title) = match share {
-        Some(ScreenShare { size, title }) => (Some(size), title),
-        None => (None, String::new()),
+    let (size, title, wanted) = match share {
+        Some(ScreenShare { size, title, sound }) => (Some(size), title, sound),
+        None => (None, String::new(), false),
     };
 
     // Split first, so the publish below and the slot it fills are two borrows
     // of two fields rather than two of `joined`.
     let Joined {
-        session, sharing, ..
+        session,
+        sharing,
+        speaking,
+        ..
     } = joined;
 
     let publish = |at| session.publish_screen(at);
     match publication(sharing, frames, size, publish, || session.retract_screen()).await {
-        Ok(true) => shared(
-            events,
-            current,
-            SelfScreen {
-                sharing: Some(title),
-                trouble: None,
-            },
-        ),
-        Ok(false) => shared(events, current, SelfScreen::default()),
-        Err(error) => shared(
-            events,
-            current,
-            SelfScreen {
-                sharing: None,
-                trouble: Some(error.to_string()),
-            },
-        ),
+        Ok(true) => {
+            let sound = speaking_now(speaking, sound_frames, wanted, session).await;
+            shared(
+                events,
+                current,
+                SelfScreen {
+                    sharing: Some(title),
+                    trouble: None,
+                    sound,
+                },
+            )
+        }
+        Ok(false) => {
+            // The picture is down, so its sound comes down with it whatever
+            // was asked for.
+            speaking_now(speaking, sound_frames, false, session).await;
+            shared(events, current, SelfScreen::default())
+        }
+        Err(error) => {
+            speaking_now(speaking, sound_frames, false, session).await;
+            shared(
+                events,
+                current,
+                SelfScreen {
+                    sharing: None,
+                    trouble: Some(error.to_string()),
+                    sound: false,
+                },
+            )
+        }
     }
+}
+
+/// Put a share's sound up, or take it down, and say whether one is up.
+///
+/// [`publication`]'s audio twin, and it answers rather than failing: a share
+/// whose sound will not publish is still a share, so the refusal is logged and
+/// reported as a share without sound rather than as a share that did not start.
+async fn speaking_now<S: CallSession>(
+    slot: &mut Option<Showing>,
+    frames: &Microphone,
+    wanted: bool,
+    session: &S,
+) -> bool {
+    if !wanted {
+        // Dropped first, which aborts the pump, so no frame goes out while the
+        // retraction is in flight.
+        if slot.take().is_some()
+            && let Err(error) = session.retract_share_audio().await
+        {
+            tracing::warn!(%error, "could not retract a share's sound");
+        }
+        // So the next share does not open with the tail of this one.
+        frames.clear();
+        return false;
+    }
+
+    if slot.is_some() {
+        return true;
+    }
+
+    let track = match session.publish_share_audio().await {
+        Ok(track) => track,
+        Err(error) => {
+            tracing::warn!(%error, "sharing without sound: the publication was refused");
+            return false;
+        }
+    };
+
+    *slot = Some(Showing {
+        pump: AbortOnDrop(tokio::task::spawn_local(pump(track, frames.clone()))),
+    });
+    true
 }
 
 /// [`show`] for the screen share. Separate so a change to one state does not
@@ -1158,6 +1234,7 @@ async fn connect<T: CallTransport>(
         // `Message::SetCamera` and `Message::SetScreen`.
         showing: None,
         sharing: None,
+        speaking: None,
         chasing: Chase::default(),
     })
 }
@@ -1240,6 +1317,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
         watching,
         showing,
         sharing,
+        speaking,
         chasing,
     }) = current
     else {
@@ -1261,6 +1339,7 @@ async fn leave<S: CallSession>(current: Option<Joined<S>>, budget: Duration) -> 
     // "Quitting has to leave the call" section of CLAUDE.md.
     drop(showing);
     drop(sharing);
+    drop(speaking);
 
     leave_session(&room_id, session, budget).await;
     true
@@ -1363,9 +1442,18 @@ mod tests {
         /// A test that watched one could not tell a camera switched off from a
         /// camera whose frames merely stopped.
         live_cameras: Arc<AtomicUsize>,
-        /// What the session was asked to retract, in order: `"camera"` or
-        /// `"screen"`.
+        /// What the session was asked to retract, in order: `"camera"`,
+        /// `"screen"` or `"share sound"`.
         retracted: Arc<Mutex<Vec<&'static str>>>,
+        /// How many share-sound publications were asked for.
+        share_sounds: Arc<AtomicUsize>,
+        /// Whether a share-sound publication is refused.
+        share_sound_fails: Arc<AtomicBool>,
+        /// The first sample of every frame each audio publication carried.
+        /// Two sinks, because the one thing that must never happen is a
+        /// share's sound arriving on the microphone's track.
+        mic_samples: Arc<Mutex<Vec<i16>>>,
+        share_samples: Arc<Mutex<Vec<i16>>>,
         /// Frames the camera publication was handed.
         frames: Arc<AtomicUsize>,
         /// How many times the session was asked to play the call.
@@ -1437,6 +1525,22 @@ mod tests {
 
         fn listens(&self) -> usize {
             self.listens.load(Ordering::Relaxed)
+        }
+
+        fn share_sounds(&self) -> usize {
+            self.share_sounds.load(Ordering::Relaxed)
+        }
+
+        fn fail_share_sound(&self) {
+            self.share_sound_fails.store(true, Ordering::Relaxed);
+        }
+
+        fn mic_samples(&self) -> Vec<i16> {
+            self.mic_samples.lock().unwrap().clone()
+        }
+
+        fn share_samples(&self) -> Vec<i16> {
+            self.share_samples.lock().unwrap().clone()
         }
 
         fn watches(&self) -> usize {
@@ -1572,6 +1676,8 @@ mod tests {
     /// frames themselves do is `publish.rs`.
     struct FakeTrack {
         log: Log,
+        /// Where this publication records what it carried.
+        sink: Arc<Mutex<Vec<i16>>>,
     }
 
     impl Drop for FakeTrack {
@@ -1581,7 +1687,10 @@ mod tests {
     }
 
     impl PublishedAudio for FakeTrack {
-        async fn send(&self, _samples: Vec<i16>) -> Result<(), CallFailure> {
+        async fn send(&self, samples: Vec<i16>) -> Result<(), CallFailure> {
+            if let Some(first) = samples.first() {
+                self.sink.lock().unwrap().push(*first);
+            }
             Ok(())
         }
     }
@@ -1840,6 +1949,7 @@ mod tests {
     impl CallSession for FakeSession {
         type Track = FakeTrack;
         type Video = FakeCamera;
+        type ShareAudio = FakeTrack;
         type Roster = FakeRoster;
 
         fn roster(&self) -> Self::Roster {
@@ -1861,6 +1971,7 @@ mod tests {
                     self.log.live.fetch_add(1, Ordering::Relaxed);
                     Ok(FakeTrack {
                         log: self.log.clone(),
+                        sink: self.log.mic_samples.clone(),
                     })
                 }
                 Publishing::Fails => Err(CallFailure::NoTransport(
@@ -1910,6 +2021,27 @@ mod tests {
 
         async fn retract_screen(&self) -> Result<(), CallFailure> {
             self.log.retracted.lock().unwrap().push("screen");
+            Ok(())
+        }
+
+        async fn publish_share_audio(&self) -> Result<Self::ShareAudio, CallFailure> {
+            self.log.share_sounds.fetch_add(1, Ordering::Relaxed);
+
+            if self.log.share_sound_fails.load(Ordering::Relaxed) {
+                return Err(CallFailure::NoTransport(
+                    "the focus refused the share's sound".to_owned(),
+                ));
+            }
+
+            self.log.live.fetch_add(1, Ordering::Relaxed);
+            Ok(FakeTrack {
+                log: self.log.clone(),
+                sink: self.log.share_samples.clone(),
+            })
+        }
+
+        async fn retract_share_audio(&self) -> Result<(), CallFailure> {
+            self.log.retracted.lock().unwrap().push("share sound");
             Ok(())
         }
 
@@ -2090,6 +2222,7 @@ mod tests {
                     microphone,
                     camera,
                     screen,
+                    share_sound: Microphone::new(),
                     ears: Arc::new(Deaf::default()),
                     eyes: Arc::new(Blind::default()),
                 },
@@ -2342,6 +2475,7 @@ mod tests {
                     microphone: Microphone::new(),
                     camera: Camera::new(),
                     screen: Camera::new(),
+                    share_sound: Microphone::new(),
                     ears: Arc::new(Deaf::default()),
                     eyes: Arc::new(Blind::default()),
                 },
@@ -2405,6 +2539,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(Deaf::default()),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -2469,6 +2604,7 @@ mod tests {
                 microphone: Microphone::new(),
                 camera: Camera::new(),
                 screen: Camera::new(),
+                share_sound: Microphone::new(),
                 ears: Arc::new(Deaf::default()),
                 eyes: Arc::new(Blind::default()),
             },
@@ -2500,6 +2636,7 @@ mod tests {
                 microphone: Microphone::new(),
                 camera: Camera::new(),
                 screen: Camera::new(),
+                share_sound: Microphone::new(),
                 ears: Arc::new(Deaf::default()),
                 eyes: Arc::new(Blind::default()),
             },
@@ -3011,6 +3148,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(Deaf::default()),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -3063,6 +3201,15 @@ mod tests {
     /// In the parent module because both the camera tests and the screen
     /// tests drive a publication against a call they joined themselves.
     async fn joined(transport: &FakeTransport) -> Option<Joined<FakeSession>> {
+        joined_with(transport, &Microphone::new()).await
+    }
+
+    /// [`joined`], with the microphone handed in so a test can offer frames at
+    /// the publication the join starts.
+    async fn joined_with(
+        transport: &FakeTransport,
+        microphone: &Microphone,
+    ) -> Option<Joined<FakeSession>> {
         let (events, _said) = unbounded_channel();
         let (restate, _restated) = unbounded_channel();
         connect(
@@ -3070,7 +3217,7 @@ mod tests {
             None,
             GENERAL.to_owned(),
             &events,
-            &Microphone::new(),
+            microphone,
             &restate,
             &(Arc::new(Deaf::default()) as Ears),
         )
@@ -3088,9 +3235,14 @@ mod tests {
         const WHAT: &str = "DP-0 (2560x1440)";
 
         fn share_on() -> Message {
+            share_on_with_sound(false)
+        }
+
+        fn share_on_with_sound(sound: bool) -> Message {
             Message::SetScreen(Some(ScreenShare {
                 size: SIZE,
                 title: WHAT.to_owned(),
+                sound,
             }))
         }
 
@@ -3102,6 +3254,7 @@ mod tests {
             SelfScreen {
                 sharing: what.map(str::to_owned),
                 trouble: None,
+                sound: false,
             }
         }
 
@@ -3113,6 +3266,145 @@ mod tests {
                     _ => None,
                 })
                 .collect()
+        }
+
+        #[tokio::test]
+        async fn sharing_with_sound_publishes_a_second_audio_track() {
+            // Alongside the microphone, never instead of it and never mixed
+            // into it: peers read `ScreenShareAudio` as belonging to the
+            // picture rather than to the person.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on_with_sound(true)],
+            )
+            .await;
+
+            assert_eq!(log.share_sounds(), 1);
+            assert_eq!(
+                screens(&said),
+                vec![SelfScreen {
+                    sharing: Some(WHAT.to_owned()),
+                    trouble: None,
+                    sound: true,
+                }]
+            );
+        }
+
+        #[tokio::test]
+        async fn sharing_without_sound_publishes_only_the_picture() {
+            // Which is every share on a build that cannot capture one.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on_with_sound(false)],
+            )
+            .await;
+
+            assert_eq!(log.share_sounds(), 0);
+            assert_eq!(screens(&said), vec![sharing(Some(WHAT))]);
+        }
+
+        #[tokio::test]
+        async fn asking_again_does_not_publish_a_second_sound() {
+            // The interface may ask because it lost track of what it is doing.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            transcript(
+                transport,
+                vec![
+                    connect_to(GENERAL),
+                    share_on_with_sound(true),
+                    share_on_with_sound(true),
+                ],
+            )
+            .await;
+
+            assert_eq!(log.share_sounds(), 1);
+        }
+
+        #[tokio::test]
+        async fn stopping_a_share_takes_its_sound_down_with_it() {
+            // Retracted, not merely unfed. Peers hold a decoder for a stream
+            // that is still published however quiet it goes.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on_with_sound(true), share_off()],
+            )
+            .await;
+
+            assert_eq!(log.retracted(), vec!["screen", "share sound"]);
+            assert_eq!(
+                screens(&said).last().map(|screen| screen.sound),
+                Some(false)
+            );
+        }
+
+        #[tokio::test]
+        async fn a_share_whose_sound_is_refused_still_shares_its_picture() {
+            // A refusal here is logged and reported as a share without sound.
+            // Failing the share would be a worse answer than a quiet one.
+            let (transport, log) = FakeTransport::new(Joining::Succeeds);
+            log.fail_share_sound();
+
+            let said = transcript(
+                transport,
+                vec![connect_to(GENERAL), share_on_with_sound(true)],
+            )
+            .await;
+
+            assert_eq!(
+                screens(&said),
+                vec![SelfScreen {
+                    sharing: Some(WHAT.to_owned()),
+                    trouble: None,
+                    sound: false,
+                }]
+            );
+        }
+
+        #[tokio::test]
+        async fn a_shares_sound_goes_out_on_its_own_track_and_never_the_microphones() {
+            // The defect this whole track exists to avoid. Mixed into the
+            // microphone, a listener who turned the sharer down would lose the
+            // share with them, and the share could never be separated again.
+            let local = tokio::task::LocalSet::new();
+            local
+                .run_until(async {
+                    let (transport, log) = FakeTransport::new(Joining::Succeeds);
+                    let microphone = Microphone::new();
+                    let share_sound = Microphone::new();
+                    let mut call = joined_with(&transport, &microphone).await;
+                    let (events, _said) = unbounded_channel();
+
+                    set_screen(
+                        &events,
+                        SelfScreen::default(),
+                        call.as_mut(),
+                        Some(ScreenShare {
+                            size: SIZE,
+                            title: WHAT.to_owned(),
+                            sound: true,
+                        }),
+                        &Camera::new(),
+                        &share_sound,
+                    )
+                    .await;
+
+                    microphone.offer(&[3; 4], true);
+                    share_sound.offer(&[7; 4], true);
+                    for _ in 0..16 {
+                        tokio::task::yield_now().await;
+                    }
+
+                    assert_eq!(log.mic_samples(), vec![3], "the microphone carried a share");
+                    assert_eq!(log.share_samples(), vec![7], "the share carried nothing");
+                })
+                .await;
         }
 
         #[tokio::test]
@@ -3390,14 +3682,40 @@ mod tests {
                         Some(ScreenShare {
                             size: SIZE,
                             title: WHAT.to_owned(),
+                            sound: false,
                         })
                     };
+                    let quiet = Microphone::new();
 
-                    set_screen(&events, SelfScreen::default(), call.as_mut(), on(), &screen).await;
+                    set_screen(
+                        &events,
+                        SelfScreen::default(),
+                        call.as_mut(),
+                        on(),
+                        &screen,
+                        &quiet,
+                    )
+                    .await;
                     screen.offer(frame_of(1));
-                    set_screen(&events, sharing(Some(WHAT)), call.as_mut(), None, &screen).await;
+                    set_screen(
+                        &events,
+                        sharing(Some(WHAT)),
+                        call.as_mut(),
+                        None,
+                        &screen,
+                        &quiet,
+                    )
+                    .await;
 
-                    set_screen(&events, SelfScreen::default(), call.as_mut(), on(), &screen).await;
+                    set_screen(
+                        &events,
+                        SelfScreen::default(),
+                        call.as_mut(),
+                        on(),
+                        &screen,
+                        &quiet,
+                    )
+                    .await;
                     pushed(&log, 1).await;
 
                     assert_eq!(
@@ -3986,6 +4304,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(Deaf::default()),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -4035,6 +4354,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(heard),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -4475,6 +4795,7 @@ mod tests {
                         microphone: Microphone::new(),
                         camera: Camera::new(),
                         screen: Camera::new(),
+                        share_sound: Microphone::new(),
                         ears: Arc::new(ears.clone()),
                         eyes: Arc::new(eyes.clone()),
                     },
@@ -4524,6 +4845,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(Deaf::default()),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -4619,6 +4941,7 @@ mod tests {
                         microphone: Microphone::new(),
                         camera: Camera::new(),
                         screen: Camera::new(),
+                        share_sound: Microphone::new(),
                         ears: Arc::new(Deaf::default()),
                         eyes: Arc::new(Blind::default()),
                     },
@@ -4727,6 +5050,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(ears),
                             eyes: Arc::new(Blind::default()),
                         },
@@ -4954,6 +5278,7 @@ mod tests {
                             microphone: Microphone::new(),
                             camera: Camera::new(),
                             screen: Camera::new(),
+                            share_sound: Microphone::new(),
                             ears: Arc::new(Deaf::default()),
                             eyes: Arc::new(eyes),
                         },
