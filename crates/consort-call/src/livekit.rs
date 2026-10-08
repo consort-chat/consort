@@ -45,7 +45,7 @@ use crate::dialect::{self, Dialect};
 use crate::discovery;
 use crate::event::SelfAudio;
 use crate::failure::{CallFailure, classify};
-use crate::hearing::{self, Attached, Ears};
+use crate::hearing::{self, Attached, Ears, Sound};
 use crate::notices::{self, Notice};
 use crate::publish::PublishedAudio;
 use crate::roster;
@@ -269,14 +269,14 @@ pub struct LiveKitSession {
     /// Set once, by `publish_microphone`. Empty before that, which is the
     /// window between joining and publishing and no longer.
     microphone: OnceLock<Arc<dyn LocalTrackHandle>>,
-    /// One task per participant whose audio is being played, keyed by
-    /// `member_id`. Dropping one stops that person's audio; dropping the
+    /// One task per stream of audio being played, keyed by membership and
+    /// which of its sounds. Dropping one stops that stream; dropping the
     /// session stops everybody's, which is what ends a call cleanly.
     ///
     /// A `RefCell` rather than a `Mutex` because a session never leaves the
     /// call thread. That is not a shortcut, it is the same constraint that put
     /// the call on a thread of its own: `Call::join` drives `!Send` futures.
-    playing: RefCell<HashMap<String, Pulling>>,
+    playing: RefCell<HashMap<(String, Sound), Pulling>>,
     /// One task per remote picture being pulled, keyed by membership and kind.
     /// Two entries for somebody sending a camera and a screen at once.
     watching: RefCell<HashMap<(String, Kind), Pulling>>,
@@ -617,11 +617,12 @@ impl CallSession for LiveKitSession {
             if participant.is_local {
                 continue;
             }
-            self.call.set_constraints(
-                &participant.member_id,
-                MediaStreamKind::Microphone,
-                constraints,
-            );
+            // Both sounds, or somebody who deafened mid-share keeps hearing
+            // the share.
+            for sound in [Sound::Voice, Sound::Share] {
+                self.call
+                    .set_constraints(&participant.member_id, sound.stream(), constraints);
+            }
         }
 
         Ok(())
@@ -655,79 +656,85 @@ impl CallSession for LiveKitSession {
                 .collect::<Vec<_>>(),
         );
 
-        let audible = hearing::audible(&participants);
-
         let mut playing = self.playing.borrow_mut();
-
-        // Before the diff, because `changes` is told who is attached and a
-        // stale entry answers that question wrongly. Left in, its owner reads
-        // as attached, nothing is reported to start, and the track they
-        // published on coming back is never pulled: silent for the rest of the
-        // call. Forgotten as well as dropped, on the same terms as somebody
-        // who left, so no half-word of theirs plays out later.
-        let stale: Vec<String> = playing
-            .iter()
-            .filter(|(who, held)| {
-                let current = self.call.remote_track(who, MediaStreamKind::Microphone);
-                !held.still_going(current.as_ref())
-            })
-            .map(|(who, _)| who.clone())
-            .collect();
-        for who in stale {
-            playing.remove(&who);
-            ears.forget(&who);
-            tracing::debug!(member_id = %who, "a participant's audio went stale");
-        }
-
-        let attached: BTreeSet<String> = playing.keys().cloned().collect();
-        let (start, stop) = hearing::changes(&attached, &audible);
         let mut pending = 0;
 
-        for who in stop {
-            // Dropping the handle aborts the pump; forgetting drops whatever it
-            // had already queued. Both, because a participant who left mid-word
-            // would otherwise finish it several seconds later.
-            playing.remove(&who);
-            ears.forget(&who);
-            tracing::debug!(member_id = %who, "stopped playing a participant");
-        }
+        // Two passes, for the reason `watch` makes two: a shared screen's
+        // sound is a track of its own, and somebody talking over a share is
+        // both at once.
+        for sound in [Sound::Voice, Sound::Share] {
+            let audible = hearing::audible(&participants, sound);
+            let mine = |(who, held): &(String, Sound)| (*held == sound).then(|| who.clone());
 
-        for who in start {
-            let Some(track) = self.call.remote_track(&who, MediaStreamKind::Microphone) else {
-                // Ordinary order of events rather than a fault, and counted
-                // because nothing need ever publish a roster again: issue #157.
-                pending += 1;
-                continue;
-            };
-            let Some(mut frames) = track.audio_frames() else {
-                tracing::warn!(member_id = %who, "a microphone track with no audio to pull");
-                pending += 1;
-                continue;
-            };
+            // Before the diff, because `changes` is told who is attached and a
+            // stale entry answers that question wrongly. Left in, its owner
+            // reads as attached, nothing is reported to start, and the track
+            // they published on coming back is never pulled: silent for the
+            // rest of the call. Forgotten as well as dropped, on the same
+            // terms as somebody who left, so no half-word plays out later.
+            let stale: Vec<String> = playing
+                .iter()
+                .filter_map(|(key, held)| {
+                    let who = mine(key)?;
+                    let current = self.call.remote_track(&who, sound.stream());
+                    (!held.still_going(current.as_ref())).then_some(who)
+                })
+                .collect();
+            for who in stale {
+                playing.remove(&(who.clone(), sound));
+                ears.forget(&sound.queue(&who));
+                tracing::debug!(member_id = %who, ?sound, "a participant's audio went stale");
+            }
 
-            let ears = Arc::clone(ears);
-            let name = who.clone();
-            let pump = tokio::task::spawn_local(async move {
-                while let Some(frame) = frames.next().await {
-                    ears.hear(
-                        &name,
-                        hearing::mono(&frame.data, frame.num_channels).as_ref(),
-                    );
-                }
-                // The stream ended, which means the track went away rather than
-                // that they stopped talking. A silent participant keeps
-                // producing frames.
-                ears.forget(&name);
-            });
+            let attached: BTreeSet<String> = playing.keys().filter_map(mine).collect();
+            let (start, stop) = hearing::changes(&attached, &audible);
 
-            tracing::debug!(member_id = %who, "playing a participant");
-            playing.insert(
-                who,
-                Pulling {
-                    track,
-                    pump: AbortOnDrop(pump),
-                },
-            );
+            for who in stop {
+                // Dropping the handle aborts the pump; forgetting drops
+                // whatever it had already queued. Both, because a participant
+                // who left mid-word would otherwise finish it seconds later.
+                playing.remove(&(who.clone(), sound));
+                ears.forget(&sound.queue(&who));
+                tracing::debug!(member_id = %who, ?sound, "stopped playing a participant");
+            }
+
+            for who in start {
+                let Some(track) = self.call.remote_track(&who, sound.stream()) else {
+                    // Ordinary order of events rather than a fault, and counted
+                    // because nothing need ever publish a roster again: #157.
+                    pending += 1;
+                    continue;
+                };
+                let Some(mut frames) = track.audio_frames() else {
+                    tracing::warn!(member_id = %who, ?sound, "an audio track with no audio to pull");
+                    pending += 1;
+                    continue;
+                };
+
+                let ears = Arc::clone(ears);
+                let name = sound.queue(&who);
+                let pump = tokio::task::spawn_local(async move {
+                    while let Some(frame) = frames.next().await {
+                        ears.hear(
+                            &name,
+                            hearing::mono(&frame.data, frame.num_channels).as_ref(),
+                        );
+                    }
+                    // The stream ended, which means the track went away rather
+                    // than that they stopped talking. A silent participant
+                    // keeps producing frames.
+                    ears.forget(&name);
+                });
+
+                tracing::debug!(member_id = %who, ?sound, "playing a participant");
+                playing.insert(
+                    (who, sound),
+                    Pulling {
+                        track,
+                        pump: AbortOnDrop(pump),
+                    },
+                );
+            }
         }
 
         Attached {
