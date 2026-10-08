@@ -879,6 +879,14 @@ export interface CameraList {
 export interface VideoSettings {
   /** The chosen camera by device node, or null for the first one found. */
   camera: string | null;
+  /**
+   * Whether a shared screen carries what this machine is playing.
+   *
+   * Only honoured where the build can capture it, which `shareSoundAvailable`
+   * answers. False everywhere else, including where it was saved true on
+   * another machine.
+   */
+  shareSound: boolean;
 }
 
 /**
@@ -934,10 +942,21 @@ export interface SelfScreen {
   sharing: string | null;
   /** Why nothing is, when somebody asked and it did not start. */
   trouble: string | null;
+  /**
+   * Whether the share's own sound is going out with the picture.
+   *
+   * What happened rather than what was asked for: a build that cannot capture
+   * one, and a capture that would not open, both report false here.
+   */
+  sound: boolean;
 }
 
 /** Sharing nothing, with nothing wrong. Where every session starts. */
-export const NOT_SHARING: SelfScreen = { sharing: null, trouble: null };
+export const NOT_SHARING: SelfScreen = {
+  sharing: null,
+  trouble: null,
+  sound: false,
+};
 
 /**
  * The voice gate's thresholds, mirrored from `consort_audio::gate`.
@@ -3053,6 +3072,16 @@ export function callSetCamera(on: boolean): Promise<SelfVideo> {
  */
 export function shareSources(): Promise<ShareSource[]> {
   return invoke<ShareSource[]>("share_sources");
+}
+
+/**
+ * Whether this build can send a shared screen's own sound.
+ *
+ * Asked before the switch is drawn. A switch for a capture that cannot happen
+ * is a switch somebody turns on and watches do nothing.
+ */
+export function shareSoundAvailable(): Promise<boolean> {
+  return invoke<boolean>("share_sound_available");
 }
 
 /**

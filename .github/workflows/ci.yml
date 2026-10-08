@@ -184,17 +184,21 @@ jobs:
           path: lcov.info
 
   windows:
-    name: Windows video
+    name: Windows media
     # The Rust job above never compiles a line of `mf_host.rs` or
     # `wgc_host.rs`: they are `cfg(windows)`, and a Linux runner builds the
     # Linux hosts. Before this job, the first compiler to see them was the
     # release build, which runs no test and no lint. #163.
     #
-    # One crate rather than the workspace, because that is where every line
+    # `cpal_host.rs` has the same problem since #193: the WASAPI loopback that
+    # carries a shared screen's sound is `cfg(windows)` too.
+    #
+    # Two crates rather than the workspace, because that is where every line
     # that differs by platform is, and the workspace on Windows means building
     # libwebrtc for LiveKit, which the release job already pays for. A runner
-    # has no camera and no interactive desktop, so the `#[ignore]` tests that
-    # capture are still run by hand: COVERAGE.md has the command.
+    # has no camera, no sound card and no interactive desktop, so the
+    # `#[ignore]` tests that capture are still run by hand: COVERAGE.md has
+    # the command.
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -206,10 +210,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Clippy
-        run: cargo clippy -p consort-video --all-targets -- -D warnings
+        run: cargo clippy -p consort-video -p consort-audio --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test -p consort-video
+        run: cargo test -p consort-video -p consort-audio
 
   advisories:
     name: Advisories

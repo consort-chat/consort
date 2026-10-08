@@ -30,8 +30,12 @@ the card about one person caps it below that: #167,
 docs/adr/0013-ask-for-a-picture-in-pixels.md for the units and the ceilings,
 docs/PLAN-receiving-quality.md for what is left, which is the automatic cap
 from a connection going bad.
-Sharing system audio alongside a screen is not built either,
-and docs/PLAN-screen-share.md says what it would take. Deleting your own
+A shared screen's own sound is carried on a track of its own, and heard on
+every platform; sending one needs a build that can capture what the machine is
+playing, which today is Windows alone:
+docs/adr/0020-send-a-shares-sound-where-a-build-can-capture-it.md has what each
+platform can do and what is left, which is a PipeWire or libpulse backend for
+Linux and per-process loopback on Windows. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a
 clip somebody sends, or a count on the icon when something is unread.
 

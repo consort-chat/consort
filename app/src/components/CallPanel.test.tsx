@@ -1098,7 +1098,7 @@ describe("sharing a screen", () => {
 
   /** What is being shared, named, as the state channel reports it. */
   function showing(what: string): SelfScreen {
-    return { sharing: what, trouble: null };
+    return { sharing: what, trouble: null, sound: false };
   }
 
   function shareButton() {
@@ -1202,10 +1202,7 @@ describe("sharing a screen", () => {
   it("says why a share did not start", async () => {
     // An icon with no words of its own, so without this a press that failed
     // does nothing visible and there is nothing to argue with.
-    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, {
-      sharing: null,
-      trouble: "sharing a screen needs an X11 session",
-    });
+    panel(CONNECTED, "Lounge", HEARING, true, NOT_FILMING, { sharing: null, trouble: "sharing a screen needs an X11 session", sound: false });
 
     expect(screen.getByRole("alert")).toHaveTextContent(/X11/);
   });
@@ -1219,7 +1216,7 @@ describe("sharing a screen", () => {
       HEARING,
       true,
       { camera: false, trouble: "the camera is in use" },
-      { sharing: null, trouble: "that window has gone" },
+      { sharing: null, trouble: "that window has gone", sound: false },
     );
 
     const said = screen.getAllByRole("alert").map((alert) => alert.textContent);
