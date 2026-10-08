@@ -34,7 +34,7 @@ beforeEach(() => {
 
 describe("a picture of what this session is sending", () => {
   it("draws the first frame it is given", async () => {
-    const { result } = renderHook(() => usePicture("camera"));
+    const { result } = renderHook(() => usePicture("camera", 320));
 
     await waitFor(() => expect(result.current).toBe(A));
   });
@@ -42,10 +42,31 @@ describe("a picture of what this session is sending", () => {
   it("asks the screen for a screen rather than the camera", async () => {
     // One hook, two sources. Reading the camera here would draw somebody's
     // face in the square that is supposed to hold their slides.
-    const { result } = renderHook(() => usePicture("screen"));
+    const { result } = renderHook(() => usePicture("screen", 320));
 
     await waitFor(() => expect(result.current).toBe(B));
     expect(selfView).not.toHaveBeenCalled();
+  });
+
+  it("asks at the new size as soon as the box changes", async () => {
+    // Issue #194. Our own share goes on the stage, so the same capture is
+    // drawn at a square and at the whole window, and the next frame should
+    // arrive at the new size rather than the next call.
+    const { rerender } = renderHook(
+      ({ bound }: { bound: number }) => usePicture("screen", bound),
+      { initialProps: { bound: 480 } },
+    );
+    await waitFor(() => expect(screenView).toHaveBeenCalledWith(480));
+
+    rerender({ bound: 1920 });
+
+    await waitFor(() => expect(screenView).toHaveBeenCalledWith(1920));
+  });
+
+  it("asks for the size it is drawn at", async () => {
+    renderHook(() => usePicture("camera", 960));
+
+    await waitFor(() => expect(selfView).toHaveBeenCalledWith(960));
   });
 
   it("keeps asking, so the picture moves", async () => {
@@ -53,7 +74,7 @@ describe("a picture of what this session is sending", () => {
     // keeps up with whatever is being captured.
     selfView.mockResolvedValueOnce(A).mockResolvedValue(B);
 
-    const { result } = renderHook(() => usePicture("camera"));
+    const { result } = renderHook(() => usePicture("camera", 320));
 
     await waitFor(() => expect(result.current).toBe(B));
     expect(selfView.mock.calls.length).toBeGreaterThan(1);
@@ -62,7 +83,7 @@ describe("a picture of what this session is sending", () => {
   it("stops asking once it is unmounted", async () => {
     // The card can be hidden mid-call. A poll that outlived it would be a
     // frame converted every tick for the rest of the session.
-    const { unmount } = renderHook(() => usePicture("camera"));
+    const { unmount } = renderHook(() => usePicture("camera", 320));
     await waitFor(() => expect(selfView).toHaveBeenCalled());
 
     unmount();
@@ -77,7 +98,7 @@ describe("a picture of what this session is sending", () => {
     // card draws what it draws without one.
     selfView.mockResolvedValue(null);
 
-    const { result } = renderHook(() => usePicture("camera"));
+    const { result } = renderHook(() => usePicture("camera", 320));
 
     await waitFor(() => expect(selfView).toHaveBeenCalled());
     expect(result.current).toBe(null);
@@ -94,7 +115,7 @@ describe("a picture of what this session is sending", () => {
       .mockReset()
       .mockImplementation(() => Promise.reject(new Error("no")));
 
-    const { result } = renderHook(() => usePicture("camera"));
+    const { result } = renderHook(() => usePicture("camera", 320));
 
     await waitFor(() => expect(complained).toHaveBeenCalledTimes(1));
     expect(result.current).toBe(null);
@@ -114,7 +135,7 @@ describe("a picture of what this session is sending", () => {
         }),
     );
 
-    renderHook(() => usePicture("camera"));
+    renderHook(() => usePicture("camera", 320));
     await waitFor(() => expect(selfView).toHaveBeenCalledTimes(1));
     await new Promise((resume) => setTimeout(resume, PAST_A_POLL));
 

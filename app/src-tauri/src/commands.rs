@@ -1656,16 +1656,16 @@ pub fn set_share(state: State<'_, AppState>, source: Option<String>) -> SelfScre
 /// frame is converted and nothing is encoded while nobody is drawing it. See
 /// `docs/adr/0007-draw-the-self-view-from-a-still.md`.
 #[tauri::command]
-pub fn self_view(state: State<'_, AppState>) -> Option<String> {
-    state.self_view()
+pub fn self_view(state: State<'_, AppState>, bound: u32) -> Option<String> {
+    state.self_view(bound)
 }
 
 /// The newest shared-screen frame for the call card, as a `data:` URL.
 ///
 /// The twin of [`self_view`], asked for the same way and for the same reasons.
 #[tauri::command]
-pub fn screen_view(state: State<'_, AppState>) -> Option<String> {
-    state.screen_view()
+pub fn screen_view(state: State<'_, AppState>, bound: u32) -> Option<String> {
+    state.screen_view(bound)
 }
 
 /// The newest picture somebody else in the call is sending, as a `data:` URL.

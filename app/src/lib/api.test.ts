@@ -1283,9 +1283,9 @@ describe("the call commands", () => {
   it("asks Rust for the newest camera frame", async () => {
     invoke.mockResolvedValue("data:image/jpeg;base64,aaaa");
 
-    const picture = await selfView();
+    const picture = await selfView(320);
 
-    expect(invoke).toHaveBeenCalledWith("self_view");
+    expect(invoke).toHaveBeenCalledWith("self_view", { bound: 320 });
     expect(picture).toBe("data:image/jpeg;base64,aaaa");
   });
 
@@ -1294,7 +1294,7 @@ describe("the call commands", () => {
     // than a failure, because the card draws its faces either way.
     invoke.mockResolvedValue(null);
 
-    expect(await selfView()).toBe(null);
+    expect(await selfView(320)).toBe(null);
   });
 
   it("asks for somebody else's picture at the size it will be drawn", async () => {
@@ -1326,16 +1326,16 @@ describe("the call commands", () => {
     // going out at once, so one command would have to say which it meant.
     invoke.mockResolvedValue("data:image/jpeg;base64,bbbb");
 
-    const picture = await screenView();
+    const picture = await screenView(1920);
 
-    expect(invoke).toHaveBeenCalledWith("screen_view");
+    expect(invoke).toHaveBeenCalledWith("screen_view", { bound: 1920 });
     expect(picture).toBe("data:image/jpeg;base64,bbbb");
   });
 
   it("passes on having no shared screen to draw", async () => {
     invoke.mockResolvedValue(null);
 
-    expect(await screenView()).toBe(null);
+    expect(await screenView(320)).toBe(null);
   });
 
   it("hands back what happened to the camera", async () => {
