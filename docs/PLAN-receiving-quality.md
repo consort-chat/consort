@@ -176,6 +176,11 @@ re-applies a constraint when a stream reappears, but a rejoining member gets a
 fresh `member_id` and the constraints die with the old one, so the restatement
 has to be ours.
 
+What #195 then found: for a shared screen the box is below the only other
+rung, and that rung is 3 fps, so the box must not pick one.
+[ADR-0016](adr/0016-only-a-person-may-ask-a-share-for-less.md) has the ladders
+and what is left, which is the send side and issue #196.
+
 The control went on `PersonMenu` rather than on the tile itself. The stage and
 the screen squares are each one `<button>`, so a picker inside one would be a
 control inside a control, and `PersonMenu` is already the panel holding this
