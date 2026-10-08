@@ -481,7 +481,7 @@ jobs:
       # so it is checked for being the right shape before it is served rather
       # than after somebody reports that updating stopped working.
       - name: It is the manifest the plugin reads
-        run: scripts/manifest.test.sh public/updater/latest.json
+        run: scripts/check-manifest.sh public/updater/latest.json
 
       # v6 and v5, not the v5 and v4 most examples show: those still declare
       # `using: node20`, which scripts/node-version.test.sh fails closed on.

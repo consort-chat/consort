@@ -17,7 +17,7 @@ keypair exists.
    already on the release page; the signature is the only new upload.
 2. **The manifest**, at
    `https://consort-chat.github.io/consort/updater/latest.json`, published by the
-   release run. `scripts/manifest.test.sh` is the shape it has to be.
+   release run. `scripts/check-manifest.sh` is the shape it has to be.
 3. **The signature over the artifact**, checked before a byte of it is executed.
 
 The frontend never talks to the plugin. `@tauri-apps/plugin-updater`, which the
@@ -110,7 +110,7 @@ recorded the version are rejected. Consort has signed none, so that cost is zero
 It does put a floor under the CLI: **2.11.5** is the first release that writes
 `version:` into the trusted comment, and `app/package.json` says so. The lockfile
 slipping below that would not fail a build; it would publish a release every
-client refuses after downloading it. `scripts/manifest.test.sh` is what catches
+client refuses after downloading it. `scripts/check-manifest.sh` is what catches
 it, in the release run, before the manifest is served.
 
 `allowDowngrades` stays off, so a release is offered only when its version is
@@ -155,7 +155,7 @@ demand a signing key. It is an overlay, `tauri.updater.conf.json`, on the one
 command line that needs it.
 
 The manifest reinforces all of it by carrying `windows-x86_64` and nothing else,
-and `scripts/manifest.test.sh` fails if a Linux or macOS key ever appears in one.
+and `scripts/check-manifest.sh` fails if a Linux or macOS key ever appears in one.
 
 ## What somebody sees
 
@@ -198,7 +198,7 @@ here is a weekly event and a tighter interval only costs somebody else's CDN.
 | Signature does not verify | Rejected inside the plugin before anything is written | Reasoned about, from the plugin's ordering. The crypto is not ours to test |
 | Partial download | The signature is checked over the complete bytes, so a truncated download is a signature failure. There is no window in which half an installer runs | Reasoned about |
 | Downgrade | Two independent guards: `allowDowngrades` off, and `requireSignedVersion` on | Tests for both, including a manifest that asks for an older release |
-| A manifest that lies about the version | Refused: the signed version is compared against the announced one | `scripts/manifest.test.sh`, exercised against a signature made for a different version |
+| A manifest that lies about the version | Refused: the signed version is compared against the announced one | `scripts/check-manifest.sh`, exercised against a signature made for a different version |
 | Install refused mid-call | Nothing is handed to the installer | Test, and it asserts the installer was never reached |
 | Packaged build | No updater code, and `updates_itself` is false | Test |
 | A release broken for everybody | Not solvable in the client. The bar asks before installing, so a bad release reaches only people who pressed a button, and `release.yml` already gates on CI being green on the released commit. Withdrawing one means deleting its assets, which makes the manifest's `url` 404 and leaves every install on the version it has | Not tested. Stated |

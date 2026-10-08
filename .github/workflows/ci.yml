@@ -413,3 +413,10 @@ jobs:
       # anything on a pull request. This reads the files instead.
       - name: Node is the same version everywhere
         run: scripts/node-version.test.sh
+
+      # Same reasoning again, and the sharpest case of it: the update manifest
+      # gate runs in the release job and nowhere else, so a check of it that
+      # stopped checking would be found by the release that shipped a manifest
+      # every client refuses. This runs it against fixtures instead.
+      - name: The update manifest gate still catches things
+        run: scripts/check-manifest.test.sh

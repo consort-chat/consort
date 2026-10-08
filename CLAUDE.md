@@ -153,7 +153,7 @@ line that needs it. And `plugins.updater.requireSignedVersion` is on, which need
 `@tauri-apps/cli` 2.11.5 or newer to have signed the artifact: 2.11.4 does not
 write `version:` into minisign's trusted comment, and a release signed by it is
 one every client refuses after downloading it. `app/package.json` carries the
-floor and `scripts/manifest.test.sh` catches it slipping.
+floor and `scripts/check-manifest.sh` catches it slipping.
 
 [docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the rest, including the
 signing keypair, which nobody but Thomas holds.

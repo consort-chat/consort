@@ -11,7 +11,7 @@
 # pass, because that is exactly what the failure looks like.
 set -euo pipefail
 
-manifest=${1:?usage: manifest.test.sh <path to latest.json>}
+manifest=${1:?usage: check-manifest.sh <path to latest.json>}
 
 failures=0
 fail() {
