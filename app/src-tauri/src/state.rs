@@ -1047,10 +1047,15 @@ impl AppState {
         // here would be a copy that can disagree with it; what it is for is
         // deciding whether anything reaches the SFU, and it does that.
         //
-        // The same clamp the still is made at, so what is asked of the SFU and
-        // what is drawn cannot disagree.
+        // The box the still is made in rather than the square it fits inside,
+        // measured through the same arithmetic, so what is asked of the SFU
+        // and what is drawn cannot disagree: ADR-0015.
         if let Some(bridge) = self.locked_call().as_ref() {
-            bridge.drawn_at(user_id.to_owned(), kind, crate::theirview::clamped(bound));
+            bridge.drawn_at(
+                user_id.to_owned(),
+                kind,
+                self.their_views.drawn_at(user_id, kind, bound),
+            );
         }
 
         self.their_views.latest(user_id, kind, bound)
@@ -2953,6 +2958,32 @@ mod tests {
 
             const ADA: &str = "@ada:example.org";
 
+            /// A box of pixels, written the way an assertion reads best.
+            fn box_of(width: u32, height: u32) -> consort_call::Asked {
+                consort_call::Asked { width, height }
+            }
+
+            /// Leave a frame of Ada's `kind` where the card and the call both
+            /// read it from, so the box asked for has a shape.
+            fn ada_sends(state: &AppState, kind: Kind, width: u32, height: u32) {
+                use consort_call::Seen;
+
+                let (w, h) = (width as usize, height as usize);
+                let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+                state.their_views.see(
+                    "ada-laptop",
+                    ADA,
+                    kind,
+                    consort_call::IncomingPicture {
+                        width,
+                        height,
+                        y: vec![120; w * h],
+                        u: vec![128; cw * ch],
+                        v: vec![128; cw * ch],
+                    },
+                );
+            }
+
             /// A joined call whose roster holds Ada, and the record of what it
             /// was asked for.
             fn with_ada(state: &AppState, sink: &Arc<RecordingSink>) -> crate::testing::Asks {
@@ -2970,27 +3001,61 @@ mod tests {
                 // sending a whole desktop to fill a 320 pixel square.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Camera, 1280, 720);
 
                 state.their_view(ADA, Kind::Camera, 320);
 
                 wait_for(
                     "the call to ask for Ada's camera",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Camera, 320)],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Camera, box_of(320, 180))],
                     || format!("{:?}", asks.latest()),
                 );
             }
 
             #[test]
             fn a_cap_somebody_chose_asks_for_less_than_the_box() {
+                // Issue #182's comment, end to end. A cap used to come out as
+                // a square of its ceiling, and 640 by 640 is taller than
+                // every layer of a 1080p publication but the one it was
+                // already sending.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Screen, 1920, 1080);
                 state.their_view(ADA, Kind::Screen, 1920);
 
                 state.set_person_cap(ADA.to_owned(), Cap::Low);
 
                 wait_for(
                     "the call to cap Ada's screen",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 640)],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(640, 360))],
+                    || format!("{:?}", asks.latest()),
+                );
+            }
+
+            #[test]
+            fn a_cap_lifted_asks_for_the_whole_box_again() {
+                // The ask must not shrink to the layer it was answered with.
+                // Ada is sending the half layer a `Low` cap asked for, and
+                // lifting the cap has to ask for the box again rather than
+                // for what is already arriving. Issue #189's comment.
+                let (_dir, state, sink) = state();
+                let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Screen, 1920, 1080);
+                state.their_view(ADA, Kind::Screen, 1920);
+                state.set_person_cap(ADA.to_owned(), Cap::Low);
+                wait_for(
+                    "the capped ask",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(640, 360))],
+                    || format!("{:?}", asks.latest()),
+                );
+                ada_sends(&state, Kind::Screen, 960, 540);
+                state.their_view(ADA, Kind::Screen, 1920);
+
+                state.set_person_cap(ADA.to_owned(), Cap::Auto);
+
+                wait_for(
+                    "the whole box to be asked for again",
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
                     || format!("{:?}", asks.latest()),
                 );
             }
@@ -3002,6 +3067,7 @@ mod tests {
                 // per drawn frame.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Camera, 1280, 720);
                 state.their_view(ADA, Kind::Camera, 320);
                 wait_for(
                     "the first ask",
@@ -3023,12 +3089,13 @@ mod tests {
                 // than will ever be drawn is asking for bytes to throw away.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Screen, 1920, 1080);
 
                 state.their_view(ADA, Kind::Screen, 4096);
 
                 wait_for(
                     "the clamped ask",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 1920)],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
                     || format!("{:?}", asks.latest()),
                 );
             }
@@ -3043,11 +3110,12 @@ mod tests {
                 state.settings().save(&stored).expect("save");
 
                 let asks = with_ada(&state, &sink);
+                ada_sends(&state, Kind::Screen, 1920, 1080);
                 state.their_view(ADA, Kind::Screen, 1920);
 
                 wait_for(
                     "the stored cap to be applied",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, 640)],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(640, 360))],
                     || format!("{:?}", asks.latest()),
                 );
             }

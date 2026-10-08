@@ -840,21 +840,31 @@ impl CallSession for LiveKitSession {
             }
 
             for kind in [Kind::Camera, Kind::Screen] {
-                let Some(pixels) = wanted.pixels(&participant.user_id, kind) else {
+                let Some(asked) = wanted.asked(&participant.user_id, kind) else {
                     // Nothing is drawing this one, so there is no box to name.
                     continue;
                 };
+
+                // The one place the number that leaves this session can be
+                // read. Nothing above here knows what the SFU was told.
+                tracing::debug!(
+                    member_id = %participant.member_id,
+                    ?kind,
+                    width = asked.width,
+                    height = asked.height,
+                    "asking the SFU for a picture"
+                );
 
                 self.call.set_constraints(
                     &participant.member_id,
                     kind.stream(),
                     MediaConstraints {
-                        // A square, because the still is sampled to fit one:
-                        // ADR-0014. The transport picks the smallest layer
-                        // that covers it.
+                        // The box the still is drawn in, not a square of its
+                        // long edge: ADR-0015. The SFU picks the smallest
+                        // layer that covers it, by height.
                         detail: VideoDetail::Dimensions(Dimensions {
-                            width: pixels,
-                            height: pixels,
+                            width: asked.width,
+                            height: asked.height,
                         }),
                         ..MediaConstraints::default()
                     },

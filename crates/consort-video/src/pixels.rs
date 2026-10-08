@@ -86,13 +86,30 @@ pub struct Picture {
 const SMALLEST: u32 = 2;
 
 impl Picture {
+    /// The size [`Self::thumbnail`] would make, without making one.
+    ///
+    /// For asking an SFU for a layer worth sampling: what gets drawn is this
+    /// box rather than the square it fits inside. See ADR-0015.
+    pub fn thumbnail_size(&self, max_width: u32, max_height: u32) -> (u32, u32) {
+        fitted(self.width, self.height, max_width, max_height)
+    }
+
+    /// The box this frame's shape fills inside `max_width` by `max_height`.
+    ///
+    /// Not [`Self::thumbnail_size`], which stops at the frame: this is the box
+    /// on screen, and an ask that shrank to the layer it was answered with
+    /// could only ratchet down. ADR-0015.
+    pub fn shape_in(&self, max_width: u32, max_height: u32) -> (u32, u32) {
+        filling(self.width, self.height, max_width, max_height)
+    }
+
     /// A copy sampled down to fit inside `max_width` by `max_height`.
     ///
     /// Nearest neighbour, because the one reader is a self view a couple of
     /// hundred pixels wide and the cost is paid on the capture thread. A frame
     /// already inside the bound is copied at the size it is.
     pub fn thumbnail(&self, max_width: u32, max_height: u32) -> Self {
-        let (width, height) = fitted(self.width, self.height, max_width, max_height);
+        let (width, height) = self.thumbnail_size(max_width, max_height);
         let (w, h) = (width as usize, height as usize);
         let (source_w, source_h) = (self.width as usize, self.height as usize);
         let (chroma_w, chroma_h) = (w.div_ceil(2), h.div_ceil(2));
@@ -133,13 +150,20 @@ impl Picture {
 /// Rounded down to even and never below [`SMALLEST`], so a chroma plane is a
 /// whole number of 2x2 blocks whatever was asked for.
 fn fitted(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
-    let scaled =
-        |side: u64, by: u64, over: u64| u32::try_from(side * by / over).unwrap_or(u32::MAX) & !1;
-    let even = |side: u32| (side & !1).max(SMALLEST);
-
     if width <= max_width && height <= max_height {
         return (even(width), even(height));
     }
+    filling(width, height, max_width, max_height)
+}
+
+/// The largest even size filling `max_width` by `max_height` that keeps
+/// `width` by `height`'s shape.
+///
+/// [`fitted`] without its floor at the frame, for a caller measuring the box
+/// rather than the picture that will be made in it.
+fn filling(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
+    let scaled =
+        |side: u64, by: u64, over: u64| u32::try_from(side * by / over).unwrap_or(u32::MAX) & !1;
 
     // Whichever bound binds harder, compared as one fraction rather than two
     // divisions so a narrow frame is not rounded to nothing.
@@ -149,6 +173,11 @@ fn fitted(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32
     } else {
         (even(scaled(w, u64::from(max_height), h)), even(max_height))
     }
+}
+
+/// One side rounded down to even, never below [`SMALLEST`].
+fn even(side: u32) -> u32 {
+    (side & !1).max(SMALLEST)
 }
 
 /// Convert planar I420 to packed RGB, three tight bytes a pixel.
