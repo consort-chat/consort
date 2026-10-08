@@ -198,6 +198,7 @@ here is a weekly event and a tighter interval only costs somebody else's CDN.
 | Signature does not verify | Rejected inside the plugin before anything is written | Reasoned about, from the plugin's ordering. The crypto is not ours to test |
 | Partial download | The signature is checked over the complete bytes, so a truncated download is a signature failure. There is no window in which half an installer runs | Reasoned about |
 | Downgrade | Two independent guards: `allowDowngrades` off, and `requireSignedVersion` on | Tests for both, including a manifest that asks for an older release |
+| The signing key and the shipped public key are not a pair | Caught before the manifest is served. minisign compares key ids before it does any crypto, so otherwise every client would download the installer and refuse it, six-hourly, with the release looking clean | `scripts/check-manifest.sh`, exercised against a signature made by another key |
 | A manifest that lies about the version | Refused: the signed version is compared against the announced one | `scripts/check-manifest.sh`, exercised against a signature made for a different version |
 | Install refused mid-call | Nothing is handed to the installer | Test, and it asserts the installer was never reached |
 | Packaged build | No updater code, and `updates_itself` is false | Test |

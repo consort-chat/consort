@@ -11,7 +11,12 @@
 # pass, because that is exactly what the failure looks like.
 set -euo pipefail
 
-manifest=${1:?usage: check-manifest.sh <path to latest.json>}
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+manifest=${1:?usage: check-manifest.sh <path to latest.json> [public key]}
+# The key every shipped binary checks against, which is the one in the config
+# the release was built from unless a caller says otherwise.
+pubkey=${2:-$(jq -r '.plugins.updater.pubkey // empty' "$root/app/src-tauri/tauri.conf.json")}
 
 failures=0
 fail() {
@@ -72,6 +77,22 @@ if [ -n "$signature" ]; then
   elif [ "$signed" != "$version" ] && [ "$signed" != "v$version" ]; then
     fail "the signature was made for '$signed', not for $version"
   fi
+fi
+
+# Which key signed it. minisign compares key ids before it does any crypto, so
+# a signature made by a key whose public half is not the one in the binary is
+# refused by every client after it has downloaded the installer.
+key_id() {
+  printf '%s' "$1" | base64 -d 2>/dev/null | sed -n 2p | base64 -d 2>/dev/null \
+    | od -An -tx1 -N10 | tr -d ' \n' | cut -c5-20 || :
+}
+
+ships_with=$(key_id "$pubkey")
+signed_by=$(key_id "$signature")
+if [ ${#ships_with} -ne 16 ]; then
+  fail "plugins.updater.pubkey is not a minisign public key, so no client can check this release"
+elif [ ${#signed_by} -eq 16 ] && [ "$signed_by" != "$ships_with" ]; then
+  fail "the signature was made by key $signed_by, and shipped binaries only trust $ships_with"
 fi
 
 # Optional to the plugin, but not optional here: it is rejected if it is present

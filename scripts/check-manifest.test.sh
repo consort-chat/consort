@@ -24,6 +24,7 @@ trap 'rm -rf "$work"' EXIT
 # is base64 of two algorithm bytes, an eight byte key id, and a payload; these
 # build that shape over filler, and no private half exists for any of them.
 KEY_ID=$'\x11\x22\x33\x44\x55\x66\x77\x88'
+ANOTHER_KEY_ID=$'\x99\xaa\xbb\xcc\xdd\xee\xff\x01'
 
 # A minisign file is four lines for a signature and two for a public key, each
 # base64 line carrying the bytes above. Built line by line because `base64 -w0`
@@ -32,10 +33,15 @@ lines() { printf '%s\n' "$@" | base64 -w0; }
 
 bytes() { printf "$@" | base64 -w0; }
 
-# <trusted comment>
+a_public_key() {
+  lines "untrusted comment: minisign public key FIXTURE" \
+    "$(bytes 'Ed%s%032d' "$KEY_ID" 0)"
+}
+
+# <trusted comment> [key id]
 a_signature() {
   lines "untrusted comment: signature from a fixture" \
-    "$(bytes 'ED%s%064d' "$KEY_ID" 0)" \
+    "$(bytes 'ED%s%064d' "${2:-$KEY_ID}" 0)" \
     "trusted comment: $1" \
     "$(bytes '%064d' 0)"
 }
@@ -62,16 +68,16 @@ a_manifest() {
 }
 
 passes() {
-  local manifest=$1 what=$2 output
-  if ! output=$("$gate" "$manifest" 2>&1); then
+  local manifest=$1 what=$2 pubkey=${3:-$(a_public_key)} output
+  if ! output=$("$gate" "$manifest" "$pubkey" 2>&1); then
     fail "$what was rejected: $output"
   fi
 }
 
-# <manifest> <what it is> <the words the complaint has to contain>
+# <manifest> <what it is> <the words the complaint has to contain> [public key]
 rejects() {
-  local manifest=$1 what=$2 expected=$3 output
-  if output=$("$gate" "$manifest" 2>&1); then
+  local manifest=$1 what=$2 expected=$3 pubkey=${4:-$(a_public_key)} output
+  if output=$("$gate" "$manifest" "$pubkey" 2>&1); then
     fail "$what was served: $output"
   elif ! printf '%s' "$output" | grep -qF "$expected"; then
     fail "$what was rejected for the wrong reason: $output"
@@ -114,6 +120,13 @@ rejects "$(a_manifest linux '.platforms."linux-x86_64" = .platforms."windows-x86
   "an entry offering a Linux update" "does not own"
 rejects "$(a_manifest no_windows '.platforms = {}')" \
   "a manifest with nothing for Windows" "there is no signature"
+
+echo "A signature made by a key no shipped binary trusts"
+rejects "$(a_manifest another_key \
+  ".platforms.\"windows-x86_64\".signature = \"$(a_signature "$SIGNED" "$ANOTHER_KEY_ID")\"")" \
+  "a release signed by the wrong key" "only trust"
+rejects "$(a_manifest unkeyed)" \
+  "a manifest checked against no public key" "not a minisign public key" PUBLIC_KEY_NOT_SET
 
 if [ "$failures" -ne 0 ]; then
   echo
