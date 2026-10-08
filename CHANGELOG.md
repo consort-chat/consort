@@ -4,6 +4,18 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.12.0 (2026-10-08)
+
+### Added
+
+- Ask for a received picture at the size it is drawn, and cap it (@tominal)
+
+### Fixed
+
+- Ask the SFU for the box a picture is drawn in, not a square (@tominal)
+- Ask for the window's box, not the size of the frame it sent back (@tominal)
+- Encode a remote picture outside the lock the call thread writes under (@tominal)
+
 ## 0.11.0 (2026-10-07)
 
 ### Added
