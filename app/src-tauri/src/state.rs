@@ -1024,16 +1024,16 @@ impl AppState {
     ///
     /// `None` when no camera is running, and in the moment between opening one
     /// and its first frame. The card draws its faces either way.
-    pub fn self_view(&self) -> Option<String> {
-        self.self_view.latest()
+    pub fn self_view(&self, bound: u32) -> Option<String> {
+        self.self_view.latest(bound)
     }
 
     /// The newest shared-screen frame as a data URL, for the card to draw.
     ///
     /// `None` when nothing is being shared, and in the moment between a
     /// capture starting and its first frame.
-    pub fn screen_view(&self) -> Option<String> {
-        self.screen_view.latest()
+    pub fn screen_view(&self, bound: u32) -> Option<String> {
+        self.screen_view.latest(bound)
     }
 
     /// The newest picture somebody else is sending, at the size asked for.
@@ -1894,6 +1894,9 @@ mod tests {
             }
 
             /// Hand one frame over the way a display would.
+            ///
+            /// A real desktop's shape, so a test can tell what size the card
+            /// was answered at rather than only that it was answered.
             fn capture(&self) {
                 if let Some(sink) = self
                     .sink
@@ -1901,12 +1904,13 @@ mod tests {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .as_mut()
                 {
+                    let (width, height) = (640usize, 360usize);
                     sink(consort_video::Picture {
-                        width: 2,
-                        height: 2,
-                        y: vec![120; 4],
-                        u: vec![128],
-                        v: vec![128],
+                        width: width as u32,
+                        height: height as u32,
+                        y: vec![120; width * height],
+                        u: vec![128; width.div_ceil(2) * height.div_ceil(2)],
+                        v: vec![128; width.div_ceil(2) * height.div_ceil(2)],
                         timestamp_us: 1,
                     });
                 }
@@ -2055,7 +2059,7 @@ mod tests {
         fn there_is_nothing_for_the_card_to_draw_before_a_share_starts() {
             let (_dir, state, _sink) = state();
 
-            assert_eq!(state.screen_view(), None);
+            assert_eq!(state.screen_view(320), None);
         }
 
         #[test]
@@ -2073,9 +2077,44 @@ mod tests {
             backend.capture();
 
             assert!(
-                state.screen_view().is_some(),
+                state.screen_view(320).is_some(),
                 "the card has nothing to draw"
             );
+        }
+
+        #[test]
+        fn the_card_is_answered_at_the_size_it_asked_for() {
+            // Issue #194. Our own share is drawn on the stage, which is up to
+            // the whole window, and the ask has to reach the slot or the stage
+            // gets a tile's worth of pixels blown up to fill it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+            backend.capture();
+
+            let tile = drawn_size(&state.screen_view(160).expect("nothing to draw"));
+            let stage = drawn_size(&state.screen_view(640).expect("nothing to draw"));
+
+            assert_eq!(tile, (160, 90));
+            assert_eq!(stage, (640, 360));
+        }
+
+        /// How many pixels across and down a `data:` URL actually holds.
+        fn drawn_size(url: &str) -> (u32, u32) {
+            use base64::Engine;
+
+            let base64 = url
+                .strip_prefix("data:image/jpeg;base64,")
+                .expect("not a JPEG data URL");
+            let jpeg = base64::engine::general_purpose::STANDARD
+                .decode(base64)
+                .expect("the URL holds base64");
+            let picture = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+                .expect("the URL holds a JPEG");
+
+            (picture.width(), picture.height())
         }
 
         #[test]
@@ -2091,8 +2130,12 @@ mod tests {
 
             backend.capture();
 
-            assert!(state.screen_view().is_some());
-            assert_eq!(state.self_view(), None, "the camera square took a screen");
+            assert!(state.screen_view(320).is_some());
+            assert_eq!(
+                state.self_view(320),
+                None,
+                "the camera square took a screen"
+            );
         }
 
         #[test]
@@ -2106,13 +2149,13 @@ mod tests {
             state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
             backend.capture();
             assert!(
-                state.screen_view().is_some(),
+                state.screen_view(320).is_some(),
                 "nothing was drawn to take down"
             );
 
             state.set_share(backing(&backend), None);
 
-            assert_eq!(state.screen_view(), None);
+            assert_eq!(state.screen_view(320), None);
         }
 
         #[test]
@@ -2379,7 +2422,7 @@ mod tests {
         fn there_is_nothing_for_the_card_to_draw_before_a_camera_is_on() {
             let (_dir, state, _sink) = state();
 
-            assert_eq!(state.self_view(), None);
+            assert_eq!(state.self_view(320), None);
         }
 
         #[test]
@@ -2402,7 +2445,10 @@ mod tests {
 
             backend.capture();
 
-            assert!(state.self_view().is_some(), "the card has nothing to draw");
+            assert!(
+                state.self_view(320).is_some(),
+                "the card has nothing to draw"
+            );
         }
 
         #[test]
@@ -2422,13 +2468,13 @@ mod tests {
             );
             backend.capture();
             assert!(
-                state.self_view().is_some(),
+                state.self_view(320).is_some(),
                 "nothing was drawn to take down"
             );
 
             state.set_camera(|| Box::new(Backend::default()), false);
 
-            assert_eq!(state.self_view(), None);
+            assert_eq!(state.self_view(320), None);
         }
 
         #[test]

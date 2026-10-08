@@ -7,6 +7,19 @@ const ALT: Record<Sending, string> = {
   screen: "Your screen",
 };
 
+interface Props {
+  /** This session's camera, or the screen it is sharing. */
+  of: Sending;
+  /**
+   * How many pixels to ask for on the long edge.
+   *
+   * The size of the box this is drawn into, which the call site knows and this
+   * does not. Our own share goes on the stage as well as in a square, and
+   * issue #194 was this being fixed where the frame was sampled.
+   */
+  bound: number;
+}
+
 /**
  * A still of what this session is sending, replaced on a timer.
  *
@@ -17,12 +30,12 @@ const ALT: Record<Sending, string> = {
  *
  * A still on a timer rather than a `<video>`: there is no stream for one to
  * play, because the device is open in Rust and V4L2 gives it to one process.
- * See `docs/adr/0007-draw-the-self-view-from-a-still.md`, and `0008` for the
- * second picture. Everybody else's is [`TheirPicture`], which is the same
- * still from a different source.
+ * See `docs/adr/0007-draw-the-self-view-from-a-still.md`, `0008` for the second
+ * picture, and `0014` for why the size travels with the ask. Everybody else's
+ * is [`TheirPicture`], which is the same still from a different source.
  */
-export function SelfPicture({ of }: { of: Sending }) {
-  const picture = usePicture(of);
+export function SelfPicture({ of, bound }: Props) {
+  const picture = usePicture(of, bound);
 
   if (picture === null) return null;
 
@@ -39,8 +52,8 @@ export function SelfPicture({ of }: { of: Sending }) {
       */
       alt={ALT[of]}
       /* Drawn at a known shape, so a frame arriving does not move anything. */
-      width={320}
-      height={320}
+      width={bound}
+      height={bound}
       draggable={false}
     />
   );
