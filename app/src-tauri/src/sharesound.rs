@@ -105,6 +105,8 @@ mod tests {
     struct Fake {
         opens: Arc<AtomicUsize>,
         refuses: bool,
+        /// Whether this backend claims it can capture at all.
+        unavailable: bool,
         /// What to push at the sink as soon as it is opened.
         sample: Option<i16>,
     }
@@ -117,7 +119,7 @@ mod tests {
 
     impl ShareSound for Fake {
         fn available(&self) -> bool {
-            true
+            !self.unavailable
         }
 
         fn open(
@@ -168,14 +170,32 @@ mod tests {
     }
 
     #[test]
-    fn a_build_that_cannot_capture_is_never_asked_to() {
-        // Reported rather than attempted. The refusal would be identical, but
-        // every share would log one.
+    fn a_build_that_cannot_capture_says_so_and_is_never_asked_to() {
+        // Reported rather than attempted. A backend that would answer the
+        // same way at the open is what pins the asking: otherwise every share
+        // on such a build opens a capture to be told no and logs it.
+        let (bridge, backend) = bridge(Fake {
+            unavailable: true,
+            ..Fake::default()
+        });
+
+        assert!(!bridge.available());
+        assert!(!bridge.start(true, Microphone::new()));
+        assert_eq!(
+            backend.opens(),
+            0,
+            "a build with no backend was asked anyway"
+        );
+        assert!(!bridge.capturing());
+    }
+
+    #[test]
+    fn the_real_absence_of_a_backend_is_the_same_answer() {
+        // `NoShareSound` is what every build but Windows holds.
         let bridge = ShareSoundBridge::new(Box::new(NoShareSound));
 
         assert!(!bridge.available());
         assert!(!bridge.start(true, Microphone::new()));
-        assert!(!bridge.capturing());
     }
 
     #[test]
