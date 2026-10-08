@@ -3288,6 +3288,66 @@ mod direct_messages {
         assert_eq!(room_id, THEIRS);
     }
 
+    const OURS: &str = "!ours:example.org";
+
+    #[tokio::test]
+    async fn a_room_this_account_is_already_in_beats_a_later_invite_from_them() {
+        // Issue #184's last sentence: a second room with the same person on
+        // purpose has to stay possible, so its invite must not be taken as an
+        // answer about the room they already talk in.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": [{
+                        "type": "m.direct",
+                        "content": { OTHER: [OURS] },
+                    }] },
+                    "rooms": {
+                        "join": { OURS: {
+                            "timeline": { "events": [], "limited": false },
+                        } },
+                        "invite": { THEIRS: { "invite_state": { "events": [
+                            {
+                                "type": "m.room.member",
+                                "state_key": OTHER,
+                                "sender": OTHER,
+                                "content": { "membership": "join" },
+                            },
+                            {
+                                "type": "m.room.member",
+                                "state_key": USER,
+                                "sender": OTHER,
+                                "content": { "membership": "invite", "is_direct": true },
+                            },
+                        ] } } },
+                    },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the room and the invite should sync");
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the room they already talk in");
+
+        assert_eq!(room_id, OURS);
+        let asked = server.server().received_requests().await.unwrap();
+        assert!(
+            !asked
+                .iter()
+                .any(|request| request.url.path().contains("/join")),
+            "the second room's invite should have been left alone"
+        );
+    }
+
     #[tokio::test]
     async fn an_invite_carrying_no_membership_of_ours_is_skipped_rather_than_fatal() {
         // A homeserver that sends an invite with nothing in its stripped state
