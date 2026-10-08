@@ -81,6 +81,11 @@ rejects() {
     fail "$what was served: $output"
   elif ! printf '%s' "$output" | grep -qF "$expected"; then
     fail "$what was rejected for the wrong reason: $output"
+  elif ! printf '%s' "$output" | grep -qF "Not serving it"; then
+    # Every check runs, and the gate says so at the end. A `set -e` death part
+    # way through is also a non-zero exit, and reads in a release log as the
+    # gate crashing rather than as the manifest being refused.
+    fail "$what stopped the gate before it finished: $output"
   fi
 }
 
@@ -102,6 +107,8 @@ rejects "$(a_manifest unsigned '.platforms."windows-x86_64".signature = ""')" \
   "no signature at all" "there is no signature"
 rejects "$(a_manifest not_a_sig ".platforms.\"windows-x86_64\".signature = \"$(printf 'not a signature' | base64 -w0)\"")" \
   "base64 of something that is not a .sig" "not the contents of a .sig"
+rejects "$(a_manifest not_base64 '.platforms."windows-x86_64".signature = "not base64 at all!"')" \
+  "a signature that is not even base64" "not the contents of a .sig"
 
 echo "A signature that does not vouch for this version"
 rejects "$(a_manifest no_signed_version \

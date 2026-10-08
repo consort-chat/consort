@@ -69,8 +69,10 @@ fi
 # catches app/package.json's floor slipping back below that: the symptom would
 # otherwise be every client refusing every update after the release went out.
 if [ -n "$signature" ]; then
+  # `|| :` because pipefail turns a signature that is not base64 into a
+  # `set -e` death here, which reads in a release log as the gate crashing.
   comment=$(printf '%s' "$signature" | base64 -d 2>/dev/null \
-    | sed -n 's/^trusted comment: //p')
+    | sed -n 's/^trusted comment: //p' || :)
   signed=$(printf '%s' "$comment" | tr '\t' '\n' | sed -n 's/^version://p')
   if [ -z "$signed" ]; then
     fail "the signature records no version, so requireSignedVersion refuses it; app/package.json needs @tauri-apps/cli 2.11.5 or newer"
