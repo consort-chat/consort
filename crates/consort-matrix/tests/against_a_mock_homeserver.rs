@@ -3166,6 +3166,284 @@ mod direct_messages {
         assert!(direct(&client, OTHER).await.is_err());
     }
 
+    const THEIRS: &str = "!theirs:example.org";
+
+    /// Put an invite to `room` from `sender` into the client's store.
+    ///
+    /// The envelope is written out rather than built, on the same terms as
+    /// `syncing` further down: `InvitedRoomBuilder` lives in a crate this one
+    /// cannot name.
+    async fn invited_by(
+        server: &MatrixMockServer,
+        client: &matrix_sdk::Client,
+        room: &str,
+        sender: &str,
+        is_direct: bool,
+    ) {
+        let mut ours = serde_json::json!({
+            "type": "m.room.member",
+            "state_key": USER,
+            "sender": sender,
+            "content": { "membership": "invite" },
+        });
+        if is_direct {
+            ours["content"]["is_direct"] = serde_json::json!(true);
+        }
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "rooms": { "invite": { room: { "invite_state": { "events": [
+                        {
+                            "type": "m.room.member",
+                            "state_key": sender,
+                            "sender": sender,
+                            "content": { "membership": "join" },
+                        },
+                        ours,
+                    ] } } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the invite should sync");
+    }
+
+    /// The account data endpoints the SDK writes `m.direct` through on a join.
+    async fn mount_m_direct(server: &MatrixMockServer) {
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path_regex(
+                r"^/_matrix/client/v3/user/.*/account_data/m\.direct$",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(server.server())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_invite_to_a_direct_room_is_taken_rather_than_answered_with_a_second_one() {
+        // Nothing mounts `createRoom`, so a second room would 404 and this
+        // would fail rather than pass for the wrong reason.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, true).await;
+        // `mock_once` rather than `ok`: the room ID alone would come back
+        // whether or not the invite was taken, and a room nobody joined is not
+        // one Consort can draw.
+        server
+            .mock_room_join(ruma::room_id!("!theirs:example.org"))
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+        // The SDK writes this account's `m.direct` as part of taking a direct
+        // invite, and reads the member list to know who to write it against.
+        server.mock_get_members().ok(vec![]).mount().await;
+        mount_m_direct(&server).await;
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the invite is the room");
+
+        assert_eq!(room_id, THEIRS);
+    }
+
+    #[tokio::test]
+    async fn a_room_this_account_is_already_in_with_them_is_answered_with_that_room() {
+        // The case the button is pressed in most often, and the one that costs
+        // no request at all. `createRoom` is unmounted, so a second room 404s.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": [{
+                        "type": "m.direct",
+                        "content": { OTHER: [THEIRS] },
+                    }] },
+                    "rooms": { "join": { THEIRS: {
+                        "timeline": { "events": [], "limited": false },
+                    } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the room should sync");
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the room is already there");
+
+        assert_eq!(room_id, THEIRS);
+    }
+
+    const OURS: &str = "!ours:example.org";
+
+    #[tokio::test]
+    async fn a_room_this_account_is_already_in_beats_a_later_invite_from_them() {
+        // Issue #184's last sentence: a second room with the same person on
+        // purpose has to stay possible, so its invite must not be taken as an
+        // answer about the room they already talk in.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": [{
+                        "type": "m.direct",
+                        "content": { OTHER: [OURS] },
+                    }] },
+                    "rooms": {
+                        "join": { OURS: {
+                            "timeline": { "events": [], "limited": false },
+                        } },
+                        "invite": { THEIRS: { "invite_state": { "events": [
+                            {
+                                "type": "m.room.member",
+                                "state_key": OTHER,
+                                "sender": OTHER,
+                                "content": { "membership": "join" },
+                            },
+                            {
+                                "type": "m.room.member",
+                                "state_key": USER,
+                                "sender": OTHER,
+                                "content": { "membership": "invite", "is_direct": true },
+                            },
+                        ] } } },
+                    },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the room and the invite should sync");
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the room they already talk in");
+
+        assert_eq!(room_id, OURS);
+        let asked = server.server().received_requests().await.unwrap();
+        assert!(
+            !asked
+                .iter()
+                .any(|request| request.url.path().contains("/join")),
+            "the second room's invite should have been left alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invite_carrying_no_membership_of_ours_is_skipped_rather_than_fatal() {
+        // A homeserver that sends an invite with nothing in its stripped state
+        // leaves nothing to read the sender or `is_direct` off. The button
+        // still has a room to make.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "rooms": { "invite": { THEIRS: {
+                        "invite_state": { "events": [] },
+                    } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the invite should sync");
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
+    #[tokio::test]
+    async fn an_invite_the_homeserver_will_not_let_us_take_is_an_error_not_a_second_room() {
+        // Neither `join` nor `createRoom` is mounted, so both 404. The point is
+        // which one is reported: falling through to a second room on a failed
+        // join would make the duplicate this fixes, silently, on a bad network.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, true).await;
+
+        assert!(direct(&client, OTHER).await.is_err());
+
+        let asked = server.server().received_requests().await.unwrap();
+        assert!(
+            !asked
+                .iter()
+                .any(|request| request.url.path().ends_with("/createRoom")),
+            "a failed join should not have made a room"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invite_from_somebody_else_is_not_a_room_with_this_person() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, "@cass:example.org", true).await;
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
+    #[tokio::test]
+    async fn an_invite_to_an_ordinary_room_is_not_a_room_with_this_person() {
+        // Same inviter, no `is_direct`. Being asked into somebody's project
+        // room is not having a direct message with them, and taking it as one
+        // would both answer the wrong room and accept an invite nobody
+        // accepted.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, false).await;
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
     #[tokio::test]
     async fn something_that_is_not_a_user_id_never_reaches_the_homeserver() {
         // Nothing is mounted here either, so a request would fail anyway. The
