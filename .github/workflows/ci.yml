@@ -166,10 +166,8 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # The updater is behind a feature that is off by default, because a .deb
-      # and an Arch package must not carry one. Only the Windows release job
-      # asks for it, so without these two steps nothing in CI ever compiles the
-      # code behind it. See docs/PLAN-self-update.md.
+      # Only the Windows release job asks for `self-update`, so without these
+      # two steps nothing in CI compiles it: docs/PLAN-self-update.md.
       - name: Clippy, with the updater compiled in
         run: cargo clippy -p consort-app --all-targets --features self-update -- -D warnings
 
@@ -416,9 +414,8 @@ jobs:
       - name: Node is the same version everywhere
         run: scripts/node-version.test.sh
 
-      # Same reasoning again, and the sharpest case of it: the update manifest
-      # gate runs in the release job and nowhere else, so a check of it that
-      # stopped checking would be found by the release that shipped a manifest
-      # every client refuses. This runs it against fixtures instead.
+      # Same reasoning, sharpest case: the manifest gate runs on a tag and
+      # nowhere else, so a gate that stopped checking would be found by the
+      # release it let through. This runs it against fixtures.
       - name: The update manifest gate still catches things
         run: scripts/check-manifest.test.sh

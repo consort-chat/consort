@@ -132,31 +132,21 @@ a hand-run test for exactly that in `crates/consort-video/tests/screens.rs`.
 
 ### Only the Windows build updates itself, and that is not a gap
 
-`tauri-plugin-updater` is behind a Cargo feature, `self-update`, off by default,
-and only `release.yml`'s Windows job turns it on. Do not widen it to Linux and do
-not "fix" the fact that a `.deb` draws no update bar.
+`tauri-plugin-updater` sits behind the `self-update` Cargo feature, off by
+default, and only `release.yml`'s Windows job turns it on. Do not widen it to
+Linux and do not "fix" a `.deb` drawing no update bar: the plugin would reach
+for `pkexec dpkg -i` on a package `apt` is tracking, which is what #47 exists to
+replace with a repository.
 
-The plugin does handle `.deb` and `.rpm`: `install_inner` dispatches on the
-bundle type and `install_deb` runs `pkexec dpkg -i`. Overwriting a package `apt`
-is tracking from inside a chat client is the thing #47 exists to replace with a
-repository. On Arch it is worse: `packaging/arch/PKGBUILD` builds with plain
-`cargo build`, never through `tauri-bundler`, so the bundle-type marker is never
-stamped, detection returns `None`, and the dispatch falls through to the AppImage
-arm on a binary that is not an AppImage. There is no AppImage on purpose either,
-for the reason `README.md` gives.
+Three things that will cost a release if they are undone:
+`bundle.createUpdaterArtifacts` stays out of `tauri.conf.json` and lives in
+`tauri.updater.conf.json`, or every local build demands a signing key;
+`requireSignedVersion` needs `@tauri-apps/cli` 2.11.5 or newer to have signed
+the artifact, which `app/package.json` floors and `scripts/check-manifest.sh`
+checks; and the manifest carries `windows-x86_64` and nothing else.
 
-Two more things worth not rediscovering. `bundle.createUpdaterArtifacts` is not
-in `tauri.conf.json` and must not be put there: it applies to every bundle, so it
-would make the `.deb` job and every local `pnpm tauri build` demand a signing key.
-It lives in `tauri.updater.conf.json`, passed with `--config` on the one command
-line that needs it. And `plugins.updater.requireSignedVersion` is on, which needs
-`@tauri-apps/cli` 2.11.5 or newer to have signed the artifact: 2.11.4 does not
-write `version:` into minisign's trusted comment, and a release signed by it is
-one every client refuses after downloading it. `app/package.json` carries the
-floor and `scripts/check-manifest.sh` catches it slipping.
-
-[docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the rest, including the
-signing keypair, which nobody but Thomas holds.
+[docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the rest, the Arch
+detail included, and the signing keypair, which nobody but Thomas holds.
 
 ### The matrix-sdk pin is load-bearing
 

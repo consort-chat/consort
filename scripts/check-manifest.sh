@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 # What the update manifest has to say for an installed Consort to read it.
 #
-# The manifest is the one thing in the update path with no compiler and no type
-# behind it. tauri-plugin-updater validates the whole file before it looks at
-# the version, so a field with the wrong name is not a degraded update, it is
-# every client reporting that the server answered with something unreadable.
-#
-# Run against the file about to be served, in the release run that built it.
-# Every assertion is positive: a manifest that is merely valid JSON is not a
-# pass, because that is exactly what the failure looks like.
+# The one thing in the update path with no compiler behind it, so every
+# assertion here is positive: valid JSON is not a pass, it is the failure.
+# Run against the file about to be served. docs/PLAN-self-update.md.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 manifest=${1:?usage: check-manifest.sh <path to latest.json> [public key]}
-# The key every shipped binary checks against, which is the one in the config
-# the release was built from unless a caller says otherwise.
+# The key every shipped binary checks against, unless a caller says otherwise.
 pubkey=${2:-$(jq -r '.plugins.updater.pubkey // empty' "$root/app/src-tauri/tauri.conf.json")}
 
 failures=0
@@ -31,8 +25,7 @@ fi
 
 read_field() { jq -r "$1 // empty" "$manifest"; }
 
-# The three the plugin requires. `platforms` keyed by `{os}-{arch}`, which is
-# what it looks itself up under; Windows is the only build that updates itself.
+# The three the plugin requires. `platforms` is keyed by `{os}-{arch}`.
 version=$(read_field '.version')
 url=$(read_field '.platforms."windows-x86_64".url')
 signature=$(read_field '.platforms."windows-x86_64".signature')
@@ -50,24 +43,18 @@ case "$url" in
     ;;
 esac
 
-# A `.sig` from the Tauri bundler is base64 of a minisign file, so it decodes
-# and it carries the untrusted comment minisign writes. An empty string here is
-# the shape this test exists for: the workflow would have substituted one
-# silently from a step that produced no signature.
+# A `.sig` is base64 of a minisign file, so it decodes and carries minisign's
+# untrusted comment. Empty is what a step that signed nothing substitutes.
 if [ -z "$signature" ]; then
   fail "there is no signature, so every client will refuse this update"
 elif ! printf '%s' "$signature" | base64 -d 2>/dev/null | grep -q 'untrusted comment'; then
   fail "the signature is not the contents of a .sig file the bundler wrote"
 fi
 
-# `requireSignedVersion` is on, so the version the artifact was signed for has
-# to be the version announced here, and a signature carrying no version at all
-# is refused outright. Both live in minisign's trusted comment, which the
-# signature itself covers, as tab separated `key:value` fields.
-#
-# The Tauri CLI only started writing `version:` in 2.11.5, so this is also what
-# catches app/package.json's floor slipping back below that: the symptom would
-# otherwise be every client refusing every update after the release went out.
+# `requireSignedVersion` is on, so the signed version has to be the announced
+# one, and no version at all is refused. Both live in minisign's trusted
+# comment as tab separated fields, written only by CLI 2.11.5 and newer, so
+# this is also what catches app/package.json's floor slipping.
 if [ -n "$signature" ]; then
   # `|| :` because pipefail turns a signature that is not base64 into a
   # `set -e` death here, which reads in a release log as the gate crashing.
@@ -81,9 +68,8 @@ if [ -n "$signature" ]; then
   fi
 fi
 
-# Which key signed it. minisign compares key ids before it does any crypto, so
-# a signature made by a key whose public half is not the one in the binary is
-# refused by every client after it has downloaded the installer.
+# Which key signed it. A signature made by the wrong key is refused by every
+# client, after it has downloaded the installer.
 key_id() {
   printf '%s' "$1" | base64 -d 2>/dev/null | sed -n 2p | base64 -d 2>/dev/null \
     | od -An -tx1 -N10 | tr -d ' \n' | cut -c5-20 || :
@@ -107,9 +93,8 @@ if [ -n "$pub_date" ]; then
   esac
 fi
 
-# Nothing for Linux, ever. A .deb and an Arch package belong to a package
-# manager, and an entry here is all it would take for the plugin to reach for
-# `pkexec dpkg -i` on one. See #47 and docs/PLAN-self-update.md.
+# Nothing for Linux, ever: an entry here is all it takes for the plugin to
+# reach for `pkexec dpkg -i` on a package apt is tracking. See #47.
 if [ "$(jq -r '[.platforms | keys[] | select(startswith("linux") or startswith("darwin"))] | length' "$manifest")" != 0 ]; then
   fail "this manifest offers an update to a platform whose packages Consort does not own"
 fi

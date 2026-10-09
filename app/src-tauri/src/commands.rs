@@ -76,8 +76,7 @@ impl CommandError {
     }
 }
 
-/// A refusal is already written for a person, and the detail says what it was
-/// about rather than repeating it.
+/// A refusal is already written for a person, so the detail does not repeat it.
 #[cfg(feature = "self-update")]
 impl From<crate::updating::Refusal> for CommandError {
     fn from(refusal: crate::updating::Refusal) -> Self {
@@ -85,8 +84,7 @@ impl From<crate::updating::Refusal> for CommandError {
     }
 }
 
-/// The plugin's own error text has already gone to the log by the time one of
-/// these is built, so the detail names the kind rather than carrying it twice.
+/// The plugin's error text is in the log by now, so the detail names the kind.
 #[cfg(feature = "self-update")]
 impl From<crate::updating::Trouble> for CommandError {
     fn from(trouble: crate::updating::Trouble) -> Self {
@@ -1774,8 +1772,7 @@ pub fn token_storage(state: State<'_, AppState>) -> TokenStorage {
 
 /// Whether this build updates itself.
 ///
-/// False for a .deb and for an Arch package, and the frontend draws no updater
-/// at all when it is. Those are a package manager's to update: see #47 and
+/// False for a .deb and for an Arch package, which draw no updater at all:
 /// docs/PLAN-self-update.md.
 #[tauri::command]
 pub fn updates_itself() -> bool {
@@ -1796,15 +1793,8 @@ pub async fn update_install(
 
 /// Refuse mid-call, download, refuse mid-call again, install.
 ///
-/// The second refusal is not a repetition. A download takes seconds, somebody
-/// can join a channel inside them, and the Windows installer exits Consort as
-/// soon as it is launched without going through the shutdown that leaves a call.
-/// So the question is asked again with the bytes already in hand, which is the
-/// last moment it can be asked at all.
-///
-/// Nothing that goes wrong from here leaves the channel describing it. A press
-/// gets its answer as this function's error; the channel goes back to the offer,
-/// which is still true and is what the next reload has to come back to.
+/// The second refusal is the one that matters: a call can start inside the
+/// seconds a download takes. See docs/PLAN-self-update.md#a-call-in-progress.
 #[cfg(feature = "self-update")]
 pub async fn update_install_for<R: tauri::Runtime>(
     state: &AppState,
@@ -2740,10 +2730,8 @@ mod tests {
 
     /// Updating Consort from inside Consort.
     ///
-    /// Only compiled for a build that carries an updater, which is the Windows
-    /// one. The plugin's own checking, verifying and installing is not ours to
-    /// test; what is ours is the refusal, and it is the one thing here that a
-    /// person's voice depends on.
+    /// The plugin's checking, verifying and installing is not ours to test.
+    /// The refusal is, and a person's voice depends on it.
     #[cfg(feature = "self-update")]
     mod updates {
         use super::*;
@@ -2766,8 +2754,8 @@ mod tests {
 
         /// A mock application with the updater pointed at `endpoint`.
         ///
-        /// The plugin reads `plugins.updater` out of the application config, so
-        /// a mock context has to be given one or registering it fails.
+        /// The plugin reads `plugins.updater` out of the config, so a mock
+        /// context has to be given one or registering it fails.
         fn app(endpoint: &str) -> tauri::App<tauri::test::MockRuntime> {
             let mut context = tauri::test::mock_context(tauri::test::noop_assets());
             context.config_mut().plugins.0.insert(
@@ -2786,10 +2774,8 @@ mod tests {
 
         /// The key this machine's build looks itself up under.
         ///
-        /// The shipped manifest carries `windows-x86_64` and nothing else, on
-        /// purpose. A test running on Linux has to write the key it will
-        /// actually be asked for, or every one of these would read as
-        /// "no update" for the wrong reason.
+        /// Written per platform, or a test on Linux reads as "no update" for
+        /// the wrong reason: the shipped manifest is Windows only.
         fn here() -> String {
             format!(
                 "{}-{}",
@@ -2844,8 +2830,7 @@ mod tests {
             );
         }
 
-        /// The one that matters. A call can start between the press and the
-        /// installer launching, so the answer is taken here rather than trusted
+        /// The one that matters: the answer is taken here rather than trusted
         /// from whatever the button looked like when it was drawn.
         #[tokio::test]
         async fn installing_during_a_call_is_refused_and_says_why() {
@@ -2877,9 +2862,8 @@ mod tests {
             );
         }
 
-        /// The manifest shape this repository publishes is the shape the plugin
-        /// reads. The thing most likely to be quietly wrong, so it is pinned
-        /// against a server rather than reasoned about.
+        /// The shape this repository publishes is the shape the plugin reads,
+        /// pinned against a server rather than reasoned about.
         #[tokio::test]
         async fn a_newer_release_in_the_manifest_is_offered() {
             let (server, endpoint) =
@@ -2944,9 +2928,7 @@ mod tests {
             );
         }
 
-        /// A manifest with no entry for this build. What a Linux build reaching
-        /// the shipped manifest would find, and what it has to do about it is
-        /// nothing.
+        /// What a Linux build reaching the shipped manifest finds.
         #[tokio::test]
         async fn a_manifest_with_no_entry_for_this_build_offers_nothing() {
             let body = serde_json::json!({
@@ -2970,8 +2952,7 @@ mod tests {
             );
         }
 
-        /// Nothing listening. A check that cannot reach the server is reported
-        /// and is never louder than that.
+        /// A check that cannot reach the server is reported, and no louder.
         #[tokio::test]
         async fn an_unreachable_endpoint_says_so() {
             // Port 1, which nothing binds. A wiremock dropped to make a dead

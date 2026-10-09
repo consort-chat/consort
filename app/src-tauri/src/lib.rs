@@ -27,8 +27,7 @@ mod state;
 mod testing;
 mod theirview;
 mod tray;
-// The policy half compiles in either configuration, so its tests run in both.
-// Nothing calls it without the feature, which is the point.
+// The policy half compiles either way, so its tests run both ways.
 #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
 mod updating;
 mod video;
@@ -172,8 +171,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init());
-    // The updater reads `plugins.updater` out of tauri.conf.json, so registering
-    // it without a `pubkey` there fails the build rather than running unsigned.
+    // Registering it with no `pubkey` in tauri.conf.json fails rather than
+    // running unsigned.
     #[cfg(feature = "self-update")]
     {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
@@ -253,8 +252,7 @@ pub fn run() {
             // no appindicator library. See the comment there.
             tray::install(app.handle());
 
-            // Only a build that carries an updater, which is the Windows one.
-            // A packaged build leaves the channel silent and the bar undrawn.
+            // Windows only. A packaged build leaves the channel silent.
             #[cfg(feature = "self-update")]
             updating::poll(app.handle().clone());
 

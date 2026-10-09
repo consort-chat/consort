@@ -14,10 +14,8 @@ import { UpdateBar } from "./UpdateBar";
 /**
  * Everything the update bar needs, and nothing above it has to know about.
  *
- * Mounted beside the three views rather than inside the signed-in shell,
- * because a newer Consort is worth offering on the sign-in screen too. It asks
- * first whether this build updates itself at all: a .deb and an Arch package do
- * not, and in those it subscribes to nothing and draws nothing.
+ * It asks first whether this build updates itself at all: a Linux package does
+ * not, and in one it subscribes to nothing and draws nothing.
  */
 export function UpdateNotice() {
   const [update, setUpdate] = useState<Update | null>(null);
@@ -35,9 +33,8 @@ export function UpdateNotice() {
         stops.push(
           await onUpdate((next) =>
             setUpdate((current) =>
-              // A six-hourly look that could not reach GitHub says nothing about
-              // whether a release exists. It still does, so the offer stands and
-              // the next look is the retry.
+              // A look that could not reach GitHub says nothing about whether
+              // a release exists, so an offer already made stands.
               next.state === "failed" && current?.state === "ready"
                 ? current
                 : next,
@@ -45,12 +42,11 @@ export function UpdateNotice() {
           ),
         );
         stops.push(await onCall((call) => setInACall(call.state !== "disconnected")));
-        // The poll starts with the process, so its first answer was published
-        // before this page ran a line. See CLAUDE.md on state channels.
+        // The poll starts with the process, so its first answer predates this
+        // page. See CLAUDE.md on state channels.
         await resendState();
       } catch (error: unknown) {
-        // Nothing to put in front of anybody: the bar simply stays undrawn,
-        // which is what a build with no updater looks like too.
+        // Nothing to put in front of anybody: the bar stays undrawn.
         console.error("the updater could not be reached", asCommandError(error));
       }
     })();
@@ -63,9 +59,8 @@ export function UpdateNotice() {
 
   const install = useCallback(() => {
     updateInstall().catch((error: unknown) => {
-      // Rust checks the call again once the bytes are down, so this is where a
-      // refusal lands even when the button looked pressable. Render what it
-      // said rather than a sentence of our own.
+      // Rust checks the call again once the bytes are down, so a refusal lands
+      // here even when the button looked pressable.
       setUpdate({ state: "failed", reason: asCommandError(error).message });
     });
   }, []);

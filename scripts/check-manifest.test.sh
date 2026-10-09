@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # What check-manifest.sh has to keep catching.
 #
-# Every assertion here names the problem it expects, because the gate's own
-# failure mode is passing a manifest for the wrong reason: a glob loosened by
-# one character, or a sed that stops matching, turns a check into a formality
-# and nothing says so. The gate runs only on a tag, so a formality is found by
-# the release it breaks.
+# Every assertion names the problem it expects: the gate's own failure mode is
+# passing for the wrong reason, and it runs only on a tag.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,15 +17,15 @@ fail() {
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# Nothing below is a key. A minisign .pub and .sig are text whose second line
-# is base64 of two algorithm bytes, an eight byte key id, and a payload; these
-# build that shape over filler, and no private half exists for any of them.
+# Nothing below is a key: a .pub and a .sig are text whose second line is
+# base64 of two algorithm bytes, an eight byte key id and a payload, and these
+# build that shape over filler.
 KEY_ID=$'\x11\x22\x33\x44\x55\x66\x77\x88'
 ANOTHER_KEY_ID=$'\x99\xaa\xbb\xcc\xdd\xee\xff\x01'
 
-# A minisign file is four lines for a signature and two for a public key, each
-# base64 line carrying the bytes above. Built line by line because `base64 -w0`
-# writes no trailing newline and a run-together line parses as neither.
+# Four lines for a signature, two for a public key. Line by line because
+# `base64 -w0` writes no trailing newline and a run-together line parses as
+# neither.
 lines() { printf '%s\n' "$@" | base64 -w0; }
 
 bytes() { printf "$@" | base64 -w0; }

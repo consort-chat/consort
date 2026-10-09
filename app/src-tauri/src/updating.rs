@@ -31,9 +31,8 @@ impl Refusal {
 
 /// Whether an install may start now.
 ///
-/// Asked twice: once where the button is drawn, and again inside the command,
-/// because a call can start in the seconds between a press and the installer
-/// launching and only the second answer is the one somebody's voice depends on.
+/// Asked twice, and the second answer is the one somebody's voice depends on:
+/// docs/PLAN-self-update.md#a-call-in-progress.
 pub fn may_install(in_a_call: bool) -> Result<(), Refusal> {
     if in_a_call {
         return Err(Refusal::InCall);
@@ -88,8 +87,7 @@ pub enum Update {
 
 /// How often to look, once the first look is out of the way.
 ///
-/// Six hours rather than minutes. A release is a weekly event here, and the
-/// only thing a tighter interval buys is load on somebody else's CDN.
+/// Six hours rather than minutes: a release here is a weekly event.
 #[cfg(feature = "self-update")]
 pub const EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
@@ -103,8 +101,8 @@ pub const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
 impl Trouble {
     /// Which kind of trouble one of the plugin's errors is.
     ///
-    /// The enum is `#[non_exhaustive]`, so the fallthrough is the plugin
-    /// growing a variant rather than a case being forgotten.
+    /// The enum is `#[non_exhaustive]`, so the fallthrough is it growing a
+    /// variant rather than a case being forgotten.
     pub fn of(error: &tauri_plugin_updater::Error) -> Self {
         use tauri_plugin_updater::Error as E;
         match error {
@@ -131,8 +129,8 @@ impl Trouble {
 
 /// Look for an update now and then, for as long as the application runs.
 ///
-/// Started in `setup` rather than with a session, because a newer Consort is
-/// worth knowing about on the sign-in screen too.
+/// Started in `setup` rather than with a session: a newer Consort is worth
+/// knowing about on the sign-in screen too.
 #[cfg(feature = "self-update")]
 pub fn poll<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     use tauri::Manager;
@@ -147,12 +145,10 @@ pub fn poll<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     });
 }
 
-/// Hand verified bytes to the installer, unless a call started while they were
-/// arriving.
+/// Hand verified bytes to the installer, unless a call started meanwhile.
 ///
-/// A closure rather than the bytes, because what it guards is unreachable from
-/// a test otherwise: getting here needs a signed artifact and the key that
-/// signed it, and neither belongs in one.
+/// A closure rather than the bytes, or the guard is untestable: getting here
+/// needs a signed artifact and the key that signed it.
 #[cfg(feature = "self-update")]
 pub fn put_in_place(
     in_a_call: bool,
@@ -221,9 +217,8 @@ mod tests {
             assert!(handed.get(), "the installer was never reached");
         }
 
-        /// A call that started while the bytes were arriving. The installer
-        /// exits Consort as soon as it is launched, so reaching it here would
-        /// cut somebody off mid-word.
+        /// The installer exits Consort as soon as it is launched, so reaching
+        /// it here would cut somebody off mid-word.
         #[test]
         fn a_call_that_started_during_the_download_stops_the_install() {
             let handed = Cell::new(false);
@@ -243,8 +238,7 @@ mod tests {
     }
 
     /// The whole mechanism keeping an updater out of a .deb and an Arch
-    /// package. CI runs this suite both ways, so this pins both directions: off
-    /// in a default build, on only where the Windows release job asked.
+    /// package. CI runs this suite both ways, so this pins both directions.
     #[test]
     fn only_a_build_that_asked_for_an_updater_has_one() {
         assert_eq!(UPDATES_ITSELF, cfg!(feature = "self-update"));

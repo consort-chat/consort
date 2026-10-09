@@ -178,15 +178,9 @@ export function App() {
     setView({ name: "signedOut" });
   }, []);
 
-  /*
-    The update bar sits above all three views rather than inside the signed-in
-    shell, for the reason Ctrl+Q is handled here: a newer Consort is worth
-    offering to somebody stuck on a login that will not go through, and a bar
-    that only appeared once you were signed in would be missing exactly then.
-
-    It draws nothing in a build that does not update itself, which is every
-    Linux package. See `UpdateNotice`.
-  */
+  // Above all three views, for the reason Ctrl+Q is handled here: a newer
+  // Consort is worth offering to somebody stuck on a login that will not go
+  // through. It draws nothing in a Linux package. See `UpdateNotice`.
   return (
     <>
       <UpdateNotice />

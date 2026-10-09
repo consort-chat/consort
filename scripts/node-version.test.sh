@@ -46,11 +46,8 @@ node_major=24
 # 2.9.x, so there is no newer major to go to. dtolnay/rust-toolchain runs no
 # Node at all and says `using: composite`.
 #
-# The three Pages actions are the second case worth looking twice at, for the
-# same reason upload-artifact is. Every example of a Pages deployment shows
-# configure-pages@v5 and deploy-pages@v4, and both of those still declare
-# node20: the migration is v6 and v5 respectively.
-# actions/upload-pages-artifact runs no Node either.
+# Every example of a Pages deployment shows configure-pages@v5 and
+# deploy-pages@v4, and both of those are still node20. v6 and v5 are not.
 floor_for() {
   case "$1" in
     actions/checkout)        echo 5 ;;

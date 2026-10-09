@@ -34,8 +34,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
-# Off by default, and that is the whole mechanism keeping an in-app updater out
-# of a packaged build. Only the Windows release job asks for it. See
+# Off by default, which is the whole mechanism keeping an updater out of a
+# packaged build. Only the Windows release job asks for it:
 # docs/PLAN-self-update.md.
 self-update = ["dep:tauri-plugin-updater"]
 
@@ -123,9 +123,8 @@ tracing-subscriber = { workspace = true }
 # See `src/notify.rs`.
 notify-rust = "4"
 
-# Behind `self-update`, so a .deb or an Arch package carries none of it. Those
-# are a package manager's to update, and the plugin would otherwise reach for
-# `pkexec dpkg -i` on one. #47 is the Linux update path.
+# Behind `self-update`: on a .deb it would reach for `pkexec dpkg -i`, and a
+# package apt is tracking is apt's. #47 is the Linux update path.
 tauri-plugin-updater = { version = "2", optional = true }
 
 [dev-dependencies]

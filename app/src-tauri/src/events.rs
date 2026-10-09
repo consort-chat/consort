@@ -180,9 +180,8 @@ pub enum AppEvent {
     Dropped(Vec<Chosen>),
     /// Whether a newer Consort exists, and what is happening about it.
     ///
-    /// Only a build carrying the `self-update` feature ever says anything here,
-    /// so a packaged one leaves the channel silent and the bar undrawn. See
-    /// [`crate::updating`].
+    /// Only a `self-update` build says anything here, so a packaged one leaves
+    /// the channel silent and the bar undrawn. See [`crate::updating`].
     #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
     Update(crate::updating::Update),
 }
@@ -321,10 +320,8 @@ impl AppEvent {
             // in that room typed again, which in a quiet room is never.
             | Self::Typing(_)
             | Self::Readers(_)
-            // State, the failure included: it is how the bar says "no update,
-            // and here is why", and the next poll supersedes it. A webview
-            // that reloaded while one was waiting has to come back still being
-            // offered it, because nothing else will mention it for six hours.
+            // State, the failure included: nothing else will mention a waiting
+            // release for six hours, so a reload has to come back to it.
             | Self::Update(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             // Open is state and shut is history, on the same terms as a
@@ -1225,10 +1222,8 @@ mod tests {
             assert!(!AppEvent::VerificationFlow(a_flow(FlowState::Done)).is_worth_keeping());
         }
 
-        /// Including the failure, which is how the bar says "no update, and
-        /// here is why". A webview that reloaded while one was waiting has to
-        /// come back still being offered it: nothing else will say so until the
-        /// next poll, which is hours away.
+        /// The failure included: it is how the bar says "no update, and here is
+        /// why", and a reload has to come back to a waiting release.
         #[test]
         fn an_update_is_always_worth_repeating() {
             for state in [

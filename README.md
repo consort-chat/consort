@@ -135,11 +135,10 @@ signature, not about anything the installer does, and the only way to tell
 those apart is to check the download against the SHA-256 GitHub prints beside
 the asset.
 
-This is the one build that updates itself. A bar appears across the top of the
-window when a newer release exists, naming the version, and nothing is
-downloaded or installed until it is pressed. It will not install during a voice
-call, because finishing means restarting Consort, and it says so rather than
-going grey. The installer is checked against a signature before anything is run.
+This is the one build that updates itself. A bar names the newer version across
+the top of the window, and nothing is downloaded or installed until it is
+pressed. It will not install during a call, because finishing means restarting
+Consort. The installer is checked against a signature before anything is run.
 [docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the mechanism.
 
 ### Arch Linux

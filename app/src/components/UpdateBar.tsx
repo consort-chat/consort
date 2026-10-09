@@ -4,9 +4,8 @@ import "./UpdateBar.css";
 /**
  * A newer Consort, offered in one line across the top of the window.
  *
- * Nothing is drawn unless there is something to offer, which is what a packaged
- * build and an up-to-date one have in common. A bar saying "no updates" is a
- * bar nobody needs and a .deb user would file a bug about.
+ * Nothing is drawn unless there is something to offer, which a packaged build
+ * and an up-to-date one have in common.
  */
 export function UpdateBar({
   update,
@@ -52,11 +51,8 @@ export function UpdateBar({
 }
 
 /**
- * The sentence for whatever is happening.
- *
- * The refusal is on the line rather than only in the disabled button, because a
- * grey control with no reason beside it is the thing that gets reported as
- * broken.
+ * The sentence for whatever is happening. The refusal is on the line and not
+ * only in the disabled button: a grey control gets reported as broken.
  */
 function line(update: Update, inACall: boolean): string {
   switch (update.state) {
@@ -74,8 +70,7 @@ function line(update: Update, inACall: boolean): string {
       return "Installing. Consort will restart.";
     case "failed":
       return update.reason;
-    // Not reachable: an up-to-date build draws nothing. Handled so that a new
-    // state added on the Rust side is a blank line rather than a crash.
+    // Not reachable: an up-to-date build draws nothing.
     case "upToDate":
       return "";
   }

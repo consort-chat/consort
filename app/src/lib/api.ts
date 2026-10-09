@@ -3032,11 +3032,8 @@ export function callSetShare(source: string | null): Promise<SelfScreen> {
 }
 
 /**
- * What is happening about a newer Consort.
- *
- * Mirrors `updating::Update`. Only a build that updates itself ever says
- * anything on this channel, so a packaged one leaves it silent and the bar is
- * never drawn. See `updatesItself`.
+ * What is happening about a newer Consort. Mirrors `updating::Update`. Only a
+ * build that updates itself ever says anything here. See `updatesItself`.
  */
 export type Update =
   | { state: "upToDate" }
@@ -3046,32 +3043,25 @@ export type Update =
   | { state: "failed"; reason: string };
 
 /**
- * Listen for changes to whether a newer Consort exists.
- *
- * Same contract as `onConnection`: the channel name matches `AppEvent::UPDATE`,
- * and the returned function stops listening.
+ * Listen for changes to whether a newer Consort exists. Same contract as
+ * `onConnection`: the returned function stops listening.
  */
 export function onUpdate(handler: (update: Update) => void): Promise<UnlistenFn> {
   return listen<Update>("update", (event) => handler(event.payload));
 }
 
 /**
- * Whether this build can update itself.
- *
- * False for a .deb and for an Arch package, which a package manager owns. The
- * interface draws no updater at all when it is false, rather than a dead
- * control somebody would file a bug about.
+ * Whether this build can update itself. False for a Linux package, and the
+ * interface then draws no updater at all rather than a dead control.
  */
 export function updatesItself(): Promise<boolean> {
   return invoke<boolean>("updates_itself");
 }
 
 /**
- * Download the waiting release and install it.
- *
- * Rejects with a sentence when a call is up, because installing restarts
- * Consort. Progress arrives on the `update` channel; on Windows a successful
- * install does not return, since the installer exits Consort to replace it.
+ * Download the waiting release and install it. Rejects with a sentence when a
+ * call is up. Progress arrives on the `update` channel, and a successful
+ * install does not return: the installer exits Consort to replace it.
  */
 export function updateInstall(): Promise<void> {
   return invoke<void>("update_install");

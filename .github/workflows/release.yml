@@ -82,8 +82,7 @@ permissions:
   contents: write
   # `gh run list`, for the CI gate below.
   actions: read
-  # The update manifest, which GitHub Pages serves. Why Pages and not the
-  # release page: docs/PLAN-self-update.md.
+  # The update manifest, which GitHub Pages serves: docs/PLAN-self-update.md.
   pages: write
   id-token: write
 
@@ -359,18 +358,9 @@ jobs:
       # Windows. The frontend is not built separately either, because
       # `beforeBuildCommand` is already `pnpm build`.
       #
-      # This is the only build in this repository that carries an updater, and
-      # the only one that signs anything. `--features self-update` compiles the
-      # plugin in; the config overlay asks the bundler for the artifacts, which
-      # for NSIS means the installer itself plus a detached signature beside it.
-      # Both are needed together: the overlay alone would sign an installer
-      # whose binary cannot check for an update, and the feature alone would
-      # check for one that nothing signed.
-      #
-      # Neither happens unless the signing key and the public key are both in
-      # place. Half a setup produces a plain installer and a warning naming the
-      # missing half, rather than a release that cannot be updated from and
-      # does not say so. docs/PLAN-self-update.md has what Thomas has to run.
+      # The only build here that carries an updater, and the only one that
+      # signs anything. Both halves of the keypair or neither:
+      # docs/PLAN-self-update.md.
       - name: Build the installer
         id: installer
         working-directory: app
@@ -398,8 +388,7 @@ jobs:
             --config src-tauri/tauri.updater.conf.json
           sig="../target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe.sig"
           test -s "$sig"
-          # The signature is one line of base64 and goes into the manifest the
-          # job below publishes. It is a signature, not a secret.
+          # A signature, not a secret. The manifest job below carries it.
           echo "signature=$(cat "$sig")" >> "$GITHUB_OUTPUT"
 
       - name: Attach it to the release
@@ -414,26 +403,14 @@ jobs:
           exe="target/release/bundle/nsis/Consort_${VERSION}_x64-setup.exe"
           test -f "$exe"
           gh release upload "$TAG" "$exe" --clobber
-          # The .sig too, so the artifact and what vouches for it are in the
-          # same place and anybody can check one against the other.
+          # The .sig beside it, so anybody can check one against the other.
           if [ "$UPDATING" = true ]; then
             gh release upload "$TAG" "${exe}.sig" --clobber
           fi
 
-  # The manifest the installed clients poll.
-  #
-  # On GitHub Pages rather than as a release asset, and that is not a style
-  # choice: `releases/latest/download/` resolves to the newest release that is
-  # not a prerelease, every 0.x release here is published `--prerelease`, and so
-  # that permalink 404s. Pages gives one URL that no release flag can move.
-  #
-  # The artifacts stay on the release page, where GitHub documents bandwidth as
-  # unmetered. What crosses Pages is under a kilobyte. docs/PLAN-self-update.md
-  # has the arithmetic.
-  #
-  # Nothing is published when the Windows job did not sign anything, because a
-  # manifest pointing at an unsigned installer is a manifest every client
-  # rejects after downloading it.
+  # The manifest the installed clients poll, on Pages because
+  # `releases/latest/download/` 404s for a prerelease. Nothing is published
+  # when nothing was signed. docs/PLAN-self-update.md.
   manifest:
     name: Update manifest
     runs-on: ubuntu-latest
@@ -447,10 +424,8 @@ jobs:
         with:
           ref: ${{ needs.release.outputs.tag }}
 
-      # `site/` is whatever this repository wants on the web, and the manifest
-      # is laid on top of it. A Pages deployment replaces the whole site, so
-      # building it this way is what keeps a future website and the update path
-      # from evicting each other.
+      # A Pages deployment replaces the whole site, so the manifest is laid on
+      # top of `site/` rather than published alone.
       - name: Build the site
         env:
           TAG: ${{ needs.release.outputs.tag }}
@@ -477,14 +452,12 @@ jobs:
              }' > public/updater/latest.json
           cat public/updater/latest.json
 
-      # The manifest is the thing clients trust to point at the right artifact,
-      # so it is checked for being the right shape before it is served rather
-      # than after somebody reports that updating stopped working.
+      # Checked before it is served, not after somebody reports that updating
+      # stopped working.
       - name: It is the manifest the plugin reads
         run: scripts/check-manifest.sh public/updater/latest.json
 
-      # v6 and v5, not the v5 and v4 most examples show: those still declare
-      # `using: node20`, which scripts/node-version.test.sh fails closed on.
+      # v6 and v5, not the v5 and v4 every example shows: those are still node20.
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

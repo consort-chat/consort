@@ -683,9 +683,8 @@ impl AppState {
 
     /// Publish what is happening about a newer Consort.
     ///
-    /// Narrow on purpose. The updater is the one thing here with no client, no
-    /// call and no room behind it, so it has nothing to hold in `AppState` and
-    /// needs only somewhere to say what it found.
+    /// Narrow on purpose: the updater holds nothing in `AppState` and needs
+    /// only somewhere to say what it found.
     #[cfg(feature = "self-update")]
     pub fn announce(&self, update: crate::updating::Update) {
         self.events.emit(AppEvent::Update(update));
@@ -693,9 +692,8 @@ impl AppState {
 
     /// Whether this session is in a voice call right now.
     ///
-    /// The room rather than the bridge, because the bridge outlives the call:
-    /// it is kept across channel switches so a mute survives one. Read by the
-    /// updater, which must not restart Consort out from under a call.
+    /// The room rather than the bridge, which outlives the call: it is kept
+    /// across channel switches so a mute survives one.
     #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
     pub fn in_a_call(&self) -> bool {
         self.locked_called().is_some()
