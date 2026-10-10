@@ -292,6 +292,8 @@ pub fn run() {
             commands::resend_state,
             commands::updates_itself,
             commands::update_install,
+            commands::update_check,
+            commands::app_version,
             commands::room_avatar,
             commands::member_avatar,
             commands::member_profile,

@@ -16,6 +16,9 @@ const appearanceSettings = vi.hoisted(() => vi.fn());
 const setAppearanceSettings = vi.hoisted(() => vi.fn());
 const cameras = vi.hoisted(() => vi.fn());
 const videoSettings = vi.hoisted(() => vi.fn());
+const appVersion = vi.hoisted(() => vi.fn());
+const updatesItself = vi.hoisted(() => vi.fn());
+const updateCheck = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -33,6 +36,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setAppearanceSettings,
   cameras,
   videoSettings,
+  appVersion,
+  updatesItself,
+  updateCheck,
 }));
 
 import { SettingsModal } from "./SettingsModal";
@@ -107,6 +113,9 @@ describe("SettingsModal", () => {
       sound: true,
     });
     setNotificationSettings.mockReset().mockResolvedValue(undefined);
+    appVersion.mockReset().mockResolvedValue("0.12.0");
+    updatesItself.mockReset().mockResolvedValue(true);
+    updateCheck.mockReset().mockResolvedValue({ state: "upToDate" });
   });
 
   it("is a modal dialog with a name", () => {
@@ -276,6 +285,41 @@ describe("SettingsModal", () => {
     await userEvent.click(screen.getByRole("button", { name: /voice/i }));
 
     expect(await screen.findByLabelText(/input device/i)).toBeVisible();
+  });
+
+  it("goes to About when asked", async () => {
+    open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^about$/i }));
+
+    expect(await screen.findByText(/consort 0\.12\.0/i)).toBeVisible();
+  });
+
+  it("lists every section it can show", () => {
+    // The nav is the only index of what settings has in it, so a pane added
+    // without a way to reach it is a pane nobody finds.
+    open();
+    const nav = screen.getByRole("navigation", { name: /settings sections/i });
+
+    expect(within(nav).getAllByRole("button")).toHaveLength(6);
+  });
+
+  it("keeps Tab inside itself while About is showing", async () => {
+    // About is the one pane whose own control can be the last focusable thing
+    // in the dialog, which is the end the trap has to handle.
+    open();
+    await userEvent.click(screen.getByRole("button", { name: /^about$/i }));
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: /check for updates/i }),
+      ).toBeVisible(),
+    );
+    within(dialog).getAllByRole("button").at(-1)?.focus();
+
+    await userEvent.tab();
+
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
   });
 
   it("does not open the microphone until Voice and Video is showing", async () => {

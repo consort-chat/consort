@@ -65,6 +65,14 @@ impl Trouble {
     }
 }
 
+/// What a build with no updater says if anything ever asks it to look.
+///
+/// Nothing does. The About section draws no control when [`UPDATES_ITSELF`] is
+/// false, which is the rule docs/PLAN-self-update.md sets out: not a disabled
+/// button and not an "updates unavailable" notice.
+#[cfg(not(feature = "self-update"))]
+pub const NO_UPDATER: &str = "This build of Consort does not update itself.";
+
 /// What the `update` channel carries.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "state")]
