@@ -31,6 +31,8 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 // settings file.
 const emojiSettings = vi.hoisted(() => vi.fn());
 const emojiUsed = vi.hoisted(() => vi.fn());
+// Read by `lib/chatEffects` before an effect is announced.
+const appearanceSettings = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onThread,
@@ -51,9 +53,11 @@ vi.mock("../lib/api", async (importOriginal) => ({
   pasteAttachment,
   threadAttachFile,
   threadAttachPasted,
+  appearanceSettings,
 }));
 
 import { ThreadPanel } from "./ThreadPanel";
+import { onEffect } from "../lib/chatEffects";
 import { fakeScrolling } from "../test/scrolling";
 import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
@@ -106,7 +110,14 @@ beforeEach(() => {
   timelineDelete.mockReset().mockResolvedValue(undefined);
   resendState.mockReset().mockResolvedValue(undefined);
   threadOpen.mockReset().mockResolvedValue(undefined);
-  threadSend.mockReset().mockResolvedValue(undefined);
+  // Null rather than undefined: what a send answers is the effect the line
+  // asked for, and an ordinary message asks for none.
+  threadSend.mockReset().mockResolvedValue(null);
+  appearanceSettings.mockReset().mockResolvedValue({
+    applicationScale: 1,
+    textScale: 1,
+    chatEffects: true,
+  });
   emojiSettings.mockReset().mockResolvedValue({
     recent: ["\u{1F44D}"],
     tone: 0,
@@ -644,6 +655,37 @@ describe("ThreadPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+  });
+
+  /*
+    A command typed in here resolves the same way it does in the room, and the
+    effect it asked for is announced rather than drawn: the overlay belongs to
+    the room pane, which is this panel's sibling rather than its parent.
+  */
+  it("announces the effect a command in a thread asked for", async () => {
+    threadSend.mockResolvedValue("confetti");
+    const drawn = vi.fn();
+    const stop = onEffect(drawn);
+    await opened();
+
+    await userEvent.type(screen.getByRole("textbox"), "/confetti well done");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(drawn).toHaveBeenCalledWith("confetti"));
+    stop();
+  });
+
+  it("announces nothing for an ordinary message", async () => {
+    const drawn = vi.fn();
+    const stop = onEffect(drawn);
+    await opened();
+
+    await userEvent.type(screen.getByRole("textbox"), "Consort");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    expect(drawn).not.toHaveBeenCalled();
+    stop();
   });
 
   it("offers the same emoji control the room's composer has", async () => {

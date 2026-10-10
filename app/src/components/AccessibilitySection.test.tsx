@@ -14,7 +14,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
 import { AccessibilitySection } from "./AccessibilitySection";
 import { zoomed } from "../lib/scale";
 
-const AS_DRAWN = { applicationScale: 1, textScale: 1 };
+const AS_DRAWN = { applicationScale: 1, textScale: 1, chatEffects: true };
 
 function application(): HTMLInputElement {
   return screen.getByRole("slider", { name: /application scale/i });
@@ -22,6 +22,10 @@ function application(): HTMLInputElement {
 
 function text(): HTMLInputElement {
   return screen.getByRole("slider", { name: /text size/i });
+}
+
+function effects(): HTMLInputElement {
+  return screen.getByRole("switch", { name: /confetti/i });
 }
 
 describe("AccessibilitySection", () => {
@@ -36,6 +40,7 @@ describe("AccessibilitySection", () => {
     appearanceSettings.mockResolvedValue({
       applicationScale: 1.3,
       textScale: 1.15,
+      chatEffects: true,
     });
     render(<AccessibilitySection />);
 
@@ -47,6 +52,7 @@ describe("AccessibilitySection", () => {
     appearanceSettings.mockResolvedValue({
       applicationScale: 1.3,
       textScale: 1.15,
+      chatEffects: true,
     });
     render(<AccessibilitySection />);
 
@@ -89,6 +95,7 @@ describe("AccessibilitySection", () => {
       expect(setAppearanceSettings).toHaveBeenCalledWith({
         applicationScale: 1.5,
         textScale: 1,
+        chatEffects: true,
       }),
     );
   });
@@ -103,6 +110,7 @@ describe("AccessibilitySection", () => {
       expect(setAppearanceSettings).toHaveBeenCalledWith({
         applicationScale: 1,
         textScale: 1.25,
+        chatEffects: true,
       }),
     );
   });
@@ -122,6 +130,7 @@ describe("AccessibilitySection", () => {
     expect(setAppearanceSettings).toHaveBeenCalledWith({
       applicationScale: 1.4,
       textScale: 1,
+      chatEffects: true,
     });
   });
 
@@ -153,6 +162,7 @@ describe("AccessibilitySection", () => {
       expect(setAppearanceSettings).toHaveBeenCalledWith({
         applicationScale: 1,
         textScale: 1.4,
+        chatEffects: true,
       }),
     );
   });
@@ -162,10 +172,7 @@ describe("AccessibilitySection", () => {
     // only the number that changed would quietly put the other back to 100%,
     // and the symptom is somebody losing their text size every time they touch
     // the scale above it.
-    appearanceSettings.mockResolvedValue({
-      applicationScale: 1,
-      textScale: 1.3,
-    });
+    appearanceSettings.mockResolvedValue({ ...AS_DRAWN, textScale: 1.3 });
     render(<AccessibilitySection />);
     await waitFor(() => expect(text()).toHaveValue("130"));
 
@@ -175,15 +182,13 @@ describe("AccessibilitySection", () => {
       expect(setAppearanceSettings).toHaveBeenCalledWith({
         applicationScale: 1.5,
         textScale: 1.3,
+        chatEffects: true,
       }),
     );
   });
 
   it("keeps a chosen application scale when the text slider moves", async () => {
-    appearanceSettings.mockResolvedValue({
-      applicationScale: 1.6,
-      textScale: 1,
-    });
+    appearanceSettings.mockResolvedValue({ ...AS_DRAWN, applicationScale: 1.6 });
     render(<AccessibilitySection />);
     await waitFor(() => expect(application()).toHaveValue("160"));
 
@@ -193,6 +198,7 @@ describe("AccessibilitySection", () => {
       expect(setAppearanceSettings).toHaveBeenCalledWith({
         applicationScale: 1.6,
         textScale: 1.2,
+        chatEffects: true,
       }),
     );
   });
@@ -210,6 +216,7 @@ describe("AccessibilitySection", () => {
     expect(setAppearanceSettings).toHaveBeenCalledWith({
       applicationScale: 1.7,
       textScale: 1,
+      chatEffects: true,
     });
   });
 
@@ -294,5 +301,49 @@ describe("AccessibilitySection", () => {
     await screen.findByText("Could not save your settings.");
 
     expect(application()).toHaveValue("150");
+  });
+
+  it("draws the chat effects switch on, which is where it starts", async () => {
+    render(<AccessibilitySection />);
+
+    await waitFor(() => expect(effects()).toBeChecked());
+  });
+
+  it("draws it off for somebody who turned it off", async () => {
+    appearanceSettings.mockResolvedValue({ ...AS_DRAWN, chatEffects: false });
+    render(<AccessibilitySection />);
+
+    await waitFor(() => expect(effects()).not.toBeChecked());
+  });
+
+  it("saves the switch, leaving both sizes alone", async () => {
+    render(<AccessibilitySection />);
+    await waitFor(() => expect(effects()).toBeChecked());
+
+    fireEvent.click(effects());
+
+    expect(effects()).not.toBeChecked();
+    await waitFor(() =>
+      expect(setAppearanceSettings).toHaveBeenCalledWith({
+        applicationScale: 1,
+        textScale: 1,
+        chatEffects: false,
+      }),
+    );
+  });
+
+  it("says so when the switch cannot be saved", async () => {
+    setAppearanceSettings.mockRejectedValue({
+      message: "Could not save your settings.",
+      detail: "read-only",
+    });
+    render(<AccessibilitySection />);
+    await waitFor(() => expect(effects()).toBeChecked());
+
+    fireEvent.click(effects());
+
+    expect(
+      await screen.findByText("Could not save your settings."),
+    ).toBeVisible();
   });
 });

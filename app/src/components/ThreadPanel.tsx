@@ -27,6 +27,7 @@ import {
   type Participant,
   type Thread,
 } from "../lib/api";
+import { playEffect } from "../lib/chatEffects";
 import { useRoomLinks } from "../lib/roomLinks";
 import { clampTo, type Bounds } from "../lib/useColumnResize";
 import { ColumnGrip } from "./ColumnGrip";
@@ -590,12 +591,16 @@ export function ThreadPanel({
         // thread relation of its own and is folded onto whatever it names.
         await timelineEdit(thread.roomId, editing.id, draft);
       } else {
-        await threadSend(
-          thread.roomId,
-          thread.rootId,
-          answering?.id ?? latest,
-          answering?.sender ?? null,
-          draft,
+        // The effect a slash command asked for, announced rather than drawn:
+        // the overlay belongs to the room pane, which is this panel's sibling.
+        await playEffect(
+          await threadSend(
+            thread.roomId,
+            thread.rootId,
+            answering?.id ?? latest,
+            answering?.sender ?? null,
+            draft,
+          ),
         );
       }
       // Cleared only once the homeserver has it. A box that empties on a send

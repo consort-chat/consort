@@ -1,0 +1,79 @@
+/*
+  Glyphs crossing the room, over everything and reachable by nothing.
+
+  Only `transform` and `opacity` move, so the whole of it stays on the
+  compositor however many are on screen at once.
+*/
+.effect {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.effect__glyph {
+  position: absolute;
+  top: 0;
+  font-size: var(--text-lg);
+  line-height: 1;
+  will-change: transform, opacity;
+  animation-name: effect-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+.effect[data-drift="rise"] .effect__glyph {
+  top: auto;
+  bottom: 0;
+  animation-name: effect-rise;
+}
+
+@keyframes effect-fall {
+  from {
+    opacity: 0;
+    transform: translateY(-10%) rotate(0deg);
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(110vh) rotate(220deg);
+  }
+}
+
+@keyframes effect-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10%) rotate(0deg);
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-110vh) rotate(-140deg);
+  }
+}
+
+/*
+  The second half of the rule `ChatEffect` enforces in JavaScript, which is
+  where the real decision is: an effect nobody wants is not drawn at all. This
+  is what catches a future change that draws it anyway.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .effect {
+    display: none;
+  }
+
+  .effect__glyph {
+    animation-name: none;
+  }
+}

@@ -30,6 +30,7 @@ use serde::Deserialize;
 
 use matrix_sdk::ruma::events::receipt::ReceiptType;
 
+use crate::slash;
 use crate::timeline::dto::{
     Media, Message, MessageKind, SenderTrust, SystemChange, SystemMessage, ThreadSummary,
 };
@@ -448,6 +449,10 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         _ => {}
     }
 
+    // Before the match, because the match consumes it: an effect's type is one
+    // ruma has no variant for, so it is the string that names it.
+    let asked_for = slash::effect_of(said.content.msgtype.msgtype());
+
     // All three text types carry a `formatted_body`, and reading it for one of
     // them is how a bot's links arrive as literal angle brackets.
     let (kind, body, formatted, media) = match said.content.msgtype {
@@ -527,12 +532,34 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
                 media,
             )
         }
-        _ => (
-            MessageKind::Unsupported,
-            NOT_SUPPORTED.to_owned(),
-            None,
-            None,
-        ),
+        other => {
+            /*
+              An effect's body is an ordinary sentence, which is the whole
+              reason these are safe to send into a mixed room: a client that
+              has never heard of `nic.custom.confetti` draws the words and
+              plays nothing. Drawn as text here for the same reason, with the
+              animation carried separately.
+            */
+            if asked_for.is_some() {
+                (MessageKind::Text, other.body().to_owned(), None, None)
+            } else {
+                (
+                    MessageKind::Unsupported,
+                    NOT_SUPPORTED.to_owned(),
+                    None,
+                    None,
+                )
+            }
+        }
+    };
+
+    // Only for a reply: the plaintext fallback and an ordinary markdown quote
+    // are the same characters, so stripping unconditionally would eat the
+    // first paragraph of anybody quoting somebody.
+    let body = if reply_to.is_some() {
+        remove_plain_reply_fallback(&body).to_owned()
+    } else {
+        body
     };
 
     Some(Message {
@@ -544,14 +571,11 @@ fn read(event: &TimelineEvent, reading: Reading) -> Option<Message> {
         // of the annotations and the corrections the watcher is holding.
         reactions: Vec::new(),
         edited: false,
-        // Only for a reply: the plaintext fallback and an ordinary markdown
-        // quote are the same characters, so stripping unconditionally would
-        // eat the first paragraph of anybody quoting somebody.
-        body: if reply_to.is_some() {
-            remove_plain_reply_fallback(&body).to_owned()
-        } else {
-            body
-        },
+        // The words asking for an effect, when the msgtype did not: Element
+        // plays one on any message merely containing the emoji, and matching
+        // that is what makes 🎉 mean the same thing in both clients.
+        effect: asked_for.or_else(|| slash::effect_in(&body)),
+        body,
         // `format` is an open string, and anything other than the one the
         // specification defines is somebody's extension that this build has no
         // way to read. The plaintext fallback is what it is for.
@@ -746,6 +770,8 @@ fn undecryptable(event: &TimelineEvent) -> Option<Message> {
         // this draws already says the session has no key for it.
         sender_trust: None,
         kind: MessageKind::Undecryptable,
+        // Nothing to read it out of: the content is ciphertext.
+        effect: None,
     })
 }
 
@@ -800,12 +826,15 @@ fn deleted(
             .ok()
             .flatten(),
         kind: MessageKind::Deleted,
+        // The content is gone, so there is nothing left asking for anything.
+        effect: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slash::Effect;
     use matrix_sdk::deserialized_responses::{
         AlgorithmInfo, EncryptionInfo, UnableToDecryptInfo, VerificationLevel, VerificationState,
     };
@@ -1225,6 +1254,69 @@ mod tests {
         assert_eq!(said.kind, MessageKind::Unsupported);
         assert_eq!(said.media, None);
         assert!(!said.body.is_empty());
+    }
+
+    #[test]
+    fn an_effect_arrives_as_an_ordinary_message_that_also_asks_for_an_animation() {
+        // The whole reason these are safe to send into a mixed room: the body
+        // is a sentence, so a client that has never heard of the type draws
+        // the words. This one draws them too and plays the animation beside.
+        let said = message(&sent(json!({
+            "msgtype": "nic.custom.confetti",
+            "body": "well done everybody",
+        })))
+        .expect("an effect is a message");
+
+        assert_eq!(said.kind, MessageKind::Text);
+        assert_eq!(said.body, "well done everybody");
+        assert_eq!(said.effect, Some(Effect::Confetti));
+    }
+
+    #[test]
+    fn the_space_invaders_msgtype_is_read_as_upstream_writes_it() {
+        // Plural and underscored, unlike the other five. Read off the wire
+        // here as well as written to it, so a message Element sent plays.
+        let said = message(&sent(json!({
+            "msgtype": "io.element.effects.space_invaders",
+            "body": "look up",
+        })))
+        .expect("an effect is a message");
+
+        assert_eq!(said.effect, Some(Effect::SpaceInvaders));
+        assert_eq!(said.kind, MessageKind::Text);
+    }
+
+    #[test]
+    fn a_message_merely_containing_the_emoji_asks_for_the_animation_too() {
+        // Element's rule, and the reason a room bursts into confetti when
+        // somebody types the emoji without knowing why.
+        let said =
+            message(&sent(text("congratulations \u{1F389}"))).expect("a text message is a message");
+
+        assert_eq!(said.effect, Some(Effect::Confetti));
+        assert_eq!(said.kind, MessageKind::Text);
+    }
+
+    #[test]
+    fn an_ordinary_message_asks_for_nothing() {
+        assert_eq!(
+            message(&sent(text("congratulations"))).and_then(|said| said.effect),
+            None
+        );
+    }
+
+    #[test]
+    fn a_message_type_with_no_effect_behind_it_is_still_the_line_that_says_so() {
+        // The guard that keeps the arm above from swallowing every custom
+        // type: a location has no effect, so it is still undrawable.
+        let said = message(&sent(json!({
+            "msgtype": "org.example.whatever",
+            "body": "something else",
+        })))
+        .expect("an unknown type is still something to draw");
+
+        assert_eq!(said.kind, MessageKind::Unsupported);
+        assert_eq!(said.effect, None);
     }
 
     #[test]
