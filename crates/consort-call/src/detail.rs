@@ -5,9 +5,12 @@
 //!
 //! Two things meet here. The box a picture is drawn into, which only the
 //! window knows, and a ceiling somebody chose for one person, which only they
-//! know. What is asked for is the box, brought under the ceiling.
+//! know. A camera is asked for at the box under the ceiling; a share is asked
+//! for at its best until somebody caps it, because the rung below its best is
+//! three frames a second:
+//! `docs/adr/0016-only-a-person-may-ask-a-share-for-less.md`.
 //!
-//! A box and not a single number, because an SFU picks a layer by the height
+//! A box and not a single number, because an SFU picks a rung by the height
 //! it is asked for: see `docs/adr/0015-ask-for-the-box-not-a-square.md`.
 //!
 //! The units are pixels rather than a layer name, and the ceilings a named
@@ -16,6 +19,7 @@
 
 use std::collections::BTreeMap;
 
+use matrix_rtc_media::{Dimensions, QualityLimit, VideoDetail};
 use serde::{Deserialize, Serialize};
 
 use crate::watching::Kind;
@@ -39,12 +43,12 @@ pub enum Cap {
 impl Cap {
     /// The most pixels this choice allows on the long edge.
     ///
-    /// `None` for [`Cap::Auto`], which caps nothing. The numbers are
-    /// ADR-0013's table.
+    /// `None` is a choice that caps nothing, which is both [`Cap::Auto`] and
+    /// [`Cap::High`]: a ceiling of ADR-0013's 1920 picks the lower rung of
+    /// anything published above 1080p. The rest are ADR-0013's table.
     pub fn ceiling(self) -> Option<u32> {
         match self {
-            Self::Auto => None,
-            Self::High => Some(1920),
+            Self::Auto | Self::High => None,
             Self::Medium => Some(1280),
             Self::Low => Some(640),
         }
@@ -73,10 +77,18 @@ impl Asked {
     /// A box already inside `bound` is returned as it is, so a cap above what
     /// is drawn asks for no more than was being drawn.
     fn under(self, bound: u32) -> Self {
-        let long = self.bound();
-        if long <= bound {
+        if self.bound() <= bound {
             return self;
         }
+        self.at(bound)
+    }
+
+    /// This box's shape with its long edge at `bound`, grown or shrunk.
+    ///
+    /// What a cap on a share asks for, which is a choice about the stream
+    /// rather than about the card it is floating in: ADR-0016.
+    fn at(self, bound: u32) -> Self {
+        let long = self.bound();
         // Never zero: an SFU reads a zero as no hint at all, which is the
         // opposite of the cap somebody asked for.
         let scaled = |side: u32| {
@@ -87,6 +99,34 @@ impl Asked {
         Self {
             width: scaled(self.width),
             height: scaled(self.height),
+        }
+    }
+}
+
+/// What to ask the SFU for.
+///
+/// Two answers rather than one box, because the best a publisher has is not a
+/// number this side can name: see [`Wanted::asked`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Ask {
+    /// Whatever the publisher is sending at its best.
+    Best,
+    /// A box of pixels, answered with the smallest rung that covers it.
+    Size(Asked),
+}
+
+impl Ask {
+    /// What to tell the SFU.
+    ///
+    /// `Quality` and not `Auto` for the best there is: the transport sends
+    /// nothing at all for `Auto`, so a size already sent would stand.
+    pub fn detail(self) -> VideoDetail {
+        match self {
+            Self::Best => VideoDetail::Quality(QualityLimit::High),
+            Self::Size(size) => VideoDetail::Dimensions(Dimensions {
+                width: size.width,
+                height: size.height,
+            }),
         }
     }
 }
@@ -124,12 +164,14 @@ impl Wanted {
         self.caps.insert(user_id.to_owned(), cap) != Some(cap)
     }
 
-    /// The box of pixels to ask the SFU for.
+    /// What to ask the SFU for, per [`Ask`].
     ///
     /// `None` for a picture nothing has drawn yet, which is the only honest
-    /// answer: `Dimensions` is the size of a box, so a caller with no box has
-    /// nothing to send.
-    pub fn asked(&self, user_id: &str, kind: Kind) -> Option<Asked> {
+    /// answer: there is no shape to ask at and nothing on screen to answer.
+    ///
+    /// The box decides a camera and does not decide a share, because the rung
+    /// below a share's best is three frames a second: ADR-0016.
+    pub fn asked(&self, user_id: &str, kind: Kind) -> Option<Ask> {
         let drawn = *self.drawn.get(&(user_id.to_owned(), kind))?;
         let ceiling = self
             .caps
@@ -138,7 +180,10 @@ impl Wanted {
             .unwrap_or_default()
             .ceiling();
 
-        Some(ceiling.map_or(drawn, |ceiling| drawn.under(ceiling)))
+        Some(match kind {
+            Kind::Camera => Ask::Size(ceiling.map_or(drawn, |ceiling| drawn.under(ceiling))),
+            Kind::Screen => ceiling.map_or(Ask::Best, |ceiling| Ask::Size(drawn.at(ceiling))),
+        })
     }
 }
 
@@ -170,24 +215,70 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_is_asked_for_at_the_shape_it_is_drawn() {
+    fn a_camera_is_asked_for_at_the_shape_it_is_drawn() {
         // A square asks the SFU for a picture as tall as the box is wide, and
-        // an SFU picks a layer by height, so a square asks for a taller layer
+        // an SFU picks a rung by height, so a square asks for a taller rung
         // than anything draws. ADR-0015.
         let mut wanted = Wanted::default();
-        wanted.drawn_at(ALICE, Kind::Screen, wide(480));
+        wanted.drawn_at(ALICE, Kind::Camera, wide(480));
 
-        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(wide(480)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(480)))
+        );
     }
 
     #[test]
-    fn an_uncapped_picture_is_asked_for_at_the_size_it_is_drawn() {
-        // Phase 1 of the plan: a 1080p share pulled in full to fill a 320
-        // pixel square is paid for and thrown away.
+    fn an_uncapped_camera_is_asked_for_at_the_size_it_is_drawn() {
+        // A 720p camera pulled in full to fill a 320 pixel square is paid for
+        // and thrown away, and every rung of a camera's ladder carries more
+        // frames a second than the card redraws at.
         let mut wanted = Wanted::default();
-        wanted.drawn_at(ALICE, Kind::Screen, wide(320));
+        wanted.drawn_at(ALICE, Kind::Camera, wide(320));
 
-        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(wide(320)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(320)))
+        );
+    }
+
+    #[test]
+    fn an_uncapped_share_is_asked_for_at_its_best() {
+        // #195. The box a share floats in is smaller than half of what is
+        // published, so a box asking for itself picks the rung below the best
+        // and that rung is three frames a second. ADR-0016.
+        let mut wanted = Wanted::default();
+        wanted.drawn_at(ALICE, Kind::Screen, wide(960));
+
+        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(Ask::Best));
+    }
+
+    #[test]
+    fn a_share_capped_high_is_asked_for_at_its_best() {
+        // The most a person can choose is the most there is, whatever it is.
+        // A ceiling of 1920 would pick the lower rung of a 4K share.
+        let mut wanted = Wanted::default();
+        wanted.drawn_at(ALICE, Kind::Screen, wide(480));
+        wanted.cap(ALICE, Cap::High);
+
+        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(Ask::Best));
+    }
+
+    #[test]
+    fn a_capped_share_is_asked_for_at_the_cap_and_not_at_the_box() {
+        // A cap is a choice about the stream, so it asks for the same thing
+        // wherever the card is floating.
+        let mut wanted = Wanted::default();
+        wanted.drawn_at(ALICE, Kind::Screen, wide(480));
+        wanted.cap(ALICE, Cap::Low);
+
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Screen),
+            Some(Ask::Size(Asked {
+                width: 640,
+                height: 360
+            }))
+        );
     }
 
     #[test]
@@ -201,10 +292,10 @@ mod tests {
 
         assert_eq!(
             wanted.asked(ALICE, Kind::Screen),
-            Some(Asked {
+            Some(Ask::Size(Asked {
                 width: 640,
                 height: 360
-            })
+            }))
         );
     }
 
@@ -225,10 +316,10 @@ mod tests {
 
         assert_eq!(
             wanted.asked(ALICE, Kind::Camera),
-            Some(Asked {
+            Some(Ask::Size(Asked {
                 width: 360,
                 height: 640
-            })
+            }))
         );
     }
 
@@ -240,7 +331,10 @@ mod tests {
         wanted.drawn_at(ALICE, Kind::Camera, wide(320));
         wanted.cap(ALICE, Cap::High);
 
-        assert_eq!(wanted.asked(ALICE, Kind::Camera), Some(wide(320)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(320)))
+        );
     }
 
     #[test]
@@ -251,13 +345,16 @@ mod tests {
         wanted.drawn_at(ALICE, Kind::Screen, wide(1920));
         wanted.cap(ALICE, Cap::Medium);
 
-        assert_eq!(wanted.asked(ALICE, Kind::Camera), Some(wide(960)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(960)))
+        );
         assert_eq!(
             wanted.asked(ALICE, Kind::Screen),
-            Some(Asked {
+            Some(Ask::Size(Asked {
                 width: 1280,
                 height: 720
-            })
+            }))
         );
     }
 
@@ -268,7 +365,7 @@ mod tests {
         wanted.drawn_at(BOB, Kind::Screen, wide(1920));
         wanted.cap(ALICE, Cap::Low);
 
-        assert_eq!(wanted.asked(BOB, Kind::Screen), Some(wide(1920)));
+        assert_eq!(wanted.asked(BOB, Kind::Screen), Some(Ask::Best));
     }
 
     #[test]
@@ -278,9 +375,19 @@ mod tests {
         let mut wanted = Wanted::default();
         wanted.drawn_at(ALICE, Kind::Camera, wide(320));
         wanted.drawn_at(ALICE, Kind::Screen, wide(1920));
+        wanted.cap(ALICE, Cap::Medium);
 
-        assert_eq!(wanted.asked(ALICE, Kind::Camera), Some(wide(320)));
-        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(wide(1920)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(320)))
+        );
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Screen),
+            Some(Ask::Size(Asked {
+                width: 1280,
+                height: 720
+            }))
+        );
     }
 
     #[test]
@@ -361,19 +468,21 @@ mod tests {
         );
         wanted.cap(ALICE, Cap::Low);
 
-        let asked = wanted.asked(ALICE, Kind::Screen).expect("a box");
+        let Some(Ask::Size(asked)) = wanted.asked(ALICE, Kind::Screen) else {
+            unreachable!("a capped share is asked for at a size")
+        };
         assert_eq!(asked.width, 640);
         assert!(asked.height >= 1, "asked for {asked:?}");
     }
 
     #[test]
-    fn clearing_a_cap_goes_back_to_the_drawn_size() {
+    fn clearing_a_cap_goes_back_to_the_best_there_is() {
         let mut wanted = Wanted::default();
         wanted.drawn_at(ALICE, Kind::Screen, wide(1920));
         wanted.cap(ALICE, Cap::Low);
         wanted.cap(ALICE, Cap::Auto);
 
-        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(wide(1920)));
+        assert_eq!(wanted.asked(ALICE, Kind::Screen), Some(Ask::Best));
     }
 
     #[test]
@@ -381,9 +490,32 @@ mod tests {
         // The numbers the control promises. Changing one is changing what
         // somebody who picked "low" gets, which is the whole of the feature.
         assert_eq!(Cap::Auto.ceiling(), None);
-        assert_eq!(Cap::High.ceiling(), Some(1920));
+        assert_eq!(Cap::High.ceiling(), None);
         assert_eq!(Cap::Medium.ceiling(), Some(1280));
         assert_eq!(Cap::Low.ceiling(), Some(640));
+    }
+
+    #[test]
+    fn the_best_there_is_is_told_to_the_sfu_as_a_quality_and_not_as_a_size() {
+        // `Auto` is the honest word for it and the LiveKit transport sends
+        // nothing at all for it, which would leave a size already sent
+        // standing. ADR-0016.
+        assert_eq!(Ask::Best.detail(), VideoDetail::Quality(QualityLimit::High));
+    }
+
+    #[test]
+    fn a_size_is_told_to_the_sfu_as_the_box_it_is() {
+        assert_eq!(
+            Ask::Size(Asked {
+                width: 640,
+                height: 360
+            })
+            .detail(),
+            VideoDetail::Dimensions(Dimensions {
+                width: 640,
+                height: 360
+            })
+        );
     }
 
     #[test]
@@ -406,7 +538,10 @@ mod tests {
         let mut wanted = Wanted::default();
         wanted.drawn_at(ALICE, Kind::Camera, wide(320));
 
-        assert_eq!(wanted.asked(ALICE, Kind::Camera), Some(wide(320)));
+        assert_eq!(
+            wanted.asked(ALICE, Kind::Camera),
+            Some(Ask::Size(wide(320)))
+        );
         assert_eq!(Cap::default(), Cap::Auto);
     }
 }

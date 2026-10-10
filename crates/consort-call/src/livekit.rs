@@ -28,9 +28,9 @@ use std::time::Duration;
 use consort_matrix::{Participant, rooms};
 use matrix_rtc_livekit::{Call, CallError, CallOptions};
 use matrix_rtc_media::{
-    AudioFrame, AudioSourceConfig, Dimensions, I420Buffer, LocalTrackHandle, MediaConstraints,
-    MediaStreamKind, Participant as MediaParticipant, PublishOptions, RemoteTrackHandle,
-    VideoDetail, VideoFrame, VideoRotation, VideoSourceConfig,
+    AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
+    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
+    VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -845,13 +845,12 @@ impl CallSession for LiveKitSession {
                     continue;
                 };
 
-                // The one place the number that leaves this session can be
-                // read. Nothing above here knows what the SFU was told.
+                // The one place what leaves this session can be read.
+                // Nothing above here knows what the SFU was told.
                 tracing::debug!(
                     member_id = %participant.member_id,
                     ?kind,
-                    width = asked.width,
-                    height = asked.height,
+                    ?asked,
                     "asking the SFU for a picture"
                 );
 
@@ -859,13 +858,7 @@ impl CallSession for LiveKitSession {
                     &participant.member_id,
                     kind.stream(),
                     MediaConstraints {
-                        // The box the still is drawn in, not a square of its
-                        // long edge: ADR-0015. The SFU picks the smallest
-                        // layer that covers it, by height.
-                        detail: VideoDetail::Dimensions(Dimensions {
-                            width: asked.width,
-                            height: asked.height,
-                        }),
+                        detail: asked.detail(),
                         ..MediaConstraints::default()
                     },
                 );
