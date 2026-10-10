@@ -41,6 +41,7 @@ mod membership;
 pub mod people;
 pub mod profile;
 mod snapshot;
+pub mod widgets;
 
 pub use avatar::{avatar, member_avatar};
 pub use direct::direct;
@@ -49,6 +50,7 @@ pub use link::{permalink, room_at};
 pub use membership::{can_invite, invite, join, leave};
 pub use people::{Member, Members, Naming, Roster, members};
 pub use profile::{MemberProfile, Presence, member_profile};
+pub use widgets::{Container, Viewer, Widget, widgets};
 
 use std::collections::BTreeMap;
 use std::time::Duration;

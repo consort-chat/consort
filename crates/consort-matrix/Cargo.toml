@@ -29,6 +29,12 @@ base64 = "0.22"
 # SDK resolves, which cargo unifies with it rather than compiling twice.
 mime = "0.3"
 sha2 = "0.10"
+# Deciding what a widget URL points at, which is a question no string
+# comparison answers: see `rooms::widgets::definition`. Both are already in the
+# graph under matrix-sdk, which resolves the same majors, so cargo unifies them
+# rather than compiling a second copy.
+url = "2"
+percent-encoding = "2"
 # Only for the store key in `store_key`, which has to be unguessable and so
 # cannot come from anything less than the operating system's CSPRNG. Already in
 # the tree by way of matrix-sdk, and the default features are the ones it
