@@ -11,9 +11,9 @@
 }
 
 /*
-  Sized and coloured like the paperclip beside it in the room's composer. Both
-  are quiet controls at the end of the same row, and one of them drawn
-  differently would read as the more important of the two.
+  Sized and coloured like the paperclip beside it. Both are quiet controls at
+  the end of the same row, and one of them drawn differently would read as the
+  more important of the two.
 */
 .composer-emoji__open {
   display: flex;

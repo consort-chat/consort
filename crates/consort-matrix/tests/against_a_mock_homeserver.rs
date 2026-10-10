@@ -4790,7 +4790,7 @@ mod timeline {
     /// them can be seen from a unit test.
     mod sending_attachments {
         use super::*;
-        use consort_matrix::timeline::Attaching;
+        use consort_matrix::timeline::{Answering, Attaching};
 
         /// A PNG header saying 640 by 480, with no pixels after it.
         fn png() -> Vec<u8> {
@@ -5026,12 +5026,173 @@ mod timeline {
                 &client,
                 ROOM,
                 Attaching {
-                    reply_to: Some("$said:example.org".to_owned()),
+                    answering: Answering::Message("$said:example.org".to_owned()),
                     ..attaching("cat.png", png())
                 },
             )
             .await
             .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_picture_sent_in_a_thread_lands_in_the_thread() {
+            // #134. The relation has to name the thread's root rather than the
+            // reply it was sent after, and the root is the SDK's answer: it
+            // reads it off the message named here, which is the last thing said
+            // in the thread.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            let mut latest = said("$latest:example.org", "what does it look like", 1_000);
+            latest["content"]["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(latest).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::Thread("$latest:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            // Read off the wire rather than matched, because what matters here
+            // includes a flag whose absence is the bug: without it every client
+            // draws the picture as an answer to that one reply.
+            let sent = sent_message(&server).await;
+            assert_eq!(
+                sent["m.relates_to"],
+                serde_json::json!({
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    "m.in_reply_to": { "event_id": "$latest:example.org" },
+                    "is_falling_back": true,
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn a_picture_opening_a_thread_roots_it_at_the_message_it_answers() {
+            // The first attachment in a thread nobody has replied to yet. The
+            // message it names carries no thread relation, so the thread this
+            // starts is rooted at that message, which is what the panel means
+            // by it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(said("$root:example.org", "look at this", 1_000)).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::Thread("$root:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            let sent = sent_message(&server).await;
+            assert_eq!(sent["m.relates_to"]["event_id"], "$root:example.org");
+        }
+
+        #[tokio::test]
+        async fn a_picture_answering_one_reply_in_a_thread_says_so_and_mentions_its_author() {
+            // Pressed Reply on a line of the thread, which is a different event
+            // from the one above by one flag and a mention. Nobody is notified
+            // of a fallback, and an answer nobody is notified of is a line in a
+            // panel that is not open.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            let mut answered = said("$said:example.org", "which one", 1_000);
+            answered["content"]["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(answered).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .body_matches_partial_json(serde_json::json!({
+                    "msgtype": "m.image",
+                    "m.mentions": { "user_ids": [OTHER] },
+                }))
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::ReplyInThread("$said:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            // No `is_falling_back` at all rather than one saying false: ruma
+            // leaves a field holding its default off the wire, and its absence
+            // is what every client reads as an answer somebody asked for.
+            let sent = sent_message(&server).await;
+            assert_eq!(
+                sent["m.relates_to"],
+                serde_json::json!({
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    "m.in_reply_to": { "event_id": "$said:example.org" },
+                })
+            );
         }
 
         #[tokio::test]

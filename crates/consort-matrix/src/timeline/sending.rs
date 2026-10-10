@@ -15,7 +15,9 @@ use matrix_sdk::attachment::{
 };
 use matrix_sdk::room::reply::{EnforceThread, Reply};
 use matrix_sdk::ruma::UInt;
-use matrix_sdk::ruma::events::room::message::{AddMentions, TextMessageEventContent};
+use matrix_sdk::ruma::events::room::message::{
+    AddMentions, ReplyWithinThread, TextMessageEventContent,
+};
 use matrix_sdk::{Client, Room};
 
 use crate::error::{Error, Result};
@@ -40,10 +42,35 @@ pub struct Attaching {
     /// What was typed beside it, read as markdown because it is typed into the
     /// same box as an ordinary message.
     pub caption: Option<String>,
-    /// The message it answers, when it is answering one. The event ID alone,
-    /// unlike [`super::send_reply`]: the SDK resolves the event itself to
-    /// build the relation, so it knows who to mention.
-    pub reply_to: Option<String>,
+    /// What it answers, which is also what decides where it is drawn.
+    pub answering: Answering,
+}
+
+/// What an attachment answers, and so which conversation it lands in.
+///
+/// An event ID and nothing else in each case, unlike [`super::send_in_thread`]
+/// which is handed the thread's root as well. The SDK reads the event named
+/// here and takes the thread off it, and a thread with no replies yet is named
+/// by its own root, which carries no thread relation and so becomes the root of
+/// the one this writes. Both are the answer this wants, so there is nothing for
+/// a caller to pass.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Answering {
+    /// Nothing. It goes into the room on its own.
+    #[default]
+    Nothing,
+    /// One message in the room. The event ID alone, unlike
+    /// [`super::send_reply`]: the SDK resolves the event itself, so it knows
+    /// who to mention.
+    Message(String),
+    /// A thread, named by the last thing said in it as far as the caller knows.
+    /// Stale is harmless: the pointer is only the fallback a thread carries for
+    /// clients that do not understand threads, and nothing about which thread
+    /// this lands in depends on it.
+    Thread(String),
+    /// One reply in a thread, which is an answer somebody pressed Reply for
+    /// rather than a fallback, so its author is mentioned.
+    ReplyInThread(String),
 }
 
 /// Send one attachment to a room.
@@ -52,7 +79,7 @@ pub struct Attaching {
 /// it back, and an upload takes long enough for that gap to be visible.
 pub async fn send_attachment(client: &Client, room_id: &str, attaching: Attaching) -> Result<()> {
     let room = super::room_of(client, room_id)?;
-    let reply = reply_to(attaching.reply_to.as_deref())?;
+    let reply = relation(&attaching.answering)?;
 
     if attaching.bytes.is_empty() {
         return Err(Error::EmptyMessage);
@@ -151,18 +178,25 @@ fn caption(caption: Option<&str>) -> Option<TextMessageEventContent> {
     Some(TextMessageEventContent::markdown(caption))
 }
 
-/// The reply relation, or `None` when this is not answering anything.
+/// The relation this attachment carries, or `None` when it answers nothing.
 ///
-/// `Unthreaded` and not `MaybeThreaded`, matching [`super::send_reply`]: a
-/// message in a thread is not drawn in the room at all.
-fn reply_to(event_id: Option<&str>) -> Result<Option<Reply>> {
-    let Some(event_id) = event_id else {
-        return Ok(None);
+/// A message in the room gets `Unthreaded` rather than `MaybeThreaded`,
+/// matching [`super::send_reply`]: a message in a thread is not drawn in the
+/// room at all, so forwarding a thread relation found on the answered message
+/// would put the picture somewhere nobody is looking.
+fn relation(answering: &Answering) -> Result<Option<Reply>> {
+    let (event_id, enforce_thread) = match answering {
+        Answering::Nothing => return Ok(None),
+        Answering::Message(event_id) => (event_id, EnforceThread::Unthreaded),
+        Answering::Thread(event_id) => (event_id, EnforceThread::Threaded(ReplyWithinThread::No)),
+        Answering::ReplyInThread(event_id) => {
+            (event_id, EnforceThread::Threaded(ReplyWithinThread::Yes))
+        }
     };
 
     Ok(Some(Reply {
         event_id: super::event_id_of(event_id)?,
-        enforce_thread: EnforceThread::Unthreaded,
+        enforce_thread,
         add_mentions: AddMentions::Yes,
     }))
 }
@@ -367,16 +401,19 @@ mod tests {
         assert!(caption.formatted.is_some());
     }
 
+    /// The relation an [`Answering`] comes to, for the four cases below.
+    fn related(answering: Answering) -> Option<Reply> {
+        relation(&answering).expect("a valid event ID")
+    }
+
     #[test]
     fn an_attachment_that_answers_nothing_carries_no_relation() {
-        assert!(reply_to(None).expect("no reply is not a failure").is_none());
+        assert!(related(Answering::Nothing).is_none());
     }
 
     #[test]
     fn an_attachment_answering_a_message_names_it_and_mentions_its_author() {
-        let reply = reply_to(Some("$said:example.org"))
-            .expect("a valid event ID")
-            .expect("a reply");
+        let reply = related(Answering::Message("$said:example.org".to_owned())).expect("a reply");
 
         assert_eq!(reply.event_id.as_str(), "$said:example.org");
         assert_eq!(reply.enforce_thread, EnforceThread::Unthreaded);
@@ -384,9 +421,45 @@ mod tests {
     }
 
     #[test]
-    fn an_event_id_that_is_not_one_is_refused_before_anything_is_uploaded() {
-        let refused = reply_to(Some("not an event")).expect_err("not an event ID");
+    fn an_attachment_in_a_thread_is_threaded_and_only_falls_back_to_the_reply() {
+        // #134. `Unthreaded` here is the bug the thread's composer had no way
+        // to hit, because it had no way to attach anything at all: it strips
+        // the thread relation, and the picture lands in the room instead of in
+        // the conversation somebody is having.
+        let reply = related(Answering::Thread("$latest:example.org".to_owned())).expect("a reply");
 
-        assert!(matches!(refused, Error::NoSuchEvent { .. }));
+        assert_eq!(reply.event_id.as_str(), "$latest:example.org");
+        assert_eq!(
+            reply.enforce_thread,
+            EnforceThread::Threaded(ReplyWithinThread::No)
+        );
+    }
+
+    #[test]
+    fn an_attachment_answering_one_reply_in_a_thread_is_not_a_fallback() {
+        // The difference between the two threaded cases is one flag on the
+        // wire, and it decides whether every client draws the picture as an
+        // answer to that reply or as the next thing said in the thread.
+        let reply =
+            related(Answering::ReplyInThread("$said:example.org".to_owned())).expect("a reply");
+
+        assert_eq!(reply.event_id.as_str(), "$said:example.org");
+        assert_eq!(
+            reply.enforce_thread,
+            EnforceThread::Threaded(ReplyWithinThread::Yes)
+        );
+    }
+
+    #[test]
+    fn an_event_id_that_is_not_one_is_refused_before_anything_is_uploaded() {
+        for answering in [
+            Answering::Message("not an event".to_owned()),
+            Answering::Thread("not an event".to_owned()),
+            Answering::ReplyInThread("not an event".to_owned()),
+        ] {
+            let refused = relation(&answering).expect_err("not an event ID");
+
+            assert!(matches!(refused, Error::NoSuchEvent { .. }));
+        }
     }
 }

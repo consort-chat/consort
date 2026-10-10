@@ -1,0 +1,40 @@
+/*
+  Square, and the same height as the box beside it rather than the same height
+  as the glyph in it, so the row reads as one control strip. The number is the
+  row's own `--composer-control`, set by whichever composer this is in, so the
+  square agrees with the box and Send however large the type is there.
+*/
+.composer-attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--composer-control);
+  height: var(--composer-control);
+  padding: 0;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.composer-attach svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-attach:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.composer-attach:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.composer-attach:focus-visible {
+  outline: none;
+  border-color: var(--violet);
+  box-shadow: var(--shadow-focus);
+}

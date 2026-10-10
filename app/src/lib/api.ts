@@ -2654,6 +2654,33 @@ export function attachFile(
   });
 }
 
+/**
+ * Send that same file into a thread rather than into the room.
+ *
+ * `replyTo` is the reply being answered when somebody pressed Reply on one, and
+ * otherwise the last thing said in the thread, which `answering` is what tells
+ * the two apart: without it the pointer is only the fallback a thread carries
+ * for clients that do not understand threads.
+ *
+ * No root. Rust reads the thread off the event named here, and a thread with no
+ * replies yet is named by its own root, which is the same answer.
+ */
+export function threadAttachFile(
+  roomId: string,
+  path: string,
+  caption: string | null,
+  replyTo: string,
+  answering: boolean,
+): Promise<void> {
+  return invoke<void>("thread_attach_file", {
+    roomId,
+    path,
+    caption,
+    replyTo,
+    answering,
+  });
+}
+
 /** A screenshot off the clipboard, waiting in the composer. */
 export interface Pasted {
   /** What the room will call it, since a screenshot arrives without a name. */
@@ -2690,6 +2717,21 @@ export function attachPasted(
   replyTo: string | null,
 ): Promise<void> {
   return invoke<void>("timeline_attach_pasted", { roomId, caption, replyTo });
+}
+
+/** The same screenshot, into a thread. See [`threadAttachFile`]. */
+export function threadAttachPasted(
+  roomId: string,
+  caption: string | null,
+  replyTo: string,
+  answering: boolean,
+): Promise<void> {
+  return invoke<void>("thread_attach_pasted", {
+    roomId,
+    caption,
+    replyTo,
+    answering,
+  });
 }
 
 /**
