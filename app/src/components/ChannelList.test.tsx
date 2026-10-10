@@ -96,6 +96,16 @@ function namesIn(label: string): string[] {
     .map((button) => button.textContent ?? "");
 }
 
+/**
+ * Open the group the rooms this account is not in are drawn under.
+ *
+ * It is folded until somebody presses it (#161), so a case about a row in it
+ * has to press it first.
+ */
+async function browse() {
+  await userEvent.click(screen.getByRole("button", { name: "Not joined" }));
+}
+
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
 /** No call, which is what almost every test here is about. */
@@ -401,7 +411,7 @@ describe("ChannelList", () => {
     expect(onSelect).toHaveBeenCalledWith("!v:example.org");
   });
 
-  it("offers a channel this account never joined as one to join", () => {
+  it("offers a channel this account never joined as one to join", async () => {
     // What was here was a row that could not be clicked, which is #128: the
     // space says the channel exists and every other client lets somebody walk
     // into it.
@@ -418,6 +428,7 @@ describe("ChannelList", () => {
         onJoin={vi.fn()}
       />,
     );
+    await browse();
 
     const entry = screen.getByRole("button", { name: /join unknown channel/i });
     expect(entry).toBeEnabled();
@@ -440,6 +451,7 @@ describe("ChannelList", () => {
         onJoin={onJoin}
       />,
     );
+    await browse();
 
     await userEvent.click(
       screen.getByRole("button", { name: /join announcements/i }),
@@ -464,6 +476,7 @@ describe("ChannelList", () => {
         joining={{ roomId: "!never:example.org", problem: null }}
       />,
     );
+    await browse();
 
     const entry = screen.getByRole("button", { name: /joining announcements/i });
     expect(entry).toBeDisabled();
@@ -492,13 +505,14 @@ describe("ChannelList", () => {
         joining={{ roomId: "!never:example.org", problem: null }}
       />,
     );
+    await browse();
 
     await userEvent.click(screen.getByRole("button", { name: /join notices/i }));
 
     expect(onJoin).toHaveBeenCalledWith("!other:example.org");
   });
 
-  it("says why a join did not work, beside the channel it was for", () => {
+  it("says why a join did not work, beside the channel it was for", async () => {
     render(
       <ChannelList
         selfId="@bob:example.org"
@@ -518,6 +532,7 @@ describe("ChannelList", () => {
         }}
       />,
     );
+    await browse();
 
     // `getByRole` rather than `getAllByRole`, because it throws on a second
     // one: the refusal belongs to the row it was about, and a sentence under
@@ -550,6 +565,7 @@ describe("ChannelList", () => {
         }}
       />,
     );
+    await browse();
 
     await userEvent.click(
       screen.getByRole("button", { name: /join announcements/i }),
@@ -605,7 +621,7 @@ describe("ChannelList", () => {
     ).toBeNull();
   });
 
-  it("offers nothing of the kind on a channel this account is not in", () => {
+  it("offers nothing of the kind on a channel this account is not in", async () => {
     // There is nothing to read. The row itself offers the way in.
     render(
       <ChannelList
@@ -619,6 +635,7 @@ describe("ChannelList", () => {
         onSelect={vi.fn()}
       />,
     );
+    await browse();
 
     expect(
       screen.queryByRole("button", { name: /without connecting/i }),
@@ -1608,6 +1625,76 @@ describe("ChannelList", () => {
       );
     });
   });
+  describe("the group of rooms this account is not in", () => {
+    /** One joined channel and one on offer, which is #128's shape. */
+    function both() {
+      list([
+        text("!a:example.org", "general"),
+        text("!never:example.org", "announcements", false),
+      ]);
+    }
+
+    /** The control in the group's heading. */
+    function heading(): HTMLElement {
+      return screen.getByRole("button", { name: "Not joined" });
+    }
+
+    it("starts folded, with the channels somebody uses still in view", async () => {
+      // The whole of #161. A space's unjoined children arrive in the same
+      // listing as the rest and outnumber them on a server of any size.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(heading()).toHaveAttribute("aria-expanded", "false");
+      expect(
+        screen.queryByRole("button", { name: /join announcements/i }),
+      ).toBeNull();
+      expect(screen.getByRole("button", { name: "#general" })).toBeVisible();
+    });
+
+    it("opens when it is pressed", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading());
+
+      expect(
+        screen.getByRole("button", { name: /join announcements/i }),
+      ).toBeVisible();
+    });
+
+    it("closes again", async () => {
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading());
+      await userEvent.click(heading());
+
+      expect(
+        screen.queryByRole("button", { name: /join announcements/i }),
+      ).toBeNull();
+    });
+
+    it("does not write its fold down", async () => {
+      // There is nothing the file could say. It holds the keys that are
+      // folded, so a section folded until somebody opens it has no way to be
+      // recorded open, and #161 asked for closed by default.
+      both();
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      await userEvent.click(heading());
+
+      expect(setSectionFolded).not.toHaveBeenCalled();
+    });
+
+    it("is not drawn at all when there is nothing on offer", async () => {
+      list([text("!a:example.org", "general")]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      expect(screen.queryByRole("button", { name: "Not joined" })).toBeNull();
+    });
+  });
+
   describe("dragging a section into a different order", () => {
     /** One of each kind, so an order is something that can be read off. */
     function both() {
@@ -1692,7 +1779,33 @@ describe("ChannelList", () => {
 
       drag("Voice", "Text");
 
-      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+      // The browse list's key is in there too, even with nothing on offer: a
+      // key left out of the order is one that moves the next time anything
+      // else is dragged.
+      expect(setSectionOrder).toHaveBeenCalledWith([
+        "voice",
+        "text",
+        "unjoined",
+      ]);
+    });
+
+    it("moves the group of rooms this account is not in like any other", async () => {
+      // A section in every way but its fold, so somebody who wants it at the
+      // top can put it there.
+      list([
+        text("!a:example.org", "general"),
+        text("!never:example.org", "announcements", false),
+      ]);
+      await waitFor(() => expect(sidebarSettings).toHaveBeenCalled());
+
+      drag("Not joined", "Text");
+
+      expect(order()).toEqual(["Not joined", "Text"]);
+      expect(setSectionOrder).toHaveBeenCalledWith([
+        "unjoined",
+        "text",
+        "voice",
+      ]);
     });
 
     it("ignores a drag carrying something that is not a section", async () => {
@@ -1718,7 +1831,11 @@ describe("ChannelList", () => {
       await userEvent.keyboard("{ArrowUp}");
 
       expect(order()).toEqual(["Voice", "Text"]);
-      expect(setSectionOrder).toHaveBeenCalledWith(["voice", "text"]);
+      expect(setSectionOrder).toHaveBeenCalledWith([
+        "voice",
+        "text",
+        "unjoined",
+      ]);
     });
 
     it("moves a section down with the arrow keys", async () => {

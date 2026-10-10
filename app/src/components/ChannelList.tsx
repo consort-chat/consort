@@ -15,7 +15,13 @@ import {
   type Participant,
   type Space,
 } from "../lib/api";
-import { BUILT_IN, arrange, moved, sectionsOf } from "../lib/sections";
+import {
+  BUILT_IN,
+  UNJOINED,
+  arrange,
+  moved,
+  sectionsOf,
+} from "../lib/sections";
 import { NewSection } from "./NewSection";
 import { ChannelGroup } from "./ChannelGroup";
 import type { Joining } from "./ChannelRow";
@@ -109,6 +115,9 @@ export function ChannelList({
   // What a refused create or rename said, for the one place a person is
   // waiting on an answer. A fold or a drag only logs; see `report`.
   const [problem, setProblem] = useState<string | null>(null);
+  // Whether the rooms this account is not in are being looked through. Not in
+  // the settings file and deliberately: see `toggleFold`.
+  const [browsing, setBrowsing] = useState(false);
   // The section being dragged and the one it is over, for the stylesheet.
   const [dragged, setDragged] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
@@ -131,7 +140,11 @@ export function ChannelList({
     anything else was dragged.
   */
   const every = arrange(
-    [...BUILT_IN, ...mine.map((section) => ({ key: section.key }))],
+    [
+      ...BUILT_IN,
+      ...mine.map((section) => ({ key: section.key })),
+      { key: UNJOINED },
+    ],
     order,
   ).map((section) => section.key);
 
@@ -154,8 +167,25 @@ export function ChannelList({
     );
   }, []);
 
+  /** Whether the channels under `key` are put away right now. */
+  function isFolded(key: string) {
+    return key === UNJOINED ? !browsing : folded.has(key);
+  }
+
   /** Put a section away, or bring it back, and write that down. */
   function toggleFold(key: string) {
+    /*
+      The browse list is the one fold that is not remembered. The file holds
+      the keys that are folded, so it has no way to say that a section folded
+      until somebody opens it is open, and #161 asked for closed by default:
+      closed on every launch is what that means for a list of rooms nobody is
+      in yet.
+    */
+    if (key === UNJOINED) {
+      setBrowsing(!browsing);
+      return;
+    }
+
     const away = !folded.has(key);
     const next = new Set(folded);
     if (away) next.add(key);
@@ -303,7 +333,7 @@ export function ChannelList({
             channels={section.channels}
             custom={section.custom}
             inSpace={space.channels}
-            folded={folded.has(section.key)}
+            folded={isFolded(section.key)}
             dragged={dragged === section.key}
             over={over === section.key && dragged !== section.key}
             selectedId={selectedId}
