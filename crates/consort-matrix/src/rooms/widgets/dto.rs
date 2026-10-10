@@ -32,7 +32,7 @@ pub enum Container {
 /// dropped.
 ///
 /// [`Self::url`] is the only field anything has to trust, and it is the one
-/// field here that a room member chose. See [`super::definition`] for what it
+/// field here that a room member chose. See `definition` for what it
 /// has already been through.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

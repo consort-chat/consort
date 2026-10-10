@@ -4,35 +4,17 @@
 //! What a room says its widgets are.
 //!
 //! A widget is a web page a room asks a client to embed, and the room says so
-//! in state: one event per widget, keyed by the widget's ID, plus one layout
-//! event saying where they go. Nothing here embeds anything. This reads the
-//! state, applies the rules, and hands back a list.
+//! in state: one event per widget keyed by its ID, plus one layout event
+//! saying where they go. Nothing here embeds anything, because the webview
+//! refuses a remote origin in a frame and widening that is a decision nobody
+//! has taken. What a widget may load, and where every event type and field
+//! below was read from, is in
+//! `docs/adr/0016-what-a-widget-is-allowed-to-load.md`.
 //!
-//! Three parts, split the way [`crate::rooms`] is split. [`definition`] decides
-//! whether one event describes something drawable, and is where every refusal
-//! lives. [`layout`] arranges what survived. This module is the only part that
-//! needs a live client, and holds no rules of its own.
-//!
-//! ## Two event types, and where they are written down
-//!
-//! Element writes `im.vector.modular.widgets`, and only that: its
-//! `WidgetStore.ts` carries `// TODO: Support m.widget too` to this day.
-//! `m.widget` is the name MSC2764 gives the same thing. Both are read, for the
-//! reason `rooms::facts::classify` reads both spellings of the call type: the
-//! day the spec one arrives should be a day this already works. Where a room
-//! carries both for one widget the spec's name wins, which is the direction a
-//! migration runs.
-//!
-//! The layout event is Element's throughout. There is no spec for it, and
-//! `docs/widget-layouts.md` in element-hq/element-web is its only description.
-//!
-//! ## Nothing calls this yet
-//!
-//! Consort's webview refuses a remote origin in a frame: `tauri.conf.json` sets
-//! no `frame-src`, so `default-src 'self'` governs frames. Widening that is a
-//! decision about trusting remote origins inside the window that holds the
-//! session, and it has not been made. This read path is the half of issue #139
-//! that did not need it.
+//! Three parts, split the way [`crate::rooms`] is split. `definition` decides
+//! whether one event describes something drawable and holds every refusal.
+//! `layout` arranges what survived. This module is the only part needing a
+//! live client, and holds no rules of its own.
 
 mod definition;
 mod dto;
@@ -91,6 +73,8 @@ pub async fn widgets(client: &Client, room_id: &str) -> Result<Vec<Widget>> {
 async fn definitions_of(room: &Room, viewer: &Viewer) -> Vec<Widget> {
     let mut found: BTreeMap<String, Widget> = BTreeMap::new();
 
+    // Element's name first, so that the spec's wins a room carrying both for
+    // one widget, which is the direction a migration runs.
     for event_type in [WIDGET_STATE_ELEMENT, WIDGET_STATE_SPEC] {
         let events = match room
             .get_state_events(StateEventType::from(event_type))
