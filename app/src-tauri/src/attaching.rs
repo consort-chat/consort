@@ -20,9 +20,10 @@
 //! forever. What crosses is [`Pasted`], a name and a length on the same terms
 //! as [`Chosen`], and the picture stays on this side until it is sent.
 //!
-//! [`MAX_BYTES`] bounds all three. On the path side it is checked against the
-//! file's length before the read rather than after it, which is the difference
-//! between refusing a four-gigabyte file and running out of memory reading one.
+//! [`MAX_BYTES`] bounds all three, and so does whatever the homeserver says it
+//! takes. On the path side both are checked against the file's length before
+//! the read rather than after it, which is the difference between refusing a
+//! four-gigabyte file and running out of memory reading one.
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -82,13 +83,18 @@ pub fn name_of(path: &Path) -> Option<String> {
 
 /// One file's bytes, refused by its length before it is opened.
 ///
+/// Both ceilings are applied here, to the length rather than to the bytes.
 /// The order matters. Reading first and checking afterwards is the same
 /// program with the bound removed: whatever it was protecting has already been
 /// spent by the time the check runs.
-pub fn read(path: &str) -> Result<Vec<u8>, CommandError> {
+///
+/// `limit` is what the homeserver said it takes, `None` when nobody asked or
+/// it would not say. See `upload_limit_for` in `commands`.
+pub fn read(path: &str, limit: Option<u64>) -> Result<Vec<u8>, CommandError> {
     let path = PathBuf::from(path);
     let facts = std::fs::metadata(&path).map_err(|error| unreadable(&path, &error))?;
     within_the_ceiling(facts.len())?;
+    consort_matrix::timeline::within_the_servers_limit(facts.len(), limit)?;
 
     std::fs::read(&path).map_err(|error| unreadable(&path, &error))
 }
@@ -287,7 +293,7 @@ mod tests {
         let path = dir.path().join("cat.png");
         std::fs::write(&path, b"\x89PNG\r\n\x1a\n").unwrap();
 
-        let bytes = read(path.to_str().unwrap()).expect("a file that exists");
+        let bytes = read(path.to_str().unwrap(), None).expect("a file that exists");
 
         assert_eq!(bytes, b"\x89PNG\r\n\x1a\n");
     }
@@ -298,9 +304,34 @@ mod tests {
         // a screenshot tool that cleans up after itself sits between them.
         let dir = tempfile::tempdir().unwrap();
 
-        let error = read(dir.path().join("gone.png").to_str().unwrap()).unwrap_err();
+        let error = read(dir.path().join("gone.png").to_str().unwrap(), None).unwrap_err();
 
         assert!(error.message().contains("moved or renamed"), "{error:?}");
+    }
+
+    #[test]
+    fn a_file_past_what_the_homeserver_takes_is_refused_before_it_is_opened() {
+        // A directory, because it is the one thing whose length is readable
+        // and whose bytes are not: if the read happened first the error would
+        // be the one about a file that will not open. Unreachable from the
+        // picker, which only answers for files, and the only way to tell the
+        // two orderings apart from a test.
+        let dir = tempfile::tempdir().unwrap();
+
+        let refused = read(dir.path().to_str().unwrap(), Some(0)).unwrap_err();
+
+        assert!(refused.message().contains("homeserver"), "{refused:?}");
+    }
+
+    #[test]
+    fn a_file_the_homeserver_will_take_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cat.png");
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        let bytes = read(path.to_str().unwrap(), Some(10)).expect("a file that fits");
+
+        assert_eq!(bytes, b"0123456789");
     }
 
     #[test]

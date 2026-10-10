@@ -85,7 +85,7 @@ pub async fn send_attachment(client: &Client, room_id: &str, attaching: Attachin
         return Err(Error::EmptyMessage);
     }
     within_the_ceiling(attaching.bytes.len())?;
-    within_the_servers_limit(client, attaching.bytes.len()).await?;
+    within_the_servers_limit(attaching.bytes.len() as u64, upload_limit(client).await)?;
 
     let content_type = content_type_of(&attaching.bytes);
     let config = AttachmentConfig::new()
@@ -220,29 +220,39 @@ fn within_the_ceiling(bytes: usize) -> Result<()> {
     })
 }
 
-/// Refuse an upload the homeserver would refuse, before it is attempted,
-/// rather than discovering it as a 413 halfway through.
+/// What this homeserver takes in one upload, or `None` when it will not say.
 ///
-/// The answer is fetched once per session and held by the SDK. Here as well as
-/// inside the SDK, which answers the same question with an error written for a
-/// log: what this adds is a sentence somebody can act on.
+/// Asked for apart from the comparison below, so that a caller holding a
+/// length and no bytes can have the answer before it reads anything: the SDK
+/// fetches this once per session and holds it, which is what makes asking
+/// while a file picker is open free and the refusal afterwards immediate.
 ///
-/// A homeserver that will not say what its limit is is left to the SDK, which
-/// will make the same call a moment later.
-async fn within_the_servers_limit(client: &Client, bytes: usize) -> Result<()> {
-    let limit = match client.load_or_fetch_max_upload_size().await {
-        Ok(limit) => u64::from(limit),
+/// A homeserver that will not say is nobody's refusal to make here. The send
+/// goes ahead and the SDK asks the same question a moment later, answering it
+/// with an error written for a log.
+pub async fn upload_limit(client: &Client) -> Option<u64> {
+    match client.load_or_fetch_max_upload_size().await {
+        Ok(limit) => Some(u64::from(limit)),
         Err(error) => {
             tracing::debug!(%error, "the homeserver would not say how large an upload it takes");
-            return Ok(());
+            None
         }
+    }
+}
+
+/// Refuse an upload the homeserver would refuse, rather than discovering it as
+/// a 413 once the bytes have been read and sent.
+///
+/// Takes the length rather than the bytes because the shell applies this to a
+/// file it has not opened, which is the whole point: the two numbers in the
+/// refusal are known before anything is read.
+pub fn within_the_servers_limit(bytes: u64, limit: Option<u64>) -> Result<()> {
+    let Some(limit) = limit else {
+        return Ok(());
     };
 
-    if bytes as u64 > limit {
-        return Err(Error::UploadTooLarge {
-            bytes,
-            limit: limit as usize,
-        });
+    if bytes > limit {
+        return Err(Error::UploadTooLarge { bytes, limit });
     }
 
     Ok(())
@@ -380,6 +390,37 @@ mod tests {
     #[test]
     fn an_attachment_at_exactly_the_ceiling_is_still_sendable() {
         assert!(within_the_ceiling(MAX_BYTES).is_ok());
+    }
+
+    #[test]
+    fn an_attachment_past_the_homeservers_ceiling_is_refused_with_both_numbers() {
+        // Both, because the message built from them is the only useful thing
+        // to say: the fix is on a server, and which server is the point.
+        let refused = within_the_servers_limit(60 * 1024 * 1024, Some(50 * 1024 * 1024))
+            .expect_err("past what the server takes");
+
+        assert!(
+            matches!(
+                refused,
+                Error::UploadTooLarge {
+                    bytes: 62_914_560,
+                    limit: 52_428_800
+                }
+            ),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn an_attachment_at_exactly_the_homeservers_ceiling_is_still_sendable() {
+        assert!(within_the_servers_limit(50 * 1024 * 1024, Some(50 * 1024 * 1024)).is_ok());
+    }
+
+    #[test]
+    fn a_homeserver_that_will_not_say_its_limit_refuses_nothing_here() {
+        // Guessing one would refuse files a server would have taken. The send
+        // goes ahead and the server gets to answer for itself.
+        assert!(within_the_servers_limit(u64::MAX, None).is_ok());
     }
 
     #[test]

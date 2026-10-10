@@ -5208,8 +5208,11 @@ mod timeline {
                 .await
                 .unwrap_err();
 
+            // The server's own number, which is the only part of this
+            // somebody can act on: the fix is a line of configuration on a
+            // homeserver they may well run themselves.
             assert!(
-                error.user_message().contains("homeserver accepts"),
+                error.user_message().contains("8 bytes"),
                 "{}",
                 error.user_message()
             );
@@ -5254,10 +5257,12 @@ mod timeline {
                 .await
                 .unwrap_err();
 
+            // The variant rather than the wording. A message that no longer
+            // says what this one used to would make a text assertion pass for
+            // the wrong reason.
             assert!(
-                !error.user_message().contains("homeserver accepts"),
-                "the refusal came from here rather than from the SDK: {}",
-                error.user_message()
+                !matches!(error, consort_matrix::Error::UploadTooLarge { .. }),
+                "the refusal came from here rather than from the SDK: {error:?}"
             );
         }
 

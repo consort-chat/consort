@@ -2603,7 +2603,8 @@ export interface Chosen {
  * Open the desktop's file picker, and say what was chosen.
  *
  * Resolves to `null` when the window was closed without choosing, which is not
- * a failure and must not be drawn as one.
+ * a failure and must not be drawn as one. Rejects for a file the homeserver
+ * would not take, which is refused here rather than staged and sent.
  *
  * A command rather than an `input type="file"`, for the reason Save As is one:
  * the page has `core:default` and could not read what came back. Nothing is
