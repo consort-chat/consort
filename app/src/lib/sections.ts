@@ -46,9 +46,9 @@ export function moved(
  * The sections the sidebar draws before anybody makes one.
  *
  * Derived from `m.room.type` rather than from a choice, which is why these two
- * cannot be renamed or deleted: Matrix decides what is in them. They are also
- * where a room with no section of its own is drawn, so between them they hold
- * whatever is left over.
+ * cannot be renamed or deleted: Matrix decides what is in them. Between them
+ * they hold every joined room with no section of its own; the rest are under
+ * [`UNJOINED`].
  */
 export const BUILT_IN: readonly { key: string; label: string; kind: Channel["kind"] }[] =
   [
@@ -66,15 +66,29 @@ export interface Drawn {
 }
 
 /**
+ * The key the rooms this account is not in are drawn under.
+ *
+ * Last of the three the sidebar draws by itself, and the one folded until
+ * somebody opens it. A space's unjoined children arrive in the same listing as
+ * the channels somebody uses and on a server of any size they outnumber them,
+ * which is #128. Browsing them is what the space's own pane is for.
+ *
+ * Not a key anybody can make: those are `custom-N`. See `SidebarSettings`.
+ */
+export const UNJOINED = "unjoined";
+
+/**
  * The sections to draw for one space, in the order somebody arranged them.
  *
  * `customs` is the sections made under this space, which the caller filters:
  * a section made in one space has no business being drawn in another.
  *
  * A room is in one section at a time, so a room a custom section claims is
- * taken out of Text or Voice. An empty built-in section is dropped and an
- * empty custom one is not: the first reads as a list that failed to load, and
- * the second is the only place anything can be put into it.
+ * taken out of Text, Voice and [`UNJOINED`] alike: filing a room somewhere was
+ * a choice, and it moves out of the browse list the moment anybody is let in
+ * anyway. An empty built-in section is dropped and an empty custom one is not:
+ * the first reads as a list that failed to load, and the second is the only
+ * place anything can be put into it.
  */
 export function sectionsOf(
   channels: readonly Channel[],
@@ -82,13 +96,15 @@ export function sectionsOf(
   order: readonly string[],
 ): Drawn[] {
   const claimed = new Set(customs.flatMap((section) => section.rooms));
+  const spare = (channel: Channel) => !claimed.has(channel.id);
 
   const built = BUILT_IN.map((section) => ({
     key: section.key,
     label: section.label,
     custom: false,
     channels: channels.filter(
-      (channel) => channel.kind === section.kind && !claimed.has(channel.id),
+      (channel) =>
+        channel.joined && channel.kind === section.kind && spare(channel),
     ),
   })).filter((section) => section.channels.length > 0);
 
@@ -101,7 +117,19 @@ export function sectionsOf(
     channels: channels.filter((channel) => section.rooms.includes(channel.id)),
   }));
 
-  return arrange([...built, ...mine], order);
+  // After the sections somebody made rather than among the two above it, so
+  // that the default order puts what this account uses first and what it has
+  // only been offered last.
+  const browse = [
+    {
+      key: UNJOINED,
+      label: "Not joined",
+      custom: false,
+      channels: channels.filter((channel) => !channel.joined && spare(channel)),
+    },
+  ].filter((section) => section.channels.length > 0);
+
+  return arrange([...built, ...mine, ...browse], order);
 }
 
 /**
