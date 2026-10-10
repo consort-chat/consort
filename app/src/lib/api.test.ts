@@ -62,6 +62,8 @@ import {
   onUpdate,
   updateInstall,
   updatesItself,
+  updateCheck,
+  appVersion,
   onVerification,
   onKeyBackup,
   onRooms,
@@ -287,6 +289,22 @@ describe("the updater", () => {
     await updatesItself();
 
     expect(invoke).toHaveBeenCalledWith("updates_itself");
+  });
+
+  it("asks for a look on demand without naming anything either", async () => {
+    // Same reason as the install below: what is on offer is the Rust side's
+    // own state, and it re-reads the manifest at the moment of the press.
+    await updateCheck();
+
+    expect(invoke).toHaveBeenCalledWith("update_check");
+  });
+
+  it("asks Rust which version is running", async () => {
+    // Rather than importing it from `tauri.conf.json` at build time, which
+    // would be a second copy of the number the updater compares against.
+    await appVersion();
+
+    expect(invoke).toHaveBeenCalledWith("app_version");
   });
 
   it("installs without naming anything", async () => {
