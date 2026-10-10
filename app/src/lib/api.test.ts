@@ -20,6 +20,8 @@ import {
   asCommandError,
   attachPasted,
   attachFile,
+  threadAttachFile,
+  threadAttachPasted,
   audioDevices,
   pasteAttachment,
   onDropped,
@@ -564,6 +566,42 @@ describe("attachments", () => {
     invoke.mockResolvedValue(null);
 
     expect(await pasteAttachment()).toBeNull();
+  });
+
+  it("sends a file into a thread by its own command, not the room's", async () => {
+    // #134. The room's command strips the thread relation, so a picture sent
+    // through it lands in the channel instead of in the conversation.
+    await threadAttachFile(
+      "!general:example.org",
+      "/home/ada/cat.png",
+      "look",
+      "$latest:example.org",
+      false,
+    );
+
+    expect(invoke).toHaveBeenCalledWith("thread_attach_file", {
+      roomId: "!general:example.org",
+      path: "/home/ada/cat.png",
+      caption: "look",
+      replyTo: "$latest:example.org",
+      answering: false,
+    });
+  });
+
+  it("says when a thread attachment is answering one reply rather than the thread", async () => {
+    await threadAttachPasted(
+      "!general:example.org",
+      null,
+      "$said:example.org",
+      true,
+    );
+
+    expect(invoke).toHaveBeenCalledWith("thread_attach_pasted", {
+      roomId: "!general:example.org",
+      caption: null,
+      replyTo: "$said:example.org",
+      answering: true,
+    });
   });
 
   it("sends a pasted screenshot by asking for the one Rust is holding", async () => {

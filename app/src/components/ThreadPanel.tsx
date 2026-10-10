@@ -11,7 +11,11 @@ import {
   asCommandError,
   memberNames,
   onThread,
+  pasteAttachment,
+  pickAttachment,
   resendState,
+  threadAttachFile,
+  threadAttachPasted,
   threadOpen,
   threadSend,
   timelineCopyLink,
@@ -26,7 +30,9 @@ import {
 import { useRoomLinks } from "../lib/roomLinks";
 import { clampTo, type Bounds } from "../lib/useColumnResize";
 import { ColumnGrip } from "./ColumnGrip";
+import { ComposerAttach } from "./ComposerAttach";
 import { ComposerEmoji } from "./ComposerEmoji";
+import { ComposerStaged, type Staged } from "./ComposerStaged";
 import { ComposerTarget } from "./ComposerTarget";
 import { MessageGroups, group, previewOf } from "./MessageGroups";
 import { PersonMenu } from "./PersonMenu";
@@ -139,6 +145,8 @@ export function ThreadPanel({
   const editingNow = useRef<Message | null>(null);
   editingNow.current = editing;
   const [sending, setSending] = useState(false);
+  /* What is waiting to be sent in here, or none. The room stages its own. */
+  const [staged, setStaged] = useState<Staged | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   /* The reply whose address has just gone to the clipboard, or none. */
   const [copied, setCopied] = useState<string | null>(null);
@@ -236,7 +244,9 @@ export function ThreadPanel({
   useEffect(() => {
     setAnswering(null);
     stopEditing();
-    // Neither of those is read here, and both are the same function on every
+    // And the attachment, which carried over would answer the wrong thread.
+    setStaged(null);
+    // None of those is read here, and all are the same function on every
     // render. What this depends on is the thread changing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread?.rootId]);
@@ -303,6 +313,37 @@ export function ThreadPanel({
       window.removeEventListener("keydown", shut);
     };
   }, [open]);
+
+  /*
+    Ctrl+V, on the window rather than on the box. `RoomTimeline` carries the
+    same listener and the reasoning. This one takes the paste only with its own
+    box focused, which is the mirror of the room's rule: that one stands aside
+    for a box which is not its own, and nothing focused at all is the room's.
+  */
+  useEffect(() => {
+    if (!open) return;
+
+    function onKey(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || event.key !== "v") return;
+      // Held down, which would ask Rust for the same screenshot as fast as the
+      // key repeats.
+      if (event.repeat) return;
+      // While a send is in flight, for the reason the picker's control is
+      // disabled then: what is staged is what is going, and replacing it
+      // halfway would send the wrong picture.
+      if (sending) return;
+      if (document.activeElement !== draftBox.current) return;
+      paste();
+    }
+
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+    // `paste` is the same function on every render and reads nothing this
+    // effect could go stale on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sending]);
 
   // Nothing but the passing of time takes the tick off the copy control.
   useEffect(() => {
@@ -381,6 +422,10 @@ export function ThreadPanel({
   function edit(message: Message) {
     setEditing(message);
     setAnswering(null);
+    // The other half of the rule [`stage`] states. A file chosen and then
+    // abandoned can be chosen again; an attachment sent instead of the
+    // correction somebody asked for cannot be unsent.
+    setStaged(null);
     setDraft(message.body);
     draftBox.current?.focus();
   }
@@ -400,6 +445,54 @@ export function ThreadPanel({
     if (editingNow.current === null) return;
     setEditing(null);
     setDraft("");
+  }
+
+  /**
+   * Put one attachment in the composer, ending a correction if one was open.
+   *
+   * One box with one Send cannot both carry a file and correct a message. Not
+   * exclusive with a reply: a picture answering one line of a thread is a thing
+   * somebody does on purpose.
+   */
+  function stage(attachment: Staged) {
+    stopEditing();
+    setStaged(attachment);
+    draftBox.current?.focus();
+  }
+
+  /** Open the desktop's picker, and put whatever comes back in the composer. */
+  function attach() {
+    void pickAttachment()
+      .then((chosen) => {
+        // Null is the window closed without choosing, which is not a failure.
+        if (chosen === null) return;
+        setProblem(null);
+        stage({
+          kind: "file",
+          name: chosen.name,
+          size: chosen.size,
+          path: chosen.path,
+        });
+      })
+      .catch((raw: unknown) => {
+        setProblem(asCommandError(raw).message);
+      });
+  }
+
+  /** Put whatever picture is on the clipboard in the composer. */
+  function paste() {
+    void pasteAttachment()
+      .then((shot) => {
+        // Null is a clipboard with no picture on it, which is every ordinary
+        // paste of words. Rust says so precisely so that the keystroke goes on
+        // to put them in the box.
+        if (shot === null) return;
+        setProblem(null);
+        stage({ kind: "pasted", name: shot.name, size: shot.size });
+      })
+      .catch((raw: unknown) => {
+        setProblem(asCommandError(raw).message);
+      });
   }
 
   /**
@@ -457,16 +550,44 @@ export function ThreadPanel({
   */
   const latest = thread.messages.at(-1)?.id ?? thread.rootId;
 
+  /**
+   * Send whatever is staged, with the box as its caption.
+   *
+   * Into the thread rather than into the room, which is the whole of #134: the
+   * room's own command would draw the picture in the channel, beside the
+   * conversation it was an answer to.
+   */
+  async function sendStaged(attachment: Staged, roomId: string) {
+    // Empty rather than a blank line under the picture, which is what a
+    // caption of whitespace would draw.
+    const caption = draft.trim() === "" ? null : draft;
+    const replyTo = answering?.id ?? latest;
+    const pressed = answering !== null;
+
+    if (attachment.kind === "file") {
+      await threadAttachFile(roomId, attachment.path, caption, replyTo, pressed);
+      return;
+    }
+
+    await threadAttachPasted(roomId, caption, replyTo, pressed);
+  }
+
   async function send() {
-    if (thread === null || draft.trim() === "" || sending) return;
+    if (thread === null) return;
+    if ((draft.trim() === "" && staged === null) || sending) return;
 
     setSending(true);
     setProblem(null);
     try {
-      // A correction replaces a message that is already in the room, so it is
-      // the room's command rather than the thread's: an edit carries no
-      // thread relation of its own and is folded onto whatever it names.
-      if (editing !== null) {
+      // A reply, an answer and an attachment differ only in what they name.
+      // All three land in this thread, and all three appear when the sync
+      // brings them back.
+      if (staged !== null) {
+        await sendStaged(staged, thread.roomId);
+      } else if (editing !== null) {
+        // A correction replaces a message that is already in the room, so it
+        // is the room's command rather than the thread's: an edit carries no
+        // thread relation of its own and is folded onto whatever it names.
         await timelineEdit(thread.roomId, editing.id, draft);
       } else {
         await threadSend(
@@ -478,8 +599,10 @@ export function ThreadPanel({
         );
       }
       // Cleared only once the homeserver has it. A box that empties on a send
-      // that failed loses what somebody wrote.
+      // that failed loses what somebody wrote, and a picker somebody has to
+      // open twice is the same loss.
       setDraft("");
+      setStaged(null);
       setAnswering(null);
       setEditing(null);
     } catch (raw: unknown) {
@@ -597,6 +720,10 @@ export function ThreadPanel({
         <ComposerTarget doing="edit" message={editing} onStop={stopEditing} />
       )}
 
+      {staged !== null && (
+        <ComposerStaged staged={staged} onStop={() => setStaged(null)} />
+      )}
+
       <form
         className="thread__composer"
         onSubmit={(event) => {
@@ -607,7 +734,8 @@ export function ThreadPanel({
         <label className="thread__label" htmlFor="thread-draft">
           Reply in this thread
         </label>
-        {/* The same control the room's composer has, doing the same thing. */}
+        {/* The two controls the room's composer has, doing the same things. */}
+        <ComposerAttach disabled={sending} onClick={attach} />
         <ComposerEmoji
           box={draftBox}
           draft={draft}
@@ -620,22 +748,28 @@ export function ThreadPanel({
           ref={draftBox}
           rows={1}
           value={draft}
-          placeholder="Reply in this thread"
+          placeholder={
+            staged === null
+              ? "Reply in this thread"
+              : `Say something about ${staged.name}`
+          }
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             /*
-              Escape puts the box back to an ordinary reply. Stopped where it
-              is caught, because the listener that shuts the panel is on the
-              window one step further out, and without this one press would
-              both abandon the correction and close the thread it was in.
+              Escape puts the box back to an ordinary reply with nothing
+              waiting to be sent. Stopped where it is caught, because the
+              listener that shuts the panel is on the window one step further
+              out, and without this one press would both abandon the
+              correction and close the thread it was in.
             */
             if (
               event.key === "Escape" &&
-              (answering !== null || editing !== null)
+              (answering !== null || editing !== null || staged !== null)
             ) {
               event.stopPropagation();
               setAnswering(null);
               stopEditing();
+              setStaged(null);
               return;
             }
             // Enter sends and Shift+Enter breaks the line, the same as the
@@ -655,7 +789,7 @@ export function ThreadPanel({
         <button
           type="submit"
           className="thread__send"
-          disabled={draft.trim() === "" || sending}
+          disabled={(draft.trim() === "" && staged === null) || sending}
         >
           Send
         </button>

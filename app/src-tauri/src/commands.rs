@@ -1031,7 +1031,7 @@ async fn send_attachment_for(
     filename: String,
     bytes: Vec<u8>,
     caption: Option<String>,
-    reply_to: Option<String>,
+    answering: timeline::Answering,
 ) -> Result<(), CommandError> {
     let client = signed_in_client(state).await?;
     timeline::send_attachment(
@@ -1041,18 +1041,42 @@ async fn send_attachment_for(
             filename,
             bytes,
             caption,
-            reply_to,
+            answering,
         },
     )
     .await?;
     Ok(())
 }
 
-/// Send a file the picker or a drop named, by its path.
+/// One file, read at the moment it is sent rather than when it was picked.
 ///
-/// The read happens here rather than when it was chosen, so that nothing is
-/// held between somebody picking a file and deciding to send it. What crosses
-/// the boundary in the meantime is a name and a length.
+/// Nothing is held between somebody choosing a file and deciding to send it.
+/// What crossed the boundary in the meantime is a name and a length.
+fn file_to_send(path: &str) -> Result<(String, Vec<u8>), CommandError> {
+    let filename = attaching::name_of(std::path::Path::new(path)).ok_or_else(|| {
+        CommandError::new(
+            "That file is not one Consort can send.",
+            format!("{path} has no file name in it"),
+        )
+    })?;
+
+    Ok((filename, attaching::read(path)?))
+}
+
+/// Which thread reply an attachment names, and on what terms.
+///
+/// `answering` is whether somebody pressed Reply on that one line. Without it
+/// the event named is the last thing said in the thread and only a fallback for
+/// clients that do not understand threads.
+fn in_a_thread(reply_to: String, answering: bool) -> timeline::Answering {
+    if answering {
+        timeline::Answering::ReplyInThread(reply_to)
+    } else {
+        timeline::Answering::Thread(reply_to)
+    }
+}
+
+/// Send a file the picker or a drop named, by its path.
 pub async fn timeline_attach_file_for(
     state: &AppState,
     room_id: String,
@@ -1060,15 +1084,44 @@ pub async fn timeline_attach_file_for(
     caption: Option<String>,
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
-    let filename = attaching::name_of(std::path::Path::new(&path)).ok_or_else(|| {
-        CommandError::new(
-            "That file is not one Consort can send.",
-            format!("{path} has no file name in it"),
-        )
-    })?;
-    let bytes = attaching::read(&path)?;
+    let (filename, bytes) = file_to_send(&path)?;
 
-    send_attachment_for(state, room_id, filename, bytes, caption, reply_to).await
+    send_attachment_for(
+        state,
+        room_id,
+        filename,
+        bytes,
+        caption,
+        reply_to.map_or(timeline::Answering::Nothing, timeline::Answering::Message),
+    )
+    .await
+}
+
+/// The same file, into a thread rather than into the room.
+///
+/// A separate command rather than a flag on the one above, for the reason
+/// `thread_send` is separate from `timeline_send`: what the two name is
+/// different, and a thread reply drawn in the room is the bug (#134) this
+/// exists to avoid.
+pub async fn thread_attach_file_for(
+    state: &AppState,
+    room_id: String,
+    path: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    let (filename, bytes) = file_to_send(&path)?;
+
+    send_attachment_for(
+        state,
+        room_id,
+        filename,
+        bytes,
+        caption,
+        in_a_thread(reply_to, answering),
+    )
+    .await
 }
 
 /// Stage whatever picture is on the clipboard, if a picture is what is on it.
@@ -1111,6 +1164,33 @@ pub async fn timeline_attach_pasted_for(
     caption: Option<String>,
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
+    send_pasted_for(
+        state,
+        room_id,
+        caption,
+        reply_to.map_or(timeline::Answering::Nothing, timeline::Answering::Message),
+    )
+    .await
+}
+
+/// The same screenshot, into a thread. See `thread_attach_file_for`.
+pub async fn thread_attach_pasted_for(
+    state: &AppState,
+    room_id: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    send_pasted_for(state, room_id, caption, in_a_thread(reply_to, answering)).await
+}
+
+/// The held screenshot, wherever it is going.
+async fn send_pasted_for(
+    state: &AppState,
+    room_id: String,
+    caption: Option<String>,
+    answering: timeline::Answering,
+) -> Result<(), CommandError> {
     let bytes = state.pasted().await.ok_or_else(|| {
         // Reachable: the webview reloading loses the composer while this side
         // keeps running, so the page can ask for something already let go of.
@@ -1126,7 +1206,7 @@ pub async fn timeline_attach_pasted_for(
         attaching::PASTED_NAME.to_owned(),
         bytes,
         caption,
-        reply_to,
+        answering,
     )
     .await?;
 
@@ -2366,6 +2446,19 @@ pub async fn timeline_attach_file(
     timeline_attach_file_for(&state, room_id, path, caption, reply_to).await
 }
 
+/// See `thread_attach_file_for`.
+#[tauri::command]
+pub async fn thread_attach_file(
+    state: State<'_, AppState>,
+    room_id: String,
+    path: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    thread_attach_file_for(&state, room_id, path, caption, reply_to, answering).await
+}
+
 /// This desktop's clipboard, as the two questions `attaching` asks of it.
 ///
 /// The platform call is all this is, which is the same split
@@ -2416,6 +2509,18 @@ pub async fn timeline_attach_pasted(
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
     timeline_attach_pasted_for(&state, room_id, caption, reply_to).await
+}
+
+/// See `thread_attach_pasted_for`.
+#[tauri::command]
+pub async fn thread_attach_pasted(
+    state: State<'_, AppState>,
+    room_id: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    thread_attach_pasted_for(&state, room_id, caption, reply_to, answering).await
 }
 
 /// The schemes a message may send somebody to.
@@ -5762,6 +5867,57 @@ mod against_a_mock_homeserver {
         /// The eight bytes every PNG starts with, and nothing after them.
         const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
+        /// Answer for one reply already in a thread, which is what the SDK
+        /// reads the root off when an attachment names it.
+        async fn a_reply_in_a_thread(server: &MatrixMockServer) {
+            let event = serde_json::json!({
+                "type": "m.room.message",
+                "event_id": "$latest:example.org",
+                "room_id": ROOM,
+                "sender": "@ada:example.org",
+                "origin_server_ts": 1_000,
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "which one",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$root:example.org",
+                    },
+                },
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        matrix_sdk::ruma::serde::Raw::new(&event)
+                            .expect("the fixture is valid JSON")
+                            .cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+        }
+
+        /// A send that must carry the thread relation, naming the root.
+        async fn expecting_a_thread_send(server: &MatrixMockServer) {
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .body_matches_partial_json(serde_json::json!({
+                    "msgtype": "m.image",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$root:example.org",
+                        "m.in_reply_to": { "event_id": "$latest:example.org" },
+                    },
+                }))
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+        }
+
         #[tokio::test]
         async fn a_picked_file_is_read_here_and_sent_under_its_own_name() {
             // The path is what crossed the boundary and the bytes never did.
@@ -5792,6 +5948,97 @@ mod against_a_mock_homeserver {
             )
             .await
             .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_file_sent_in_a_thread_lands_in_the_thread() {
+            // #134. The thread's composer had no way to attach anything at
+            // all, and sending through the room's command would have drawn the
+            // picture in the channel rather than in the thread.
+            let server = MatrixMockServer::new().await;
+            let (dir, state, _sink) = ready(&server).await;
+            let path = dir.path().join("cat.png");
+            std::fs::write(&path, PNG).unwrap();
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+
+            thread_attach_file_for(
+                &state,
+                ROOM.to_owned(),
+                path.to_str().unwrap().to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                false,
+            )
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_screenshot_sent_in_a_thread_lands_in_the_thread_and_is_let_go_of() {
+            // The other half of the same hole: Ctrl+V with the thread's box
+            // focused stages the picture here, and the slot is shared with the
+            // room's composer.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+            paste_attachment_for(&state, &FakeClipboard::holding_a_picture())
+                .await
+                .unwrap()
+                .expect("a picture");
+
+            thread_attach_pasted_for(
+                &state,
+                ROOM.to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert!(state.pasted().await.is_none());
+        }
+
+        #[tokio::test]
+        async fn pressing_reply_on_one_line_of_a_thread_is_not_a_fallback() {
+            // One flag apart on the wire, and it decides whether every client
+            // draws the picture as an answer to that reply or as the next thing
+            // said in the thread. Its absence is what says so: ruma leaves a
+            // field holding its default off the wire.
+            let server = MatrixMockServer::new().await;
+            let (dir, state, _sink) = ready(&server).await;
+            let path = dir.path().join("cat.png");
+            std::fs::write(&path, PNG).unwrap();
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+
+            thread_attach_file_for(
+                &state,
+                ROOM.to_owned(),
+                path.to_str().unwrap().to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                true,
+            )
+            .await
+            .unwrap();
+
+            let sent: serde_json::Value = server
+                .server()
+                .received_requests()
+                .await
+                .expect("the mock server is recording")
+                .iter()
+                .find(|request| request.url.path().contains("/send/m.room.message/"))
+                .map(|request| serde_json::from_slice(&request.body).expect("JSON"))
+                .expect("nothing was sent");
+
+            assert_eq!(
+                sent["m.relates_to"]["is_falling_back"],
+                serde_json::Value::Null
+            );
         }
 
         /// A clipboard with whatever was put on it, counting picture reads.
