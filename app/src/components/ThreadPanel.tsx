@@ -27,6 +27,7 @@ import {
   type Participant,
   type Thread,
 } from "../lib/api";
+import { useEmoteNames } from "../lib/emotes";
 import { useRoomLinks } from "../lib/roomLinks";
 import { clampTo, type Bounds } from "../lib/useColumnResize";
 import { ColumnGrip } from "./ColumnGrip";
@@ -194,6 +195,12 @@ export function ThreadPanel({
   }, [thread, onOpen]);
 
   const roomId = thread?.roomId ?? "";
+  /*
+    The same packs the room's own pane reads, for the same pills. Asked for
+    again rather than passed down: the panel is drawn beside the room and both
+    read one local answer. See `useEmoteNames`.
+  */
+  const shortcodes = useEmoteNames(roomId);
   /*
     Everybody in the panel, as a stable string, so names are resolved when the
     set of people changes rather than on every arriving reply.
@@ -649,6 +656,7 @@ export function ThreadPanel({
               roomId={thread.roomId}
               selfId={selfId}
               known={known}
+              shortcodes={shortcodes}
               container={scroller}
               copiedId={copied}
               onAbout={(person, at) => setOpened({ person, at })}
@@ -684,6 +692,7 @@ export function ThreadPanel({
           threadRoot={thread.rootId}
           selfId={selfId}
           known={known}
+          shortcodes={shortcodes}
           container={scroller}
           copiedId={copied}
           onAbout={(person, at) => setOpened({ person, at })}

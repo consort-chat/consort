@@ -15,7 +15,8 @@ use consort_audio::{
 };
 use consort_call::{Cap, Kind, LiveKitTransport, SelfScreen, SelfVideo};
 use consort_matrix::{
-    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
+    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, emotes, rooms, timeline,
+    verification,
 };
 // `catalogue` is already taken by the audio one above, which resolves a
 // different question over a different list, so the camera side is qualified.
@@ -461,6 +462,19 @@ pub async fn member_names_for(
 ) -> Result<std::collections::BTreeMap<String, String>, CommandError> {
     let client = signed_in_client(state).await?;
     Ok(rooms::member_names(&client, &room_id, &user_ids).await)
+}
+
+/// Every custom emoji somebody reading `room_id` can reach.
+///
+/// Local: `consort_matrix::emotes` reads the state store and the account data
+/// already in it, so this is safe to ask for whenever a room opens. See there
+/// for which packs are read and in what order.
+pub async fn emoji_packs_for(
+    state: &AppState,
+    room_id: String,
+) -> Result<Vec<emotes::ImagePack>, CommandError> {
+    let client = signed_in_client(state).await?;
+    Ok(emotes::packs(&client, &room_id).await?)
 }
 
 /// Open a room and start watching its messages.
@@ -2833,6 +2847,15 @@ pub async fn member_avatar(
     user_id: String,
 ) -> Result<Option<String>, CommandError> {
     member_avatar_for(&state, room_id, user_id).await
+}
+
+/// The custom emoji packs one room can reach. See `emoji_packs_for`.
+#[tauri::command]
+pub async fn emoji_packs(
+    state: State<'_, AppState>,
+    room_id: String,
+) -> Result<Vec<emotes::ImagePack>, CommandError> {
+    emoji_packs_for(&state, room_id).await
 }
 
 /// Who is in one room.
@@ -5593,6 +5616,35 @@ mod against_a_mock_homeserver {
         let (_dir, state, _sink) = state();
 
         let error = room_members_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_for_a_room_s_emoji_while_signed_out_says_so() {
+        // An empty answer would be drawn as a room with no custom emoji in
+        // it, which is a different claim from not knowing.
+        let (_dir, state, _sink) = state();
+
+        let error = emoji_packs_for(&state, "!a:example.org".to_owned())
+            .await
+            .unwrap_err();
+
+        assert!(!error.message().is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_emoji_of_a_room_this_account_is_not_in_says_so() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .unwrap();
+
+        let error = emoji_packs_for(&state, "!gone:example.org".to_owned())
             .await
             .unwrap_err();
 
