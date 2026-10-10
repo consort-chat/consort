@@ -60,6 +60,7 @@ pub use error::{Error, Result};
 pub use notifications::Notification;
 pub use receipts::count_unread;
 pub use rooms::{Channel, ChannelKind, Participant, Rooms, Space};
+pub use rooms::{Container, Widget, widgets};
 pub use secrets::{Backend, BackendKind};
 pub use session::{KEYRING_SERVICE, SessionStore, StoredSession};
 pub use store_key::StoreKey;
