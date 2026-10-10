@@ -776,6 +776,51 @@ fn set_privacy_settings_for(
     state.settings().save(&settings)
 }
 
+/// Which session this is, while there is one.
+///
+/// Asked of the client rather than taken from the caller, which is the same
+/// rule `verification_verify_this_session` follows and for a sharper reason
+/// here: the device id is what keys the answer below, so a webview that named
+/// a device of its own choosing could record one constant id and have every
+/// later sign-in inherit a silenced warning. There is only ever one session to
+/// mean, so there is nothing for anybody to pass.
+async fn session_of(state: &AppState) -> Option<String> {
+    Some(state.client().await?.device_id()?.to_string())
+}
+
+/// Whether this session has already been told what staying unverified costs.
+///
+/// Per device rather than once per machine. `VerificationSettings` has the
+/// reason: a flag would silence the warning for the next sign-in, which is a
+/// device nobody has looked at.
+///
+/// With no session there is no device to have answered under, which is an
+/// error rather than a `false`: the caller's own failure path already fails
+/// safe and draws the warning in full, and answering "not dismissed" would
+/// claim an absent session had been looked at.
+async fn verification_warning_dismissed_for(state: &AppState) -> Result<bool, CommandError> {
+    let device = session_of(state)
+        .await
+        .ok_or(consort_matrix::Error::NotLoggedIn)?;
+    Ok(state.settings().load().verification.dismissed_by(&device))
+}
+
+/// Record that it has, and that whoever read it chose to carry on.
+///
+/// Nothing about encryption changes here. The session stays exactly as
+/// unverified as it was, encrypted history stays shut, and
+/// `consort_matrix::calls::can_join` still refuses an encrypted channel. All
+/// that is written down is that the long form of the warning has been read.
+async fn dismiss_verification_warning_for(state: &AppState) -> Result<(), CommandError> {
+    let device = session_of(state)
+        .await
+        .ok_or(consort_matrix::Error::NotLoggedIn)?;
+    let mut settings = state.settings().load();
+    settings.verification.dismiss(&device);
+    state.settings().save(&settings)?;
+    Ok(())
+}
+
 /// What the emoji picker remembers: the recently used row and the skin tone.
 fn emoji_settings_for(state: &AppState) -> EmojiSettings {
     state.settings().load().emoji
@@ -2276,6 +2321,20 @@ pub fn set_privacy_settings(
 ) -> Result<(), CommandError> {
     set_privacy_settings_for(&state, privacy)?;
     Ok(())
+}
+
+/// See `verification_warning_dismissed_for`.
+#[tauri::command]
+pub async fn verification_warning_dismissed(
+    state: State<'_, AppState>,
+) -> Result<bool, CommandError> {
+    verification_warning_dismissed_for(&state).await
+}
+
+/// See `dismiss_verification_warning_for`.
+#[tauri::command]
+pub async fn dismiss_verification_warning(state: State<'_, AppState>) -> Result<(), CommandError> {
+    dismiss_verification_warning_for(&state).await
 }
 
 /// See `emoji_settings_for`.
@@ -3872,6 +3931,19 @@ mod tests {
             assert!(!privacy_settings_for(&state).public_read_receipts);
         }
 
+        #[tokio::test]
+        async fn there_is_no_answer_and_nothing_to_record_without_a_session() {
+            // Unreachable from the interface, which only draws the banner once
+            // somebody is signed in. Both have to refuse rather than quietly
+            // succeed: there is no device to have answered under, and a write
+            // that went nowhere would shrink the warning on screen and bring
+            // it back at the next launch.
+            let (_dir, state, _) = state();
+
+            assert!(verification_warning_dismissed_for(&state).await.is_err());
+            assert!(dismiss_verification_warning_for(&state).await.is_err());
+        }
+
         #[test]
         fn saving_privacy_leaves_the_audio_section_alone() {
             // The two screens are separate and neither holds the other's
@@ -4097,6 +4169,7 @@ mod tests {
                 emoji: crate::settings::EmojiSettings::default(),
                 appearance: crate::settings::AppearanceSettings::default(),
                 sidebar: crate::settings::SidebarSettings::default(),
+                verification: crate::settings::VerificationSettings::default(),
                 recent: crate::recent::RecentRooms::default(),
             };
             state.settings().save(&stored).expect("save");
@@ -5140,6 +5213,59 @@ mod against_a_mock_homeserver {
         let status = session_status_for(&state).await.unwrap();
 
         assert_eq!(status_name(&status), "signedIn");
+    }
+
+    #[tokio::test]
+    async fn choosing_to_stay_unverified_is_recorded_against_this_session() {
+        // Here rather than with the other settings tests because the id is
+        // taken from the client rather than from the caller, so the claim
+        // worth making needs a session to have a device id at all.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .expect("login");
+
+        dismiss_verification_warning_for(&state)
+            .await
+            .expect("save");
+
+        assert!(
+            verification_warning_dismissed_for(&state)
+                .await
+                .expect("ask")
+        );
+        // And under this device, not under something a caller chose. A
+        // constant written here would be a machine-wide flag by another route,
+        // silencing the warning for every later sign-in.
+        assert_eq!(
+            state.settings().load().verification.dismissed.as_deref(),
+            Some(DEVICE)
+        );
+    }
+
+    #[tokio::test]
+    async fn recording_the_answer_leaves_the_rest_of_the_file_alone() {
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .expect("login");
+        set_privacy_settings_for(
+            &state,
+            crate::settings::PrivacySettings {
+                public_read_receipts: false,
+            },
+        )
+        .expect("save");
+
+        dismiss_verification_warning_for(&state)
+            .await
+            .expect("save");
+
+        assert!(!privacy_settings_for(&state).public_read_receipts);
     }
 
     #[tokio::test]

@@ -790,6 +790,34 @@ export function verificationRecover(recoveryKey: string): Promise<void> {
 }
 
 /**
+ * Whether this session has already been told what staying unverified costs.
+ *
+ * No arguments, on the same terms as `verificationVerifyThisSession`: it is
+ * always this session being asked about. Rust keys the answer by the device id
+ * it reads off the client, so that signing out ends it. A device named from
+ * here would let one constant id stand in for every later sign-in, which is a
+ * machine-wide silencing of the warning by another route.
+ *
+ * Rejects when nobody is signed in, which the banner treats as not answered.
+ */
+export function verificationWarningDismissed(): Promise<boolean> {
+  return invoke<boolean>("verification_warning_dismissed");
+}
+
+/**
+ * Record that it has, and that whoever read it chose to carry on unverified.
+ *
+ * Changes nothing about encryption. This session stays as unverified as it
+ * was: encrypted history stays shut, other people's clients keep warning
+ * about it, and an encrypted voice channel still refuses it. The only thing
+ * written down is that the long form of the warning has been read, so the
+ * banner can shrink to the one line that is still true.
+ */
+export function dismissVerificationWarning(): Promise<void> {
+  return invoke<void>("dismiss_verification_warning");
+}
+
+/**
  * Ask the Rust side to publish the current state of every channel again.
  *
  * Call it once, after the listeners are attached. Both channels above carry
