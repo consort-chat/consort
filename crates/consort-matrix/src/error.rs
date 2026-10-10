@@ -105,6 +105,14 @@ pub enum Error {
     #[error("a message with no text in it")]
     EmptyMessage,
 
+    /// A line beginning with a slash named a command this build has none of.
+    ///
+    /// A refusal rather than a message, which is the whole reason the parse
+    /// happens here. Sending `/pin this` to the room because Consort did not
+    /// know the word would be public and could not be taken back.
+    #[error("`/{command}` is not a command")]
+    UnknownCommand { command: String },
+
     /// An edit of a message this account did not send.
     ///
     /// The homeserver would refuse it and every other client would ignore it,
@@ -339,6 +347,9 @@ impl Error {
                     .to_owned()
             }
             Self::EmptyMessage => "There is nothing to send.".to_owned(),
+            Self::UnknownCommand { command } => {
+                format!("There is no /{command} command. Type //{command} to send it as text.")
+            }
             Self::NotYourMessage { .. } => {
                 "Only the person who sent a message can edit it.".to_owned()
             }

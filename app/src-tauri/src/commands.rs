@@ -15,7 +15,8 @@ use consort_audio::{
 };
 use consort_call::{Cap, Kind, LiveKitTransport, SelfScreen, SelfVideo};
 use consort_matrix::{
-    BackendKind, Credentials, JoinVerdict, Profile, auth, calls, rooms, timeline, verification,
+    BackendKind, Credentials, Effect, JoinVerdict, Profile, auth, calls, rooms, timeline,
+    verification,
 };
 // `catalogue` is already taken by the audio one above, which resolves a
 // different question over a different list, so the camera side is qualified.
@@ -606,10 +607,9 @@ pub async fn timeline_send_for(
     state: &AppState,
     room_id: String,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     let client = signed_in_client(state).await?;
-    timeline::send(&client, &room_id, &body).await?;
-    Ok(())
+    Ok(timeline::send(&client, &room_id, &body).await?)
 }
 
 /// Answer one message in the room.
@@ -624,10 +624,9 @@ pub async fn timeline_reply_for(
     reply_to: String,
     sender: String,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     let client = signed_in_client(state).await?;
-    timeline::send_reply(&client, &room_id, &reply_to, &sender, &body).await?;
-    Ok(())
+    Ok(timeline::send_reply(&client, &room_id, &reply_to, &sender, &body).await?)
 }
 
 /// Correct a message this account sent.
@@ -682,9 +681,9 @@ pub async fn thread_send_for(
     in_reply_to: String,
     answering: Option<String>,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     let client = signed_in_client(state).await?;
-    timeline::send_in_thread(
+    Ok(timeline::send_in_thread(
         &client,
         &room_id,
         &root_id,
@@ -692,8 +691,7 @@ pub async fn thread_send_for(
         answering.as_deref(),
         &body,
     )
-    .await?;
-    Ok(())
+    .await?)
 }
 
 /// React to a message.
@@ -2185,7 +2183,7 @@ pub async fn timeline_send(
     state: State<'_, AppState>,
     room_id: String,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     timeline_send_for(&state, room_id, body).await
 }
 
@@ -2198,7 +2196,7 @@ pub async fn thread_send(
     in_reply_to: String,
     answering: Option<String>,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     thread_send_for(&state, room_id, root_id, in_reply_to, answering, body).await
 }
 
@@ -2210,7 +2208,7 @@ pub async fn timeline_reply(
     reply_to: String,
     sender: String,
     body: String,
-) -> Result<(), CommandError> {
+) -> Result<Option<Effect>, CommandError> {
     timeline_reply_for(&state, room_id, reply_to, sender, body).await
 }
 
@@ -3917,6 +3915,7 @@ mod tests {
                 AppearanceSettings {
                     application_scale: 1.25,
                     text_scale: 1.1,
+                    ..AppearanceSettings::default()
                 },
             )
             .expect("save");
@@ -3926,6 +3925,7 @@ mod tests {
                 AppearanceSettings {
                     application_scale: 1.25,
                     text_scale: 1.1,
+                    ..AppearanceSettings::default()
                 }
             );
         }
@@ -3950,6 +3950,7 @@ mod tests {
                 AppearanceSettings {
                     application_scale: 40.0,
                     text_scale: 0.0,
+                    ..AppearanceSettings::default()
                 },
             )
             .expect("save");
@@ -3980,6 +3981,7 @@ mod tests {
                 AppearanceSettings {
                     application_scale: 40.0,
                     text_scale: 1.0,
+                    ..AppearanceSettings::default()
                 },
             )
             .expect("save");
@@ -4009,6 +4011,7 @@ mod tests {
                 AppearanceSettings {
                     application_scale: 1.5,
                     text_scale: 1.0,
+                    ..AppearanceSettings::default()
                 },
             )
             .expect("save");
