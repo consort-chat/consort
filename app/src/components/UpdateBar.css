@@ -1,0 +1,30 @@
+/*
+  Violet, the application's own accent, rather than the mint (voice) or the
+  amber (connection health). Consort talking about itself is neither of those.
+*/
+.update {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--violet-press);
+  background: linear-gradient(
+    to bottom,
+    oklch(28% 0.05 284),
+    var(--surface-base)
+  );
+}
+
+.update__line {
+  margin: 0;
+  flex: 1 1 18rem;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.update__actions {
+  display: flex;
+  gap: var(--space-2);
+}

@@ -3109,3 +3109,39 @@ export function shareSources(): Promise<ShareSource[]> {
 export function callSetShare(source: string | null): Promise<SelfScreen> {
   return invoke<SelfScreen>("set_share", { source });
 }
+
+/**
+ * What is happening about a newer Consort. Mirrors `updating::Update`. Only a
+ * build that updates itself ever says anything here. See `updatesItself`.
+ */
+export type Update =
+  | { state: "upToDate" }
+  | { state: "ready"; version: string; notes: string }
+  | { state: "downloading"; received: number; total: number | null }
+  | { state: "installing" }
+  | { state: "failed"; reason: string };
+
+/**
+ * Listen for changes to whether a newer Consort exists. Same contract as
+ * `onConnection`: the returned function stops listening.
+ */
+export function onUpdate(handler: (update: Update) => void): Promise<UnlistenFn> {
+  return listen<Update>("update", (event) => handler(event.payload));
+}
+
+/**
+ * Whether this build can update itself. False for a Linux package, and the
+ * interface then draws no updater at all rather than a dead control.
+ */
+export function updatesItself(): Promise<boolean> {
+  return invoke<boolean>("updates_itself");
+}
+
+/**
+ * Download the waiting release and install it. Rejects with a sentence when a
+ * call is up. Progress arrives on the `update` channel, and a successful
+ * install does not return: the installer exits Consort to replace it.
+ */
+export function updateInstall(): Promise<void> {
+  return invoke<void>("update_install");
+}

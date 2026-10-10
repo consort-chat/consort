@@ -166,6 +166,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Only the Windows release job asks for `self-update`, so without these
+      # two steps nothing in CI compiles it: docs/PLAN-self-update.md.
+      - name: Clippy, with the updater compiled in
+        run: cargo clippy -p consort-app --all-targets --features self-update -- -D warnings
+
+      - name: Test, with the updater compiled in
+        run: cargo test -p consort-app --features self-update
+
       - name: Coverage
         # There is no keyring daemon in a container, so the secrets backend
         # under test is the file fallback and the keyring adapter is skipped.
@@ -288,10 +296,12 @@ jobs:
       #
       # ripgrep used to be installed here too. Nothing needs it now: git grep
       # searches tracked files without a pipe, which is the point.
+      # jq is not in this image either, and the manifest gate below is built
+      # out of it.
       - name: Install git, before the checkout needs it
         run: |
           apt-get update
-          apt-get install --yes --no-install-recommends git ca-certificates
+          apt-get install --yes --no-install-recommends git ca-certificates jq
 
       - uses: actions/checkout@v5
 
@@ -403,3 +413,9 @@ jobs:
       # anything on a pull request. This reads the files instead.
       - name: Node is the same version everywhere
         run: scripts/node-version.test.sh
+
+      # Same reasoning, sharpest case: the manifest gate runs on a tag and
+      # nowhere else, so a gate that stopped checking would be found by the
+      # release it let through. This runs it against fixtures.
+      - name: The update manifest gate still catches things
+        run: scripts/check-manifest.test.sh

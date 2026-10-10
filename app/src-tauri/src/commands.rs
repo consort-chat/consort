@@ -76,6 +76,22 @@ impl CommandError {
     }
 }
 
+/// A refusal is already written for a person, so the detail does not repeat it.
+#[cfg(feature = "self-update")]
+impl From<crate::updating::Refusal> for CommandError {
+    fn from(refusal: crate::updating::Refusal) -> Self {
+        Self::new(refusal.message(), "an update was refused".to_owned())
+    }
+}
+
+/// The plugin's error text is in the log by now, so the detail names the kind.
+#[cfg(feature = "self-update")]
+impl From<crate::updating::Trouble> for CommandError {
+    fn from(trouble: crate::updating::Trouble) -> Self {
+        Self::new(trouble.message(), format!("updating: {trouble:?}"))
+    }
+}
+
 impl From<crate::settings::SettingsError> for CommandError {
     fn from(error: crate::settings::SettingsError) -> Self {
         Self {
@@ -1892,6 +1908,90 @@ pub fn token_storage(state: State<'_, AppState>) -> TokenStorage {
     token_storage_for(&state)
 }
 
+/// Whether this build updates itself.
+///
+/// False for a .deb and for an Arch package, which draw no updater at all:
+/// docs/PLAN-self-update.md.
+#[tauri::command]
+pub fn updates_itself() -> bool {
+    crate::updating::UPDATES_ITSELF
+}
+
+/// Download the waiting release and put it in place.
+#[tauri::command]
+pub async fn update_install(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    #[cfg(feature = "self-update")]
+    return update_install_for(&state, &app).await;
+    #[cfg(not(feature = "self-update"))]
+    Ok(())
+}
+
+/// Refuse mid-call, download, refuse mid-call again, install.
+///
+/// The second refusal is the one that matters: a call can start inside the
+/// seconds a download takes. See docs/PLAN-self-update.md#a-call-in-progress.
+#[cfg(feature = "self-update")]
+pub async fn update_install_for<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+) -> Result<(), CommandError> {
+    use crate::updating::{Update, may_install};
+
+    may_install(state.in_a_call())?;
+
+    let Some(waiting) = crate::updating::waiting(app).await? else {
+        // Withdrawn between the banner and the press, which is what deleting a
+        // release's assets looks like from here.
+        state.announce(Update::UpToDate);
+        return Ok(());
+    };
+
+    let offered = Update::Ready {
+        version: waiting.version.clone(),
+        notes: waiting.body.clone().unwrap_or_default(),
+    };
+
+    // `on_chunk` is handed this chunk's length, not the running total, so the
+    // running total is kept here. Atomic rather than a `Cell` because this
+    // future has to be `Send` to be a command.
+    let received = std::sync::atomic::AtomicU64::new(0);
+    let bytes = waiting
+        .download(
+            |chunk, total| {
+                let so_far = received.fetch_add(chunk as u64, std::sync::atomic::Ordering::Relaxed)
+                    + chunk as u64;
+                state.announce(Update::Downloading {
+                    received: so_far,
+                    total,
+                });
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "downloading the update did not work");
+            crate::updating::Trouble::of(&error)
+        });
+
+    let outcome = match bytes {
+        Ok(bytes) => crate::updating::put_in_place(state.in_a_call(), || {
+            state.announce(Update::Installing);
+            waiting.install(bytes)
+        }),
+        Err(trouble) => Err(trouble.into()),
+    };
+
+    if let Err(failure) = &outcome {
+        tracing::warn!(detail = failure.detail(), "the update was not installed");
+        state.announce(offered);
+    }
+
+    outcome
+}
+
 /// Re-send the current state of every push channel.
 ///
 /// Called by the frontend once its listeners are attached. The background
@@ -2789,6 +2889,248 @@ mod tests {
         let settings = crate::settings::SettingsStore::at(dir.path());
         let state = AppState::new(store, settings, Arc::new(RecordingSink::new()));
         (dir, state, backend)
+    }
+
+    /// Updating Consort from inside Consort.
+    ///
+    /// The plugin's checking, verifying and installing is not ours to test.
+    /// The refusal is, and a person's voice depends on it.
+    #[cfg(feature = "self-update")]
+    mod updates {
+        use super::*;
+        use crate::events::{AppEvent, RecordingSink};
+        use crate::testing::{FakeCallTransport, fake_backends};
+
+        const GENERAL: &str = "!general:example.org";
+
+        fn state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
+            let sink = Arc::new(RecordingSink::new());
+            let settings = crate::settings::SettingsStore::at(dir.path());
+            (dir, AppState::new(store, settings, sink.clone()), sink)
+        }
+
+        /// Not a key. Nothing here downloads, so nothing parses it, and a real
+        /// one has no business in a test.
+        const NOT_A_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG5vdCBhIGtleQo=";
+
+        /// A mock application with the updater pointed at `endpoint`.
+        ///
+        /// The plugin reads `plugins.updater` out of the config, so a mock
+        /// context has to be given one or registering it fails.
+        fn app(endpoint: &str) -> tauri::App<tauri::test::MockRuntime> {
+            let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+            context.config_mut().plugins.0.insert(
+                "updater".to_owned(),
+                serde_json::json!({
+                    "pubkey": NOT_A_KEY,
+                    "endpoints": [endpoint],
+                    "requireSignedVersion": true,
+                }),
+            );
+            tauri::test::mock_builder()
+                .plugin(tauri_plugin_updater::Builder::new().build())
+                .build(context)
+                .unwrap()
+        }
+
+        /// The key this machine's build looks itself up under.
+        ///
+        /// Written per platform, or a test on Linux reads as "no update" for
+        /// the wrong reason: the shipped manifest is Windows only.
+        fn here() -> String {
+            format!(
+                "{}-{}",
+                if cfg!(windows) { "windows" } else { "linux" },
+                std::env::consts::ARCH
+            )
+        }
+
+        /// What the mock runtime reports itself as. Fixed by Tauri, not by us.
+        const RUNNING: &str = "0.1.0";
+
+        /// A manifest of exactly the shape docs/PLAN-self-update.md documents.
+        fn manifest(version: &str) -> serde_json::Value {
+            serde_json::json!({
+                "version": version,
+                "notes": "https://github.com/consort-chat/consort/releases/tag/v0.12.0",
+                "pub_date": "2026-10-07T07:09:53Z",
+                "platforms": {
+                    here(): {
+                        "url": "https://example.invalid/Consort_0.12.0_x64-setup.exe",
+                        "signature": "not checked until something is downloaded"
+                    }
+                }
+            })
+        }
+
+        /// A server answering `/latest.json` with `body`, and its endpoint.
+        async fn serving(body: wiremock::ResponseTemplate) -> (wiremock::MockServer, String) {
+            use wiremock::matchers::{method, path};
+
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(method("GET"))
+                .and(path("/latest.json"))
+                .respond_with(body)
+                .mount(&server)
+                .await;
+            let endpoint = format!("{}/latest.json", server.uri());
+            (server, endpoint)
+        }
+
+        fn join(state: &AppState, room_id: &str) {
+            state.connect_call(
+                room_id.to_owned(),
+                FakeCallTransport::joining,
+                crate::state::CallAudio {
+                    device: None,
+                    output: None,
+                    gate: Default::default(),
+                    backends: Box::new(fake_backends),
+                    us: "@ada:example.org".to_owned(),
+                },
+            );
+        }
+
+        /// The one that matters: the answer is taken here rather than trusted
+        /// from whatever the button looked like when it was drawn.
+        #[tokio::test]
+        async fn installing_during_a_call_is_refused_and_says_why() {
+            let (_dir, state, sink) = state();
+            // No endpoint is ever reached: the refusal is the first thing that
+            // happens, which is the point.
+            let app = app("http://127.0.0.1:1/latest.json");
+            let handle = app.handle().clone();
+            join(&state, GENERAL);
+            crate::testing::wait_for(
+                "the call to be up",
+                || state.in_a_call(),
+                || "no call".to_owned(),
+            );
+
+            let refused = update_install_for(&state, &handle)
+                .await
+                .expect_err("a call was up");
+
+            assert!(refused.message().contains("call"), "{refused:?}");
+            assert!(refused.message().contains("restart"), "{refused:?}");
+            // Nothing was announced, because nothing was attempted.
+            assert!(
+                !sink
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AppEvent::Update(_))),
+                "the refusal published an update state"
+            );
+        }
+
+        /// The shape this repository publishes is the shape the plugin reads,
+        /// pinned against a server rather than reasoned about.
+        #[tokio::test]
+        async fn a_newer_release_in_the_manifest_is_offered() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest("0.12.0")))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Ready {
+                    version: "0.12.0".to_owned(),
+                    notes: "https://github.com/consort-chat/consort/releases/tag/v0.12.0"
+                        .to_owned(),
+                }
+            );
+        }
+
+        #[tokio::test]
+        async fn the_running_version_is_not_an_update() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest(RUNNING)))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(found, crate::updating::Update::UpToDate);
+        }
+
+        /// A downgrade is not offered, however loudly the manifest asks.
+        #[tokio::test]
+        async fn an_older_release_is_never_offered() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest("0.0.9")))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(found, crate::updating::Update::UpToDate);
+        }
+
+        #[tokio::test]
+        async fn a_manifest_that_does_not_parse_says_so_and_offers_nothing() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_string("{ not json")).await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Manifest.message(),
+                }
+            );
+        }
+
+        /// What a Linux build reaching the shipped manifest finds.
+        #[tokio::test]
+        async fn a_manifest_with_no_entry_for_this_build_offers_nothing() {
+            let body = serde_json::json!({
+                "version": "9.9.9",
+                "platforms": {
+                    "plan9-vax": { "url": "https://example.invalid/x", "signature": "x" }
+                }
+            });
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(body)).await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Manifest.message(),
+                }
+            );
+        }
+
+        /// A check that cannot reach the server is reported, and no louder.
+        #[tokio::test]
+        async fn an_unreachable_endpoint_says_so() {
+            // Port 1, which nothing binds. A wiremock dropped to make a dead
+            // endpoint is not reliably dead: its listener outlives the drop.
+            let app = app("http://127.0.0.1:1/latest.json");
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Unreachable.message(),
+                }
+            );
+        }
     }
 
     /// Joining and leaving a voice channel.

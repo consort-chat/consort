@@ -27,6 +27,9 @@ mod state;
 mod testing;
 mod theirview;
 mod tray;
+// The policy half compiles either way, so its tests run both ways.
+#[cfg_attr(not(feature = "self-update"), allow(dead_code))]
+mod updating;
 mod video;
 
 use std::path::PathBuf;
@@ -168,6 +171,12 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init());
+    // Registering it with no `pubkey` in tauri.conf.json fails rather than
+    // running unsigned.
+    #[cfg(feature = "self-update")]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
     if profile().is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tracing::info!("a second instance was launched; focusing the existing window");
@@ -242,6 +251,11 @@ pub fn run() {
             // and `tray::install` needs to be on it to survive a machine with
             // no appindicator library. See the comment there.
             tray::install(app.handle());
+
+            // Windows only. A packaged build leaves the channel silent.
+            #[cfg(feature = "self-update")]
+            updating::poll(app.handle().clone());
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -276,6 +290,8 @@ pub fn run() {
             commands::logout,
             commands::token_storage,
             commands::resend_state,
+            commands::updates_itself,
+            commands::update_install,
             commands::room_avatar,
             commands::member_avatar,
             commands::member_profile,

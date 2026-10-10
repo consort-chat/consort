@@ -135,6 +135,12 @@ signature, not about anything the installer does, and the only way to tell
 those apart is to check the download against the SHA-256 GitHub prints beside
 the asset.
 
+This is the one build that updates itself. A bar names the newer version across
+the top of the window, and nothing is downloaded or installed until it is
+pressed. It will not install during a call, because finishing means restarting
+Consort. The installer is checked against a signature before anything is run.
+[docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the mechanism.
+
 ### Arch Linux
 
 ```sh
@@ -143,6 +149,9 @@ sudo pacman -U ./consort-<version>-1-x86_64.pkg.tar.zst
 
 pacman will say the package is unsigned and ask whether to install it anyway.
 Nothing here has a key yet, so that is expected rather than a sign of trouble.
+
+Consort does not update this for you, and deliberately never will: a package
+pacman is tracking is pacman's to replace. #47 is the Linux update path.
 
 To build it yourself instead, run `makepkg -si` in
 [`packaging/arch/`](packaging/arch/). To track `main` rather than the last
