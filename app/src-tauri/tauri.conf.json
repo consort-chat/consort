@@ -32,7 +32,7 @@
       "endpoints": [
         "https://consort-chat.github.io/consort/updater/latest.json"
       ],
-      "pubkey": "PUBLIC_KEY_NOT_SET",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5RTIyM0M4QzVERDAxRjQKUldUMEFkM0Z5Q1BpZWZDbVJwa0YwbmdpQVpxVEV6Q1M0aEQ2VmtUVysvVldNNm5TOD",
       "requireSignedVersion": true
     }
   },
