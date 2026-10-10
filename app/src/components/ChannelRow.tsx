@@ -313,15 +313,7 @@ export function ChannelRow({
         any other, and every other client lets somebody open one without
         joining the call in it.
       */}
-      <div
-        className="channels__row"
-        /*
-          Whether the control that reads a voice channel is on this row. It is
-          drawn over the row rather than in it, so the mention badge beside it
-          has to leave its slot alone; see the stylesheet.
-        */
-        data-chat={voice && channel.joined}
-      >
+      <div className="channels__row">
         <button
           type="button"
           className="channels__entry"
