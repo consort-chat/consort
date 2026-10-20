@@ -8950,3 +8950,244 @@ mod joining {
         assert!(!message.contains("You are not invited"), "{message}");
     }
 }
+
+/// Reading a room's widgets out of the state a sync delivered.
+///
+/// The rules themselves are unit-tested in `rooms::widgets`. What these cover
+/// is the part that needs a homeserver: both event types reaching the store,
+/// the layout event being found under its empty state key, and the account's
+/// own display name landing in a templated URL.
+mod widgets {
+    use super::*;
+    use consort_matrix::rooms::{Container, widgets};
+    use std::time::Duration;
+
+    const ROOM: &str = "!general:example.org";
+
+    fn state_event(
+        event_type: &str,
+        state_key: &str,
+        content: serde_json::Value,
+    ) -> serde_json::Value {
+        let event_id: String = format!("{event_type}{state_key}")
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+
+        serde_json::json!({
+            "type": event_type,
+            "state_key": state_key,
+            "content": content,
+            "event_id": format!("$e{event_id}"),
+            "sender": USER,
+            "origin_server_ts": 1_000,
+        })
+    }
+
+    /// A signed-in client whose one room holds `events` as state.
+    async fn room_holding(
+        server: &MatrixMockServer,
+        events: Vec<serde_json::Value>,
+    ) -> (tempfile::TempDir, matrix_sdk::Client) {
+        let (dir, client) = signed_in(server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s1",
+                    "rooms": { "join": { ROOM: { "state": { "events": events } } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        (dir, client)
+    }
+
+    fn wordle(url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.custom",
+            "name": "Wordle",
+            "url": url,
+        })
+    }
+
+    #[tokio::test]
+    async fn a_room_with_no_widgets_has_no_widgets() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(&server, Vec::new()).await;
+
+        assert_eq!(widgets(&client, ROOM).await.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn the_event_type_element_writes_is_read() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![state_event(
+                "im.vector.modular.widgets",
+                "wordle",
+                wordle("https://example.org/wordle"),
+            )],
+        )
+        .await;
+
+        let found = widgets(&client, ROOM).await.unwrap();
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].id, "wordle");
+        assert_eq!(found[0].url, "https://example.org/wordle");
+        assert_eq!(found[0].name.as_deref(), Some("Wordle"));
+    }
+
+    #[tokio::test]
+    async fn the_event_type_the_spec_names_is_read_too() {
+        // Element writes only the `im.vector` one today. Reading both now is
+        // what makes the day it moves a non-event.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![state_event(
+                "m.widget",
+                "wordle",
+                wordle("https://example.org/wordle"),
+            )],
+        )
+        .await;
+
+        let found = widgets(&client, ROOM).await.unwrap();
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].id, "wordle");
+    }
+
+    #[tokio::test]
+    async fn a_widget_written_under_both_types_is_listed_once() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![
+                state_event(
+                    "im.vector.modular.widgets",
+                    "wordle",
+                    wordle("https://example.org/old"),
+                ),
+                state_event("m.widget", "wordle", wordle("https://example.org/new")),
+            ],
+        )
+        .await;
+
+        let found = widgets(&client, ROOM).await.unwrap();
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        // The spec's name wins, which is the direction a migration runs.
+        assert_eq!(found[0].url, "https://example.org/new");
+    }
+
+    #[tokio::test]
+    async fn the_layout_event_puts_a_widget_at_the_top_of_the_room() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![
+                state_event(
+                    "im.vector.modular.widgets",
+                    "wordle",
+                    wordle("https://example.org/wordle"),
+                ),
+                state_event(
+                    "io.element.widgets.layout",
+                    "",
+                    serde_json::json!({ "widgets": {
+                        "wordle": { "container": "top", "height": 50 },
+                    } }),
+                ),
+            ],
+        )
+        .await;
+
+        let found = widgets(&client, ROOM).await.unwrap();
+
+        assert_eq!(found[0].container, Container::Top);
+        assert_eq!(found[0].height, Some(50));
+    }
+
+    #[tokio::test]
+    async fn a_removed_widget_is_not_listed() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![state_event(
+                "im.vector.modular.widgets",
+                "wordle",
+                serde_json::json!({}),
+            )],
+        )
+        .await;
+
+        assert_eq!(widgets(&client, ROOM).await.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn the_account_is_what_the_default_variables_stand_for() {
+        // The one part of the templating that cannot be unit-tested: that the
+        // viewer handed to the rules is this account in this room.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![state_event(
+                "im.vector.modular.widgets",
+                "wordle",
+                wordle("https://example.org/wordle?r=$matrix_room_id&u=$matrix_user_id"),
+            )],
+        )
+        .await;
+
+        let found = widgets(&client, ROOM).await.unwrap();
+
+        assert_eq!(
+            found[0].url,
+            "https://example.org/wordle?r=%21general%3Aexample.org&u=%40bob%3Aexample.org"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_widget_pointing_somewhere_this_client_will_not_go_is_not_listed() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(
+            &server,
+            vec![
+                state_event(
+                    "im.vector.modular.widgets",
+                    "script",
+                    wordle("javascript:alert(1)"),
+                ),
+                state_event(
+                    "im.vector.modular.widgets",
+                    "plaintext",
+                    wordle("http://example.org/wordle"),
+                ),
+            ],
+        )
+        .await;
+
+        assert_eq!(widgets(&client, ROOM).await.unwrap(), Vec::new());
+    }
+
+    #[tokio::test]
+    async fn a_room_this_account_is_not_in_is_an_error_rather_than_an_empty_list() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = room_holding(&server, Vec::new()).await;
+
+        let error = widgets(&client, "!elsewhere:example.org")
+            .await
+            .expect_err("a room nothing knows about is not a room with no widgets");
+
+        assert!(matches!(error, consort_matrix::Error::NoSuchRoom { .. }));
+    }
+}

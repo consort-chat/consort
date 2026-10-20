@@ -1034,6 +1034,7 @@ dependencies = [
  "matrix-sdk",
  "matrix-sdk-base",
  "mime",
+ "percent-encoding",
  "rand 0.9.5",
  "rustls",
  "serde",
@@ -1043,6 +1044,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "url",
  "wiremock",
  "zeroize",
 ]
