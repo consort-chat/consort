@@ -3130,6 +3130,32 @@ export function onUpdate(handler: (update: Update) => void): Promise<UnlistenFn>
 }
 
 /**
+ * What a look can answer with. The progress states arrive on the channel while
+ * an install runs, so a look never carries one.
+ */
+export type UpdateLook = Extract<
+  Update,
+  { state: "upToDate" | "ready" | "failed" }
+>;
+
+/**
+ * Look for an update now, because somebody asked. The same answer is published
+ * on the `update` channel, so the bar across the top agrees with About.
+ */
+export function updateCheck(): Promise<UpdateLook> {
+  return invoke<UpdateLook>("update_check");
+}
+
+/**
+ * What version is running. Read back from Tauri rather than kept a second time
+ * here, so this and what the updater compares a manifest against are one
+ * number.
+ */
+export function appVersion(): Promise<string> {
+  return invoke<string>("app_version");
+}
+
+/**
  * Whether this build can update itself. False for a Linux package, and the
  * interface then draws no updater at all rather than a dead control.
  */

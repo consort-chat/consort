@@ -1,0 +1,48 @@
+/*
+  Its own stylesheet, on the same terms as every other settings pane.
+*/
+.about {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  max-width: 46rem;
+}
+
+/*
+  A floor rather than a height taken from the words inside it. SC 2.5.8 asks
+  24 CSS pixels, and in `rem` so that it holds at the text size #122 put on a
+  slider. See AboutSection.css.test.tsx.
+*/
+.about__check {
+  min-width: 1.5rem;
+  min-height: 1.5rem;
+}
+
+.about__version {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.about__said {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.about__note {
+  margin: 0;
+  max-width: 34rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.about__problem {
+  margin: 0;
+  padding: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--danger);
+  background: var(--danger-surface);
+  border-radius: var(--radius-sm);
+}

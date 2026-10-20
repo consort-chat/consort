@@ -1917,6 +1917,53 @@ pub fn updates_itself() -> bool {
     crate::updating::UPDATES_ITSELF
 }
 
+/// What version is running, as the About section prints it.
+#[tauri::command]
+pub fn app_version(app: tauri::AppHandle) -> String {
+    app_version_for(&app)
+}
+
+/// The version the updater compares a manifest against.
+///
+/// Read back from Tauri rather than kept a second time: About and the offer
+/// disagreeing about what is running is worse than neither saying.
+pub fn app_version_for<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Look for an update now, because somebody pressed the button in About.
+#[tauri::command]
+pub async fn update_check(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] state: State<'_, AppState>,
+) -> Result<crate::updating::Update, CommandError> {
+    // A `Result` because Tauri requires one of any async command borrowing
+    // state. Nothing here fails: `look` folds every failure into a state.
+    #[cfg(feature = "self-update")]
+    return Ok(update_check_for(&state, &app).await);
+    // Nothing asks: a build with no updater draws no control to ask with.
+    // The command exists because `generate_handler!` takes one list.
+    #[cfg(not(feature = "self-update"))]
+    Ok(crate::updating::Update::Failed {
+        reason: crate::updating::NO_UPDATER,
+    })
+}
+
+/// Answer the press, and publish the same thing on the `update` channel.
+///
+/// Both, because they are two windows onto one fact. The press needs an
+/// answer, and a release found by hand is the same news the poll would have
+/// published, which the bar across the top is what carries.
+#[cfg(feature = "self-update")]
+pub async fn update_check_for<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+) -> crate::updating::Update {
+    let found = crate::updating::look(app).await;
+    state.announce(found.clone());
+    found
+}
+
 /// Download the waiting release and put it in place.
 #[tauri::command]
 pub async fn update_install(
@@ -2891,6 +2938,25 @@ mod tests {
         (dir, state, backend)
     }
 
+    /// What version is running, which the About section prints.
+    mod the_running_version {
+        use super::*;
+
+        #[test]
+        fn is_the_one_a_manifest_is_compared_against() {
+            // Two numbers would be worse than none: an About screen saying
+            // 0.12.0 while the updater offers 0.12.0 as newer is a bug report
+            // nobody can act on.
+            let app = tauri::test::mock_builder()
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .unwrap();
+
+            let said = app_version_for(&app.handle().clone());
+
+            assert_eq!(said, "0.1.0", "the mock runtime's own version");
+        }
+    }
+
     /// Updating Consort from inside Consort.
     ///
     /// The plugin's checking, verifying and installing is not ours to test.
@@ -3023,6 +3089,49 @@ mod tests {
                     .any(|e| matches!(e, AppEvent::Update(_))),
                 "the refusal published an update state"
             );
+        }
+
+        /// A look somebody asked for, which is the About section's button.
+        #[tokio::test]
+        async fn a_check_asked_for_answers_and_publishes_the_same_thing() {
+            // Both, because the two surfaces are different windows onto one
+            // fact: the About line answers the press, and the bar across the
+            // top is what carries the offer once settings are closed again.
+            let (_dir, state, sink) = state();
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest("0.12.0")))
+                    .await;
+            let app = app(&endpoint);
+
+            let answered = update_check_for(&state, &app.handle().clone()).await;
+
+            drop(server);
+            let offered = crate::updating::Update::Ready {
+                version: "0.12.0".to_owned(),
+                notes: "https://github.com/consort-chat/consort/releases/tag/v0.12.0".to_owned(),
+            };
+            assert_eq!(answered, offered);
+            assert!(
+                sink.events()
+                    .iter()
+                    .any(|e| matches!(e, AppEvent::Update(published) if *published == offered)),
+                "the look was never published: {:?}",
+                sink.events()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_check_that_finds_nothing_says_so_rather_than_staying_silent() {
+            let (_dir, state, _sink) = state();
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest(RUNNING)))
+                    .await;
+            let app = app(&endpoint);
+
+            let answered = update_check_for(&state, &app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(answered, crate::updating::Update::UpToDate);
         }
 
         /// The shape this repository publishes is the shape the plugin reads,
