@@ -1705,24 +1705,35 @@ describe("AppShell", () => {
     }
 
     /**
+     * Open the group the rooms this account is not in are drawn under.
+     *
+     * Folded until somebody presses it (#161), so a case about a row in it has
+     * to press it first.
+     */
+    async function browse() {
+      await userEvent.click(screen.getByRole("button", { name: "Not joined" }));
+    }
+
+    /**
      * The row in the column beside the pane.
      *
-     * Named by its group, because the space's own pane offers the same channel
+     * Found by its group, because the space's own pane offers the same channel
      * and `getByRole` cannot tell two identical controls apart. These cases
-     * are about the column; the pane has its own.
+     * are about the column; the pane has its own. One group for both kinds,
+     * because joining is the question whichever kind it is.
      */
-    function inTheColumn(group: "Text" | "Voice") {
-      return within(screen.getByRole("region", { name: group })).getByRole(
-        "button",
-        { name: /join(ing)? announcements/i },
-      );
+    function inTheColumn() {
+      return within(
+        screen.getByRole("region", { name: "Not joined" }),
+      ).getByRole("button", { name: /join(ing)? announcements/i });
     }
 
     it("asks the homeserver to let this account in", async () => {
       shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
 
       expect(roomJoin).toHaveBeenCalledWith(NEVER);
     });
@@ -1730,8 +1741,9 @@ describe("AppShell", () => {
     it("opens the channel once the join has landed", async () => {
       const { again } = shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
       again({ rooms: joined() });
 
       expect(
@@ -1750,8 +1762,9 @@ describe("AppShell", () => {
       );
       shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
 
       expect(
         screen.queryByRole("heading", { level: 1, name: "#announcements" }),
@@ -1767,8 +1780,9 @@ describe("AppShell", () => {
       // click, on a row that is now an ordinary voice channel.
       const { again, onJoinVoice } = shell({ rooms: listing("voice") });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Voice"));
+      await userEvent.click(inTheColumn());
       again({ rooms: joined("voice") });
 
       await screen.findByRole("heading", { level: 1, name: "announcements" });
@@ -1782,8 +1796,9 @@ describe("AppShell", () => {
       });
       shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
 
       // Twice: the column beside the pane and the pane itself both carry the
       // row that was pressed, so both say why it did not work.
@@ -1800,8 +1815,9 @@ describe("AppShell", () => {
       roomJoin.mockRejectedValue({ message: "Nope.", detail: "M_FORBIDDEN" });
       shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
 
       await screen.findAllByRole("alert");
       expect(
@@ -1822,11 +1838,12 @@ describe("AppShell", () => {
         );
       shell({ rooms: listing() });
       await openSpace();
+      await browse();
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
       await screen.findAllByRole("alert");
 
-      await userEvent.click(inTheColumn("Text"));
+      await userEvent.click(inTheColumn());
 
       expect(screen.queryAllByRole("alert")).toHaveLength(0);
       await act(async () => {
@@ -1962,7 +1979,10 @@ describe("AppShell", () => {
         ),
       );
 
-      expect(await screen.findAllByRole("alert")).toHaveLength(2);
+      // One rather than the two it used to be. The column carries the same
+      // row, but it is inside the group of rooms this account is not in, and
+      // that is folded until somebody opens it (#161).
+      expect(await screen.findAllByRole("alert")).toHaveLength(1);
     });
   });
 });
