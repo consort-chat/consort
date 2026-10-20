@@ -1312,11 +1312,12 @@ mod tests {
     use tokio::sync::watch;
 
     use crate::camera::OutgoingPicture;
+    use crate::detail::Ask;
     use crate::hearing::Heard;
     use crate::publish::PublishedAudio;
 
-    /// What one pass of `request` asked for: a box per person per picture.
-    type Pass = Vec<(String, Kind, Asked)>;
+    /// What one pass of `request` asked for, per person per picture.
+    type Pass = Vec<(String, Kind, Ask)>;
 
     /// What the fake transport was asked to do, in order.
     ///
@@ -3769,28 +3770,45 @@ mod tests {
             }
         }
 
-        /// What `Cap::Low` leaves of a box wider than its ceiling.
-        fn low() -> Asked {
-            Asked {
+        /// What `Cap::Low` asks for of a share, whatever it is drawn at.
+        fn low() -> Ask {
+            Ask::Size(Asked {
                 width: 640,
                 height: 360,
-            }
+            })
         }
 
         #[tokio::test]
-        async fn a_picture_is_asked_for_at_the_size_of_the_box_it_is_drawn_in() {
-            // Phase 1 of the plan. Nothing capped anything here: the SFU was
-            // sending a whole desktop to fill a 320 pixel square, and this is
-            // the ask that stops it.
+        async fn a_camera_is_asked_for_at_the_size_of_the_box_it_is_drawn_in() {
+            // Nothing capped anything here: the SFU was sending 720p to fill
+            // a 320 pixel square, and this is the ask that stops it.
             let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
 
             transcript(
                 transport,
-                vec![connect_to(GENERAL), drawn_at(ADA, Kind::Screen, 320)],
+                vec![connect_to(GENERAL), drawn_at(ADA, Kind::Camera, 320)],
             )
             .await;
 
-            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, wide(320))]);
+            assert_eq!(
+                log.asked(),
+                vec![(ADA.to_owned(), Kind::Camera, Ask::Size(wide(320)))]
+            );
+        }
+
+        #[tokio::test]
+        async fn an_uncapped_share_is_asked_for_at_its_best() {
+            // #195. The box is smaller than half of what is published, so a
+            // box asking for itself picks a rung at three frames a second.
+            let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
+
+            transcript(
+                transport,
+                vec![connect_to(GENERAL), drawn_at(ADA, Kind::Screen, 960)],
+            )
+            .await;
+
+            assert_eq!(log.asked(), vec![(ADA.to_owned(), Kind::Screen, Ask::Best)]);
         }
 
         #[tokio::test]
@@ -3832,7 +3850,7 @@ mod tests {
                 log.asked(),
                 vec![
                     (ADA.to_owned(), Kind::Screen, low()),
-                    (BOB.to_owned(), Kind::Screen, wide(1920)),
+                    (BOB.to_owned(), Kind::Screen, Ask::Best),
                 ]
             );
         }
@@ -3875,24 +3893,24 @@ mod tests {
 
         #[tokio::test]
         async fn a_box_that_grew_is_asked_for_again() {
-            // Clicking a share to fill the window is the case. The still is
+            // A face moving from the strip to a bigger square. The still is
             // already sampled at the new size, and this is what makes the SFU
-            // send a layer worth sampling.
+            // send a rung worth sampling.
             let (transport, log) = FakeTransport::whose_roster_holds(vec![person("Ada")]);
 
             transcript(
                 transport,
                 vec![
                     connect_to(GENERAL),
-                    drawn_at(ADA, Kind::Screen, 320),
-                    drawn_at(ADA, Kind::Screen, 1920),
+                    drawn_at(ADA, Kind::Camera, 320),
+                    drawn_at(ADA, Kind::Camera, 1920),
                 ],
             )
             .await;
 
             assert_eq!(
                 log.asked(),
-                vec![(ADA.to_owned(), Kind::Screen, wide(1920))]
+                vec![(ADA.to_owned(), Kind::Camera, Ask::Size(wide(1920)))]
             );
         }
 
@@ -4092,10 +4110,10 @@ mod tests {
                 vec![(
                     "@ada:example.org".to_owned(),
                     Kind::Screen,
-                    Asked {
+                    Ask::Size(Asked {
                         width: 640,
                         height: 360
-                    }
+                    })
                 )],
                 "the pass after the rejoin asked for the publisher's own size"
             );
