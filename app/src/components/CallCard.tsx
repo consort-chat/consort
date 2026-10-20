@@ -200,7 +200,9 @@ export function CallCard({
           {
             key: selfId,
             label: sharing,
-            picture: () => <SelfPicture of="screen" />,
+            picture: (bound: number) => (
+              <SelfPicture of="screen" bound={bound} />
+            ),
           },
         ]),
     ...people
@@ -210,8 +212,8 @@ export function CallCard({
         label: `${person.name}'s screen`,
         /*
           A function of the size, because the same share is drawn at two of
-          them: across the stage and as a square in the strip. Ours takes no
-          size, being one local capture bounded where it is sampled.
+          them: across the stage and as a square in the strip. Ours is asked
+          the same way, from the local capture rather than over the SFU.
         */
         picture: (bound: number) => (
           <TheirPicture
@@ -341,7 +343,9 @@ export function CallCard({
    */
   function camera(participant: Participant): ReactNode {
     if (participant.id === selfId) {
-      return cameraOn ? <SelfPicture of="camera" /> : undefined;
+      return cameraOn ? (
+        <SelfPicture of="camera" bound={BOUND.tile} />
+      ) : undefined;
     }
 
     return participant.camera === true ? (

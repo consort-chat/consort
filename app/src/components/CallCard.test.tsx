@@ -666,7 +666,7 @@ describe("your own camera on the card", () => {
       }),
     );
 
-    expect(usePicture).toHaveBeenCalledWith("camera");
+    expect(usePicture).toHaveBeenCalledWith("camera", 320);
   });
 
   it("survives being dragged", () => {
@@ -777,7 +777,7 @@ describe("what other people are sending", () => {
       }),
     );
 
-    expect(usePicture).toHaveBeenCalledWith("camera");
+    expect(usePicture).toHaveBeenCalledWith("camera", 320);
     expect(useTheirPicture).not.toHaveBeenCalled();
   });
 
@@ -892,6 +892,42 @@ describe("screens being shared on the card", () => {
     expect(
       within(stage()!).getByRole("img", { name: "Your screen" }),
     ).toBeVisible();
+  });
+
+  it("asks for our own share at the size the stage is drawing it", async () => {
+    // Issue #194. The sender's own picture was bounded where it was sampled, so
+    // the stage got a tile's worth of pixels blown up to fill it whatever size
+    // the card was. Everybody else's share had already been fixed for #165.
+    usePicture.mockReturnValue(PICTURE);
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+    }));
+    expect(usePicture).toHaveBeenCalledWith("screen", 480);
+
+    await userEvent.click(stage()!);
+
+    expect(usePicture).toHaveBeenCalledWith("screen", 1920);
+  });
+
+  it("asks for only a square's worth of our own share under the stage", async () => {
+    // Two shares, so ours is in the strip. A tile down there is the square a
+    // face is in and should cost what one costs.
+    usePicture.mockReturnValue(PICTURE);
+
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+    await userEvent.click(within(strip()!).getAllByRole("button")[0]!);
+
+    expect(usePicture).toHaveBeenCalledWith("screen", 320);
   });
 
   it("puts somebody else's screen on the stage when theirs is the only one", () => {

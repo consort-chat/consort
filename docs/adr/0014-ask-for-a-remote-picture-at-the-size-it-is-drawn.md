@@ -120,7 +120,11 @@ self view is sampled to 320 pixels on the capture thread, which is ADR-0007's
 bound and the thing #165 is actually about: the stage now draws somebody else's
 share at up to 1920 and our own at 320 upscaled. Moving that bound is a
 different change, in `app/src-tauri/src/selfview.rs`, with a different cost
-profile: it is paid per captured frame rather than per drawn picture.
+profile: it is paid per captured frame rather than per drawn picture. Reported
+as #194 and done in
+[ADR-0018](0018-sample-the-self-view-at-the-size-it-is-drawn.md), which moves
+the sampling to the ask and measures the capture thread cheaper for it rather
+than dearer.
 
 **ADR-0009's reason for staging our own screen by default has expired.** It
 staged ours "because it is the only share that can draw a picture". That is no
