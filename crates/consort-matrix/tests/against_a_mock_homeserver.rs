@@ -8950,3 +8950,313 @@ mod joining {
         assert!(!message.contains("You are not invited"), "{message}");
     }
 }
+
+/// Reading MSC2545 image packs out of room state and account data.
+///
+/// Every read is of the local store, so the thing being tested is a sync
+/// landing and the packs coming back out of it. The sync envelope is written
+/// out by hand for the reason `timeline` does it: `mock_sync`'s builder takes
+/// a `JoinedRoomBuilder` this crate cannot name.
+mod image_packs {
+    use super::*;
+    use consort_matrix::emotes;
+
+    const ROOM: &str = "!general:example.org";
+    const ELSEWHERE: &str = "!blobs:example.org";
+
+    /// One `im.ponies.room_emotes` state event under `state_key`.
+    fn room_pack(state_key: &str, content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "type": "im.ponies.room_emotes",
+            "state_key": state_key,
+            "event_id": format!("$pack{state_key}:example.org"),
+            "sender": USER,
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": content,
+        })
+    }
+
+    /// One global account data event.
+    fn account(event_type: &str, content: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "type": event_type, "content": content })
+    }
+
+    /// A pack of one image under `shortcode`.
+    fn one_image(shortcode: &str) -> serde_json::Value {
+        serde_json::json!({
+            "images": { shortcode: { "url": format!("mxc://example.org/{shortcode}") } },
+        })
+    }
+
+    /// Sync once, with `rooms` in the join block and `data` as account data.
+    async fn syncing(
+        server: &MatrixMockServer,
+        client: &matrix_sdk::Client,
+        rooms: serde_json::Value,
+        data: Vec<serde_json::Value>,
+    ) {
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": data },
+                    "rooms": { "join": rooms },
+                })),
+            )
+            .mount(server.server())
+            .await;
+
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the packs should sync");
+    }
+
+    /// The shortcodes in each pack, in the order the packs came back.
+    fn drawn(packs: &[emotes::ImagePack]) -> Vec<(&str, Vec<&str>)> {
+        packs
+            .iter()
+            .map(|pack| {
+                (
+                    pack.id.as_str(),
+                    pack.images
+                        .iter()
+                        .map(|image| image.shortcode.as_str())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_room_s_own_pack_is_read_out_of_its_state() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [room_pack("", one_image("blobcat"))] } },
+            }),
+            Vec::new(),
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(drawn(&packs), [("!general:example.org/", vec!["blobcat"])]);
+    }
+
+    #[tokio::test]
+    async fn two_packs_in_one_room_are_two_packs() {
+        // A bridged room is the ordinary case: somebody sets a pack, and the
+        // bridge drops the other side's whole emoji set in beside it.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [
+                    room_pack("ours", one_image("blobcat")),
+                    room_pack("bridged", one_image("partyparrot")),
+                ] } },
+            }),
+            Vec::new(),
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(packs.len(), 2, "{packs:?}");
+    }
+
+    #[tokio::test]
+    async fn the_account_s_own_pack_comes_first() {
+        // What somebody put together for themselves, before what a room handed
+        // them. Nothing in MSC2545's ordering covers this one, because the
+        // revision that is current dropped the per-account pack; every client
+        // that implements packs still writes it.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [room_pack("", one_image("blobcat"))] } },
+            }),
+            vec![account("im.ponies.user_emotes", one_image("mine"))],
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(
+            drawn(&packs),
+            [
+                ("account", vec!["mine"]),
+                ("!general:example.org/", vec!["blobcat"]),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pack_switched_on_for_every_room_is_read_from_the_room_it_lives_in() {
+        // The whole point of `im.ponies.emote_rooms`: the pack is state in a
+        // room somebody is not reading, and it has to reach the room they are.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [] } },
+                ELSEWHERE: { "state": { "events": [
+                    room_pack("blobs", one_image("blobcat")),
+                ] } },
+            }),
+            vec![account(
+                "im.ponies.emote_rooms",
+                serde_json::json!({ "rooms": { ELSEWHERE: { "blobs": {} } } }),
+            )],
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(
+            drawn(&packs),
+            [("!blobs:example.org/blobs", vec!["blobcat"])]
+        );
+    }
+
+    #[tokio::test]
+    async fn only_the_pack_that_was_switched_on_comes_along() {
+        // The state key in the list names one pack. A room with three of them
+        // and one switched on must not hand over all three.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [] } },
+                ELSEWHERE: { "state": { "events": [
+                    room_pack("blobs", one_image("blobcat")),
+                    room_pack("other", one_image("partyparrot")),
+                ] } },
+            }),
+            vec![account(
+                "im.ponies.emote_rooms",
+                serde_json::json!({ "rooms": { ELSEWHERE: { "blobs": {} } } }),
+            )],
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(
+            drawn(&packs),
+            [("!blobs:example.org/blobs", vec!["blobcat"])]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pack_switched_on_in_the_room_being_read_is_offered_once() {
+        // Switching on a pack that lives in the room you are in is a thing
+        // somebody does, and two copies of it in a picker would be this
+        // build's fault rather than theirs.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [room_pack("ours", one_image("blobcat"))] } },
+            }),
+            vec![account(
+                "im.ponies.emote_rooms",
+                serde_json::json!({ "rooms": { ROOM: { "ours": {} } } }),
+            )],
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(
+            drawn(&packs),
+            [("!general:example.org/ours", vec!["blobcat"])]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_switched_on_pack_in_a_room_this_account_is_not_in_is_left_out() {
+        // MSC2545 says outright that the list can name one. There is no state
+        // to read and nothing to draw, and it must not cost the packs beside
+        // it.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({
+                ROOM: { "state": { "events": [room_pack("", one_image("blobcat"))] } },
+            }),
+            vec![account(
+                "im.ponies.emote_rooms",
+                serde_json::json!({ "rooms": { "!gone:example.org": { "": {} } } }),
+            )],
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("the room is a room");
+
+        assert_eq!(drawn(&packs), [("!general:example.org/", vec!["blobcat"])]);
+    }
+
+    #[tokio::test]
+    async fn a_room_with_no_packs_has_no_packs() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        syncing(
+            &server,
+            &client,
+            serde_json::json!({ ROOM: { "state": { "events": [] } } }),
+            Vec::new(),
+        )
+        .await;
+
+        let packs = emotes::packs(&client, ROOM)
+            .await
+            .expect("a room with no packs is still a room");
+
+        assert!(packs.is_empty(), "{packs:?}");
+    }
+
+    #[tokio::test]
+    async fn a_room_this_session_has_never_heard_of_is_an_error_rather_than_an_empty_picker() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+
+        let error = emotes::packs(&client, "!nowhere:example.org")
+            .await
+            .expect_err("there is no such room");
+
+        assert!(matches!(error, consort_matrix::Error::NoSuchRoom { .. }));
+    }
+}

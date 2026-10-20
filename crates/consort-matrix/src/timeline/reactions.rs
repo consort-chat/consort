@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 
 use crate::timeline::dto::Reaction;
+use crate::timeline::facts::Annotated;
 
 /// One `m.reaction` event, unpacked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +25,8 @@ struct Annotation {
     key: String,
     /// Who reacted.
     sender: String,
+    /// What the sender called the image, when the key is one and they said.
+    shortcode: Option<String>,
 }
 
 /// The annotations currently known, for one room.
@@ -49,30 +52,29 @@ impl Reactions {
     /// A repeat of one already held changes nothing, and so does a second
     /// annotation of the same key by the same person, which the specification
     /// says to ignore and a client that counted would draw as two.
-    pub fn added(&mut self, event_id: &str, target: &str, key: &str, sender: &str) -> bool {
-        if self.held.contains_key(event_id) {
+    pub fn added(&mut self, one: Annotated) -> bool {
+        if self.held.contains_key(&one.event_id) {
             return false;
         }
 
         let already = self
-            .ids_on(target)
-            .any(|held| held.key == key && held.sender == sender);
+            .ids_on(&one.target)
+            .any(|held| held.key == one.key && held.sender == one.sender);
         if already {
             return false;
         }
 
+        let target = one.target.clone();
         self.held.insert(
-            event_id.to_owned(),
+            one.event_id.clone(),
             Annotation {
-                target: target.to_owned(),
-                key: key.to_owned(),
-                sender: sender.to_owned(),
+                target: one.target,
+                key: one.key,
+                sender: one.sender,
+                shortcode: one.shortcode,
             },
         );
-        self.on
-            .entry(target.to_owned())
-            .or_default()
-            .push(event_id.to_owned());
+        self.on.entry(target).or_default().push(one.event_id);
         true
     }
 
@@ -107,11 +109,20 @@ impl Reactions {
                     if mine {
                         had.mine = Some(event_id.to_owned());
                     }
+                    // The first name the key was given, and only when it has
+                    // none: two clients read the shortcode out of their own
+                    // packs and can disagree, and a pill that renamed itself
+                    // as other people pressed it would be one control with
+                    // several labels.
+                    if had.shortcode.is_none() {
+                        had.shortcode = held.shortcode.clone();
+                    }
                 }
                 None => counted.push(Reaction {
                     key: held.key.clone(),
                     count: 1,
                     mine: mine.then(|| event_id.to_owned()),
+                    shortcode: held.shortcode.clone(),
                 }),
             }
         }
@@ -144,8 +155,19 @@ mod tests {
     const BOB: &str = "@bob:example.org";
     const SAID: &str = "$said";
 
+    /// One annotation of [`SAID`], named or not.
+    fn annotated(id: &str, key: &str, who: &str, shortcode: Option<&str>) -> Annotated {
+        Annotated {
+            event_id: id.to_owned(),
+            target: SAID.to_owned(),
+            key: key.to_owned(),
+            sender: who.to_owned(),
+            shortcode: shortcode.map(str::to_owned),
+        }
+    }
+
     fn reacted(reactions: &mut Reactions, id: &str, key: &str, who: &str) -> bool {
-        reactions.added(id, SAID, key, who)
+        reactions.added(annotated(id, key, who, None))
     }
 
     fn keys(reactions: &Reactions, me: Option<&str>) -> Vec<(String, u32, bool)> {
@@ -276,10 +298,83 @@ mod tests {
     }
 
     #[test]
+    fn a_pill_nobody_named_carries_no_name() {
+        let mut reactions = Reactions::new();
+        reacted(&mut reactions, "$a", "👍", ADA);
+
+        assert_eq!(reactions.on(SAID, None)[0].shortcode, None);
+    }
+
+    #[test]
+    fn a_custom_emoji_pill_carries_the_name_its_sender_gave_it() {
+        // Without this the pill reads out as an `mxc://` URI, one character at
+        // a time, to whoever is listening rather than looking.
+        let mut reactions = Reactions::new();
+        reactions.added(annotated(
+            "$a",
+            "mxc://example.org/cat",
+            ADA,
+            Some("blobcat"),
+        ));
+
+        assert_eq!(
+            reactions.on(SAID, None)[0].shortcode.as_deref(),
+            Some("blobcat")
+        );
+    }
+
+    #[test]
+    fn the_first_name_on_a_key_is_the_one_the_pill_keeps() {
+        // Two people can call the same image two things, because each client
+        // writes the shortcode out of its own packs. The pill is one control
+        // and has one label, and the stable answer is the one that was already
+        // on screen.
+        let mut reactions = Reactions::new();
+        reactions.added(annotated(
+            "$a",
+            "mxc://example.org/cat",
+            ADA,
+            Some("blobcat"),
+        ));
+        reactions.added(annotated("$b", "mxc://example.org/cat", BOB, Some("cat")));
+
+        let drawn = reactions.on(SAID, None);
+
+        assert_eq!(drawn[0].count, 2);
+        assert_eq!(drawn[0].shortcode.as_deref(), Some("blobcat"));
+    }
+
+    #[test]
+    fn a_name_arrives_even_when_the_first_person_did_not_give_one() {
+        // A client that sends no shortcode and one that does, on the same
+        // image. Holding out for the first annotation's answer would leave the
+        // pill unnamed because of whoever happened to press first.
+        let mut reactions = Reactions::new();
+        reactions.added(annotated("$a", "mxc://example.org/cat", ADA, None));
+        reactions.added(annotated(
+            "$b",
+            "mxc://example.org/cat",
+            BOB,
+            Some("blobcat"),
+        ));
+
+        assert_eq!(
+            reactions.on(SAID, None)[0].shortcode.as_deref(),
+            Some("blobcat")
+        );
+    }
+
+    #[test]
     fn reactions_on_one_message_say_nothing_about_another() {
         let mut reactions = Reactions::new();
-        reactions.added("$a", "$one", "👍", ADA);
-        reactions.added("$b", "$two", "🎉", ADA);
+        reactions.added(Annotated {
+            target: "$one".to_owned(),
+            ..annotated("$a", "👍", ADA, None)
+        });
+        reactions.added(Annotated {
+            target: "$two".to_owned(),
+            ..annotated("$b", "🎉", ADA, None)
+        });
 
         assert_eq!(reactions.on("$one", None).len(), 1);
         assert_eq!(reactions.on("$one", None)[0].key, "👍");

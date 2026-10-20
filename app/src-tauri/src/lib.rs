@@ -297,6 +297,7 @@ pub fn run() {
             commands::member_profile,
             commands::member_names,
             commands::room_members,
+            commands::emoji_packs,
             commands::timeline_open,
             commands::timeline_close,
             commands::recent_rooms,

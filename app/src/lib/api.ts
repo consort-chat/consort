@@ -690,6 +690,45 @@ export function roomMembers(roomId: string): Promise<Members> {
   return invoke<Members>("room_members", { roomId });
 }
 
+/** One custom emoji out of an image pack. Mirrors `consort_matrix::PackImage`. */
+export interface PackImage {
+  /** What somebody types to reach it, with no colons around it. */
+  shortcode: string;
+  /** Where the image is, always an `mxc://`: Rust refuses anything else. */
+  url: string;
+  /**
+   * What the image is of, for somebody who cannot see it. Not the shortcode:
+   * MSC2545 is explicit that those are different jobs.
+   */
+  body?: string;
+}
+
+/** One image pack. Mirrors `consort_matrix::ImagePack`. */
+export interface ImagePack {
+  /** Stable across reads, so it can be a React key. */
+  id: string;
+  /** What to call it: its own name, or the room's where it has none. */
+  name?: string;
+  /** An `mxc://` for its icon, if it or its room has one. */
+  avatar?: string;
+  /** Who made the images, where the pack says. */
+  attribution?: string;
+  /** The emoji in it, by shortcode, in an order that does not move. */
+  images: PackImage[];
+}
+
+/**
+ * Every custom emoji somebody reading `roomId` can reach.
+ *
+ * Local on the Rust side: the packs are already in the state store, so this is
+ * a read rather than a request. See `consort_matrix::emotes` for which packs
+ * are read and in what order, and `useEmoteNames` in `lib/emotes` for the
+ * direction a drawn message needs them in.
+ */
+export function emojiPacks(roomId: string): Promise<ImagePack[]> {
+  return invoke<ImagePack[]>("emoji_packs", { roomId });
+}
+
 /**
  * The five things a person can do to a verification flow.
  *
@@ -1807,6 +1846,16 @@ export interface Reaction {
    * session has not used this key.
    */
   mine?: string;
+  /**
+   * What the sender called the image, when the key is a custom emoji.
+   *
+   * MSC2545 keys one by the image's own `mxc://` URI and says nothing about
+   * naming it, so the name travels beside the relation. Absent for an
+   * ordinary reaction, where the key is the character and needs no name, and
+   * absent for a client that sends none: see `nameOfKey` in `MessageGroups`
+   * for what is drawn then.
+   */
+  shortcode?: string;
 }
 
 /**

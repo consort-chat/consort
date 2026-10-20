@@ -54,6 +54,8 @@ const threadOpen = vi.hoisted(() => vi.fn());
 // file. Two of the twelve it starts with are enough here.
 const emojiSettings = vi.hoisted(() => vi.fn());
 const emojiUsed = vi.hoisted(() => vi.fn());
+// This room's custom emoji, which name the pills under a message.
+const emojiPacks = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
@@ -89,6 +91,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
   emojiSettings,
   emojiUsed,
+  emojiPacks,
 }));
 
 import { COPIED_FOR, RoomTimeline } from "./RoomTimeline";
@@ -219,6 +222,7 @@ beforeEach(() => {
       },
     );
   emojiSettings.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
+  emojiPacks.mockReset().mockResolvedValue([]);
   emojiUsed.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
   pickAttachment.mockReset().mockResolvedValue(null);
   attachFile.mockReset().mockResolvedValue(undefined);
@@ -2848,6 +2852,29 @@ describe("reacting to a message", () => {
 
     expect(timelineUnreact).toHaveBeenCalledWith(GENERAL, "$mine");
     expect(timelineReact).not.toHaveBeenCalled();
+  });
+
+  it("names a custom emoji from this room's packs", async () => {
+    // The pane is the only thing that knows which room is open, so it is what
+    // reads the packs. Without this the pill is labelled "Custom reaction"
+    // and there is nothing to type to send the same one back.
+    emojiPacks.mockResolvedValue([
+      {
+        id: `${GENERAL}/`,
+        images: [
+          { shortcode: "partyparrot", url: "mxc://example.org/parrot" },
+        ],
+      },
+    ]);
+    await pane();
+    await arrive(
+      timeline([reacted({ key: "mxc://example.org/parrot", count: 1 })]),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "partyparrot, 1" }),
+    ).toBeVisible();
+    expect(emojiPacks).toHaveBeenCalledWith(GENERAL);
   });
 
   it("says why a reaction did not land", async () => {

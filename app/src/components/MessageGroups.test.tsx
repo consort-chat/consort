@@ -114,6 +114,26 @@ function drawReactable(messages: Message[], onReact: Reacted) {
   );
 }
 
+/** The same, with the names this room's packs give its custom emoji. */
+function drawWithEmoteNames(
+  messages: Message[],
+  shortcodes: ReadonlyMap<string, string>,
+) {
+  return render(
+    <MessageGroups
+      groups={group(messages)}
+      names={{ [ADA]: "Ada" }}
+      roomId={GENERAL}
+      selfId={BOB}
+      known={known(messages)}
+      shortcodes={shortcodes}
+      onAbout={vi.fn()}
+      onOpenThread={vi.fn()}
+      onReact={vi.fn()}
+    />,
+  );
+}
+
 type Reacted = (eventId: string, key: string, mine: string | undefined) => void;
 
 /** The same, with the two controls a room offers and a thread panel does not. */
@@ -1316,6 +1336,84 @@ describe("a reaction this build has no picture for", () => {
       mediaUrl(JSON.stringify({ url: "mxc://example.org/parrot" })),
     );
     expect(pill).not.toHaveTextContent("mxc://");
+  });
+
+  it("calls it what its sender called it", () => {
+    // The sender's own word for the image, carried beside the relation.
+    // Without it the pill reads out as a URI, one character at a time, to
+    // whoever is listening rather than looking.
+    draw([
+      said("$1", ADA, "hello", NOON, {
+        reactions: [
+          {
+            key: "mxc://example.org/parrot",
+            count: 2,
+            shortcode: "partyparrot",
+          },
+        ],
+      }),
+    ]);
+
+    const pill = screen.getByRole("button", { name: "partyparrot, 2" });
+    expect(within(pill).getByRole("presentation")).toHaveAttribute(
+      "title",
+      "partyparrot",
+    );
+  });
+
+  it("calls it what this room's packs call it when its sender said nothing", () => {
+    // Most clients send no name at all. The packs are the other place the
+    // answer is, and #20 is what put them within reach.
+    drawWithEmoteNames(
+      [
+        said("$1", ADA, "hello", NOON, {
+          reactions: [{ key: "mxc://example.org/parrot", count: 2 }],
+        }),
+      ],
+      new Map([["mxc://example.org/parrot", "partyparrot"]]),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "partyparrot, 2" }),
+    ).toBeVisible();
+  });
+
+  it("keeps the sender's name when the packs have another for it", () => {
+    // Two shortcodes for one image is the ordinary case: each client reads the
+    // name out of its own packs. What was sent is what was meant.
+    drawWithEmoteNames(
+      [
+        said("$1", ADA, "hello", NOON, {
+          reactions: [
+            {
+              key: "mxc://example.org/parrot",
+              count: 1,
+              shortcode: "partyparrot",
+            },
+          ],
+        }),
+      ],
+      new Map([["mxc://example.org/parrot", "parrot"]]),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "partyparrot, 1" }),
+    ).toBeVisible();
+  });
+
+  it("leaves an ordinary key alone when the packs know the shortcode", () => {
+    // A pack whose address somehow matched a plain key must not rename a
+    // thumbs up. The lookup is by `mxc://` and nothing else is one.
+    drawWithEmoteNames(
+      [
+        said("$1", ADA, "hello", NOON, {
+          reactions: [{ key: "lgtm", count: 1 }],
+        }),
+      ],
+      new Map([["lgtm", "laughing"]]),
+    );
+
+    expect(screen.getByRole("button", { name: "lgtm, 1" })).toBeVisible();
   });
 
   it("counts it and takes it back the way any other pill does", () => {

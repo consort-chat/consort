@@ -47,6 +47,14 @@ pub struct Annotated {
     pub key: String,
     /// Who reacted.
     pub sender: String,
+    /// What the sender called the image they reacted with, when they said.
+    ///
+    /// MSC2545 keys a custom emoji reaction by the image's own `mxc://` URI
+    /// and says nothing about naming it, so the name is carried beside the
+    /// relation as `shortcode`: that is what Cinny writes and reads, and
+    /// without it a pill about an emoji from a pack this account cannot see
+    /// has nothing to read out but a URI.
+    pub shortcode: Option<String>,
 }
 
 /// One `m.replace` event, unpacked.
@@ -221,7 +229,38 @@ pub fn annotation(event: &TimelineEvent) -> Option<Annotated> {
         target: reacted.content.relates_to.event_id.to_string(),
         key: reacted.content.relates_to.key,
         sender: reacted.sender.to_string(),
+        shortcode: shortcode_of(event),
     })
+}
+
+/// The longest a shortcode may be, in bytes, which is MSC2545's own ceiling.
+///
+/// Applied to a reaction's name and not to a pack's. A pack is set by somebody
+/// with power in a room, and the MSC asks that a malformed shortcode be shown
+/// so they can see it and fix it. A reaction is sent by anybody in the room
+/// and nobody can fix it, and the name becomes a pill's tooltip and the label
+/// a screen reader reads out.
+const LONGEST_SHORTCODE: usize = 100;
+
+/// What a reaction's sender called the image, out of the raw event.
+///
+/// Read field by field rather than by deserialising the content, because the
+/// field is not in the specification: a typed read of the whole content would
+/// let a sender who wrote a number there cost the reaction itself. A blank one
+/// is no name, which is the same rule a blank room name gets.
+fn shortcode_of(event: &TimelineEvent) -> Option<String> {
+    /// Only the one field, so nothing else in the content can refuse to parse.
+    #[derive(Deserialize)]
+    struct Named {
+        shortcode: Option<String>,
+    }
+
+    event
+        .raw()
+        .get_field::<Named>("content")
+        .ok()??
+        .shortcode
+        .filter(|name| !name.trim().is_empty() && name.len() <= LONGEST_SHORTCODE)
 }
 
 /// One `m.room.redaction`, unpacked. Its own type rather than the event ID
@@ -1487,6 +1526,112 @@ mod tests {
         }));
 
         assert!(replacement(&edit).is_none());
+    }
+
+    /// One `m.reaction` on `$one`, with `content` as its content.
+    fn reaction(content: Value) -> TimelineEvent {
+        event(json!({
+            "type": "m.reaction",
+            "event_id": "$reacted:example.org",
+            "sender": "@ada:example.org",
+            "origin_server_ts": 1_700_000_000_000u64,
+            "content": content,
+        }))
+    }
+
+    /// An annotation of `$one` with `key`, plus whatever else `extra` holds.
+    fn annotating(key: &str, extra: Value) -> Value {
+        let mut content = json!({
+            "m.relates_to": {
+                "rel_type": "m.annotation",
+                "event_id": "$one:example.org",
+                "key": key,
+            },
+        });
+        for (name, value) in extra.as_object().expect("the fixture is an object") {
+            content[name] = value.clone();
+        }
+        content
+    }
+
+    #[test]
+    fn an_ordinary_reaction_carries_no_shortcode() {
+        // Every reaction anybody has ever sent with a keyboard. There is
+        // nothing to name: the key is the character.
+        let read = annotation(&reaction(annotating("\u{1f44d}", json!({}))))
+            .expect("a reaction is an annotation");
+
+        assert_eq!(read.key, "\u{1f44d}");
+        assert_eq!(read.shortcode, None);
+    }
+
+    #[test]
+    fn a_custom_emoji_reaction_carries_the_name_its_sender_wrote() {
+        // MSC2545 keys one by the image's own URI, which reads out as a URI
+        // unless whoever sent it also said what it is called. Cinny writes
+        // this field and it is the only local answer there is.
+        let read = annotation(&reaction(annotating(
+            "mxc://example.org/cat",
+            json!({ "shortcode": "blobcat" }),
+        )))
+        .expect("a reaction is an annotation");
+
+        assert_eq!(read.shortcode.as_deref(), Some("blobcat"));
+    }
+
+    #[test]
+    fn a_blank_shortcode_is_no_shortcode_at_all() {
+        // Worse than absent: an empty label on a pill reads as a pill with
+        // nothing in it rather than falling back to saying what it is.
+        let read = annotation(&reaction(annotating(
+            "mxc://example.org/cat",
+            json!({ "shortcode": "   " }),
+        )))
+        .expect("a reaction is an annotation");
+
+        assert_eq!(read.shortcode, None);
+    }
+
+    #[test]
+    fn a_shortcode_longer_than_a_shortcode_may_be_is_refused() {
+        // Anybody in the room can send a reaction, and its content is theirs
+        // to write. The name becomes a pill's label and its tooltip, so a
+        // kilobyte of it is a kilobyte read out to whoever is listening.
+        // MSC2545's own ceiling is 100 bytes.
+        let read = annotation(&reaction(annotating(
+            "mxc://example.org/cat",
+            json!({ "shortcode": "a".repeat(101) }),
+        )))
+        .expect("the reaction is still an annotation");
+
+        assert_eq!(read.shortcode, None);
+    }
+
+    #[test]
+    fn a_shortcode_of_exactly_the_longest_allowed_is_kept() {
+        // The fixture guard for the one above: without it that test passes
+        // whether the bound is 100 or zero.
+        let read = annotation(&reaction(annotating(
+            "mxc://example.org/cat",
+            json!({ "shortcode": "a".repeat(100) }),
+        )))
+        .expect("the reaction is still an annotation");
+
+        assert_eq!(read.shortcode.as_deref(), Some("a".repeat(100).as_str()));
+    }
+
+    #[test]
+    fn a_shortcode_that_is_not_a_name_is_ignored_rather_than_refused() {
+        // Anybody can put anything in an event. A number there must not cost
+        // the reaction itself, which is what reading the whole content as a
+        // typed shape would do.
+        let read = annotation(&reaction(annotating(
+            "mxc://example.org/cat",
+            json!({ "shortcode": 7 }),
+        )))
+        .expect("the reaction is still an annotation");
+
+        assert_eq!(read.shortcode, None);
     }
 
     #[test]

@@ -31,6 +31,8 @@ const setPersonVolume = vi.hoisted(() => vi.fn());
 // settings file.
 const emojiSettings = vi.hoisted(() => vi.fn());
 const emojiUsed = vi.hoisted(() => vi.fn());
+// The thread's own room's custom emoji, which name the pills under a reply.
+const emojiPacks = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onThread,
@@ -47,6 +49,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPersonVolume,
   emojiSettings,
   emojiUsed,
+  emojiPacks,
   pickAttachment,
   pasteAttachment,
   threadAttachFile,
@@ -105,6 +108,7 @@ beforeEach(() => {
   timelineEdit.mockReset().mockResolvedValue(undefined);
   timelineDelete.mockReset().mockResolvedValue(undefined);
   resendState.mockReset().mockResolvedValue(undefined);
+  emojiPacks.mockReset().mockResolvedValue([]);
   threadOpen.mockReset().mockResolvedValue(undefined);
   threadSend.mockReset().mockResolvedValue(undefined);
   emojiSettings.mockReset().mockResolvedValue({
@@ -743,6 +747,56 @@ describe("what the panel is called", () => {
     });
 
     expect(screen.getByRole("heading", { name: ":shipit:" })).toBeVisible();
+  });
+
+  it("names a custom emoji reaction out of the room's packs", async () => {
+    // The panel reads them for itself rather than being handed them: it is
+    // drawn beside the room and both are one local read. Without this a pill
+    // in a thread says "Custom reaction" where the same pill in the room
+    // says what to type.
+    emojiPacks.mockResolvedValue([
+      {
+        id: `${GENERAL}/`,
+        images: [{ shortcode: "partyparrot", url: "mxc://example.org/parrot" }],
+      },
+    ]);
+    await opened({
+      ...OPEN,
+      messages: [
+        {
+          ...said("$a:example.org", "Consort", NOON + 1_000),
+          reactions: [{ key: "mxc://example.org/parrot", count: 1 }],
+        },
+      ],
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "partyparrot, 1" }),
+    ).toBeVisible();
+    expect(emojiPacks).toHaveBeenCalledWith(GENERAL);
+  });
+
+  it("names one on the thread's own root as well", async () => {
+    // The root is drawn by a second `MessageGroups` above the replies, which
+    // needs telling separately: a name on the replies and a URI on the thing
+    // they are about would be the same pill labelled two ways.
+    emojiPacks.mockResolvedValue([
+      {
+        id: `${GENERAL}/`,
+        images: [{ shortcode: "partyparrot", url: "mxc://example.org/parrot" }],
+      },
+    ]);
+    await opened({
+      ...OPEN,
+      root: {
+        ...said("$root:example.org", "what shall we call it"),
+        reactions: [{ key: "mxc://example.org/parrot", count: 1 }],
+      },
+    });
+
+    expect(
+      await screen.findByRole("button", { name: "partyparrot, 1" }),
+    ).toBeVisible();
   });
 
   it("names an attachment nobody captioned", async () => {

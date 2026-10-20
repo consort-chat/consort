@@ -160,6 +160,11 @@ pub struct Reaction {
     /// than a flag, because taking a reaction back redacts that exact event.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mine: Option<String>,
+    /// What to call the key when it is a custom emoji, which MSC2545 keys by
+    /// the image's own `mxc://` URI. Absent for an ordinary reaction, where
+    /// the key is the character and needs no name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcode: Option<String>,
 }
 
 /// One message in a room.
