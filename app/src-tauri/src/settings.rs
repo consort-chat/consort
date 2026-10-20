@@ -558,6 +558,7 @@ mod tests {
         Settings {
             video: VideoSettings {
                 camera: Some("/dev/video2".to_owned()),
+                sending: consort_video::Sending::Low,
             },
             audio: AudioSettings {
                 input: Some("Yeti Stereo Microphone".to_owned()),

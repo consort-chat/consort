@@ -10,7 +10,7 @@
 use std::sync::Mutex;
 
 use consort_call::{Camera, OutgoingPicture, PictureSize};
-use consort_video::{CameraStream, CaptureError, Picture, Resolution, VideoCapture, capture};
+use consort_video::{CameraStream, CaptureError, Picture, Resolution, Sending, VideoCapture};
 
 use crate::selfview::SelfView;
 
@@ -61,11 +61,19 @@ impl VideoBridge {
     /// Reports the size that was negotiated, which is what a publication has to
     /// be set up for. Replaces whatever was open: switching camera is one act
     /// here rather than a stop and a start that could leave both devices held.
-    pub fn start(&self, camera: Option<&str>, queue: Camera) -> Result<PictureSize, CaptureError> {
+    ///
+    /// `sending` is the ceiling the device is opened under, which is the only
+    /// sender-side control over what peers can receive: #196.
+    pub fn start(
+        &self,
+        camera: Option<&str>,
+        sending: Sending,
+        queue: Camera,
+    ) -> Result<PictureSize, CaptureError> {
         let mirror = self.mirror.clone();
         let stream = self.backend.open(
             camera,
-            capture::WANTED,
+            sending.camera(),
             Box::new(move |picture| {
                 // Sampled down before the frame is moved on, which is the only
                 // moment both readers can be served from one capture.
@@ -154,6 +162,8 @@ mod tests {
         negotiated: Option<Resolution>,
         /// Somewhere to keep the sink, so a test can push a frame through it.
         sink: Arc<Mutex<Option<FrameSink>>>,
+        /// What `open` was asked for, which is what a send-side cap changes.
+        wanted: Arc<Mutex<Option<Resolution>>>,
     }
 
     impl Fake {
@@ -229,6 +239,7 @@ mod tests {
             }
 
             *self.sink.lock().unwrap() = Some(on_frame);
+            *self.wanted.lock().unwrap() = Some(want);
             Ok(Box::new(FakeStream {
                 id: camera.unwrap_or("/dev/video0").to_owned(),
                 resolution: self.negotiated.unwrap_or(want),
@@ -257,13 +268,38 @@ mod tests {
     }
 
     #[test]
+    fn a_camera_is_asked_for_what_the_sender_chose_to_send() {
+        // #196. A rung the publisher never built cannot be asked for, so the
+        // only sender-side control is what the device is opened at.
+        let (bridge, backend) = bridge(Fake::default());
+
+        bridge.start(None, Sending::Low, Camera::new()).unwrap();
+
+        assert_eq!(*backend.wanted.lock().unwrap(), Some(Sending::Low.camera()));
+    }
+
+    #[test]
+    fn an_unchosen_camera_is_asked_for_everything_it_has() {
+        let (bridge, backend) = bridge(Fake::default());
+
+        bridge.start(None, Sending::Auto, Camera::new()).unwrap();
+
+        assert_eq!(
+            *backend.wanted.lock().unwrap(),
+            Some(consort_video::capture::WANTED)
+        );
+    }
+
+    #[test]
     fn starting_opens_the_camera_and_reports_what_it_negotiated() {
         // The negotiated size, not the wanted one. A publication configured for
         // 720p that is fed 480p frames has its encoder set up for a picture
         // that never arrives.
         let (bridge, backend) = bridge(Fake::negotiating(640, 480));
 
-        let size = bridge.start(Some("/dev/video2"), Camera::new()).unwrap();
+        let size = bridge
+            .start(Some("/dev/video2"), Sending::Auto, Camera::new())
+            .unwrap();
 
         assert_eq!(
             size,
@@ -281,7 +317,7 @@ mod tests {
         let (bridge, backend) = bridge(Fake::default());
         let queue = Camera::new();
 
-        bridge.start(None, queue.clone()).unwrap();
+        bridge.start(None, Sending::Auto, queue.clone()).unwrap();
         backend.capture(7);
 
         let frame = tokio::runtime::Builder::new_current_thread()
@@ -295,7 +331,7 @@ mod tests {
     #[test]
     fn stopping_releases_the_device() {
         let (bridge, backend) = bridge(Fake::default());
-        bridge.start(None, Camera::new()).unwrap();
+        bridge.start(None, Sending::Auto, Camera::new()).unwrap();
 
         bridge.stop();
 
@@ -309,7 +345,7 @@ mod tests {
         // rather than opening a second device, which on V4L2 it could not do.
         let (bridge, backend) = bridge(Fake::default());
 
-        bridge.start(None, Camera::new()).unwrap();
+        bridge.start(None, Sending::Auto, Camera::new()).unwrap();
         backend.capture(7);
 
         assert!(bridge.mirror().latest().is_some());
@@ -322,7 +358,7 @@ mod tests {
         // showing a camera that is off is the one picture somebody who just
         // covered theirs did not want left on screen.
         let (bridge, _) = bridge(Fake::default());
-        bridge.start(None, Camera::new()).unwrap();
+        bridge.start(None, Sending::Auto, Camera::new()).unwrap();
         bridge.mirror().offer(&picture(7));
 
         bridge.stop();
@@ -336,7 +372,7 @@ mod tests {
         // camera, which on Linux means exactly one process can.
         let (bridge, backend) = bridge(Fake::refusing());
 
-        let refused = bridge.start(None, Camera::new());
+        let refused = bridge.start(None, Sending::Auto, Camera::new());
 
         assert_eq!(
             refused,
@@ -363,8 +399,8 @@ mod tests {
             SelfView::new(),
         );
 
-        bridge.start(None, Camera::new()).unwrap();
-        let refused = bridge.start(Some("/dev/video9"), Camera::new());
+        bridge.start(None, Sending::Auto, Camera::new()).unwrap();
+        let refused = bridge.start(Some("/dev/video9"), Sending::Auto, Camera::new());
 
         assert!(refused.is_err());
         assert!(bridge.running(), "the working camera was released");
@@ -398,8 +434,12 @@ mod tests {
         // light on beside a camera nobody is publishing.
         let (bridge, backend) = bridge(Fake::default());
 
-        bridge.start(Some("/dev/video0"), Camera::new()).unwrap();
-        bridge.start(Some("/dev/video2"), Camera::new()).unwrap();
+        bridge
+            .start(Some("/dev/video0"), Sending::Auto, Camera::new())
+            .unwrap();
+        bridge
+            .start(Some("/dev/video2"), Sending::Auto, Camera::new())
+            .unwrap();
 
         assert_eq!(backend.opens(), 2);
         assert_eq!(backend.closes(), 1, "the first camera is still held");

@@ -875,10 +875,20 @@ export interface CameraList {
   missing: string | null;
 }
 
+/**
+ * How much camera this machine sends, mirrored from `consort_video::Sending`.
+ *
+ * A size to open the device at, not a rung to publish from: a receiver can
+ * only choose among rungs the publisher built.
+ */
+export type Sending = "auto" | "medium" | "low";
+
 /** The saved camera choice, mirrored from `consort_video::VideoSettings`. */
 export interface VideoSettings {
   /** The chosen camera by device node, or null for the first one found. */
   camera: string | null;
+  /** The size this machine opens its camera at. */
+  sending: Sending;
 }
 
 /**

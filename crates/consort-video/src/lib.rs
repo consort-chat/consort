@@ -37,7 +37,7 @@ pub use screens::{
     NoScreens, ScreenCapture, SeenWindow, ShareError, ShareKind, ShareSource, ShareStream, screen,
     shareable,
 };
-pub use settings::VideoSettings;
+pub use settings::{Sending, VideoSettings};
 
 /// The camera backend for this build.
 ///
