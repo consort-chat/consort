@@ -86,14 +86,15 @@ function ScaleSlider({
  * who wants larger words on a screen that already fits wants the second one,
  * and a single control would have chosen for them.
  *
- * Called Accessibility rather than Appearance deliberately. Reduced motion is
- * the next thing that belongs here, wanted already by the flash on a jump and
- * by the chat effects work, and the name leaves room for it.
+ * Called Accessibility rather than Appearance deliberately, which is what left
+ * room for the third control: whether a chat effect plays. The flash on a jump
+ * is the next thing that belongs beside it.
  *
  * Both sliders apply as they move and write once the pointer stops. Watching
  * the size change while dragging is the whole reason this is a slider rather
  * than a number, and a write per pointer move would be the settings file
- * rewritten a hundred times for one adjustment.
+ * rewritten a hundred times for one adjustment. The switch takes the same
+ * delayed write, so there is one path to the file rather than two.
  */
 export function AccessibilitySection() {
   const [settings, setSettings] = useState<AppearanceSettings | null>(null);
@@ -177,8 +178,8 @@ export function AccessibilitySection() {
     [flush],
   );
 
-  /** Draw at `next`, and write it once the moving stops. */
-  function slide(next: AppearanceSettings) {
+  /** Draw at `next`, and write it once the changing stops. */
+  function change(next: AppearanceSettings) {
     setProblem(null);
     setSettings(next);
     pending.current = next;
@@ -201,14 +202,20 @@ export function AccessibilitySection() {
   function slideApplication(applicationScale: number) {
     if (settings === null) return;
     void previewApplicationScale(applicationScale);
-    slide({ ...settings, applicationScale });
+    change({ ...settings, applicationScale });
   }
 
   /** The root font size, which only the page can set. */
   function slideText(textScale: number) {
     if (settings === null) return;
     applyTextScale(textScale);
-    slide({ ...settings, textScale });
+    change({ ...settings, textScale });
+  }
+
+  /** Whether a chat effect plays its animation. */
+  function flipEffects(chatEffects: boolean) {
+    if (settings === null) return;
+    change({ ...settings, chatEffects });
   }
 
   return (
@@ -255,6 +262,36 @@ export function AccessibilitySection() {
               The words only, and the spacing that follows them. Pictures and
               avatars stay the size they are, so this is the one to reach for if
               the window already fits and the text is what is too small.
+            </p>
+          </div>
+
+          <div className="a11y__field">
+            <span className="a11y__label">Chat effects</span>
+            <div className="a11y__toggle">
+              <input
+                id="a11y-chat-effects"
+                className="a11y__switch"
+                type="checkbox"
+                role="switch"
+                aria-describedby="a11y-chat-effects-note"
+                checked={settings.chatEffects}
+                onChange={(event) => flipEffects(event.target.checked)}
+              />
+              <label className="a11y__toggle-label" htmlFor="a11y-chat-effects">
+                Play confetti, snowfall and the rest
+              </label>
+            </div>
+            <p className="a11y__note" id="a11y-chat-effects-note">
+              {"Somebody sending \u201C/confetti\u201D, or a message with "}
+              {"\u{1F389} in it, throws glyphs across the room for a couple of "}
+              seconds. Turn it off and the message still arrives with its words
+              on it, which is what every client that has never heard of the
+              effect shows anyway.
+            </p>
+            <p className="a11y__note">
+              A desktop set to reduce motion stops them as well, whatever this
+              says, so there is nothing to change here for anybody who has
+              already asked for less movement.
             </p>
           </div>
         </>

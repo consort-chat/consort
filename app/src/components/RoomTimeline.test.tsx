@@ -54,6 +54,9 @@ const threadOpen = vi.hoisted(() => vi.fn());
 // file. Two of the twelve it starts with are enough here.
 const emojiSettings = vi.hoisted(() => vi.fn());
 const emojiUsed = vi.hoisted(() => vi.fn());
+// Read by `lib/chatEffects` before an effect plays, each time, so that turning
+// the switch off reaches a room that is already open.
+const appearanceSettings = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   onTimeline,
@@ -89,6 +92,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   memberProfile,
   emojiSettings,
   emojiUsed,
+  appearanceSettings,
 }));
 
 import { COPIED_FOR, RoomTimeline } from "./RoomTimeline";
@@ -97,6 +101,7 @@ import { resetAvatarCache } from "../lib/avatars";
 import { resetPresenceCache } from "../lib/presence";
 import type {
   Channel,
+  Effect,
   Message,
   Reaction,
   Readers,
@@ -218,6 +223,11 @@ beforeEach(() => {
         return Promise.resolve(() => {});
       },
     );
+  appearanceSettings.mockReset().mockResolvedValue({
+    applicationScale: 1,
+    textScale: 1,
+    chatEffects: true,
+  });
   emojiSettings.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
   emojiUsed.mockReset().mockResolvedValue({ recent: REMEMBERED, tone: 0 });
   pickAttachment.mockReset().mockResolvedValue(null);
@@ -248,8 +258,10 @@ beforeEach(() => {
   timelineLater.mockReset().mockResolvedValue(undefined);
   timelineGoTo.mockReset().mockResolvedValue(undefined);
   timelinePresent.mockReset().mockResolvedValue(undefined);
-  timelineSend.mockReset().mockResolvedValue(undefined);
-  timelineReply.mockReset().mockResolvedValue(undefined);
+  // Null rather than undefined: what a send answers is the effect the line
+  // asked for, and an ordinary message asks for none.
+  timelineSend.mockReset().mockResolvedValue(null);
+  timelineReply.mockReset().mockResolvedValue(null);
   timelineEdit.mockReset().mockResolvedValue(undefined);
   timelineDelete.mockReset().mockResolvedValue(undefined);
   timelineCopyLink.mockReset().mockResolvedValue(undefined);
@@ -3055,5 +3067,108 @@ describe("who has read a message", () => {
     });
 
     expect(screen.getByText("+45")).toBeTruthy();
+  });
+});
+
+describe("a chat effect", () => {
+  /** Every glyph currently crossing the room. */
+  function glyphs(): Element[] {
+    return [...document.querySelectorAll(".effect__glyph")];
+  }
+
+  /** The same message, with `effect` on it, as somebody else's arrival. */
+  function asked(id: string, at: number, effect: Effect): Message {
+    return { ...said(id, ADA, "well done", at), effect };
+  }
+
+  it("throws glyphs across the room when a command asked for one", async () => {
+    // Played at the keypress rather than when the sync brings the message
+    // round, which is a second later and after the confetti was wanted.
+    timelineSend.mockResolvedValue("confetti");
+    await pane();
+
+    await userEvent.type(screen.getByRole("textbox"), "/confetti well done{Enter}");
+
+    await waitFor(() => expect(glyphs().length).toBeGreaterThan(0));
+  });
+
+  it("throws nothing when the switch is off", async () => {
+    appearanceSettings.mockResolvedValue({
+      applicationScale: 1,
+      textScale: 1,
+      chatEffects: false,
+    });
+    timelineSend.mockResolvedValue("confetti");
+    await pane();
+
+    await userEvent.type(screen.getByRole("textbox"), "/confetti well done{Enter}");
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    expect(glyphs()).toHaveLength(0);
+  });
+
+  it("throws nothing for an ordinary message", async () => {
+    await pane();
+
+    await userEvent.type(screen.getByRole("textbox"), "hello{Enter}");
+
+    await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+    expect(appearanceSettings).not.toHaveBeenCalled();
+    expect(glyphs()).toHaveLength(0);
+  });
+
+  it("throws what somebody else has just sent", async () => {
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first", NOON)]));
+
+    await arrive(timeline([
+      said("$one", ADA, "first", NOON),
+      asked("$two", NOON + 1_000, "snowfall"),
+    ]));
+
+    await waitFor(() => expect(glyphs().length).toBeGreaterThan(0));
+    expect(document.querySelector(".effect")).toHaveAttribute(
+      "data-effect",
+      "snowfall",
+    );
+  });
+
+  /*
+    Opening a room should not set off whatever happened in it last week, which
+    is the difference between a backlog and an arrival.
+  */
+  it("throws nothing for the backlog a room opens with", async () => {
+    await pane();
+
+    await arrive(timeline([asked("$one", NOON, "confetti")]));
+
+    expect(appearanceSettings).not.toHaveBeenCalled();
+    expect(glyphs()).toHaveLength(0);
+  });
+
+  it("throws nothing for this session's own message coming back", async () => {
+    // Sending it already played it. Twice for one command is the bug.
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first", NOON)]));
+
+    await arrive(timeline([
+      said("$one", ADA, "first", NOON),
+      { ...said("$two", "@bob:example.org", "well done", NOON + 1_000), effect: "confetti" },
+    ]));
+
+    expect(glyphs()).toHaveLength(0);
+  });
+
+  it("says so rather than playing nothing silently when the switch cannot be read", async () => {
+    appearanceSettings.mockRejectedValue({ message: "no settings", detail: "no" });
+    await pane();
+    await arrive(timeline([said("$one", ADA, "first", NOON)]));
+
+    await arrive(timeline([
+      said("$one", ADA, "first", NOON),
+      asked("$two", NOON + 1_000, "hearts"),
+    ]));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/no settings/);
   });
 });

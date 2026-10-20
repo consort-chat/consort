@@ -301,6 +301,15 @@ pub struct AppearanceSettings {
     pub application_scale: f64,
     /// The root font size, as a multiplier on top of the zoom above.
     pub text_scale: f64,
+    /// Whether a chat effect plays its animation.
+    ///
+    /// Here rather than beside the voice settings because it is the same kind
+    /// of knob as the two sizes above: how much the application does to the
+    /// screen. On for everybody who has not said otherwise, and off is the
+    /// answer for anybody who finds a room full of confetti unbearable.
+    /// `prefers-reduced-motion` is checked separately and independently: this
+    /// is a choice about Consort, that is a choice about the whole desktop.
+    pub chat_effects: bool,
 }
 
 impl Default for AppearanceSettings {
@@ -308,6 +317,7 @@ impl Default for AppearanceSettings {
         Self {
             application_scale: 1.0,
             text_scale: 1.0,
+            chat_effects: true,
         }
     }
 }
@@ -343,6 +353,7 @@ impl AppearanceSettings {
         Self {
             application_scale: application_scale_within_range(self.application_scale),
             text_scale: self.text_scale.clamp(MIN_TEXT_SCALE, MAX_TEXT_SCALE),
+            ..self
         }
     }
 }
@@ -704,12 +715,64 @@ mod tests {
     }
 
     #[test]
+    fn chat_effects_are_on_for_anybody_who_has_not_said_otherwise() {
+        assert!(AppearanceSettings::default().chat_effects);
+    }
+
+    #[test]
+    fn turning_chat_effects_off_survives_a_round_trip() {
+        let (_dir, store) = store();
+        let chosen = Settings {
+            appearance: AppearanceSettings {
+                chat_effects: false,
+                ..AppearanceSettings::default()
+            },
+            ..Settings::default()
+        };
+
+        store.save(&chosen).expect("save");
+
+        assert!(!store.load().appearance.chat_effects);
+    }
+
+    #[test]
+    fn a_settings_file_written_before_this_setting_existed_still_plays_them() {
+        // What is on disk for everybody who has used Consort already: an
+        // `appearance` block with two numbers in it and nothing else. The
+        // field has to arrive on, not off, which is what the container-level
+        // serde default is for.
+        let (_dir, store) = store();
+        std::fs::write(
+            store.path(),
+            r#"{"appearance":{"applicationScale":1.25,"textScale":1.0}}"#,
+        )
+        .expect("write");
+
+        let loaded = store.load();
+
+        assert!(loaded.appearance.chat_effects);
+        assert_eq!(loaded.appearance.application_scale, 1.25);
+    }
+
+    #[test]
+    fn bringing_the_sizes_into_range_leaves_the_effects_switch_alone() {
+        let far_out = AppearanceSettings {
+            application_scale: 40.0,
+            text_scale: 1.0,
+            chat_effects: false,
+        };
+
+        assert!(!far_out.within_range().chat_effects);
+    }
+
+    #[test]
     fn a_chosen_size_survives_a_round_trip() {
         let (_dir, store) = store();
         let chosen = Settings {
             appearance: AppearanceSettings {
                 application_scale: 1.3,
                 text_scale: 1.2,
+                ..AppearanceSettings::default()
             },
             ..Settings::default()
         };

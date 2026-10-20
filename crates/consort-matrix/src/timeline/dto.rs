@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::slash::Effect;
+
 /// Everything currently loaded for one room, oldest message first.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,6 +227,15 @@ pub struct Message {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_trust: Option<SenderTrust>,
     pub kind: MessageKind,
+    /// The animation this message asks for, when it asks for one.
+    ///
+    /// Either its `msgtype` is one of the six effects, or its words merely
+    /// contain one of the emoji that play one, which is Element's rule and the
+    /// reason a room bursts into confetti when somebody types 🎉. Said here
+    /// rather than worked out in the interface: which msgtype means which
+    /// effect is protocol, and the strings are not guessable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<Effect>,
 }
 
 /// What is known about a thread without opening it. The homeserver bundles it

@@ -224,6 +224,7 @@ mod tests {
             deleted_by: None,
             sender_trust: None,
             kind: MessageKind::Text,
+            effect: None,
         }
     }
 

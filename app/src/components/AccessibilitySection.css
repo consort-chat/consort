@@ -126,6 +126,95 @@
   text-align: right;
 }
 
+.a11y__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/*
+  A real checkbox underneath, restyled rather than replaced, the same shape the
+  privacy and notification switches use. Two spans and a click handler would
+  mean reimplementing space, focus and the announced state, all of which
+  `role="switch"` on an input already has.
+
+  In `rem` and at least 1.5rem tall, where the older switches are 20px: this is
+  the accessibility screen and 24 by 24 CSS pixels is what WCAG 2.5.8 asks of a
+  target. `rem` so it grows with the text size the slider above sets.
+*/
+.a11y__toggle {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.a11y__switch {
+  position: relative;
+  flex: none;
+  width: 2.5rem;
+  height: 1.5rem;
+  appearance: none;
+  cursor: pointer;
+  background: var(--surface-overlay);
+  border: 1px solid var(--line-subtle);
+  border-radius: 999px;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.a11y__switch::after {
+  position: absolute;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: 1rem;
+  height: 1rem;
+  content: "";
+  background: var(--text-muted);
+  border-radius: 50%;
+  transition:
+    transform var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.a11y__switch:checked {
+  background: var(--violet);
+  border-color: var(--violet);
+}
+
+.a11y__switch:checked::after {
+  background: oklch(99% 0 0);
+  transform: translateX(1rem);
+}
+
+.a11y__switch:hover {
+  border-color: var(--line-strong);
+}
+
+.a11y__switch:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.a11y__toggle-label {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/*
+  The knob and the track stop moving for anybody who asked for less motion. The
+  switch still flips; what goes is the slide.
+*/
+@media (prefers-reduced-motion: reduce) {
+  .a11y__switch,
+  .a11y__switch::after {
+    transition: none;
+  }
+}
+
 .a11y__note {
   margin: 0;
   font-size: var(--text-xs);

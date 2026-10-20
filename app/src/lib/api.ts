@@ -1520,6 +1520,21 @@ export function memberNames(
  * something to save, and the three ways a message can exist with nothing to
  * draw at all.
  */
+/**
+ * One of the six animations a message can ask for.
+ *
+ * Mirrors `consort_matrix::Effect`. The msgtypes behind these are Element's
+ * and are not guessable, so which one a message asks for is decided in Rust;
+ * this side only draws it.
+ */
+export type Effect =
+  | "confetti"
+  | "fireworks"
+  | "rainfall"
+  | "snowfall"
+  | "spaceInvaders"
+  | "hearts";
+
 export type MessageKind =
   | "text"
   | "emote"
@@ -1707,6 +1722,17 @@ export interface Message {
    */
   senderTrust?: SenderTrust;
   kind: MessageKind;
+  /**
+   * The animation this message asks for, when it asks for one.
+   *
+   * Either its msgtype is one of the six effects or its words merely contain
+   * one of the emoji that play one, which is Element's rule. Worked out in
+   * Rust: the msgtypes are protocol and not guessable from here.
+   *
+   * Absent for almost every message. A present one is not on its own a reason
+   * to play anything, either: see `ChatEffects` for why only an arrival does.
+   */
+  effect?: Effect;
 }
 
 /**
@@ -2443,6 +2469,14 @@ export interface AppearanceSettings {
   applicationScale: number;
   /** The root font size, on top of the zoom. Applied by the page. */
   textScale: number;
+  /**
+   * Whether a chat effect plays its animation.
+   *
+   * A choice about Consort. `prefers-reduced-motion` is a choice about the
+   * whole desktop and is checked separately, so either one off is enough to
+   * stop an animation.
+   */
+  chatEffects: boolean;
 }
 
 /**
@@ -2522,8 +2556,8 @@ export function threadSend(
   inReplyTo: string,
   answering: string | null,
   body: string,
-): Promise<void> {
-  return invoke<void>("thread_send", {
+): Promise<Effect | null> {
+  return invoke<Effect | null>("thread_send", {
     roomId,
     rootId,
     inReplyTo,
@@ -2537,9 +2571,20 @@ export function threadSend(
  *
  * The message appears when the sync brings it round rather than immediately.
  * There is no local echo yet; see `consort_matrix::timeline` for why.
+ *
+ * A line beginning with a slash is resolved in Rust first, so what lands in
+ * the room may be an emote, a shrug, or an effect. A command nobody recognises
+ * is refused there and nothing is sent, which is the whole point of resolving
+ * it on that side.
+ *
+ * The effect it asked for, or null. Playing it here is what makes the
+ * animation arrive with the keypress rather than a round trip later.
  */
-export function timelineSend(roomId: string, body: string): Promise<void> {
-  return invoke<void>("timeline_send", { roomId, body });
+export function timelineSend(
+  roomId: string,
+  body: string,
+): Promise<Effect | null> {
+  return invoke<Effect | null>("timeline_send", { roomId, body });
 }
 
 /**
@@ -2559,8 +2604,13 @@ export function timelineReply(
   replyTo: string,
   sender: string,
   body: string,
-): Promise<void> {
-  return invoke<void>("timeline_reply", { roomId, replyTo, sender, body });
+): Promise<Effect | null> {
+  return invoke<Effect | null>("timeline_reply", {
+    roomId,
+    replyTo,
+    sender,
+    body,
+  });
 }
 
 /**

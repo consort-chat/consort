@@ -4042,6 +4042,185 @@ mod timeline {
         timeline::send(&client, ROOM, "### Heading").await.unwrap();
     }
 
+    /*
+      The failure the parser exists to prevent, checked where it would
+      actually happen. A command Consort does not know must not become a
+      message: it goes to the room in front of everybody and it cannot be
+      taken back.
+    */
+    #[tokio::test]
+    async fn an_unknown_command_never_reaches_the_room() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        // Nothing may be sent at all, which is what `expect(0)` asserts when
+        // the mock is dropped at the end of the test.
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(0)
+            .mount()
+            .await;
+
+        let refused = timeline::send(&client, ROOM, "/pin this")
+            .await
+            .expect_err("an unknown command is refused");
+
+        assert!(
+            matches!(&refused, consort_matrix::Error::UnknownCommand { command } if command == "pin"),
+            "expected an unknown command, got {refused:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn me_puts_an_emote_on_the_wire() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.emote",
+                "body": "waves",
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        let played = timeline::send(&client, ROOM, "/me waves").await.unwrap();
+
+        assert_eq!(played, None);
+    }
+
+    #[tokio::test]
+    async fn an_effect_with_words_puts_its_own_msgtype_on_the_wire() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        // The plural, underscored one, which is upstream's inconsistency and
+        // the one of the six worth asserting on the wire.
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "io.element.effects.space_invaders",
+                "body": "look up",
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        let played = timeline::send(&client, ROOM, "/spaceinvaders look up")
+            .await
+            .unwrap();
+
+        assert_eq!(played, Some(consort_matrix::Effect::SpaceInvaders));
+    }
+
+    #[tokio::test]
+    async fn a_command_typed_into_a_thread_resolves_there_too() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "m.emote",
+                "body": "nods",
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        timeline::send_in_thread(
+            &client,
+            ROOM,
+            "$root:example.org",
+            "$root:example.org",
+            None,
+            "/me nods",
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reply_that_is_a_command_resolves_before_the_relation_is_put_on_it() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        server
+            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
+            .await;
+        server
+            .mock_room_state_encryption()
+            .expect_any_access_token()
+            .plain()
+            .mount()
+            .await;
+        server
+            .mock_room_send()
+            .expect_any_access_token()
+            .body_matches_partial_json(serde_json::json!({
+                "msgtype": "nic.custom.confetti",
+                "body": "well done",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$said:example.org" } },
+            }))
+            .ok(ruma::event_id!("$sent:example.org"))
+            .expect(1)
+            .mount()
+            .await;
+
+        let played = timeline::send_reply(
+            &client,
+            ROOM,
+            "$said:example.org",
+            OTHER,
+            "/confetti well done",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(played, Some(consort_matrix::Effect::Confetti));
+    }
+
     #[tokio::test]
     async fn a_reply_in_a_thread_says_which_thread_it_is_in() {
         // Without the relation it is an ordinary message in the room, which

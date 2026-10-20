@@ -36,6 +36,8 @@ pub use read_by::{About, ReadBy, SHOWN};
 pub use sending::{Answering, Attaching, send_attachment};
 pub use thread::thread;
 
+use crate::slash::{self, Effect};
+
 use std::collections::{HashMap, HashSet};
 
 use futures_util::StreamExt;
@@ -1222,11 +1224,17 @@ pub async fn delete(client: &Client, room_id: &str, event_id: &str) -> Result<()
 /// so a sentence with a stray asterisk in it goes out as the sentence.
 /// Encrypted or not according to the room, which the SDK decides.
 ///
-/// Nothing is returned and nothing is echoed: see the module header.
-pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<()> {
-    let content = written(body)?;
-    room_of(client, room_id)?.send(content).await?;
-    Ok(())
+/// A line beginning with a slash goes through [`slash::resolve`] first, so
+/// what reaches the room may be an emote, a shrug, or an effect. A command
+/// nobody recognises is refused here and nothing is sent.
+///
+/// The effect that came back, for the overlay on this machine to play. Nothing
+/// else is returned and nothing is echoed: see the module header.
+pub async fn send(client: &Client, room_id: &str, body: &str) -> Result<Option<Effect>> {
+    let said = slash::resolve(body)?;
+    let effect = said.effect();
+    room_of(client, room_id)?.send(said.into_content()).await?;
+    Ok(effect)
 }
 
 /// Answer one message in the room.
@@ -1243,12 +1251,14 @@ pub async fn send_reply(
     reply_to: &str,
     sender: &str,
     body: &str,
-) -> Result<()> {
+) -> Result<Option<Effect>> {
     let answered = event_id_of(reply_to)?;
     let author = UserId::parse(sender).map_err(|_| Error::NoSuchUser {
         user_id: sender.to_owned(),
     })?;
-    let content = written(body)?.make_reply_to(
+    let said = slash::resolve(body)?;
+    let effect = said.effect();
+    let content = said.into_content().make_reply_to(
         ReplyMetadata::new(&answered, &author, None),
         // The room, never the thread the answered message might be in: a
         // message in a thread is not drawn in the room at all.
@@ -1257,7 +1267,7 @@ pub async fn send_reply(
     );
 
     room_of(client, room_id)?.send(content).await?;
-    Ok(())
+    Ok(effect)
 }
 
 /// Correct a message this account sent.
@@ -1265,6 +1275,10 @@ pub async fn send_reply(
 /// A wrapper. `Room::make_edit_event` refuses an edit of somebody else's
 /// message, carries the original's `m.mentions` forward, and writes both
 /// `m.new_content` and the `* ` fallback body.
+///
+/// No slash command is read here, which is Element's behaviour too: an edit
+/// replaces the words of a message that already exists, and there is nothing
+/// for a command that resolves to a different event type to replace.
 ///
 /// It reads the target event first, so an edit of a message old enough to have
 /// fallen out of the event cache fails on the fetch, before anything is sent.
@@ -1317,8 +1331,10 @@ pub async fn send_in_thread(
     in_reply_to: &str,
     answering: Option<&str>,
     body: &str,
-) -> Result<()> {
-    let mut content = written(body)?;
+) -> Result<Option<Effect>> {
+    let said = slash::resolve(body)?;
+    let effect = said.effect();
+    let mut content = said.into_content();
     let root = event_id_of(root_id)?;
     let answered = event_id_of(in_reply_to)?;
 
@@ -1344,7 +1360,7 @@ pub async fn send_in_thread(
     };
 
     room_of(client, room_id)?.send(content).await?;
-    Ok(())
+    Ok(effect)
 }
 
 /// What was typed, as something to send.
@@ -1502,6 +1518,7 @@ mod tests {
             deleted_by: None,
             sender_trust: trust,
             kind: MessageKind::Text,
+            effect: None,
         }
     }
 

@@ -7,6 +7,12 @@ import {
   useState,
 } from "react";
 
+import {
+  arriving,
+  onEffect,
+  playEffect,
+  type Watched,
+} from "../lib/chatEffects";
 import { flashMessage } from "../lib/flash";
 import { forgetReaders, publishedReaders } from "../lib/readers";
 import { channelHeading, channelLabel, typingLabel } from "../lib/labels";
@@ -41,10 +47,12 @@ import {
   threadOpen,
   NO_TIMELINE,
   type Channel,
+  type Effect,
   type Message,
   type Participant,
   type Timeline,
 } from "../lib/api";
+import { ChatEffect } from "./ChatEffect";
 import { ComposerAttach } from "./ComposerAttach";
 import { ComposerEmoji } from "./ComposerEmoji";
 import { ComposerStaged, type Staged } from "./ComposerStaged";
@@ -190,6 +198,14 @@ export function RoomTimeline({
     the window read forwards until it caught up with the room.
   */
   const [sentAway, setSentAway] = useState(false);
+  /** Which effect is crossing the room, when one is. */
+  const [playing, setPlaying] = useState<Effect | null>(null);
+  /*
+    How far this room has been watched, for telling an arrival from a backlog.
+    A ref rather than state: nothing is drawn differently because of it, and
+    it is read and written inside the same effect that reacts to a timeline.
+  */
+  const watched = useRef<Watched | null>(null);
   /*
     Which thread has been asked for and not yet arrived. `threadOpen` answers
     immediately, because it is a message to the room's watcher in Rust rather
@@ -328,6 +344,32 @@ export function RoomTimeline({
   // changed. Drawing it would put the last room's conversation under this
   // room's name for a moment.
   const mine = timeline.roomId === channel.id;
+
+  // Subscribed rather than drawn from a prop: an effect can be announced by
+  // the thread panel, which is a sibling of this pane.
+  useEffect(() => onEffect(setPlaying), []);
+
+  /*
+    An effect somebody else just sent. A backlog plays nothing and a page of
+    older history plays nothing: `arriving` is where both of those are decided
+    and why it is handed the whole list rather than one message.
+  */
+  useEffect(() => {
+    if (!mine) return;
+    const seen = arriving(
+      watched.current,
+      timeline.roomId,
+      timeline.messages,
+      selfId,
+    );
+    watched.current = seen.watched;
+    void playEffect(seen.effect).catch((raw: unknown) => {
+      setProblem(asCommandError(raw).message);
+    });
+  }, [mine, timeline.roomId, timeline.messages, selfId]);
+
+  /** The last glyph has gone, so the next effect may start. */
+  const played = useCallback(() => setPlaying(null), []);
 
   /*
     The first message that arrived after this account last read here, which is
@@ -1100,9 +1142,18 @@ export function RoomTimeline({
       } else if (editing !== null) {
         await timelineEdit(channel.id, editing.id, draft);
       } else {
-        await (answering === null
-          ? timelineSend(channel.id, draft)
-          : timelineReply(channel.id, answering.id, answering.sender, draft));
+        /*
+          A line beginning with a slash is resolved in Rust, so what comes
+          back is whatever effect it asked for. Played before the box is
+          emptied, so the animation lands with the keypress: the message
+          itself takes a round trip, and waiting for it would put a second
+          between pressing Enter and the confetti.
+        */
+        await playEffect(
+          await (answering === null
+            ? timelineSend(channel.id, draft)
+            : timelineReply(channel.id, answering.id, answering.sender, draft)),
+        );
       }
       // Cleared only once the homeserver has it. A box that empties on a send
       // that failed loses what somebody wrote, and retyping it is the one
@@ -1167,6 +1218,7 @@ export function RoomTimeline({
 
   return (
     <section className="timeline" aria-label={`Messages in ${name}`}>
+      {playing !== null && <ChatEffect effect={playing} onDone={played} />}
       <div className="timeline__head">
         {onUnfold !== undefined && (
           <SidebarToggle folded onToggle={onUnfold} />
