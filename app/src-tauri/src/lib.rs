@@ -345,6 +345,8 @@ pub fn run() {
             commands::set_share,
             commands::privacy_settings,
             commands::set_privacy_settings,
+            commands::verification_warning_dismissed,
+            commands::dismiss_verification_warning,
             commands::notification_settings,
             commands::set_notification_settings,
             commands::emoji_settings,

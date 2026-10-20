@@ -11,6 +11,14 @@
   spending it on a second meaning is how a semantic colour stops being one.
 */
 .verification {
+  /*
+    SC 2.5.8, in `rem` so it grows with the text size slider rather than
+    staying at whatever 24 pixels was when this was written. `.button--small`
+    takes its height from its padding and the words in it, which is the shape
+    that has been under the floor twice in this repository already (#82, #102).
+  */
+  --verification-target: 1.5rem;
+
   display: grid;
   gap: var(--space-2);
   max-width: 46ch;
@@ -72,4 +80,25 @@
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--amber);
+}
+
+/*
+  What the question in front of carrying on unverified hangs off.
+
+  Downward, which is `Confirm`'s default: this banner is at the top of the main
+  pane, so there is window below it and nothing above but the window edge. Left
+  rather than right, because the button it belongs to is at the left of a
+  left-aligned banner rather than the end of a row.
+*/
+.verification__anchor {
+  --confirm-left: 0;
+  --confirm-right: auto;
+
+  position: relative;
+  justify-self: start;
+}
+
+.verification__actions .button,
+.verification__anchor .button {
+  min-height: var(--verification-target);
 }

@@ -37,6 +37,11 @@ const verificationVerifyThisSession = vi.hoisted(() => vi.fn());
 const verificationOtherSessionsExist = vi.hoisted(() => vi.fn());
 const verificationRecoveryExists = vi.hoisted(() => vi.fn());
 const verificationRecover = vi.hoisted(() => vi.fn());
+// Whether this session has already been told what staying unverified costs,
+// and the write that records it. The banner asks before it draws its own
+// controls, so an unmocked pair rejects into the console on every test here.
+const verificationWarningDismissed = vi.hoisted(() => vi.fn());
+const dismissVerificationWarning = vi.hoisted(() => vi.fn());
 // The main pane draws a room's messages, which is a subscription and three
 // commands. Mocked rather than left to fail: an unmocked `invoke` rejects into
 // nothing anybody awaits, which surfaces as an unhandled rejection attributed
@@ -95,6 +100,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   timelineSend,
   memberNames,
   verificationRecover,
+  verificationWarningDismissed,
+  dismissVerificationWarning,
 }));
 
 import { SignedIn } from "./SignedIn";
@@ -236,6 +243,10 @@ function resetApiMocks() {
   // route is the only one on offer. Tests about recovery say otherwise.
   verificationRecoveryExists.mockReset().mockResolvedValue(false);
   verificationRecover.mockReset().mockResolvedValue(undefined);
+  // Nobody has answered the carry-on question, which is where every session
+  // starts and the state that draws the banner in full.
+  verificationWarningDismissed.mockReset().mockResolvedValue(false);
+  dismissVerificationWarning.mockReset().mockResolvedValue(undefined);
   onTimeline.mockReset().mockResolvedValue(() => {});
   onTyping.mockReset().mockResolvedValue(() => {});
   onReaders.mockReset().mockResolvedValue(() => {});
@@ -560,6 +571,21 @@ describe("SignedIn verification state", () => {
       await screen.findByText("This session is not verified."),
     ).toBeVisible();
     expect(screen.getByText(/encrypted calls/i)).toBeVisible();
+  });
+
+  it("offers a way to carry on without verifying", async () => {
+    // #59. The banner has its own tests for the question and the short form;
+    // this is the one that says the control is reachable from the shell at all.
+    render(<SignedIn profile={profile} onSignedOut={vi.fn()} />);
+    await waitFor(() => expect(onVerification).toHaveBeenCalled());
+
+    act(() => verificationHandler()({ state: "unverified" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: /continue without verifying/i,
+      }),
+    ).toBeVisible();
   });
 
   it("says nothing at all once the session is verified", async () => {

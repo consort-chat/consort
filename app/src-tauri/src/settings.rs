@@ -73,6 +73,7 @@ pub struct Settings {
     pub emoji: EmojiSettings,
     pub appearance: AppearanceSettings,
     pub sidebar: SidebarSettings,
+    pub verification: VerificationSettings,
     /// The rooms this account has opened, most recently first.
     ///
     /// Here rather than in a file of its own because it is the same kind of
@@ -393,6 +394,41 @@ impl Default for PrivacySettings {
     }
 }
 
+/// What somebody has already been told about this session being unverified.
+///
+/// Not a preference about encryption. Nothing here changes what is signed,
+/// what decrypts, or what a call will accept; the only thing it decides is
+/// whether the warning in the main pane is a paragraph with two routes out of
+/// it or one quiet line, which is what #59 asked for.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VerificationSettings {
+    /// The device whose owner read what staying unverified costs and chose it.
+    ///
+    /// A device id rather than a flag, and that is the security-relevant part.
+    /// Signing out deletes the device and the next sign-in creates a new one,
+    /// so a flag would hand a session nobody has looked at yet a warning that
+    /// was already silenced on behalf of a device that no longer exists.
+    ///
+    /// One slot rather than a set. A machine runs one session at a time, the
+    /// answer is about the session in front of whoever gave it, and a set
+    /// would collect ids for devices that are gone with nothing left to prune
+    /// it against.
+    pub dismissed: Option<String>,
+}
+
+impl VerificationSettings {
+    /// Whether `device` has already answered this.
+    pub fn dismissed_by(&self, device: &str) -> bool {
+        self.dismissed.as_deref() == Some(device)
+    }
+
+    /// Record that it has.
+    pub fn dismiss(&mut self, device: &str) {
+        self.dismissed = Some(device.to_owned());
+    }
+}
+
 /// What is remembered about voice calls.
 ///
 /// The first two have no interface, deliberately: both are properties of a
@@ -576,6 +612,7 @@ mod tests {
             emoji: EmojiSettings::default(),
             appearance: AppearanceSettings::default(),
             sidebar: SidebarSettings::default(),
+            verification: VerificationSettings::default(),
             recent: RecentRooms::default(),
         }
     }
@@ -1401,5 +1438,51 @@ mod tests {
 
         assert_eq!(loaded.sidebar.folded, ["voice"]);
         assert!(loaded.sidebar.sections.is_empty());
+    }
+
+    #[test]
+    fn a_session_told_what_staying_unverified_costs_is_remembered() {
+        // The whole reason this is in the file rather than in memory. A choice
+        // that lasted until the window closed would be a choice somebody made
+        // again at every launch, which is the dead end #59 is about.
+        let (dir, store) = store();
+        let mut settings = Settings::default();
+        settings.verification.dismiss("HZTIUXZKUU");
+        store.save(&settings).expect("save");
+
+        let next_launch = SettingsStore::at(dir.path());
+
+        assert!(next_launch.load().verification.dismissed_by("HZTIUXZKUU"));
+    }
+
+    #[test]
+    fn another_device_does_not_inherit_the_choice() {
+        // The reason this is a device id rather than a flag, and the reason
+        // worth a test of its own. Signing out deletes the device and the next
+        // sign-in makes a new one, so a flag would hand a session nobody has
+        // looked at yet a warning that is already silenced.
+        let mut settings = VerificationSettings::default();
+        settings.dismiss("HZTIUXZKUU");
+
+        assert!(!settings.dismissed_by("QWERTYUIOP"));
+    }
+
+    #[test]
+    fn a_session_nobody_has_answered_for_is_not_dismissed() {
+        assert!(!VerificationSettings::default().dismissed_by("HZTIUXZKUU"));
+    }
+
+    #[test]
+    fn a_settings_file_written_before_this_section_existed_still_loads() {
+        // Every settings file on disk today was written before it, and a load
+        // that failed on its absence would take somebody's audio thresholds
+        // with it.
+        let (_dir, store) = store();
+        std::fs::write(store.path(), br#"{"audio":{"input":"Yeti"}}"#).expect("write");
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.audio.input.as_deref(), Some("Yeti"));
+        assert!(!loaded.verification.dismissed_by("HZTIUXZKUU"));
     }
 }
