@@ -53,6 +53,11 @@ fi
 # insist on and harmless here: this server is bound to loopback and its state
 # directory is deleted by down.sh.
 #
+# And a low upload ceiling, which is a knob rather than a nicety. Synapse
+# defaults to 50M, and a test that wants to see a refusal at the limit would
+# have to move fifty megabytes to get one. At 1M the same refusal costs two,
+# and the sentence it produces is the one the live attachment test asserts.
+#
 # And no rate limits, which is not a nicety. Synapse ships `rc_login` at three
 # attempts per burst, and a verification test signs in twice per test with
 # several running at once, so the defaults turn the suite into a wall of 429s
@@ -65,6 +70,8 @@ if ! grep -q '^# consort test overrides' data/homeserver.yaml; then
 # consort test overrides. Throwaway server, loopback only.
 enable_registration: true
 enable_registration_without_verification: true
+
+max_upload_size: 1M
 
 rc_login:
   address:

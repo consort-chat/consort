@@ -278,6 +278,76 @@ async fn message_pressed_from_both_sides_ends_up_in_one_room() {
     two_task.abort();
 }
 
+/// What `testing/synapse/up.sh` writes into the test server's config.
+///
+/// Synapse's own default is 50M. Low on purpose: the refusal below is the same
+/// shape at any ceiling and two megabytes is cheaper than fifty.
+const SERVER_UPLOAD_LIMIT: u64 = 1024 * 1024;
+
+#[tokio::test]
+#[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+async fn an_attachment_is_refused_or_taken_by_what_the_homeserver_says_it_takes() {
+    // The one test that reads a real `m.upload.size` and sends a real
+    // attachment. A mock can be told to answer any number; what it cannot
+    // show is that the number Consort refuses by is the number the homeserver
+    // is actually configured with.
+    let dir = tempfile::tempdir().unwrap();
+    let account = a_brand_new_account("upload-ceiling").await;
+    let (client, _) = consort_matrix::auth::login(&store(&dir), &account)
+        .await
+        .unwrap();
+    let (seen, sink) = recorder();
+    let task = sync::start(client.clone(), sink);
+    wait_for(&seen, Connection::Live).await;
+
+    let room = client
+        .create_room(matrix_sdk::ruma::api::client::room::create_room::v3::Request::new())
+        .await
+        .expect("a room of its own");
+    let room_id = room.room_id().to_string();
+
+    let refused = consort_matrix::timeline::send_attachment(
+        &client,
+        &room_id,
+        consort_matrix::timeline::Attaching {
+            filename: "too-big.bin".to_owned(),
+            bytes: vec![0; (SERVER_UPLOAD_LIMIT + 1) as usize],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("one byte past what this server takes");
+
+    assert!(
+        matches!(
+            refused,
+            consort_matrix::Error::UploadTooLarge {
+                limit: SERVER_UPLOAD_LIMIT,
+                ..
+            }
+        ),
+        "{refused:?}. If this names another limit, the homeserver config is \
+         stale: run testing/synapse/down.sh then up.sh"
+    );
+    assert!(refused.user_message().contains("1.0 MB"), "{refused}");
+
+    // And the ceiling is a ceiling rather than a wall: the same path with a
+    // file the server will take uploads and sends it.
+    consort_matrix::timeline::send_attachment(
+        &client,
+        &room_id,
+        consort_matrix::timeline::Attaching {
+            filename: "small.bin".to_owned(),
+            bytes: vec![0; 1024],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("a file the server will take");
+
+    task.abort();
+}
+
 #[tokio::test]
 #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
 async fn a_real_login_is_reported_unverified() {

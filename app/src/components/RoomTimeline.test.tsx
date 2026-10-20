@@ -2106,6 +2106,26 @@ describe("sending an attachment", () => {
     );
   });
 
+  it("stages nothing when the homeserver will not take the file", async () => {
+    // The refusal is the picker's now rather than the send's, so the composer
+    // must not be left holding a file that has nowhere to go.
+    pickAttachment.mockRejectedValue({
+      message:
+        "That file is 412.0 MB and this homeserver takes 50.0 MB at most. Send something smaller, or raise the limit on the homeserver.",
+      detail: "attachment is 432013312 bytes, past the 52428800 this homeserver accepts",
+    });
+    await pane();
+
+    await userEvent.click(screen.getByRole("button", { name: "Attach a file" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "this homeserver takes 50.0 MB",
+    );
+    expect(
+      screen.queryByRole("button", { name: /Do not send/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("sends the file with the box as its caption", async () => {
     pickAttachment.mockResolvedValue(CHOSEN);
     await pane();

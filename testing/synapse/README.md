@@ -22,6 +22,15 @@ ones that do are `#[ignore]`d and gated on `CONSORT_TEST_HOMESERVER`, which
 means CI and a normal test run both skip them and nobody has to have Docker
 installed to contribute.
 
+## The upload ceiling is deliberately low
+
+`up.sh` writes `max_upload_size: 1M`, where Synapse's own default is 50M. The
+attachment test wants to watch a real refusal at the real limit, and at 1M that
+costs two megabytes of traffic rather than fifty. It is appended once, so a
+`data/homeserver.yaml` from before this existed does not have it: run `./down.sh`
+and `./up.sh` again if the attachment test fails saying the limit was something
+else.
+
 ## Running the live tests
 
 ```sh

@@ -189,7 +189,7 @@ pub enum Error {
     /// tens of megabytes, and the only thing to do about it is send something
     /// smaller or ask whoever runs the server.
     #[error("attachment is {bytes} bytes, past the {limit} this homeserver accepts")]
-    UploadTooLarge { bytes: usize, limit: usize },
+    UploadTooLarge { bytes: u64, limit: u64 },
 
     /// An attachment whose bytes are neither a picture nor a clip.
     ///
@@ -345,9 +345,12 @@ impl Error {
             Self::MediaTooLarge { .. } => {
                 "That attachment is too large for Consort to show.".to_owned()
             }
-            Self::UploadTooLarge { .. } => {
-                "That file is larger than this homeserver accepts.".to_owned()
-            }
+            Self::UploadTooLarge { bytes, limit } => format!(
+                "That file is {} and this homeserver takes {} at most. Send something smaller, \
+                 or raise the limit on the homeserver.",
+                roughly(*bytes),
+                roughly(*limit)
+            ),
             Self::UndrawableMedia => {
                 "Consort cannot show that attachment.".to_owned()
             }
@@ -466,6 +469,28 @@ fn login_message_for_kind(kind: Option<&ErrorKind>) -> String {
         ErrorKind::Unrecognized => "That homeserver does not accept password sign-in.".to_owned(),
         // Everything else is the server's problem, not the user's.
         _ => "The homeserver refused the sign-in. Please try again.".to_owned(),
+    }
+}
+
+/// How large something is, in the units it is talked about in.
+///
+/// Binary steps, which is what Synapse's `max_upload_size: 50M` means and what
+/// `weigh` in the composer already draws beside a staged file. A decimal
+/// rendering of that same ceiling reads 52.4 MB and agrees with neither.
+fn roughly(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["bytes", "KB", "MB", "GB"];
+
+    let mut size = bytes as f64;
+    let mut at = 0;
+    while size >= 1024.0 && at < UNITS.len() - 1 {
+        size /= 1024.0;
+        at += 1;
+    }
+
+    if at == 0 {
+        format!("{bytes} {}", UNITS[at])
+    } else {
+        format!("{size:.1} {}", UNITS[at])
     }
 }
 
@@ -751,6 +776,34 @@ mod tests {
                 "{error:?} leaked the SDK error into its user message"
             );
         }
+    }
+
+    #[test]
+    fn an_upload_the_homeserver_will_not_take_says_what_it_takes() {
+        // The server's own number is the message. The only fix is on a
+        // homeserver the person reading may well run, and "too large" without
+        // a number says nothing about what would have fitted.
+        let error = Error::UploadTooLarge {
+            bytes: 412_000_000,
+            limit: 50 * 1024 * 1024,
+        };
+
+        let message = error.user_message();
+
+        assert!(message.contains("50.0 MB"), "{message}");
+        assert!(message.contains("392.9 MB"), "{message}");
+    }
+
+    #[test]
+    fn a_size_is_said_in_the_units_a_homeserver_is_configured_in() {
+        // Binary steps, matching both Synapse's `max_upload_size: 50M` and
+        // `weigh` in the composer. A decimal rendering of the same ceiling
+        // reads 52.4 and matches neither.
+        assert_eq!(roughly(0), "0 bytes");
+        assert_eq!(roughly(512), "512 bytes");
+        assert_eq!(roughly(1024), "1.0 KB");
+        assert_eq!(roughly(50 * 1024 * 1024), "50.0 MB");
+        assert_eq!(roughly(3 * 1024 * 1024 * 1024), "3.0 GB");
     }
 
     #[test]

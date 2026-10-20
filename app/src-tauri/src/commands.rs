@@ -1068,7 +1068,7 @@ async fn send_attachment_for(
 ///
 /// Nothing is held between somebody choosing a file and deciding to send it.
 /// What crossed the boundary in the meantime is a name and a length.
-fn file_to_send(path: &str) -> Result<(String, Vec<u8>), CommandError> {
+fn file_to_send(path: &str, limit: Option<u64>) -> Result<(String, Vec<u8>), CommandError> {
     let filename = attaching::name_of(std::path::Path::new(path)).ok_or_else(|| {
         CommandError::new(
             "That file is not one Consort can send.",
@@ -1076,7 +1076,23 @@ fn file_to_send(path: &str) -> Result<(String, Vec<u8>), CommandError> {
         )
     })?;
 
-    Ok((filename, attaching::read(path)?))
+    Ok((filename, attaching::read(path, limit)?))
+}
+
+/// What this homeserver takes in one upload, or `None` when there is no answer
+/// to be had.
+///
+/// Nobody signed in is one such case and a homeserver that will not say is the
+/// other, and neither is a refusal to make from here: the file goes on to the
+/// send, which asks again and lets the server answer for itself.
+///
+/// Asked for before a file is read, and before the picker is even open, which
+/// is the whole point. The SDK holds the answer for the session, so the first
+/// ask is the only one that costs anything and it happens while somebody is
+/// still choosing.
+async fn upload_limit_for(state: &AppState) -> Option<u64> {
+    let client = state.client().await?;
+    timeline::upload_limit(&client).await
 }
 
 /// Which thread reply an attachment names, and on what terms.
@@ -1100,7 +1116,7 @@ pub async fn timeline_attach_file_for(
     caption: Option<String>,
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
-    let (filename, bytes) = file_to_send(&path)?;
+    let (filename, bytes) = file_to_send(&path, upload_limit_for(state).await)?;
 
     send_attachment_for(
         state,
@@ -1127,7 +1143,7 @@ pub async fn thread_attach_file_for(
     reply_to: String,
     answering: bool,
 ) -> Result<(), CommandError> {
-    let (filename, bytes) = file_to_send(&path)?;
+    let (filename, bytes) = file_to_send(&path, upload_limit_for(state).await)?;
 
     send_attachment_for(
         state,
@@ -2513,9 +2529,19 @@ pub async fn timeline_media_save(
 /// One file. Two would change the picker, the composer and what a failure
 /// halfway through means, all at once, and none of that is worth carrying to
 /// send a screenshot.
+///
+/// A file the homeserver would not take is refused here rather than staged,
+/// which is the one thing the limit is useful for: it is asked for before the
+/// dialog opens, so the answer is in hand the moment somebody chooses and
+/// nothing has been read to find out.
 #[tauri::command]
-pub async fn attachment_pick(app: tauri::AppHandle) -> Option<attaching::Chosen> {
+pub async fn attachment_pick(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<Option<attaching::Chosen>, CommandError> {
     use tauri_plugin_dialog::DialogExt;
+
+    let limit = upload_limit_for(&state).await;
 
     // The dialog answers on a thread of its own, so this waits on a channel
     // rather than blocking the runtime it is running on.
@@ -2528,10 +2554,31 @@ pub async fn attachment_pick(app: tauri::AppHandle) -> Option<attaching::Chosen>
     // callback, which is a dialog that never opened. Read as a cancellation,
     // because from where somebody is sitting that is what it was.
     let Ok(Some(path)) = wait.await else {
-        return None;
+        return Ok(None);
     };
 
-    attaching::chosen(&path.into_path().ok()?)
+    let Some(path) = path.into_path().ok() else {
+        return Ok(None);
+    };
+
+    what_was_picked(&path, limit)
+}
+
+/// One picked path as a file to stage, nothing at all, or a refusal.
+///
+/// Apart from the command because the dialog is the part no test can open:
+/// everything the picker decides is here, and the length it decides on is the
+/// one the filesystem states rather than anything that has been read.
+fn what_was_picked(
+    path: &std::path::Path,
+    limit: Option<u64>,
+) -> Result<Option<attaching::Chosen>, CommandError> {
+    let Some(chosen) = attaching::chosen(path) else {
+        return Ok(None);
+    };
+    timeline::within_the_servers_limit(chosen.size, limit)?;
+
+    Ok(Some(chosen))
 }
 
 /// See `timeline_attach_file_for`.
@@ -4910,6 +4957,56 @@ mod tests {
         other.await.unwrap().unwrap();
     }
 
+    mod picking {
+        use super::*;
+
+        #[test]
+        fn a_file_the_homeserver_will_not_take_is_refused_rather_than_staged() {
+            // The limit was asked for while the dialog was open, so the answer
+            // is here the moment something is chosen and nothing has been read
+            // to arrive at it.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("clip.mp4");
+            std::fs::write(&path, b"0123456789a").unwrap();
+
+            let refused = what_was_picked(&path, Some(10)).unwrap_err();
+
+            assert!(refused.message().contains("homeserver"), "{refused:?}");
+        }
+
+        #[test]
+        fn a_file_the_homeserver_will_take_is_handed_back_to_be_staged() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("clip.mp4");
+            std::fs::write(&path, b"0123456789").unwrap();
+
+            let chosen = what_was_picked(&path, Some(10))
+                .expect("a file that fits")
+                .expect("a file");
+
+            assert_eq!(chosen.name, "clip.mp4");
+            assert_eq!(chosen.size, 10);
+        }
+
+        #[test]
+        fn a_homeserver_with_no_stated_limit_refuses_nothing_at_the_picker() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("clip.mp4");
+            std::fs::write(&path, b"0123456789").unwrap();
+
+            assert!(what_was_picked(&path, None).unwrap().is_some());
+        }
+
+        #[test]
+        fn a_folder_is_still_nothing_to_send() {
+            // What dragging one in produces, and the one path through here
+            // that answers with neither a file nor a refusal.
+            let dir = tempfile::tempdir().unwrap();
+
+            assert!(what_was_picked(dir.path(), None).unwrap().is_none());
+        }
+    }
+
     mod links {
         use super::*;
 
@@ -5047,6 +5144,79 @@ mod against_a_mock_homeserver {
             || !state.microphone_open(),
             || "still open".to_owned(),
         );
+    }
+
+    /// Both endpoints, because which one the SDK reaches for depends on the
+    /// versions the server advertises, and a miss is a 404 naming neither.
+    async fn mount_media_config(server: &MatrixMockServer, limit: u32) {
+        let limit = ruma::UInt::from(limit);
+        server
+            .mock_authenticated_media_config()
+            .expect_any_access_token()
+            .ok(limit)
+            .mount()
+            .await;
+        server
+            .mock_media_config()
+            .expect_any_access_token()
+            .ok(limit)
+            .mount()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn what_this_homeserver_takes_is_asked_of_the_homeserver() {
+        // The number the refusals below are made of. Asked for while a picker
+        // is open rather than once a file has been read, which is only
+        // worthwhile because the answer is one request per session.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        mount_media_config(&server, 1024 * 1024).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .expect("login");
+
+        assert_eq!(upload_limit_for(&state).await, Some(1024 * 1024));
+    }
+
+    #[tokio::test]
+    async fn a_homeserver_nobody_is_signed_in_to_has_no_limit_to_state() {
+        // Not a refusal: a file nobody can send yet is refused by the send,
+        // and guessing a ceiling here would refuse files a server would take.
+        let (_dir, state, _sink) = state();
+
+        assert_eq!(upload_limit_for(&state).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_file_past_what_this_homeserver_takes_is_refused_with_the_servers_number() {
+        // Nothing to upload to is mounted, so an attempt would 404 on an
+        // endpoint naming neither ceiling. What comes back instead is the
+        // sentence carrying the two numbers.
+        let server = MatrixMockServer::new().await;
+        mount_login(&server).await;
+        mount_media_config(&server, 10).await;
+        let (_dir, state, _sink) = state();
+        login_for(&state, server.uri(), "bob".to_owned(), "hunter2".to_owned())
+            .await
+            .expect("login");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        std::fs::write(&path, b"0123456789a").unwrap();
+
+        let refused = timeline_attach_file_for(
+            &state,
+            "!general:example.org".to_owned(),
+            path.to_str().unwrap().to_owned(),
+            None,
+            None,
+        )
+        .await
+        .expect_err("a file the server will not take");
+
+        assert!(refused.message().contains("homeserver"), "{refused:?}");
+        assert!(refused.message().contains("10 bytes"), "{refused:?}");
     }
 
     #[tokio::test]
@@ -6182,21 +6352,7 @@ mod against_a_mock_homeserver {
                 .plain()
                 .mount()
                 .await;
-            // Both media config endpoints, because which one the SDK reaches
-            // for depends on the versions the homeserver advertises and none
-            // of these tests are about that choice.
-            server
-                .mock_authenticated_media_config()
-                .expect_any_access_token()
-                .ok(100_000_000u32.into())
-                .mount()
-                .await;
-            server
-                .mock_media_config()
-                .expect_any_access_token()
-                .ok(100_000_000u32.into())
-                .mount()
-                .await;
+            mount_media_config(server, 100_000_000).await;
             server
                 .mock_upload()
                 .expect_any_access_token()
