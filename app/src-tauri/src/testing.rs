@@ -442,6 +442,7 @@ impl consort_call::Roster for FakeCallRoster {
 impl consort_call::CallSession for FakeCallSession {
     type Track = FakeCallTrack;
     type Video = FakeCallCamera;
+    type ShareAudio = FakeCallTrack;
     type Roster = FakeCallRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, consort_call::CallFailure> {
@@ -467,6 +468,14 @@ impl consort_call::CallSession for FakeCallSession {
     }
 
     async fn retract_screen(&self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn publish_share_audio(&self) -> Result<Self::ShareAudio, consort_call::CallFailure> {
+        Ok(FakeCallTrack)
+    }
+
+    async fn retract_share_audio(&self) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }
 

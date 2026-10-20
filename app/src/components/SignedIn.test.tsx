@@ -220,7 +220,7 @@ function resetApiMocks() {
   callSetCamera
     .mockReset()
     .mockResolvedValue({ camera: false, trouble: null });
-  callSetShare.mockReset().mockResolvedValue({ sharing: null, trouble: null });
+  callSetShare.mockReset().mockResolvedValue({ sharing: null, trouble: null, sound: false });
   callSetDeafened.mockReset().mockResolvedValue(undefined);
   callSetAway.mockReset().mockResolvedValue(undefined);
   callConnect.mockReset().mockResolvedValue(undefined);
@@ -724,7 +724,7 @@ describe("SignedIn verification state", () => {
       ],
       [onSelfAudio, { muted: true, deafened: false }],
       [onSelfVideo, { camera: true, trouble: null }],
-      [onSelfScreen, { sharing: "DP-0", trouble: null }],
+      [onSelfScreen, { sharing: "DP-0", trouble: null, sound: false }],
       [onSpeaking, ["@ada:example.org"]],
       [onShowRoom, "!general:example.org"],
       [onAudio, { state: "callAudioFailed", error: "no output device" }],
@@ -1822,7 +1822,7 @@ describe("SignedIn voice calls", () => {
     await inACall();
 
     act(() =>
-      selfScreenHandler()({ sharing: "Bank statement.pdf", trouble: null }),
+      selfScreenHandler()({ sharing: "Bank statement.pdf", trouble: null, sound: false }),
     );
 
     expect(
@@ -1835,9 +1835,9 @@ describe("SignedIn voice calls", () => {
     // pressed anything and the publication is gone. An indicator that stayed
     // would be telling somebody their screen is going out when it is not.
     await inACall();
-    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null }));
+    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null, sound: false }));
 
-    act(() => selfScreenHandler()({ sharing: null, trouble: null }));
+    act(() => selfScreenHandler()({ sharing: null, trouble: null, sound: false }));
 
     expect(
       screen.queryByRole("status", { name: /sharing your screen/i }),
@@ -1846,7 +1846,7 @@ describe("SignedIn voice calls", () => {
 
   it("asks to stop sharing from the indicator", async () => {
     await inACall();
-    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null }));
+    act(() => selfScreenHandler()({ sharing: "DP-0", trouble: null, sound: false }));
 
     await userEvent.click(
       await screen.findByRole("button", { name: /stop sharing/i }),
@@ -1873,10 +1873,7 @@ describe("SignedIn voice calls", () => {
     await inACall();
 
     act(() =>
-      selfScreenHandler()({
-        sharing: null,
-        trouble: "sharing a screen needs an X11 session",
-      }),
+      selfScreenHandler()({ sharing: null, trouble: "sharing a screen needs an X11 session", sound: false }),
     );
 
     expect(await screen.findByText(/needs an X11 session/i)).toBeVisible();

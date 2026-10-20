@@ -935,6 +935,14 @@ function Connected({
         >
           <i className="call-panel__sharing-dot" aria-hidden="true" />
           <span className="call-panel__sharing-what">{selfScreen.sharing}</span>
+          {/*
+            Only when it is true, and said rather than drawn as a glyph: this
+            is the one place somebody learns that a switch they set in the
+            settings screen weeks ago is sending their speakers.
+          */}
+          {selfScreen.sound && (
+            <span className="call-panel__sharing-sound">with sound</span>
+          )}
           <button
             type="button"
             className="call-panel__stop-sharing"

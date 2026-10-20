@@ -105,6 +105,11 @@ pub struct SelfScreen {
     /// `None` when a share is simply off, so a reader can tell "I stopped it"
     /// from "it would not start".
     pub trouble: Option<String>,
+    /// Whether the share's own sound is going out with the picture.
+    ///
+    /// Not every build can capture one, so this is what actually happened
+    /// rather than what was asked for. The indicator reads it to say so.
+    pub sound: bool,
 }
 
 /// What to publish when a share is switched on.
@@ -118,6 +123,12 @@ pub struct ScreenShare {
     pub size: PictureSize,
     /// What the chosen screen or window is called.
     pub title: String,
+    /// Whether to publish what the machine is playing alongside the picture.
+    ///
+    /// Settled before this arrives, by whoever opened the capture: a build
+    /// that cannot capture a share's sound says `false` here rather than
+    /// having this layer ask.
+    pub sound: bool,
 }
 
 /// One thing that happened to this session's call.
@@ -356,17 +367,19 @@ mod tests {
     #[test]
     fn self_screen_puts_its_fields_beside_the_tag() {
         // The same flattening as its two siblings, pinned for the same
-        // reason: the frontend reads `{state, sharing, trouble}` with no
+        // reason: the frontend reads `{state, sharing, trouble, sound}` with no
         // nesting and nothing in TypeScript would fail to build if it drifted.
         let json = serde_json::to_value(CallEvent::SelfScreen(SelfScreen {
             sharing: Some("DP-0 (2560x1440)".to_owned()),
             trouble: None,
+            sound: true,
         }))
         .unwrap();
 
         assert_eq!(json["state"], "selfScreen");
         assert_eq!(json["sharing"], "DP-0 (2560x1440)");
         assert!(json["trouble"].is_null());
+        assert_eq!(json["sound"], true);
     }
 
     #[test]
@@ -377,6 +390,7 @@ mod tests {
         let sharing = SelfScreen {
             sharing: Some("Bank statement.pdf".to_owned()),
             trouble: None,
+            sound: false,
         };
 
         assert_eq!(sharing.sharing.as_deref(), Some("Bank statement.pdf"));
@@ -388,6 +402,7 @@ mod tests {
 
         assert!(json["sharing"].is_null());
         assert!(json["trouble"].is_null());
+        assert_eq!(json["sound"], false);
     }
 
     #[test]
@@ -409,6 +424,7 @@ mod tests {
             CallEvent::SelfScreen(SelfScreen {
                 sharing: Some("DP-0".to_owned()),
                 trouble: None,
+                sound: true,
             }),
             CallEvent::Failed {
                 room_id: "!a:example.org".to_owned(),

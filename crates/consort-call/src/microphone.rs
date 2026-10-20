@@ -129,6 +129,14 @@ impl Microphone {
         }
     }
 
+    /// Drop whatever is queued and unsent.
+    ///
+    /// What switching a capture off needs, so the next one does not open with
+    /// the tail of the last. [`crate::Camera::clear`]'s twin.
+    pub fn clear(&self) {
+        self.queue().clear();
+    }
+
     /// How many frames have been dropped for want of room.
     pub fn dropped(&self) -> u64 {
         self.0.dropped.load(Ordering::Relaxed)
@@ -191,6 +199,18 @@ mod tests {
             drained.push(microphone.next().await.samples[0]);
         }
         drained
+    }
+
+    #[tokio::test]
+    async fn clearing_drops_what_was_queued_and_unsent() {
+        // So a second share does not open with the tail of the first.
+        let microphone = Microphone::new();
+        microphone.offer(&[1; 4], true);
+
+        microphone.clear();
+        microphone.offer(&[2; 4], true);
+
+        assert_eq!(microphone.next().await.samples, vec![2; 4]);
     }
 
     #[tokio::test]

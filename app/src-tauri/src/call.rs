@@ -204,6 +204,7 @@ mod tests {
                 microphone: consort_call::Microphone::new(),
                 camera: consort_call::Camera::new(),
                 screen: consort_call::Camera::new(),
+                share_sound: consort_call::Microphone::new(),
                 ears: crate::ears::speakers(
                     voices.clone(),
                     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
