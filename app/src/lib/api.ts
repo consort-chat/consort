@@ -1170,19 +1170,23 @@ export function onSelfScreen(
  * is a couple of hundred pixels wide, so Rust keeps the newest one and samples
  * it down when something asks: see
  * `docs/adr/0007-draw-the-self-view-from-a-still.md`.
+ *
+ * `bound` is the long edge, in pixels, of the box it is being drawn into, the
+ * same ask `theirView` takes and clamped to the same ceiling.
  */
-export function selfView(): Promise<string | null> {
-  return invoke<string | null>("self_view");
+export function selfView(bound: number): Promise<string | null> {
+  return invoke<string | null>("self_view", { bound });
 }
 
 /**
  * The newest frame of what this session is sharing, as a `data:` URL.
  *
  * `selfView`'s twin, null on the same terms: nothing being shared, or a capture
- * whose first frame has not arrived.
+ * whose first frame has not arrived. Our own share is drawn on the stage as
+ * well as in a tile, so the box it is being drawn into matters most here.
  */
-export function screenView(): Promise<string | null> {
-  return invoke<string | null>("screen_view");
+export function screenView(bound: number): Promise<string | null> {
+  return invoke<string | null>("screen_view", { bound });
 }
 
 /**

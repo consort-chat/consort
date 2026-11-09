@@ -15,7 +15,7 @@ const EVERY = 80;
 export type Sending = "camera" | "screen";
 
 /** Where each picture comes from. Both are one slot in Rust, newest wins. */
-const ASK: Record<Sending, () => Promise<string | null>> = {
+const ASK: Record<Sending, (bound: number) => Promise<string | null>> = {
   camera: selfView,
   screen: screenView,
 };
@@ -37,13 +37,17 @@ const ASK: Record<Sending, () => Promise<string | null>> = {
  * argument is a value and a caller cannot restart the poll every render by
  * passing a fresh closure.
  *
+ * `bound` is the long edge in pixels of the box this is drawn into, on the same
+ * terms as [`useTheirPicture`]: our own share goes on the stage too, and a
+ * tile's worth of pixels blown up to fill it is issue #194.
+ *
  * Chained rather than on an interval, so an answer slower than `EVERY` delays
  * the next ask instead of queueing one behind it.
  */
-export function usePicture(of: Sending): string | null {
+export function usePicture(of: Sending, bound: number): string | null {
   const [picture, setPicture] = useState<string | null>(null);
 
-  useEffect(() => poll(() => ASK[of](), setPicture, of), [of]);
+  useEffect(() => poll(() => ASK[of](bound), setPicture, of), [of, bound]);
 
   return picture;
 }
@@ -53,14 +57,12 @@ export function usePicture(of: Sending): string | null {
  * this is mounted.
  *
  * `usePicture`'s twin, null on the same terms and polled the same way. The one
- * difference is `bound`: the long edge in pixels of the box this is being drawn
- * into, which Rust samples the frame to. Changing it restarts the poll, so a
- * card that grew asks for a bigger picture on its next frame rather than on its
- * next call.
+ * difference is whose frames these are: they arrive over the SFU rather than
+ * from a local capture, so `bound` is also what tells the SFU which layer to
+ * send.
  *
  * That argument is the seam issue #167 is built on. A cap somebody chooses goes
- * over the top of it, and the same number is what tells the SFU which layer to
- * send: `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
+ * over the top of it: `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
  */
 export function useTheirPicture(
   userId: string,
