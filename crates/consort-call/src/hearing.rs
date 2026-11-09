@@ -146,26 +146,62 @@ impl Attached {
     }
 }
 
-/// Everybody in `participants` whose audio we should be playing.
+/// What separates a share's queue key from its sender's own voice.
+///
+/// A space, because a `member_id` is a MatrixRTC membership id and carries
+/// none, so no voice key can collide with a share one.
+const SHARE: &str = " share";
+
+/// Which of the two sounds somebody in a call can be sending.
+///
+/// Both at once is ordinary: somebody sharing a screen talks over it.
+/// [`crate::watching::Kind`] is the same shape for the two pictures.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum Sound {
+    /// Their microphone.
+    Voice,
+    /// What the machine they are sharing is playing.
+    Share,
+}
+
+impl Sound {
+    /// What a transport calls this stream.
+    pub fn stream(self) -> MediaStreamKind {
+        match self {
+            Self::Voice => MediaStreamKind::Microphone,
+            Self::Share => MediaStreamKind::ScreenShareAudio,
+        }
+    }
+
+    /// The key `member_id`'s audio of this kind is queued and mixed under.
+    ///
+    /// Two keys rather than one, because a mixer queue is a jitter buffer and
+    /// two streams interleaved into one play as noise.
+    pub fn queue(self, member_id: &str) -> String {
+        match self {
+            Self::Voice => member_id.to_owned(),
+            Self::Share => format!("{member_id}{SHARE}"),
+        }
+    }
+}
+
+/// Everybody in `participants` whose `sound` we should be playing.
 ///
 /// Our own membership is excluded, and not as an optimisation: an SFU does not
 /// send us our own audio, so a task waiting on it would wait forever, and if
 /// one ever did arrive it would be the caller hearing themselves a third of a
-/// second late.
+/// second late. For a share that is also the feedback loop, since the sound it
+/// carries came out of these speakers.
 ///
 /// A muted participant is included. Their frames simply stop, and being already
 /// attached is what makes unmuting instant instead of costing a roster round
 /// trip before the first word is heard.
-pub fn audible(participants: &[MediaParticipant]) -> BTreeSet<String> {
+pub fn audible(participants: &[MediaParticipant], sound: Sound) -> BTreeSet<String> {
+    let wanted = sound.stream();
     participants
         .iter()
         .filter(|member| !member.is_local)
-        .filter(|member| {
-            member
-                .streams
-                .iter()
-                .any(|stream| stream.kind == MediaStreamKind::Microphone)
-        })
+        .filter(|member| member.streams.iter().any(|stream| stream.kind == wanted))
         .map(|member| member.member_id.clone())
         .collect()
 }
@@ -245,7 +281,7 @@ mod tests {
 
     #[test]
     fn somebody_with_a_microphone_is_audible() {
-        assert_eq!(audible(&[speaking("alice")]), set(&["alice"]));
+        assert_eq!(audible(&[speaking("alice")], Sound::Voice), set(&["alice"]));
     }
 
     #[test]
@@ -258,7 +294,7 @@ mod tests {
             speaking("alice"),
         ];
 
-        assert_eq!(audible(&people), set(&["alice"]));
+        assert_eq!(audible(&people, Sound::Voice), set(&["alice"]));
     }
 
     #[test]
@@ -271,7 +307,7 @@ mod tests {
             member("bob", false, &[]),
         ];
 
-        assert!(audible(&people).is_empty());
+        assert!(audible(&people, Sound::Voice).is_empty());
     }
 
     #[test]
@@ -281,7 +317,7 @@ mod tests {
         let mut muted = speaking("alice");
         muted.streams[0].muted = true;
 
-        assert_eq!(audible(&[muted]), set(&["alice"]));
+        assert_eq!(audible(&[muted], Sound::Voice), set(&["alice"]));
     }
 
     #[test]
@@ -309,6 +345,67 @@ mod tests {
 
         assert!(start.is_empty());
         assert!(stop.is_empty());
+    }
+
+    #[test]
+    fn somebody_sharing_a_screen_with_sound_is_audible_as_a_share() {
+        let people = vec![member(
+            "alice",
+            false,
+            &[
+                MediaStreamKind::Microphone,
+                MediaStreamKind::ScreenShareAudio,
+            ],
+        )];
+
+        assert_eq!(audible(&people, Sound::Share), set(&["alice"]));
+    }
+
+    #[test]
+    fn a_share_without_sound_is_not_waited_on() {
+        // A screen share publishes its audio as a track of its own, so a
+        // picture arriving is no promise that any sound will.
+        let people = vec![member(
+            "alice",
+            false,
+            &[MediaStreamKind::Microphone, MediaStreamKind::ScreenShare],
+        )];
+
+        assert!(audible(&people, Sound::Share).is_empty());
+    }
+
+    #[test]
+    fn a_share_with_sound_but_no_microphone_is_still_heard() {
+        // Sharing a video with the microphone off. The two streams are
+        // independent and either may be the only one.
+        let people = vec![member("alice", false, &[MediaStreamKind::ScreenShareAudio])];
+
+        assert!(audible(&people, Sound::Voice).is_empty());
+        assert_eq!(audible(&people, Sound::Share), set(&["alice"]));
+    }
+
+    #[test]
+    fn our_own_share_is_never_played_back_to_us() {
+        // The feedback loop this track exists to avoid: our own share audio
+        // arriving back through the mixer and out of the speakers it was
+        // captured from.
+        let people = vec![member("me", true, &[MediaStreamKind::ScreenShareAudio])];
+
+        assert!(audible(&people, Sound::Share).is_empty());
+    }
+
+    #[test]
+    fn each_sound_names_the_stream_it_pulls() {
+        assert_eq!(Sound::Voice.stream(), MediaStreamKind::Microphone);
+        assert_eq!(Sound::Share.stream(), MediaStreamKind::ScreenShareAudio);
+    }
+
+    #[test]
+    fn a_share_is_queued_apart_from_its_senders_voice() {
+        // One queue is a jitter buffer. Two streams in it interleave into
+        // noise, so a share cannot share its sender's key.
+        assert_eq!(Sound::Voice.queue("alice"), "alice");
+        assert_ne!(Sound::Share.queue("alice"), Sound::Voice.queue("alice"));
     }
 
     #[test]

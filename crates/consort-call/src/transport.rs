@@ -77,6 +77,12 @@ pub trait CallSession {
     /// The camera publication this call hands back, when there is one.
     type Video: PublishedVideo;
 
+    /// The publication a shared screen's own sound goes out on.
+    ///
+    /// A second audio publication rather than the microphone's, and the
+    /// separation is the point: see [`publish_share_audio`](Self::publish_share_audio).
+    type ShareAudio: PublishedAudio;
+
     /// Publish this session's microphone and hand back somewhere to push PCM.
     ///
     /// Separate from joining because they fail differently and because the
@@ -120,6 +126,22 @@ pub trait CallSession {
     /// Take this session's screen share down. See
     /// [`retract_camera`](Self::retract_camera), which this mirrors.
     async fn retract_screen(&self) -> Result<(), CallFailure>;
+
+    /// Publish what the machine a share comes from is playing, and hand back
+    /// somewhere to push PCM.
+    ///
+    /// A track of its own, never the microphone's. Mixed into the microphone a
+    /// share's sound could not be separated again by anybody receiving it: a
+    /// listener who turned the sharer down would lose the share with them, and
+    /// a microphone carrying what the speakers play feeds back.
+    ///
+    /// Peers read it as `MediaStreamKind::ScreenShareAudio`, which is what
+    /// pairs it with the picture rather than with the person.
+    async fn publish_share_audio(&self) -> Result<Self::ShareAudio, CallFailure>;
+
+    /// Take a shared screen's sound down. See
+    /// [`retract_screen`](Self::retract_screen), which this mirrors.
+    async fn retract_share_audio(&self) -> Result<(), CallFailure>;
 
     /// Mute or unmute this session's own microphone at the transport.
     ///

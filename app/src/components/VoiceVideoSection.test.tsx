@@ -15,6 +15,7 @@ const onAudio = vi.hoisted(() => vi.fn());
 const cameras = vi.hoisted(() => vi.fn());
 const videoSettings = vi.hoisted(() => vi.fn());
 const setVideoSettings = vi.hoisted(() => vi.fn());
+const shareSoundAvailable = vi.hoisted(() => vi.fn());
 
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
@@ -31,6 +32,7 @@ vi.mock("../lib/api", async (importOriginal) => ({
   cameras,
   videoSettings,
   setVideoSettings,
+  shareSoundAvailable,
 }));
 
 import { VoiceVideoSection } from "./VoiceVideoSection";
@@ -110,8 +112,9 @@ describe("VoiceVideoSection", () => {
     cameras.mockReset().mockResolvedValue(found);
     videoSettings
       .mockReset()
-      .mockResolvedValue({ camera: null, sending: "auto" });
+      .mockResolvedValue({ camera: null, sending: "auto", shareSound: false });
     setVideoSettings.mockReset().mockResolvedValue(undefined);
+    shareSoundAvailable.mockReset().mockResolvedValue(true);
     unlisten.mockReset();
     onAudio.mockReset().mockImplementation((handler) => {
       emit = handler;
@@ -151,6 +154,78 @@ describe("VoiceVideoSection", () => {
     expect(picker.value).toBe("/dev/video0");
   });
 
+  it("offers to send a shared screen's sound where the build can capture it", async () => {
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", {
+      name: /share your computer's sound/i,
+    });
+
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("does not offer a switch a build cannot honour", async () => {
+    // The whole reason the backend is asked. A control for a capture that
+    // cannot happen is a control somebody turns on and watches do nothing.
+    shareSoundAvailable.mockResolvedValue(false);
+    render(<VoiceVideoSection />);
+
+    await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    expect(
+      screen.queryByRole("switch", { name: /share your computer's sound/i }),
+    ).toBeNull();
+  });
+
+  it("draws the saved share-sound choice", async () => {
+    videoSettings.mockResolvedValue({ camera: null, sending: "auto", shareSound: true });
+    render(<VoiceVideoSection />);
+
+    const toggle = await screen.findByRole("switch", {
+      name: /share your computer's sound/i,
+    });
+
+    expect(toggle).toBeChecked();
+  });
+
+  it("keeps the share-sound choice when the camera changes", async () => {
+    // The section is written whole, so a camera change that forgot this field
+    // would switch a share's sound off behind somebody's back.
+    videoSettings.mockResolvedValue({ camera: null, sending: "auto", shareSound: true });
+    render(<VoiceVideoSection />);
+    const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
+
+    await userEvent.selectOptions(picker, "/dev/video2");
+
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: "/dev/video2",
+      sending: "auto",
+      shareSound: true,
+    });
+  });
+
+  it("saves the share-sound choice without disturbing the camera", async () => {
+    // The section is written whole, so a toggle that forgot the camera would
+    // reset it to the first one found.
+    videoSettings.mockResolvedValue({
+      camera: "/dev/video2",
+      sending: "auto",
+      shareSound: false,
+    });
+    render(<VoiceVideoSection />);
+    const toggle = await screen.findByRole("switch", {
+      name: /share your computer's sound/i,
+    });
+
+    await userEvent.click(toggle);
+
+    expect(setVideoSettings).toHaveBeenCalledWith({
+      camera: "/dev/video2",
+      sending: "auto",
+      shareSound: true,
+    });
+  });
+
   it("saves the chosen camera by its device node", async () => {
     render(<VoiceVideoSection />);
     const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
@@ -160,11 +235,12 @@ describe("VoiceVideoSection", () => {
     expect(setVideoSettings).toHaveBeenCalledWith({
       camera: "/dev/video2",
       sending: "auto",
+      shareSound: false,
     });
   });
 
   it("lists what this machine will send with the saved choice selected", async () => {
-    videoSettings.mockResolvedValue({ camera: null, sending: "medium" });
+    videoSettings.mockResolvedValue({ camera: null, sending: "medium", shareSound: false });
     render(<VoiceVideoSection />);
 
     const picker = await screen.findByLabelText<HTMLSelectElement>(/send at/i);
@@ -183,13 +259,14 @@ describe("VoiceVideoSection", () => {
     expect(setVideoSettings).toHaveBeenCalledWith({
       camera: null,
       sending: "low",
+      shareSound: false,
     });
   });
 
   it("keeps the sending choice when the camera changes", async () => {
     // One section written whole, so each picker has to carry the other's
     // value or saving one silently resets the other.
-    videoSettings.mockResolvedValue({ camera: null, sending: "low" });
+    videoSettings.mockResolvedValue({ camera: null, sending: "low", shareSound: false });
     render(<VoiceVideoSection />);
     const picker = await screen.findByLabelText<HTMLSelectElement>(/^camera$/i);
 
@@ -198,6 +275,7 @@ describe("VoiceVideoSection", () => {
     expect(setVideoSettings).toHaveBeenCalledWith({
       camera: "/dev/video2",
       sending: "low",
+      shareSound: false,
     });
   });
 

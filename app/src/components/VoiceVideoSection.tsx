@@ -14,6 +14,7 @@ import {
   onAudio,
   setAudioSettings,
   setVideoSettings,
+  shareSoundAvailable,
   videoSettings,
   type AudioDeviceList,
   type CameraList,
@@ -21,6 +22,7 @@ import {
   type AudioSettings,
   type GateConfig,
   type Sending,
+  type VideoSettings,
 } from "../lib/api";
 import { LevelMeter } from "./LevelMeter";
 import "./VoiceVideoSection.css";
@@ -343,6 +345,10 @@ export function VoiceVideoSection({
   /** How much camera this machine sends, as saved. */
   const [sending, setSending] = useState<Sending>("auto");
   const [pickedCamera, setPickedCamera] = useState<string | null>(null);
+  // The rest of the video section as saved, so a write carries it along.
+  const [video, setVideo] = useState<VideoSettings | null>(null);
+  // Whether this build can capture what the machine is playing.
+  const [shareSoundable, setShareSoundable] = useState(false);
   const [meter, setMeter] = useState<Meter>(SILENT);
   const [chime, setChime] = useState<Chime>(QUIET);
   /*
@@ -383,11 +389,12 @@ export function VoiceVideoSection({
     // In parallel, because each of the four is a round trip and two of them
     // probe every device on the machine. Serially this is the delay the
     // spinner beside the menu item exists for, doubled.
-    const [report, current, found, video] = await Promise.all([
+    const [report, current, found, video, shareable] = await Promise.all([
       audioDevices(),
       audioSettings(),
       cameras(),
       videoSettings(),
+      shareSoundAvailable(),
     ]);
     setDevices({ input: report.input, output: report.output });
     setSettings(current);
@@ -395,6 +402,8 @@ export function VoiceVideoSection({
     setCamerasFound(found);
     setPickedCamera(video.camera);
     setSending(video.sending);
+    setVideo(video);
+    setShareSoundable(shareable);
   }, []);
 
   // Somebody who drags a slider and immediately closes the settings screen has
@@ -565,11 +574,29 @@ export function VoiceVideoSection({
     setPickedCamera(id);
 
     try {
-      await setVideoSettings({ camera: id, sending });
+      await writeVideo({ camera: id });
       setCamerasFound(await cameras());
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     }
+  }
+
+  /**
+   * Change one part of the video section, carrying the rest along.
+   *
+   * The section is written whole, so a change that only named its own field
+   * would reset every other one to its default.
+   */
+  async function writeVideo(change: Partial<VideoSettings>) {
+    const next = {
+      camera: pickedCamera,
+      sending,
+      shareSound: false,
+      ...video,
+      ...change,
+    };
+    setVideo(next);
+    await setVideoSettings(next);
   }
 
   /**
@@ -583,7 +610,16 @@ export function VoiceVideoSection({
     setSending(chosen);
 
     try {
-      await setVideoSettings({ camera: pickedCamera, sending: chosen });
+      await writeVideo({ sending: chosen });
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    }
+  }
+
+  /** Switch a share's own sound on or off for the next share. */
+  async function chooseShareSound(on: boolean) {
+    try {
+      await writeVideo({ shareSound: on });
     } catch (raw: unknown) {
       setProblem(asCommandError(raw).message);
     }
@@ -829,6 +865,36 @@ export function VoiceVideoSection({
         selected={sending}
         onChange={(chosen) => void chooseSending(chosen)}
       />
+      {/*
+        Beside the camera, because both are about what a call carries from
+        this machine, and only drawn where the build can capture it: ADR-0020.
+      */}
+      {shareSoundable && (
+        <div className="voice-field">
+          <div className="voice-toggle">
+            <input
+              id="voice-share-sound"
+              className="voice-toggle__switch"
+              type="checkbox"
+              role="switch"
+              aria-describedby="voice-share-sound-note"
+              checked={video?.shareSound ?? false}
+              onChange={(event) =>
+                void chooseShareSound(event.target.checked)
+              }
+            />
+            <label className="voice-toggle__label" htmlFor="voice-share-sound">
+              Share your computer&apos;s sound
+            </label>
+          </div>
+          <p className="voice-field__note" id="voice-share-sound-note">
+            Send what this machine is playing along with a shared screen, on a
+            track of its own so nobody has to choose between hearing you and
+            hearing it. This is everything coming out of your speakers, not
+            just the window you picked: notifications included.
+          </p>
+        </div>
+      )}
 
       <div className="voice-field">
         <span className="voice-field__label">Mic test</span>

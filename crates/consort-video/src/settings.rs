@@ -22,6 +22,10 @@ pub struct VideoSettings {
     pub camera: Option<String>,
     /// How much camera this machine sends.
     pub sending: Sending,
+    /// Whether to send what this machine is playing along with a shared
+    /// screen. Off by default: on the one platform that can capture it the
+    /// capture is the whole output, not one application.
+    pub share_sound: bool,
 }
 
 /// How much camera this machine sends.

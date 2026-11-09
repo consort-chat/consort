@@ -85,6 +85,9 @@ impl ScreenBridge {
                 height: stream.resolution().height,
             },
             title: stream.source().title.clone(),
+            // Decided by whoever opens the sound capture, which is not this
+            // bridge: see `AppState::start_share`.
+            sound: false,
         };
         // Replaced rather than dropped first, on the same terms as
         // `VideoBridge::start`: a source that will not open leaves the one

@@ -1466,12 +1466,16 @@ describe("the call commands", () => {
     invoke.mockResolvedValue({ camera: null });
     await videoSettings();
     invoke.mockResolvedValue(undefined);
-    await setVideoSettings({ camera: "/dev/video2", sending: "low" });
+    await setVideoSettings({
+      camera: "/dev/video2",
+      sending: "low",
+      shareSound: false,
+    });
 
     expect(invoke).toHaveBeenNthCalledWith(1, "cameras");
     expect(invoke).toHaveBeenNthCalledWith(2, "video_settings");
     expect(invoke).toHaveBeenNthCalledWith(3, "set_video_settings", {
-      video: { camera: "/dev/video2", sending: "low" },
+      video: { camera: "/dev/video2", sending: "low", shareSound: false },
     });
   });
 
