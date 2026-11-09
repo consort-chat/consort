@@ -558,6 +558,7 @@ mod tests {
         Settings {
             video: VideoSettings {
                 camera: Some("/dev/video2".to_owned()),
+                sending: consort_video::Sending::Low,
                 share_sound: true,
             },
             audio: AudioSettings {

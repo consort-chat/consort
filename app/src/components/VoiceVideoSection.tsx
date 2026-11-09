@@ -21,6 +21,7 @@ import {
   FRAME_MS,
   type AudioSettings,
   type GateConfig,
+  type Sending,
   type VideoSettings,
 } from "../lib/api";
 import { LevelMeter } from "./LevelMeter";
@@ -192,6 +193,52 @@ function CameraPicker({
   );
 }
 
+/** What each sending choice is called, and what it means in one line. */
+const SENDING: { value: Sending; name: string; note: string }[] = [
+  { value: "auto", name: "Full", note: "1280 by 720" },
+  { value: "medium", name: "Reduced", note: "960 by 540" },
+  { value: "low", name: "Minimal", note: "320 by 180" },
+];
+
+/**
+ * How much camera this machine sends.
+ *
+ * The camera opened smaller rather than published from a lower rung: a
+ * receiver can only choose among rungs the publisher built. ADR-0017.
+ */
+function SendingPicker({
+  selected,
+  onChange,
+}: {
+  selected: Sending;
+  onChange: (sending: Sending) => void;
+}) {
+  const chosen = SENDING.find((option) => option.value === selected);
+
+  return (
+    <div className="voice-field">
+      <label className="voice-field__label" htmlFor="voice-sending">
+        Send at
+      </label>
+      <select
+        id="voice-sending"
+        className="voice-field__select"
+        value={selected}
+        onChange={(event) => onChange(event.target.value as Sending)}
+      >
+        {SENDING.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.name}
+          </option>
+        ))}
+      </select>
+      <p className="voice-field__note">
+        {chosen?.note}. Applies the next time you switch your camera on.
+      </p>
+    </div>
+  );
+}
+
 /**
  * One volume slider.
  *
@@ -295,6 +342,8 @@ export function VoiceVideoSection({
     well have one and not the other.
   */
   const [camerasFound, setCamerasFound] = useState<CameraList | null>(null);
+  /** How much camera this machine sends, as saved. */
+  const [sending, setSending] = useState<Sending>("auto");
   const [pickedCamera, setPickedCamera] = useState<string | null>(null);
   // The rest of the video section as saved, so a write carries it along.
   const [video, setVideo] = useState<VideoSettings | null>(null);
@@ -352,6 +401,7 @@ export function VoiceVideoSection({
     saved.current = current;
     setCamerasFound(found);
     setPickedCamera(video.camera);
+    setSending(video.sending);
     setVideo(video);
     setShareSoundable(shareable);
   }, []);
@@ -538,9 +588,32 @@ export function VoiceVideoSection({
    * would reset every other one to its default.
    */
   async function writeVideo(change: Partial<VideoSettings>) {
-    const next = { camera: pickedCamera, shareSound: false, ...video, ...change };
+    const next = {
+      camera: pickedCamera,
+      sending,
+      shareSound: false,
+      ...video,
+      ...change,
+    };
     setVideo(next);
     await setVideoSettings(next);
+  }
+
+  /**
+   * Choose how much camera to send.
+   *
+   * Nothing is reopened, for the reason a camera change reopens nothing: a
+   * new capture size is a new publication, which is a reconnect in everybody
+   * else's call in answer to somebody browsing a settings screen.
+   */
+  async function chooseSending(chosen: Sending) {
+    setSending(chosen);
+
+    try {
+      await writeVideo({ sending: chosen });
+    } catch (raw: unknown) {
+      setProblem(asCommandError(raw).message);
+    }
   }
 
   /** Switch a share's own sound on or off for the next share. */
@@ -788,6 +861,10 @@ export function VoiceVideoSection({
         />
       )}
 
+      <SendingPicker
+        selected={sending}
+        onChange={(chosen) => void chooseSending(chosen)}
+      />
       {/*
         Beside the camera, because both are about what a call carries from
         this machine, and only drawn where the build can capture it: ADR-0020.

@@ -291,8 +291,8 @@ pub struct FakeCallTransport {
 #[derive(Clone, Default)]
 pub struct Asks(Arc<std::sync::Mutex<Vec<Pass>>>);
 
-/// What one pass of `request` asked for: a box per person per picture.
-pub type Pass = Vec<(String, consort_call::Kind, consort_call::Asked)>;
+/// What one pass of `request` asked for, per person per picture.
+pub type Pass = Vec<(String, consort_call::Kind, consort_call::Ask)>;
 
 impl Asks {
     /// How many passes there have been.

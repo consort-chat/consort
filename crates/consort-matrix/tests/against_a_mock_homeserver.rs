@@ -3166,6 +3166,284 @@ mod direct_messages {
         assert!(direct(&client, OTHER).await.is_err());
     }
 
+    const THEIRS: &str = "!theirs:example.org";
+
+    /// Put an invite to `room` from `sender` into the client's store.
+    ///
+    /// The envelope is written out rather than built, on the same terms as
+    /// `syncing` further down: `InvitedRoomBuilder` lives in a crate this one
+    /// cannot name.
+    async fn invited_by(
+        server: &MatrixMockServer,
+        client: &matrix_sdk::Client,
+        room: &str,
+        sender: &str,
+        is_direct: bool,
+    ) {
+        let mut ours = serde_json::json!({
+            "type": "m.room.member",
+            "state_key": USER,
+            "sender": sender,
+            "content": { "membership": "invite" },
+        });
+        if is_direct {
+            ours["content"]["is_direct"] = serde_json::json!(true);
+        }
+
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "rooms": { "invite": { room: { "invite_state": { "events": [
+                        {
+                            "type": "m.room.member",
+                            "state_key": sender,
+                            "sender": sender,
+                            "content": { "membership": "join" },
+                        },
+                        ours,
+                    ] } } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the invite should sync");
+    }
+
+    /// The account data endpoints the SDK writes `m.direct` through on a join.
+    async fn mount_m_direct(server: &MatrixMockServer) {
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .and(wiremock::matchers::path_regex(
+                r"^/_matrix/client/v3/user/.*/account_data/m\.direct$",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(server.server())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_invite_to_a_direct_room_is_taken_rather_than_answered_with_a_second_one() {
+        // Nothing mounts `createRoom`, so a second room would 404 and this
+        // would fail rather than pass for the wrong reason.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, true).await;
+        // `mock_once` rather than `ok`: the room ID alone would come back
+        // whether or not the invite was taken, and a room nobody joined is not
+        // one Consort can draw.
+        server
+            .mock_room_join(ruma::room_id!("!theirs:example.org"))
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+        // The SDK writes this account's `m.direct` as part of taking a direct
+        // invite, and reads the member list to know who to write it against.
+        server.mock_get_members().ok(vec![]).mount().await;
+        mount_m_direct(&server).await;
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the invite is the room");
+
+        assert_eq!(room_id, THEIRS);
+    }
+
+    #[tokio::test]
+    async fn a_room_this_account_is_already_in_with_them_is_answered_with_that_room() {
+        // The case the button is pressed in most often, and the one that costs
+        // no request at all. `createRoom` is unmounted, so a second room 404s.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": [{
+                        "type": "m.direct",
+                        "content": { OTHER: [THEIRS] },
+                    }] },
+                    "rooms": { "join": { THEIRS: {
+                        "timeline": { "events": [], "limited": false },
+                    } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the room should sync");
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the room is already there");
+
+        assert_eq!(room_id, THEIRS);
+    }
+
+    const OURS: &str = "!ours:example.org";
+
+    #[tokio::test]
+    async fn a_room_this_account_is_already_in_beats_a_later_invite_from_them() {
+        // Issue #184's last sentence: a second room with the same person on
+        // purpose has to stay possible, so its invite must not be taken as an
+        // answer about the room they already talk in.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "account_data": { "events": [{
+                        "type": "m.direct",
+                        "content": { OTHER: [OURS] },
+                    }] },
+                    "rooms": {
+                        "join": { OURS: {
+                            "timeline": { "events": [], "limited": false },
+                        } },
+                        "invite": { THEIRS: { "invite_state": { "events": [
+                            {
+                                "type": "m.room.member",
+                                "state_key": OTHER,
+                                "sender": OTHER,
+                                "content": { "membership": "join" },
+                            },
+                            {
+                                "type": "m.room.member",
+                                "state_key": USER,
+                                "sender": OTHER,
+                                "content": { "membership": "invite", "is_direct": true },
+                            },
+                        ] } } },
+                    },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the room and the invite should sync");
+
+        let room_id = direct(&client, OTHER)
+            .await
+            .expect("the room they already talk in");
+
+        assert_eq!(room_id, OURS);
+        let asked = server.server().received_requests().await.unwrap();
+        assert!(
+            !asked
+                .iter()
+                .any(|request| request.url.path().contains("/join")),
+            "the second room's invite should have been left alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invite_carrying_no_membership_of_ours_is_skipped_rather_than_fatal() {
+        // A homeserver that sends an invite with nothing in its stripped state
+        // leaves nothing to read the sender or `is_direct` off. The button
+        // still has a room to make.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/_matrix/client/v3/sync"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "next_batch": "s2",
+                    "rooms": { "invite": { THEIRS: {
+                        "invite_state": { "events": [] },
+                    } } },
+                })),
+            )
+            .mount(server.server())
+            .await;
+        client
+            .sync_once(matrix_sdk::config::SyncSettings::default())
+            .await
+            .expect("the invite should sync");
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
+    #[tokio::test]
+    async fn an_invite_the_homeserver_will_not_let_us_take_is_an_error_not_a_second_room() {
+        // Neither `join` nor `createRoom` is mounted, so both 404. The point is
+        // which one is reported: falling through to a second room on a failed
+        // join would make the duplicate this fixes, silently, on a bad network.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, true).await;
+
+        assert!(direct(&client, OTHER).await.is_err());
+
+        let asked = server.server().received_requests().await.unwrap();
+        assert!(
+            !asked
+                .iter()
+                .any(|request| request.url.path().ends_with("/createRoom")),
+            "a failed join should not have made a room"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invite_from_somebody_else_is_not_a_room_with_this_person() {
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, "@cass:example.org", true).await;
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
+    #[tokio::test]
+    async fn an_invite_to_an_ordinary_room_is_not_a_room_with_this_person() {
+        // Same inviter, no `is_direct`. Being asked into somebody's project
+        // room is not having a direct message with them, and taking it as one
+        // would both answer the wrong room and accept an invite nobody
+        // accepted.
+        let server = MatrixMockServer::new().await;
+        let (_dir, client) = signed_in(&server).await;
+        invited_by(&server, &client, THEIRS, OTHER, false).await;
+        server
+            .mock_create_room()
+            .expect_access_token("syt_first")
+            .ok()
+            .mock_once()
+            .mount()
+            .await;
+
+        let room_id = direct(&client, OTHER).await.expect("a DM can be made");
+
+        assert_eq!(room_id, "!room:example.org");
+    }
+
     #[tokio::test]
     async fn something_that_is_not_a_user_id_never_reaches_the_homeserver() {
         // Nothing is mounted here either, so a request would fail anyway. The
@@ -4512,7 +4790,7 @@ mod timeline {
     /// them can be seen from a unit test.
     mod sending_attachments {
         use super::*;
-        use consort_matrix::timeline::Attaching;
+        use consort_matrix::timeline::{Answering, Attaching};
 
         /// A PNG header saying 640 by 480, with no pixels after it.
         fn png() -> Vec<u8> {
@@ -4748,12 +5026,173 @@ mod timeline {
                 &client,
                 ROOM,
                 Attaching {
-                    reply_to: Some("$said:example.org".to_owned()),
+                    answering: Answering::Message("$said:example.org".to_owned()),
                     ..attaching("cat.png", png())
                 },
             )
             .await
             .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_picture_sent_in_a_thread_lands_in_the_thread() {
+            // #134. The relation has to name the thread's root rather than the
+            // reply it was sent after, and the root is the SDK's answer: it
+            // reads it off the message named here, which is the last thing said
+            // in the thread.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            let mut latest = said("$latest:example.org", "what does it look like", 1_000);
+            latest["content"]["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(latest).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::Thread("$latest:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            // Read off the wire rather than matched, because what matters here
+            // includes a flag whose absence is the bug: without it every client
+            // draws the picture as an answer to that one reply.
+            let sent = sent_message(&server).await;
+            assert_eq!(
+                sent["m.relates_to"],
+                serde_json::json!({
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    "m.in_reply_to": { "event_id": "$latest:example.org" },
+                    "is_falling_back": true,
+                })
+            );
+        }
+
+        #[tokio::test]
+        async fn a_picture_opening_a_thread_roots_it_at_the_message_it_answers() {
+            // The first attachment in a thread nobody has replied to yet. The
+            // message it names carries no thread relation, so the thread this
+            // starts is rooted at that message, which is what the panel means
+            // by it.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(said("$root:example.org", "look at this", 1_000)).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::Thread("$root:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            let sent = sent_message(&server).await;
+            assert_eq!(sent["m.relates_to"]["event_id"], "$root:example.org");
+        }
+
+        #[tokio::test]
+        async fn a_picture_answering_one_reply_in_a_thread_says_so_and_mentions_its_author() {
+            // Pressed Reply on a line of the thread, which is a different event
+            // from the one above by one flag and a mention. Nobody is notified
+            // of a fallback, and an answer nobody is notified of is a line in a
+            // panel that is not open.
+            let server = MatrixMockServer::new().await;
+            let (_dir, client) = signed_in(&server).await;
+            ready(&server, &client, 100_000_000).await;
+            let mut answered = said("$said:example.org", "which one", 1_000);
+            answered["content"]["m.relates_to"] = serde_json::json!({
+                "rel_type": "m.thread",
+                "event_id": "$root:example.org",
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        raw(answered).cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .body_matches_partial_json(serde_json::json!({
+                    "msgtype": "m.image",
+                    "m.mentions": { "user_ids": [OTHER] },
+                }))
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+
+            timeline::send_attachment(
+                &client,
+                ROOM,
+                Attaching {
+                    answering: Answering::ReplyInThread("$said:example.org".to_owned()),
+                    ..attaching("cat.png", png())
+                },
+            )
+            .await
+            .unwrap();
+
+            // No `is_falling_back` at all rather than one saying false: ruma
+            // leaves a field holding its default off the wire, and its absence
+            // is what every client reads as an answer somebody asked for.
+            let sent = sent_message(&server).await;
+            assert_eq!(
+                sent["m.relates_to"],
+                serde_json::json!({
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    "m.in_reply_to": { "event_id": "$said:example.org" },
+                })
+            );
         }
 
         #[tokio::test]

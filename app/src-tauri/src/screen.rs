@@ -334,7 +334,7 @@ mod tests {
         backend.capture(7);
 
         assert!(
-            bridge.mirror().latest().is_some(),
+            bridge.mirror().latest(320).is_some(),
             "the card has nothing to draw"
         );
     }
@@ -349,7 +349,7 @@ mod tests {
 
         bridge.stop();
 
-        assert_eq!(bridge.mirror().latest(), None);
+        assert_eq!(bridge.mirror().latest(320), None);
     }
 
     #[test]

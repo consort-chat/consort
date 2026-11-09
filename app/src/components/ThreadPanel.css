@@ -121,8 +121,8 @@
 .thread__composer {
   display: grid;
   flex: none;
-  /* The emoji control, the box, and Send. */
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Paperclip, emoji, the box, and Send. */
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
   gap: var(--space-2);
   align-items: end;
   padding: 0 var(--space-6) var(--space-4);
@@ -133,10 +133,10 @@
   */
   font-size: var(--text-sm);
   /*
-    The same height for all three controls as the room's composer gives its
-    own, worked out the same way. See `.timeline__composer`, which explains
-    the arithmetic; two boxes on one screen whose controls were different
-    heights would read as two different kinds of thing.
+    The same height for every control as the room's composer gives its own,
+    worked out the same way. See `.timeline__composer`, which explains the
+    arithmetic; two boxes on one screen whose controls were different heights
+    would read as two different kinds of thing.
   */
   --composer-control: calc(1lh + 2 * (var(--space-3) + 1px));
 }

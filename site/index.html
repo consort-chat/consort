@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Consort updates</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --violet: oklch(62% 0.21 284);
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        background: oklch(16% 0.018 285);
+        color: oklch(96% 0.005 285);
+        font:
+          1rem/1.6 ui-sans-serif,
+          system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 34rem;
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.5rem;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 0 0 1rem;
+        color: oklch(74% 0.012 285);
+      }
+      a {
+        color: var(--violet);
+      }
+      code {
+        font-family: ui-monospace, monospace;
+        font-size: 0.875rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Consort updates</h1>
+      <p>
+        This host serves one file: the update manifest an installed Consort polls
+        to find out whether a newer release exists. It is at
+        <code><a href="updater/latest.json">updater/latest.json</a></code>.
+      </p>
+      <p>
+        The installers themselves live on the
+        <a href="https://github.com/consort-chat/consort/releases">release pages</a>.
+        Consort is a desktop Matrix client with voice;
+        <a href="https://github.com/consort-chat/consort">the repository</a> has
+        the source, the packages and what it can and cannot do yet.
+      </p>
+      <p>
+        Linux packages are updated by your package manager rather than from
+        inside Consort, so nothing here applies to them.
+      </p>
+    </main>
+  </body>
+</html>
