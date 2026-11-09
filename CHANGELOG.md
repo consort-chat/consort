@@ -4,6 +4,29 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.13.0 (2026-10-10)
+
+### Added
+
+- Attach a file or a screenshot to a thread (#134) (@tominal)
+- Update Consort from inside Consort, on Windows only (@tominal)
+
+### Changed
+
+- One rule for everything that stops an install (@tominal)
+
+### Documentation
+
+- Trim two comments that said it twice (@tominal)
+- Cut the comment blocks down to the lines that earn their place (@tominal)
+
+### Fixed
+
+- Take a direct invite rather than making a second room (@tominal)
+- The manifest gate did not check which key signed the release (@tominal)
+- A malformed signature killed the manifest gate instead of failing it (@tominal)
+- Give the end of a channel row a flow, and grow the chat target (@tominal)
+
 ## 0.12.0 (2026-10-08)
 
 ### Added

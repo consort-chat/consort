@@ -692,6 +692,24 @@ impl AppState {
         self.events.emit(AppEvent::Dropped(files));
     }
 
+    /// Publish what is happening about a newer Consort.
+    ///
+    /// Narrow on purpose: the updater holds nothing in `AppState` and needs
+    /// only somewhere to say what it found.
+    #[cfg(feature = "self-update")]
+    pub fn announce(&self, update: crate::updating::Update) {
+        self.events.emit(AppEvent::Update(update));
+    }
+
+    /// Whether this session is in a voice call right now.
+    ///
+    /// The room rather than the bridge, which outlives the call: it is kept
+    /// across channel switches so a mute survives one.
+    #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
+    pub fn in_a_call(&self) -> bool {
+        self.locked_called().is_some()
+    }
+
     /// Leave the voice channel, if this session is in one.
     ///
     /// A no-op when no call was ever started, which is what a stray click on a
@@ -1024,16 +1042,16 @@ impl AppState {
     ///
     /// `None` when no camera is running, and in the moment between opening one
     /// and its first frame. The card draws its faces either way.
-    pub fn self_view(&self) -> Option<String> {
-        self.self_view.latest()
+    pub fn self_view(&self, bound: u32) -> Option<String> {
+        self.self_view.latest(bound)
     }
 
     /// The newest shared-screen frame as a data URL, for the card to draw.
     ///
     /// `None` when nothing is being shared, and in the moment between a
     /// capture starting and its first frame.
-    pub fn screen_view(&self) -> Option<String> {
-        self.screen_view.latest()
+    pub fn screen_view(&self, bound: u32) -> Option<String> {
+        self.screen_view.latest(bound)
     }
 
     /// The newest picture somebody else is sending, at the size asked for.
@@ -1858,6 +1876,39 @@ mod tests {
         (dir, AppState::new(store, settings, sink.clone()), sink)
     }
 
+    mod whether_a_call_is_up {
+        use super::*;
+
+        #[test]
+        fn nothing_joined_is_no_call() {
+            let (_dir, state, _sink) = state();
+
+            assert!(!state.in_a_call());
+        }
+
+        #[test]
+        fn a_joined_channel_is_a_call() {
+            let (_dir, state, sink) = state();
+
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(state.in_a_call());
+        }
+
+        #[test]
+        fn hanging_up_ends_it() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            state.disconnect_call();
+            until_call(&sink, "disconnected");
+
+            assert!(!state.in_a_call());
+        }
+    }
+
     mod the_screen {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1894,6 +1945,9 @@ mod tests {
             }
 
             /// Hand one frame over the way a display would.
+            ///
+            /// A real desktop's shape, so a test can tell what size the card
+            /// was answered at rather than only that it was answered.
             fn capture(&self) {
                 if let Some(sink) = self
                     .sink
@@ -1901,12 +1955,13 @@ mod tests {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .as_mut()
                 {
+                    let (width, height) = (640usize, 360usize);
                     sink(consort_video::Picture {
-                        width: 2,
-                        height: 2,
-                        y: vec![120; 4],
-                        u: vec![128],
-                        v: vec![128],
+                        width: width as u32,
+                        height: height as u32,
+                        y: vec![120; width * height],
+                        u: vec![128; width.div_ceil(2) * height.div_ceil(2)],
+                        v: vec![128; width.div_ceil(2) * height.div_ceil(2)],
                         timestamp_us: 1,
                     });
                 }
@@ -2055,7 +2110,7 @@ mod tests {
         fn there_is_nothing_for_the_card_to_draw_before_a_share_starts() {
             let (_dir, state, _sink) = state();
 
-            assert_eq!(state.screen_view(), None);
+            assert_eq!(state.screen_view(320), None);
         }
 
         #[test]
@@ -2073,9 +2128,44 @@ mod tests {
             backend.capture();
 
             assert!(
-                state.screen_view().is_some(),
+                state.screen_view(320).is_some(),
                 "the card has nothing to draw"
             );
+        }
+
+        #[test]
+        fn the_card_is_answered_at_the_size_it_asked_for() {
+            // Issue #194. Our own share is drawn on the stage, which is up to
+            // the whole window, and the ask has to reach the slot or the stage
+            // gets a tile's worth of pixels blown up to fill it.
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+            let backend = Backend::default();
+            state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
+            backend.capture();
+
+            let tile = drawn_size(&state.screen_view(160).expect("nothing to draw"));
+            let stage = drawn_size(&state.screen_view(640).expect("nothing to draw"));
+
+            assert_eq!(tile, (160, 90));
+            assert_eq!(stage, (640, 360));
+        }
+
+        /// How many pixels across and down a `data:` URL actually holds.
+        fn drawn_size(url: &str) -> (u32, u32) {
+            use base64::Engine;
+
+            let base64 = url
+                .strip_prefix("data:image/jpeg;base64,")
+                .expect("not a JPEG data URL");
+            let jpeg = base64::engine::general_purpose::STANDARD
+                .decode(base64)
+                .expect("the URL holds base64");
+            let picture = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+                .expect("the URL holds a JPEG");
+
+            (picture.width(), picture.height())
         }
 
         #[test]
@@ -2091,8 +2181,12 @@ mod tests {
 
             backend.capture();
 
-            assert!(state.screen_view().is_some());
-            assert_eq!(state.self_view(), None, "the camera square took a screen");
+            assert!(state.screen_view(320).is_some());
+            assert_eq!(
+                state.self_view(320),
+                None,
+                "the camera square took a screen"
+            );
         }
 
         #[test]
@@ -2106,13 +2200,13 @@ mod tests {
             state.set_share(backing(&backend), Some("screen:DP-0".to_owned()));
             backend.capture();
             assert!(
-                state.screen_view().is_some(),
+                state.screen_view(320).is_some(),
                 "nothing was drawn to take down"
             );
 
             state.set_share(backing(&backend), None);
 
-            assert_eq!(state.screen_view(), None);
+            assert_eq!(state.screen_view(320), None);
         }
 
         #[test]
@@ -2379,7 +2473,7 @@ mod tests {
         fn there_is_nothing_for_the_card_to_draw_before_a_camera_is_on() {
             let (_dir, state, _sink) = state();
 
-            assert_eq!(state.self_view(), None);
+            assert_eq!(state.self_view(320), None);
         }
 
         #[test]
@@ -2402,7 +2496,10 @@ mod tests {
 
             backend.capture();
 
-            assert!(state.self_view().is_some(), "the card has nothing to draw");
+            assert!(
+                state.self_view(320).is_some(),
+                "the card has nothing to draw"
+            );
         }
 
         #[test]
@@ -2422,13 +2519,13 @@ mod tests {
             );
             backend.capture();
             assert!(
-                state.self_view().is_some(),
+                state.self_view(320).is_some(),
                 "nothing was drawn to take down"
             );
 
             state.set_camera(|| Box::new(Backend::default()), false);
 
-            assert_eq!(state.self_view(), None);
+            assert_eq!(state.self_view(320), None);
         }
 
         #[test]
@@ -2958,9 +3055,10 @@ mod tests {
 
             const ADA: &str = "@ada:example.org";
 
-            /// A box of pixels, written the way an assertion reads best.
-            fn box_of(width: u32, height: u32) -> consort_call::Asked {
-                consort_call::Asked { width, height }
+            /// A box of pixels asked for, written the way an assertion reads
+            /// best.
+            fn box_of(width: u32, height: u32) -> consort_call::Ask {
+                consort_call::Ask::Size(consort_call::Asked { width, height })
             }
 
             /// Leave a frame of Ada's `kind` where the card and the call both
@@ -2996,9 +3094,9 @@ mod tests {
             }
 
             #[test]
-            fn drawing_a_picture_asks_for_it_at_the_size_of_the_box() {
+            fn drawing_a_camera_asks_for_it_at_the_size_of_the_box() {
                 // Phase 1 of `docs/PLAN-receiving-quality.md`. The SFU was
-                // sending a whole desktop to fill a 320 pixel square.
+                // sending 720p to fill a 320 pixel square.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
                 ada_sends(&state, Kind::Camera, 1280, 720);
@@ -3033,11 +3131,11 @@ mod tests {
             }
 
             #[test]
-            fn a_cap_lifted_asks_for_the_whole_box_again() {
-                // The ask must not shrink to the layer it was answered with.
-                // Ada is sending the half layer a `Low` cap asked for, and
-                // lifting the cap has to ask for the box again rather than
-                // for what is already arriving. Issue #189's comment.
+            fn a_cap_lifted_asks_for_the_best_again() {
+                // The ask must not shrink to the rung it was answered with.
+                // Ada is sending the half rung a `Low` cap asked for, and
+                // lifting the cap has to ask for her best rather than for
+                // what is already arriving. Issue #189's comment.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
                 ada_sends(&state, Kind::Screen, 1920, 1080);
@@ -3054,8 +3152,11 @@ mod tests {
                 state.set_person_cap(ADA.to_owned(), Cap::Auto);
 
                 wait_for(
-                    "the whole box to be asked for again",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
+                    "the best to be asked for again",
+                    || {
+                        asks.latest()
+                            == vec![(ADA.to_owned(), Kind::Screen, consort_call::Ask::Best)]
+                    },
                     || format!("{:?}", asks.latest()),
                 );
             }
@@ -3089,13 +3190,13 @@ mod tests {
                 // than will ever be drawn is asking for bytes to throw away.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
-                ada_sends(&state, Kind::Screen, 1920, 1080);
+                ada_sends(&state, Kind::Camera, 1280, 720);
 
-                state.their_view(ADA, Kind::Screen, 4096);
+                state.their_view(ADA, Kind::Camera, 4096);
 
                 wait_for(
                     "the clamped ask",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Camera, box_of(1920, 1080))],
                     || format!("{:?}", asks.latest()),
                 );
             }

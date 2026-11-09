@@ -45,7 +45,9 @@ import {
   type Participant,
   type Timeline,
 } from "../lib/api";
+import { ComposerAttach } from "./ComposerAttach";
 import { ComposerEmoji } from "./ComposerEmoji";
+import { ComposerStaged, type Staged } from "./ComposerStaged";
 import { ComposerTarget } from "./ComposerTarget";
 import {
   MessageGroups,
@@ -105,67 +107,6 @@ const TYPING_EVERY = 3_000;
  */
 export const COPIED_FOR = 1_800;
 
-/**
- * The control that opens the picker, and the mark on the line above the box.
- *
- * Here rather than beside the reply arrow in `MessageGroups`, which is about
- * one message: this one is about the composer, and the two files have no other
- * reason to know about each other.
- */
-function PaperclipIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      /*
-        Shifted, not square with the origin. The path's ink spans x 4.33..21.00
-        and y 4.03..22.07, so it sits centred on (12.66, 13.05) and drew half a
-        pixel right and most of one low. Moving the window rather than the
-        coordinates leaves the path as it came, and a scale is not an option
-        here: `stroke-width` scales with it, which would make this the one thin
-        icon in the application.
-      */
-      viewBox="0.66 1.05 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M21 12.5 12.9 20.6a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8" />
-    </svg>
-  );
-}
-
-/**
- * The one attachment waiting in the composer, and where its bytes are.
- *
- * Two shapes because there are two answers to that. A file somebody picked or
- * dropped is a path Rust will read at the moment they press send. A screenshot
- * off the clipboard has no path, so Rust holds the picture itself and there is
- * nothing here to address it by. Neither one puts bytes in the page.
- *
- * One at a time. More would change the picker, this line, and what a failure
- * halfway through a send means, all at once.
- */
-type Staged =
-  | { kind: "file"; name: string; size: number; path: string }
-  | { kind: "pasted"; name: string; size: number };
-
-/** What a staged attachment weighs, in words rather than in bytes. */
-function weigh(bytes: number): string {
-  const units = ["bytes", "KB", "MB", "GB"];
-  let at = 0;
-  let size = bytes;
-  while (size >= 1024 && at < units.length - 1) {
-    size /= 1024;
-    at += 1;
-  }
-  // Whole numbers for bytes, because "1.0 bytes" is nonsense, and one decimal
-  // for everything else, because a 4 MB screenshot and a 4.7 MB one are worth
-  // telling apart.
-  return at === 0 ? `${size} ${units[at]}` : `${size.toFixed(1)} ${units[at]}`;
-}
 
 /**
  * A room's messages, and somewhere to add to them.
@@ -1417,26 +1358,8 @@ export function RoomTimeline({
         <ComposerTarget doing="edit" message={editing} onStop={stopEditing} />
       )}
 
-      {/*
-        What is about to be sent, above the box that captions it. Drawn on the
-        same terms as the reply line: a staged attachment is a thing somebody
-        can forget they did, and a composer that says nothing about it sends a
-        photo with the next sentence typed into it.
-      */}
       {staged !== null && (
-        <div className="timeline__staged">
-          <PaperclipIcon className="timeline__staged-glyph" />
-          <span className="timeline__staged-name">{staged.name}</span>
-          <span className="timeline__staged-size">{weigh(staged.size)}</span>
-          <button
-            type="button"
-            className="timeline__staged-stop"
-            aria-label={`Do not send ${staged.name}`}
-            onClick={() => setStaged(null)}
-          >
-            &times;
-          </button>
-        </div>
+        <ComposerStaged staged={staged} onStop={() => setStaged(null)} />
       )}
 
       <form
@@ -1449,15 +1372,7 @@ export function RoomTimeline({
         <label className="timeline__label" htmlFor="timeline-draft">
           Message {channel.kind === "voice" ? name : `#${name}`}
         </label>
-        <button
-          type="button"
-          className="timeline__attach"
-          aria-label="Attach a file"
-          disabled={sending}
-          onClick={attach}
-        >
-          <PaperclipIcon />
-        </button>
+        <ComposerAttach disabled={sending} onClick={attach} />
         {/*
           The composer's own picker. The same grid as the one on a message and
           a different thing to do with the key: this one types it.
