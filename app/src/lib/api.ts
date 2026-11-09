@@ -2658,6 +2658,33 @@ export function attachFile(
   });
 }
 
+/**
+ * Send that same file into a thread rather than into the room.
+ *
+ * `replyTo` is the reply being answered when somebody pressed Reply on one, and
+ * otherwise the last thing said in the thread, which `answering` is what tells
+ * the two apart: without it the pointer is only the fallback a thread carries
+ * for clients that do not understand threads.
+ *
+ * No root. Rust reads the thread off the event named here, and a thread with no
+ * replies yet is named by its own root, which is the same answer.
+ */
+export function threadAttachFile(
+  roomId: string,
+  path: string,
+  caption: string | null,
+  replyTo: string,
+  answering: boolean,
+): Promise<void> {
+  return invoke<void>("thread_attach_file", {
+    roomId,
+    path,
+    caption,
+    replyTo,
+    answering,
+  });
+}
+
 /** A screenshot off the clipboard, waiting in the composer. */
 export interface Pasted {
   /** What the room will call it, since a screenshot arrives without a name. */
@@ -2694,6 +2721,21 @@ export function attachPasted(
   replyTo: string | null,
 ): Promise<void> {
   return invoke<void>("timeline_attach_pasted", { roomId, caption, replyTo });
+}
+
+/** The same screenshot, into a thread. See [`threadAttachFile`]. */
+export function threadAttachPasted(
+  roomId: string,
+  caption: string | null,
+  replyTo: string,
+  answering: boolean,
+): Promise<void> {
+  return invoke<void>("thread_attach_pasted", {
+    roomId,
+    caption,
+    replyTo,
+    answering,
+  });
 }
 
 /**
@@ -3070,4 +3112,40 @@ export function shareSources(): Promise<ShareSource[]> {
  */
 export function callSetShare(source: string | null): Promise<SelfScreen> {
   return invoke<SelfScreen>("set_share", { source });
+}
+
+/**
+ * What is happening about a newer Consort. Mirrors `updating::Update`. Only a
+ * build that updates itself ever says anything here. See `updatesItself`.
+ */
+export type Update =
+  | { state: "upToDate" }
+  | { state: "ready"; version: string; notes: string }
+  | { state: "downloading"; received: number; total: number | null }
+  | { state: "installing" }
+  | { state: "failed"; reason: string };
+
+/**
+ * Listen for changes to whether a newer Consort exists. Same contract as
+ * `onConnection`: the returned function stops listening.
+ */
+export function onUpdate(handler: (update: Update) => void): Promise<UnlistenFn> {
+  return listen<Update>("update", (event) => handler(event.payload));
+}
+
+/**
+ * Whether this build can update itself. False for a Linux package, and the
+ * interface then draws no updater at all rather than a dead control.
+ */
+export function updatesItself(): Promise<boolean> {
+  return invoke<boolean>("updates_itself");
+}
+
+/**
+ * Download the waiting release and install it. Rejects with a sentence when a
+ * call is up. Progress arrives on the `update` channel, and a successful
+ * install does not return: the installer exits Consort to replace it.
+ */
+export function updateInstall(): Promise<void> {
+  return invoke<void>("update_install");
 }

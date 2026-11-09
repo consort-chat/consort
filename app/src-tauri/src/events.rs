@@ -178,6 +178,12 @@ pub enum AppEvent {
     /// that is not a file has already been dropped from the list, which is
     /// what a folder is.
     Dropped(Vec<Chosen>),
+    /// Whether a newer Consort exists, and what is happening about it.
+    ///
+    /// Only a `self-update` build says anything here, so a packaged one leaves
+    /// the channel silent and the bar undrawn. See [`crate::updating`].
+    #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
+    Update(crate::updating::Update),
 }
 
 impl AppEvent {
@@ -219,6 +225,8 @@ impl AppEvent {
     pub const SHOW_ROOM: &'static str = "show-room";
     /// The channel carrying files dragged onto the window.
     pub const DROPPED: &'static str = "dropped";
+    /// The channel carrying whether a newer Consort exists.
+    pub const UPDATE: &'static str = "update";
 
     /// The channel this event goes out on.
     pub fn channel(&self) -> &'static str {
@@ -242,6 +250,7 @@ impl AppEvent {
             Self::Readers(_) => Self::READERS,
             Self::ShowRoom(_) => Self::SHOW_ROOM,
             Self::Dropped(_) => Self::DROPPED,
+            Self::Update(_) => Self::UPDATE,
         }
     }
 
@@ -310,7 +319,10 @@ impl AppEvent {
             // more. Without it the last name said would stand until somebody
             // in that room typed again, which in a quiet room is never.
             | Self::Typing(_)
-            | Self::Readers(_) => true,
+            | Self::Readers(_)
+            // State, the failure included: nothing else will mention a waiting
+            // release for six hours, so a reload has to come back to it.
+            | Self::Update(_) => true,
             Self::VerificationFlow(flow) => !flow.state.is_final(),
             // Open is state and shut is history, on the same terms as a
             // verification flow. A panel that is shut is not a panel showing
@@ -366,6 +378,7 @@ impl AppEvent {
             Self::Readers(readers) => serde_json::to_value(readers),
             Self::ShowRoom(room_id) => serde_json::to_value(room_id),
             Self::Dropped(files) => serde_json::to_value(files),
+            Self::Update(update) => serde_json::to_value(update),
         }
     }
 }
@@ -1207,6 +1220,35 @@ mod tests {
         #[test]
         fn a_flow_that_is_over_is_not() {
             assert!(!AppEvent::VerificationFlow(a_flow(FlowState::Done)).is_worth_keeping());
+        }
+
+        /// The failure included: it is how the bar says "no update, and here is
+        /// why", and a reload has to come back to a waiting release.
+        #[test]
+        fn an_update_is_always_worth_repeating() {
+            for state in [
+                crate::updating::Update::UpToDate,
+                crate::updating::Update::Ready {
+                    version: "0.12.0".to_owned(),
+                    notes: String::new(),
+                },
+                crate::updating::Update::Installing,
+                crate::updating::Update::Failed { reason: "anything" },
+            ] {
+                assert!(
+                    AppEvent::Update(state.clone()).is_worth_keeping(),
+                    "{state:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_update_goes_out_on_its_own_channel() {
+            assert_eq!(
+                AppEvent::Update(crate::updating::Update::UpToDate).channel(),
+                AppEvent::UPDATE
+            );
+            assert_eq!(AppEvent::UPDATE, "update");
         }
     }
 

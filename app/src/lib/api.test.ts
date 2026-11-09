@@ -20,6 +20,8 @@ import {
   asCommandError,
   attachPasted,
   attachFile,
+  threadAttachFile,
+  threadAttachPasted,
   audioDevices,
   pasteAttachment,
   onDropped,
@@ -57,6 +59,9 @@ import {
   login,
   logout,
   onConnection,
+  onUpdate,
+  updateInstall,
+  updatesItself,
   onVerification,
   onKeyBackup,
   onRooms,
@@ -260,6 +265,47 @@ describe("command wrappers", () => {
       isPreferred: true,
     });
     expect(invoke).toHaveBeenCalledWith("token_storage");
+  });
+});
+
+describe("the updater", () => {
+  beforeEach(() => {
+    invoke.mockReset().mockResolvedValue(undefined);
+    listen.mockReset().mockResolvedValue(() => {});
+  });
+
+  it("subscribes to the channel the Rust side emits on", async () => {
+    // A contract with `AppEvent::UPDATE`, and getting it wrong is silence
+    // rather than an error: a bar that never appears, in the one build where it
+    // should.
+    await onUpdate(vi.fn());
+
+    expect(listen).toHaveBeenCalledWith("update", expect.any(Function));
+  });
+
+  it("asks whether this build updates itself at all", async () => {
+    await updatesItself();
+
+    expect(invoke).toHaveBeenCalledWith("updates_itself");
+  });
+
+  it("installs without naming anything", async () => {
+    // What is on offer is the Rust side's own state, and it re-reads the
+    // manifest at the moment of the press. A handle crossing the boundary would
+    // be a second copy of that to keep in step.
+    await updateInstall();
+
+    expect(invoke).toHaveBeenCalledWith("update_install");
+  });
+
+  // The webview is not given the updater plugin's JavaScript API: the
+  // capability set is `core:default` and every privileged thing goes through a
+  // Rust command. A page that could call `install` directly would be a page that
+  // could install during a call.
+  it("reaches the plugin through Rust alone", () => {
+    expect(tauriConfig.plugins.updater.endpoints).toHaveLength(1);
+    expect(tauriConfig.plugins.updater.endpoints[0]).toMatch(/^https:/);
+    expect(tauriConfig.plugins.updater.requireSignedVersion).toBe(true);
   });
 });
 
@@ -564,6 +610,42 @@ describe("attachments", () => {
     invoke.mockResolvedValue(null);
 
     expect(await pasteAttachment()).toBeNull();
+  });
+
+  it("sends a file into a thread by its own command, not the room's", async () => {
+    // #134. The room's command strips the thread relation, so a picture sent
+    // through it lands in the channel instead of in the conversation.
+    await threadAttachFile(
+      "!general:example.org",
+      "/home/ada/cat.png",
+      "look",
+      "$latest:example.org",
+      false,
+    );
+
+    expect(invoke).toHaveBeenCalledWith("thread_attach_file", {
+      roomId: "!general:example.org",
+      path: "/home/ada/cat.png",
+      caption: "look",
+      replyTo: "$latest:example.org",
+      answering: false,
+    });
+  });
+
+  it("says when a thread attachment is answering one reply rather than the thread", async () => {
+    await threadAttachPasted(
+      "!general:example.org",
+      null,
+      "$said:example.org",
+      true,
+    );
+
+    expect(invoke).toHaveBeenCalledWith("thread_attach_pasted", {
+      roomId: "!general:example.org",
+      caption: null,
+      replyTo: "$said:example.org",
+      answering: true,
+    });
   });
 
   it("sends a pasted screenshot by asking for the one Rust is holding", async () => {

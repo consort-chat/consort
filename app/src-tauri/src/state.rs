@@ -692,6 +692,24 @@ impl AppState {
         self.events.emit(AppEvent::Dropped(files));
     }
 
+    /// Publish what is happening about a newer Consort.
+    ///
+    /// Narrow on purpose: the updater holds nothing in `AppState` and needs
+    /// only somewhere to say what it found.
+    #[cfg(feature = "self-update")]
+    pub fn announce(&self, update: crate::updating::Update) {
+        self.events.emit(AppEvent::Update(update));
+    }
+
+    /// Whether this session is in a voice call right now.
+    ///
+    /// The room rather than the bridge, which outlives the call: it is kept
+    /// across channel switches so a mute survives one.
+    #[cfg_attr(not(feature = "self-update"), allow(dead_code))]
+    pub fn in_a_call(&self) -> bool {
+        self.locked_called().is_some()
+    }
+
     /// Leave the voice channel, if this session is in one.
     ///
     /// A no-op when no call was ever started, which is what a stray click on a
@@ -1858,6 +1876,39 @@ mod tests {
         (dir, AppState::new(store, settings, sink.clone()), sink)
     }
 
+    mod whether_a_call_is_up {
+        use super::*;
+
+        #[test]
+        fn nothing_joined_is_no_call() {
+            let (_dir, state, _sink) = state();
+
+            assert!(!state.in_a_call());
+        }
+
+        #[test]
+        fn a_joined_channel_is_a_call() {
+            let (_dir, state, sink) = state();
+
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            assert!(state.in_a_call());
+        }
+
+        #[test]
+        fn hanging_up_ends_it() {
+            let (_dir, state, sink) = state();
+            join(&state, GENERAL, true);
+            until_call(&sink, "connected");
+
+            state.disconnect_call();
+            until_call(&sink, "disconnected");
+
+            assert!(!state.in_a_call());
+        }
+    }
+
     mod the_screen {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3004,9 +3055,10 @@ mod tests {
 
             const ADA: &str = "@ada:example.org";
 
-            /// A box of pixels, written the way an assertion reads best.
-            fn box_of(width: u32, height: u32) -> consort_call::Asked {
-                consort_call::Asked { width, height }
+            /// A box of pixels asked for, written the way an assertion reads
+            /// best.
+            fn box_of(width: u32, height: u32) -> consort_call::Ask {
+                consort_call::Ask::Size(consort_call::Asked { width, height })
             }
 
             /// Leave a frame of Ada's `kind` where the card and the call both
@@ -3042,9 +3094,9 @@ mod tests {
             }
 
             #[test]
-            fn drawing_a_picture_asks_for_it_at_the_size_of_the_box() {
+            fn drawing_a_camera_asks_for_it_at_the_size_of_the_box() {
                 // Phase 1 of `docs/PLAN-receiving-quality.md`. The SFU was
-                // sending a whole desktop to fill a 320 pixel square.
+                // sending 720p to fill a 320 pixel square.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
                 ada_sends(&state, Kind::Camera, 1280, 720);
@@ -3079,11 +3131,11 @@ mod tests {
             }
 
             #[test]
-            fn a_cap_lifted_asks_for_the_whole_box_again() {
-                // The ask must not shrink to the layer it was answered with.
-                // Ada is sending the half layer a `Low` cap asked for, and
-                // lifting the cap has to ask for the box again rather than
-                // for what is already arriving. Issue #189's comment.
+            fn a_cap_lifted_asks_for_the_best_again() {
+                // The ask must not shrink to the rung it was answered with.
+                // Ada is sending the half rung a `Low` cap asked for, and
+                // lifting the cap has to ask for her best rather than for
+                // what is already arriving. Issue #189's comment.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
                 ada_sends(&state, Kind::Screen, 1920, 1080);
@@ -3100,8 +3152,11 @@ mod tests {
                 state.set_person_cap(ADA.to_owned(), Cap::Auto);
 
                 wait_for(
-                    "the whole box to be asked for again",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
+                    "the best to be asked for again",
+                    || {
+                        asks.latest()
+                            == vec![(ADA.to_owned(), Kind::Screen, consort_call::Ask::Best)]
+                    },
                     || format!("{:?}", asks.latest()),
                 );
             }
@@ -3135,13 +3190,13 @@ mod tests {
                 // than will ever be drawn is asking for bytes to throw away.
                 let (_dir, state, sink) = state();
                 let asks = with_ada(&state, &sink);
-                ada_sends(&state, Kind::Screen, 1920, 1080);
+                ada_sends(&state, Kind::Camera, 1280, 720);
 
-                state.their_view(ADA, Kind::Screen, 4096);
+                state.their_view(ADA, Kind::Camera, 4096);
 
                 wait_for(
                     "the clamped ask",
-                    || asks.latest() == vec![(ADA.to_owned(), Kind::Screen, box_of(1920, 1080))],
+                    || asks.latest() == vec![(ADA.to_owned(), Kind::Camera, box_of(1920, 1080))],
                     || format!("{:?}", asks.latest()),
                 );
             }

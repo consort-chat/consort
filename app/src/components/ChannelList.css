@@ -170,19 +170,13 @@
 }
 
 /*
-  The channel and the control that only reads it, as one row. Positioned,
-  because the second is drawn over the end of the first: a column of its own
-  would be a gutter down the whole list, kept empty by every text channel and
-  by every voice channel nobody is pointing at.
-*/
-/*
-  Flex rather than a plain block, so the mention badge is a real item at the end
-  of the row and the channel name gives up its width before the count does. Still
-  positioned, because the control that reads a voice channel is drawn over the
-  row rather than in it.
+  The channel and everything that sits at the end of its row, in one flex flow.
+
+  Every one of them is a real item with the gap between it and the next, which
+  is what keeps the badge, the control that only reads the channel, and the
+  grip off each other (#192).
 */
 .channels__row {
-  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -249,14 +243,6 @@
 }
 
 /*
-  Room at the end of a voice row for the control that sits over it, so a long
-  channel name runs out of space before it runs underneath one.
-*/
-.channels__entry[data-kind="voice"] {
-  padding-right: calc(24px + var(--space-2));
-}
-
-/*
   Read a voice channel without connecting to it.
 
   Hidden until the row is wanted, on the reasoning the message actions use:
@@ -264,15 +250,19 @@
   cannot be tabbed to, and `focus-within` is what brings it back for a
   keyboard. Its own surface, so that it stays legible over the fill a selected
   or connected row carries.
+
+  Half again over the 24px floor, because clearing it was not enough to stop
+  this needing to be aimed at (#192). The glyph stays 14px: the box grew, the
+  drawing did not.
 */
 .channels__chat {
-  position: absolute;
-  top: 50%;
-  right: var(--space-1);
+  order: 2;
   display: grid;
+  flex: none;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  /* In `rem`, so the text size slider moves the target too (#122). */
+  min-width: 2rem;
+  min-height: 2rem;
   padding: 0;
   background: var(--surface-overlay);
   border: none;
@@ -280,7 +270,6 @@
   color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
-  transform: translateY(-50%);
   transition:
     opacity var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -500,18 +489,6 @@
 }
 
 /*
-  Room for the control that reads a voice channel, which is absolutely
-  positioned over the right of the row and would otherwise be drawn on top of
-  the count. Reserved rather than resolved on hover: the control appears when
-  the pointer arrives, and a badge that jumped sideways to make way for it would
-  move the thing somebody was reading.
-*/
-.channels__row[data-chat="true"] .channels__mentions,
-.channels__row[data-chat="true"] .channels__unread {
-  margin-right: calc(24px + var(--space-1));
-}
-
-/*
   The controls that rename and delete a section somebody made. Quiet until the
   section is hovered or holds focus, on the grip's terms: faint rather than
   hidden, so the keyboard never finds one by accident.
@@ -553,6 +530,7 @@
 
 /* The handle that drags a channel onto a section. Pointer only; see the row. */
 .channels__room-grip {
+  order: 3;
   display: grid;
   flex: none;
   place-items: center;

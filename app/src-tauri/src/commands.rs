@@ -76,6 +76,22 @@ impl CommandError {
     }
 }
 
+/// A refusal is already written for a person, so the detail does not repeat it.
+#[cfg(feature = "self-update")]
+impl From<crate::updating::Refusal> for CommandError {
+    fn from(refusal: crate::updating::Refusal) -> Self {
+        Self::new(refusal.message(), "an update was refused".to_owned())
+    }
+}
+
+/// The plugin's error text is in the log by now, so the detail names the kind.
+#[cfg(feature = "self-update")]
+impl From<crate::updating::Trouble> for CommandError {
+    fn from(trouble: crate::updating::Trouble) -> Self {
+        Self::new(trouble.message(), format!("updating: {trouble:?}"))
+    }
+}
+
 impl From<crate::settings::SettingsError> for CommandError {
     fn from(error: crate::settings::SettingsError) -> Self {
         Self {
@@ -1031,7 +1047,7 @@ async fn send_attachment_for(
     filename: String,
     bytes: Vec<u8>,
     caption: Option<String>,
-    reply_to: Option<String>,
+    answering: timeline::Answering,
 ) -> Result<(), CommandError> {
     let client = signed_in_client(state).await?;
     timeline::send_attachment(
@@ -1041,18 +1057,42 @@ async fn send_attachment_for(
             filename,
             bytes,
             caption,
-            reply_to,
+            answering,
         },
     )
     .await?;
     Ok(())
 }
 
-/// Send a file the picker or a drop named, by its path.
+/// One file, read at the moment it is sent rather than when it was picked.
 ///
-/// The read happens here rather than when it was chosen, so that nothing is
-/// held between somebody picking a file and deciding to send it. What crosses
-/// the boundary in the meantime is a name and a length.
+/// Nothing is held between somebody choosing a file and deciding to send it.
+/// What crossed the boundary in the meantime is a name and a length.
+fn file_to_send(path: &str) -> Result<(String, Vec<u8>), CommandError> {
+    let filename = attaching::name_of(std::path::Path::new(path)).ok_or_else(|| {
+        CommandError::new(
+            "That file is not one Consort can send.",
+            format!("{path} has no file name in it"),
+        )
+    })?;
+
+    Ok((filename, attaching::read(path)?))
+}
+
+/// Which thread reply an attachment names, and on what terms.
+///
+/// `answering` is whether somebody pressed Reply on that one line. Without it
+/// the event named is the last thing said in the thread and only a fallback for
+/// clients that do not understand threads.
+fn in_a_thread(reply_to: String, answering: bool) -> timeline::Answering {
+    if answering {
+        timeline::Answering::ReplyInThread(reply_to)
+    } else {
+        timeline::Answering::Thread(reply_to)
+    }
+}
+
+/// Send a file the picker or a drop named, by its path.
 pub async fn timeline_attach_file_for(
     state: &AppState,
     room_id: String,
@@ -1060,15 +1100,44 @@ pub async fn timeline_attach_file_for(
     caption: Option<String>,
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
-    let filename = attaching::name_of(std::path::Path::new(&path)).ok_or_else(|| {
-        CommandError::new(
-            "That file is not one Consort can send.",
-            format!("{path} has no file name in it"),
-        )
-    })?;
-    let bytes = attaching::read(&path)?;
+    let (filename, bytes) = file_to_send(&path)?;
 
-    send_attachment_for(state, room_id, filename, bytes, caption, reply_to).await
+    send_attachment_for(
+        state,
+        room_id,
+        filename,
+        bytes,
+        caption,
+        reply_to.map_or(timeline::Answering::Nothing, timeline::Answering::Message),
+    )
+    .await
+}
+
+/// The same file, into a thread rather than into the room.
+///
+/// A separate command rather than a flag on the one above, for the reason
+/// `thread_send` is separate from `timeline_send`: what the two name is
+/// different, and a thread reply drawn in the room is the bug (#134) this
+/// exists to avoid.
+pub async fn thread_attach_file_for(
+    state: &AppState,
+    room_id: String,
+    path: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    let (filename, bytes) = file_to_send(&path)?;
+
+    send_attachment_for(
+        state,
+        room_id,
+        filename,
+        bytes,
+        caption,
+        in_a_thread(reply_to, answering),
+    )
+    .await
 }
 
 /// Stage whatever picture is on the clipboard, if a picture is what is on it.
@@ -1111,6 +1180,33 @@ pub async fn timeline_attach_pasted_for(
     caption: Option<String>,
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
+    send_pasted_for(
+        state,
+        room_id,
+        caption,
+        reply_to.map_or(timeline::Answering::Nothing, timeline::Answering::Message),
+    )
+    .await
+}
+
+/// The same screenshot, into a thread. See `thread_attach_file_for`.
+pub async fn thread_attach_pasted_for(
+    state: &AppState,
+    room_id: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    send_pasted_for(state, room_id, caption, in_a_thread(reply_to, answering)).await
+}
+
+/// The held screenshot, wherever it is going.
+async fn send_pasted_for(
+    state: &AppState,
+    room_id: String,
+    caption: Option<String>,
+    answering: timeline::Answering,
+) -> Result<(), CommandError> {
     let bytes = state.pasted().await.ok_or_else(|| {
         // Reachable: the webview reloading loses the composer while this side
         // keeps running, so the page can ask for something already let go of.
@@ -1126,7 +1222,7 @@ pub async fn timeline_attach_pasted_for(
         attaching::PASTED_NAME.to_owned(),
         bytes,
         caption,
-        reply_to,
+        answering,
     )
     .await?;
 
@@ -1812,6 +1908,90 @@ pub fn token_storage(state: State<'_, AppState>) -> TokenStorage {
     token_storage_for(&state)
 }
 
+/// Whether this build updates itself.
+///
+/// False for a .deb and for an Arch package, which draw no updater at all:
+/// docs/PLAN-self-update.md.
+#[tauri::command]
+pub fn updates_itself() -> bool {
+    crate::updating::UPDATES_ITSELF
+}
+
+/// Download the waiting release and put it in place.
+#[tauri::command]
+pub async fn update_install(
+    #[allow(unused_variables)] app: tauri::AppHandle,
+    #[allow(unused_variables)] state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    #[cfg(feature = "self-update")]
+    return update_install_for(&state, &app).await;
+    #[cfg(not(feature = "self-update"))]
+    Ok(())
+}
+
+/// Refuse mid-call, download, refuse mid-call again, install.
+///
+/// The second refusal is the one that matters: a call can start inside the
+/// seconds a download takes. See docs/PLAN-self-update.md#a-call-in-progress.
+#[cfg(feature = "self-update")]
+pub async fn update_install_for<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+) -> Result<(), CommandError> {
+    use crate::updating::{Update, may_install};
+
+    may_install(state.in_a_call())?;
+
+    let Some(waiting) = crate::updating::waiting(app).await? else {
+        // Withdrawn between the banner and the press, which is what deleting a
+        // release's assets looks like from here.
+        state.announce(Update::UpToDate);
+        return Ok(());
+    };
+
+    let offered = Update::Ready {
+        version: waiting.version.clone(),
+        notes: waiting.body.clone().unwrap_or_default(),
+    };
+
+    // `on_chunk` is handed this chunk's length, not the running total, so the
+    // running total is kept here. Atomic rather than a `Cell` because this
+    // future has to be `Send` to be a command.
+    let received = std::sync::atomic::AtomicU64::new(0);
+    let bytes = waiting
+        .download(
+            |chunk, total| {
+                let so_far = received.fetch_add(chunk as u64, std::sync::atomic::Ordering::Relaxed)
+                    + chunk as u64;
+                state.announce(Update::Downloading {
+                    received: so_far,
+                    total,
+                });
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "downloading the update did not work");
+            crate::updating::Trouble::of(&error)
+        });
+
+    let outcome = match bytes {
+        Ok(bytes) => crate::updating::put_in_place(state.in_a_call(), || {
+            state.announce(Update::Installing);
+            waiting.install(bytes)
+        }),
+        Err(trouble) => Err(trouble.into()),
+    };
+
+    if let Err(failure) = &outcome {
+        tracing::warn!(detail = failure.detail(), "the update was not installed");
+        state.announce(offered);
+    }
+
+    outcome
+}
+
 /// Re-send the current state of every push channel.
 ///
 /// Called by the frontend once its listeners are attached. The background
@@ -2366,6 +2546,19 @@ pub async fn timeline_attach_file(
     timeline_attach_file_for(&state, room_id, path, caption, reply_to).await
 }
 
+/// See `thread_attach_file_for`.
+#[tauri::command]
+pub async fn thread_attach_file(
+    state: State<'_, AppState>,
+    room_id: String,
+    path: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    thread_attach_file_for(&state, room_id, path, caption, reply_to, answering).await
+}
+
 /// This desktop's clipboard, as the two questions `attaching` asks of it.
 ///
 /// The platform call is all this is, which is the same split
@@ -2416,6 +2609,18 @@ pub async fn timeline_attach_pasted(
     reply_to: Option<String>,
 ) -> Result<(), CommandError> {
     timeline_attach_pasted_for(&state, room_id, caption, reply_to).await
+}
+
+/// See `thread_attach_pasted_for`.
+#[tauri::command]
+pub async fn thread_attach_pasted(
+    state: State<'_, AppState>,
+    room_id: String,
+    caption: Option<String>,
+    reply_to: String,
+    answering: bool,
+) -> Result<(), CommandError> {
+    thread_attach_pasted_for(&state, room_id, caption, reply_to, answering).await
 }
 
 /// The schemes a message may send somebody to.
@@ -2684,6 +2889,248 @@ mod tests {
         let settings = crate::settings::SettingsStore::at(dir.path());
         let state = AppState::new(store, settings, Arc::new(RecordingSink::new()));
         (dir, state, backend)
+    }
+
+    /// Updating Consort from inside Consort.
+    ///
+    /// The plugin's checking, verifying and installing is not ours to test.
+    /// The refusal is, and a person's voice depends on it.
+    #[cfg(feature = "self-update")]
+    mod updates {
+        use super::*;
+        use crate::events::{AppEvent, RecordingSink};
+        use crate::testing::{FakeCallTransport, fake_backends};
+
+        const GENERAL: &str = "!general:example.org";
+
+        fn state() -> (tempfile::TempDir, AppState, Arc<RecordingSink>) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = SessionStore::with_backend(dir.path(), Arc::new(MemoryBackend::new()));
+            let sink = Arc::new(RecordingSink::new());
+            let settings = crate::settings::SettingsStore::at(dir.path());
+            (dir, AppState::new(store, settings, sink.clone()), sink)
+        }
+
+        /// Not a key. Nothing here downloads, so nothing parses it, and a real
+        /// one has no business in a test.
+        const NOT_A_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG5vdCBhIGtleQo=";
+
+        /// A mock application with the updater pointed at `endpoint`.
+        ///
+        /// The plugin reads `plugins.updater` out of the config, so a mock
+        /// context has to be given one or registering it fails.
+        fn app(endpoint: &str) -> tauri::App<tauri::test::MockRuntime> {
+            let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+            context.config_mut().plugins.0.insert(
+                "updater".to_owned(),
+                serde_json::json!({
+                    "pubkey": NOT_A_KEY,
+                    "endpoints": [endpoint],
+                    "requireSignedVersion": true,
+                }),
+            );
+            tauri::test::mock_builder()
+                .plugin(tauri_plugin_updater::Builder::new().build())
+                .build(context)
+                .unwrap()
+        }
+
+        /// The key this machine's build looks itself up under.
+        ///
+        /// Written per platform, or a test on Linux reads as "no update" for
+        /// the wrong reason: the shipped manifest is Windows only.
+        fn here() -> String {
+            format!(
+                "{}-{}",
+                if cfg!(windows) { "windows" } else { "linux" },
+                std::env::consts::ARCH
+            )
+        }
+
+        /// What the mock runtime reports itself as. Fixed by Tauri, not by us.
+        const RUNNING: &str = "0.1.0";
+
+        /// A manifest of exactly the shape docs/PLAN-self-update.md documents.
+        fn manifest(version: &str) -> serde_json::Value {
+            serde_json::json!({
+                "version": version,
+                "notes": "https://github.com/consort-chat/consort/releases/tag/v0.12.0",
+                "pub_date": "2026-10-07T07:09:53Z",
+                "platforms": {
+                    here(): {
+                        "url": "https://example.invalid/Consort_0.12.0_x64-setup.exe",
+                        "signature": "not checked until something is downloaded"
+                    }
+                }
+            })
+        }
+
+        /// A server answering `/latest.json` with `body`, and its endpoint.
+        async fn serving(body: wiremock::ResponseTemplate) -> (wiremock::MockServer, String) {
+            use wiremock::matchers::{method, path};
+
+            let server = wiremock::MockServer::start().await;
+            wiremock::Mock::given(method("GET"))
+                .and(path("/latest.json"))
+                .respond_with(body)
+                .mount(&server)
+                .await;
+            let endpoint = format!("{}/latest.json", server.uri());
+            (server, endpoint)
+        }
+
+        fn join(state: &AppState, room_id: &str) {
+            state.connect_call(
+                room_id.to_owned(),
+                FakeCallTransport::joining,
+                crate::state::CallAudio {
+                    device: None,
+                    output: None,
+                    gate: Default::default(),
+                    backends: Box::new(fake_backends),
+                    us: "@ada:example.org".to_owned(),
+                },
+            );
+        }
+
+        /// The one that matters: the answer is taken here rather than trusted
+        /// from whatever the button looked like when it was drawn.
+        #[tokio::test]
+        async fn installing_during_a_call_is_refused_and_says_why() {
+            let (_dir, state, sink) = state();
+            // No endpoint is ever reached: the refusal is the first thing that
+            // happens, which is the point.
+            let app = app("http://127.0.0.1:1/latest.json");
+            let handle = app.handle().clone();
+            join(&state, GENERAL);
+            crate::testing::wait_for(
+                "the call to be up",
+                || state.in_a_call(),
+                || "no call".to_owned(),
+            );
+
+            let refused = update_install_for(&state, &handle)
+                .await
+                .expect_err("a call was up");
+
+            assert!(refused.message().contains("call"), "{refused:?}");
+            assert!(refused.message().contains("restart"), "{refused:?}");
+            // Nothing was announced, because nothing was attempted.
+            assert!(
+                !sink
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AppEvent::Update(_))),
+                "the refusal published an update state"
+            );
+        }
+
+        /// The shape this repository publishes is the shape the plugin reads,
+        /// pinned against a server rather than reasoned about.
+        #[tokio::test]
+        async fn a_newer_release_in_the_manifest_is_offered() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest("0.12.0")))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Ready {
+                    version: "0.12.0".to_owned(),
+                    notes: "https://github.com/consort-chat/consort/releases/tag/v0.12.0"
+                        .to_owned(),
+                }
+            );
+        }
+
+        #[tokio::test]
+        async fn the_running_version_is_not_an_update() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest(RUNNING)))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(found, crate::updating::Update::UpToDate);
+        }
+
+        /// A downgrade is not offered, however loudly the manifest asks.
+        #[tokio::test]
+        async fn an_older_release_is_never_offered() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(manifest("0.0.9")))
+                    .await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(found, crate::updating::Update::UpToDate);
+        }
+
+        #[tokio::test]
+        async fn a_manifest_that_does_not_parse_says_so_and_offers_nothing() {
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_string("{ not json")).await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Manifest.message(),
+                }
+            );
+        }
+
+        /// What a Linux build reaching the shipped manifest finds.
+        #[tokio::test]
+        async fn a_manifest_with_no_entry_for_this_build_offers_nothing() {
+            let body = serde_json::json!({
+                "version": "9.9.9",
+                "platforms": {
+                    "plan9-vax": { "url": "https://example.invalid/x", "signature": "x" }
+                }
+            });
+            let (server, endpoint) =
+                serving(wiremock::ResponseTemplate::new(200).set_body_json(body)).await;
+            let app = app(&endpoint);
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            drop(server);
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Manifest.message(),
+                }
+            );
+        }
+
+        /// A check that cannot reach the server is reported, and no louder.
+        #[tokio::test]
+        async fn an_unreachable_endpoint_says_so() {
+            // Port 1, which nothing binds. A wiremock dropped to make a dead
+            // endpoint is not reliably dead: its listener outlives the drop.
+            let app = app("http://127.0.0.1:1/latest.json");
+
+            let found = crate::updating::look(&app.handle().clone()).await;
+
+            assert_eq!(
+                found,
+                crate::updating::Update::Failed {
+                    reason: crate::updating::Trouble::Unreachable.message(),
+                }
+            );
+        }
     }
 
     /// Joining and leaving a voice channel.
@@ -5762,6 +6209,57 @@ mod against_a_mock_homeserver {
         /// The eight bytes every PNG starts with, and nothing after them.
         const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
+        /// Answer for one reply already in a thread, which is what the SDK
+        /// reads the root off when an attachment names it.
+        async fn a_reply_in_a_thread(server: &MatrixMockServer) {
+            let event = serde_json::json!({
+                "type": "m.room.message",
+                "event_id": "$latest:example.org",
+                "room_id": ROOM,
+                "sender": "@ada:example.org",
+                "origin_server_ts": 1_000,
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "which one",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$root:example.org",
+                    },
+                },
+            });
+            server
+                .mock_room_event()
+                .expect_any_access_token()
+                .ok(
+                    matrix_sdk::deserialized_responses::TimelineEvent::from_plaintext(
+                        matrix_sdk::ruma::serde::Raw::new(&event)
+                            .expect("the fixture is valid JSON")
+                            .cast_unchecked(),
+                    ),
+                )
+                .mount()
+                .await;
+        }
+
+        /// A send that must carry the thread relation, naming the root.
+        async fn expecting_a_thread_send(server: &MatrixMockServer) {
+            server
+                .mock_room_send()
+                .expect_any_access_token()
+                .body_matches_partial_json(serde_json::json!({
+                    "msgtype": "m.image",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$root:example.org",
+                        "m.in_reply_to": { "event_id": "$latest:example.org" },
+                    },
+                }))
+                .ok(ruma::event_id!("$sent:example.org"))
+                .expect(1)
+                .mount()
+                .await;
+        }
+
         #[tokio::test]
         async fn a_picked_file_is_read_here_and_sent_under_its_own_name() {
             // The path is what crossed the boundary and the bytes never did.
@@ -5792,6 +6290,97 @@ mod against_a_mock_homeserver {
             )
             .await
             .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_file_sent_in_a_thread_lands_in_the_thread() {
+            // #134. The thread's composer had no way to attach anything at
+            // all, and sending through the room's command would have drawn the
+            // picture in the channel rather than in the thread.
+            let server = MatrixMockServer::new().await;
+            let (dir, state, _sink) = ready(&server).await;
+            let path = dir.path().join("cat.png");
+            std::fs::write(&path, PNG).unwrap();
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+
+            thread_attach_file_for(
+                &state,
+                ROOM.to_owned(),
+                path.to_str().unwrap().to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                false,
+            )
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_screenshot_sent_in_a_thread_lands_in_the_thread_and_is_let_go_of() {
+            // The other half of the same hole: Ctrl+V with the thread's box
+            // focused stages the picture here, and the slot is shared with the
+            // room's composer.
+            let server = MatrixMockServer::new().await;
+            let (_dir, state, _sink) = ready(&server).await;
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+            paste_attachment_for(&state, &FakeClipboard::holding_a_picture())
+                .await
+                .unwrap()
+                .expect("a picture");
+
+            thread_attach_pasted_for(
+                &state,
+                ROOM.to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert!(state.pasted().await.is_none());
+        }
+
+        #[tokio::test]
+        async fn pressing_reply_on_one_line_of_a_thread_is_not_a_fallback() {
+            // One flag apart on the wire, and it decides whether every client
+            // draws the picture as an answer to that reply or as the next thing
+            // said in the thread. Its absence is what says so: ruma leaves a
+            // field holding its default off the wire.
+            let server = MatrixMockServer::new().await;
+            let (dir, state, _sink) = ready(&server).await;
+            let path = dir.path().join("cat.png");
+            std::fs::write(&path, PNG).unwrap();
+            a_reply_in_a_thread(&server).await;
+            expecting_a_thread_send(&server).await;
+
+            thread_attach_file_for(
+                &state,
+                ROOM.to_owned(),
+                path.to_str().unwrap().to_owned(),
+                None,
+                "$latest:example.org".to_owned(),
+                true,
+            )
+            .await
+            .unwrap();
+
+            let sent: serde_json::Value = server
+                .server()
+                .received_requests()
+                .await
+                .expect("the mock server is recording")
+                .iter()
+                .find(|request| request.url.path().contains("/send/m.room.message/"))
+                .map(|request| serde_json::from_slice(&request.body).expect("JSON"))
+                .expect("nothing was sent");
+
+            assert_eq!(
+                sent["m.relates_to"]["is_falling_back"],
+                serde_json::Value::Null
+            );
         }
 
         /// A clipboard with whatever was put on it, counting picture reads.
