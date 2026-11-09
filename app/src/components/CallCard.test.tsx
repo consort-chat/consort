@@ -827,6 +827,57 @@ describe("what other people are sending", () => {
     );
   });
 
+  it("asks the full-window stage for the box it measures, not for the ceiling", async () => {
+    // The other half of #165's sentence, which is the size of the window. The
+    // ceiling is right for a maximised window on a 1080p display and over-asks
+    // on anything smaller: a picture made for 1920 and drawn in 1152 is paid
+    // for twice over, in the layer the SFU sends and in the encode.
+    const measured = Element.prototype.getBoundingClientRect;
+    // Two sizes, because the box the stage ends up in is the whole of this:
+    // the element is the same one before and after the click, so nothing is
+    // re-attached and no window resize fires.
+    Element.prototype.getBoundingClientRect = function () {
+      if (!this.classList?.contains("call-stage__picture")) {
+        return measured.call(this);
+      }
+      const full =
+        this.closest(".call-card")?.getAttribute("data-size") === "full";
+      const [width, height] = full ? [1152, 648] : [192, 108];
+      return {
+        left: 0,
+        top: 0,
+        width,
+        height,
+        right: width,
+        bottom: height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+
+    try {
+      render(
+        card(
+          inCall([
+            person("@bob:example.org", "Bob"),
+            sharer("@ada:example.org", "Ada"),
+          ]),
+        ),
+      );
+
+      await userEvent.click(stage());
+
+      expect(useTheirPicture).toHaveBeenCalledWith(
+        "@ada:example.org",
+        "screen",
+        1152,
+      );
+    } finally {
+      Element.prototype.getBoundingClientRect = measured;
+    }
+  });
+
   it("asks for only a square's worth for a screen waiting under the stage", () => {
     // Two shares, so one of them is in the strip. A tile down there is the
     // same square a face is in and should cost the same.

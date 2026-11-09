@@ -28,3 +28,4 @@ imperfect for now and the terms on which it would be revisited.
 | [0015](0015-ask-for-the-box-not-a-square.md) | Ask the SFU for the box, not a square of its long edge | accepted |
 | [0016](0016-only-a-person-may-ask-a-share-for-less.md) | Only a person may ask a share for less, because the rung below its best is 3 fps | accepted |
 | [0018](0018-sample-the-self-view-at-the-size-it-is-drawn.md) | Sample the self view at the size it is drawn | accepted |
+| [0019](0019-measure-the-stage-rather-than-guess-it.md) | Measure the stage filling the window, rather than guess at it | accepted |
