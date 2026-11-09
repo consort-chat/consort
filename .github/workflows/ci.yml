@@ -70,12 +70,6 @@ jobs:
         # something nobody reviewed.
         run: pnpm install --frozen-lockfile
 
-      - name: Audit dependencies
-        # Fails on moderate and above; a low advisory prints and passes. On a
-        # lockfile this deliberately frozen the audit is the only way anybody
-        # finds out. #136 is what a real one looked like. docs/DEPENDENCIES.md.
-        run: pnpm audit --audit-level=moderate
-
       - name: Type check
         run: pnpm typecheck
 
@@ -86,6 +80,38 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  frontend-advisories:
+    name: Frontend advisories
+    runs-on: ubuntu-latest
+    container:
+      image: node:24-bookworm
+    defaults:
+      run:
+        # A job in a container gets `sh`, not bash, whatever the image has in
+        # it. On Debian that is dash, which has no `pipefail`, so a step
+        # opening with `set -euo pipefail` dies on its first line. The Arch
+        # container only escaped it because Arch points /bin/sh at bash.
+        shell: bash
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable pnpm
+        # `corepack enable pnpm`, not `corepack prepare --activate`: that reads
+        # a `packageManager` field this repository does not have, and fails
+        # with a usage error rather than falling back to anything.
+        run: corepack enable pnpm
+
+      - name: Audit dependencies
+        # Fails on moderate and above; a low advisory prints and passes. On a
+        # lockfile this deliberately frozen the audit is the only way anybody
+        # finds out. #136 is what a real one looked like. docs/DEPENDENCIES.md.
+        #
+        # No `pnpm install` above it: the audit reads pnpm-lock.yaml and asks
+        # the registry, so node_modules buys it nothing and the Frontend job is
+        # already the place a stale lockfile is caught.
+        run: pnpm audit --audit-level=moderate
 
   rust:
     name: Rust
