@@ -3,10 +3,11 @@
 
 //! What you are sending, small enough to put in the call card.
 //!
-//! The capture thread leaves the newest frame here sampled down, and the card
-//! asks for it. One slot per thing being sent: see
+//! The capture thread leaves the newest frame here and the card asks for it at
+//! the size it is drawing. One slot per thing being sent: see
 //! `docs/adr/0007-draw-the-self-view-from-a-still.md` for why a still that is
-//! asked for, and `0008` for why the shared screen gets a second one.
+//! asked for, `0008` for why the shared screen gets a second one, and `0014`
+//! for why the size travels with the ask.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -15,18 +16,13 @@ use base64::engine::general_purpose::STANDARD;
 use consort_video::{Picture, to_rgb};
 use image::{ExtendedColorType, ImageEncoder, codecs::jpeg::JpegEncoder};
 
-/// The largest picture that will be made, in pixels.
-///
-/// A tile is around seventy pixels square on the card and twice that expanded,
-/// so this is generous for either of them and still a fiftieth of a 720p
-/// frame.
-const BOUND: (u32, u32) = (320, 320);
+use crate::theirview::clamped;
 
 /// How hard to compress it. Neither a face nor a desktop at this size has
 /// edges that artefact badly.
 const QUALITY: u8 = 70;
 
-/// The newest frame of one thing being sent, and whatever was last drawn.
+/// The newest frame of one thing being sent.
 ///
 /// Cheap to clone: every clone is the same slot, the way
 /// `consort_call::Camera` is. One goes to the capture thread, which only
@@ -35,18 +31,7 @@ const QUALITY: u8 = 70;
 /// One of these per thing being sent. The camera and the shared screen each
 /// have their own, because both can be going out at once.
 #[derive(Clone, Default)]
-pub struct SelfView(Arc<Mutex<Held>>);
-
-#[derive(Default)]
-struct Held {
-    /// Sampled down by the capture thread, not yet encoded.
-    fresh: Option<Picture>,
-    /// The last picture [`SelfView::latest`] produced.
-    ///
-    /// Kept so that a card asking faster than the camera produces frames
-    /// redraws the same picture rather than blinking off and on.
-    drawn: Option<String>,
-}
+pub struct SelfView(Arc<Mutex<Option<Picture>>>);
 
 impl SelfView {
     /// An empty slot.
@@ -54,28 +39,32 @@ impl SelfView {
         Self::default()
     }
 
-    /// Keep the newest frame, sampled down, replacing whatever was waiting.
+    /// Keep the newest frame, replacing whatever was there.
     ///
-    /// Runs on the capture thread, so it samples and nothing else: the colour
-    /// conversion and the encode happen in [`latest`](Self::latest), which only
-    /// runs when something is actually drawing this.
+    /// Runs on the capture thread, so it copies and nothing else. The sampling
+    /// and the encode happen in [`latest`](Self::latest), which knows the size
+    /// being drawn and only runs when something is drawing it.
     pub fn offer(&self, frame: &Picture) {
-        let mut held = self.held();
-        held.fresh = Some(frame.thumbnail(BOUND.0, BOUND.1));
+        // Copied before the lock: the capture thread should never wait on a
+        // card mid-encode, which is `theirview`'s rule here too.
+        let kept = frame.clone();
+        *self.held() = Some(kept);
     }
 
-    /// The newest frame as a data URL, or the last one when none has arrived.
+    /// The newest frame as a data URL, no larger than `bound` on its long edge.
     ///
     /// `None` before the first frame of a camera that has just been opened, and
     /// after one goes off and [`clear`](Self::clear) empties this.
-    pub fn latest(&self) -> Option<String> {
-        let mut held = self.held();
+    ///
+    /// The frame is kept rather than taken, so a card asking faster than the
+    /// capture produces frames redraws the same picture instead of blinking off
+    /// and on. Sampled under the lock and encoded outside it, the way
+    /// [`crate::theirview`] does it: an encode is a hundred times the sampling.
+    pub fn latest(&self, bound: u32) -> Option<String> {
+        let bound = clamped(bound);
+        let sampled = self.held().as_ref()?.thumbnail(bound, bound);
 
-        if let Some(picture) = held.fresh.take() {
-            held.drawn = encode(&picture);
-        }
-
-        held.drawn.clone()
+        encode(&sampled)
     }
 
     /// Throw away the picture and the frame behind it.
@@ -84,10 +73,10 @@ impl SelfView {
     /// showing the last thing it saw. The same reason
     /// `consort_call::Camera::clear` exists.
     pub fn clear(&self) {
-        *self.held() = Held::default();
+        *self.held() = None;
     }
 
-    fn held(&self) -> MutexGuard<'_, Held> {
+    fn held(&self) -> MutexGuard<'_, Option<Picture>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -149,7 +138,7 @@ mod tests {
         // an empty picture there would flash a black square.
         let view = SelfView::new();
 
-        assert_eq!(view.latest(), None);
+        assert_eq!(view.latest(320), None);
     }
 
     #[test]
@@ -158,7 +147,7 @@ mod tests {
 
         view.offer(&frame(640, 480, 120));
 
-        let url = view.latest().expect("a frame was offered");
+        let url = view.latest(320).expect("a frame was offered");
         assert_eq!(drawn(&url).color().channel_count(), 3);
     }
 
@@ -170,8 +159,45 @@ mod tests {
 
         view.offer(&frame(1280, 720, 120));
 
-        let picture = drawn(&view.latest().unwrap());
+        let picture = drawn(&view.latest(320).unwrap());
         assert_eq!((picture.width(), picture.height()), (320, 180));
+    }
+
+    #[test]
+    fn a_bigger_box_is_drawn_from_more_pixels() {
+        // Issue #194. Our own share goes on the stage, which is up to the whole
+        // window, and a picture made for a seventy-pixel square is unreadable
+        // blown up to it.
+        let view = SelfView::new();
+
+        view.offer(&frame(1920, 1080, 120));
+
+        let picture = drawn(&view.latest(960).unwrap());
+        assert_eq!((picture.width(), picture.height()), (960, 540));
+    }
+
+    #[test]
+    fn a_frame_smaller_than_the_box_is_not_blown_up() {
+        // Asking for more than was captured is answered with what there is.
+        // Scaling up here would cost the encode and add nothing.
+        let view = SelfView::new();
+
+        view.offer(&frame(640, 360, 120));
+
+        let picture = drawn(&view.latest(1920).unwrap());
+        assert_eq!((picture.width(), picture.height()), (640, 360));
+    }
+
+    #[test]
+    fn a_box_past_the_ceiling_is_brought_back_to_it() {
+        // The same ceiling everybody else's picture is held to, so a 4K share
+        // on a 4K display cannot ask for a frame nothing will pay for.
+        let view = SelfView::new();
+
+        view.offer(&frame(3840, 2160, 120));
+
+        let picture = drawn(&view.latest(4000).unwrap());
+        assert_eq!((picture.width(), picture.height()), (1920, 1080));
     }
 
     #[test]
@@ -183,7 +209,7 @@ mod tests {
         view.offer(&frame(64, 64, 16));
         view.offer(&frame(64, 64, 235));
 
-        let picture = drawn(&view.latest().unwrap()).to_luma8();
+        let picture = drawn(&view.latest(320).unwrap()).to_luma8();
         assert!(
             picture.pixels().all(|pixel| pixel.0[0] > 200),
             "the older darker frame was drawn"
@@ -198,8 +224,8 @@ mod tests {
         let view = SelfView::new();
         view.offer(&frame(64, 64, 120));
 
-        let first = view.latest();
-        let second = view.latest();
+        let first = view.latest(320);
+        let second = view.latest(320);
 
         assert!(first.is_some());
         assert_eq!(first, second);
@@ -212,22 +238,11 @@ mod tests {
         // the one picture they did not want left on screen.
         let view = SelfView::new();
         view.offer(&frame(64, 64, 120));
-        view.latest();
+        view.latest(320);
 
         view.clear();
 
-        assert_eq!(view.latest(), None);
-    }
-
-    #[test]
-    fn clearing_drops_a_frame_that_was_never_drawn() {
-        // The camera went off between a frame arriving and anybody asking.
-        let view = SelfView::new();
-        view.offer(&frame(64, 64, 120));
-
-        view.clear();
-
-        assert_eq!(view.latest(), None);
+        assert_eq!(view.latest(320), None);
     }
 
     #[test]
@@ -245,6 +260,46 @@ mod tests {
         };
 
         assert_eq!(encode(&empty), None);
+    }
+
+    /// What moving the sampling off the capture thread costs, per 1080p frame.
+    ///
+    /// The numbers in
+    /// `docs/adr/0018-sample-the-self-view-at-the-size-it-is-drawn.md` come
+    /// from here. Synthetic rather than captured, so it needs no hardware.
+    ///
+    /// ```sh
+    /// cargo test -p consort-app --lib selfview -- --ignored --nocapture measure_the_cost_of
+    /// ```
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn measure_the_cost_of_sampling_when_it_is_drawn() {
+        use std::time::Instant;
+
+        let shared = frame(1920, 1080, 120);
+        let view = SelfView::new();
+
+        let offering = Instant::now();
+        for _ in 0..200 {
+            view.offer(&shared);
+        }
+        println!("offer (copy): {:?}", offering.elapsed() / 200);
+
+        let sampling = Instant::now();
+        for _ in 0..200 {
+            let _ = shared.thumbnail(320, 320);
+        }
+        println!("what offer used to do: {:?}", sampling.elapsed() / 200);
+
+        for bound in [320, 480, 960, 1920] {
+            let asking = Instant::now();
+            let url = view.latest(bound).expect("a frame was offered");
+            println!(
+                "latest({bound}): {:?}, {} B",
+                asking.elapsed(),
+                url.len() * 3 / 4
+            );
+        }
     }
 
     /// What one self view costs, against the real camera.
@@ -292,7 +347,7 @@ mod tests {
 
         view.offer(&frame);
         let encoding = Instant::now();
-        let url = view.latest().unwrap();
+        let url = view.latest(320).unwrap();
         println!(
             "encode: {:?}, url {} B, jpeg ~{} B",
             encoding.elapsed(),
@@ -353,7 +408,7 @@ mod tests {
 
         view.offer(&frame);
         let encoding = Instant::now();
-        let url = view.latest().unwrap();
+        let url = view.latest(320).unwrap();
         println!(
             "encode: {:?}, url {} B, jpeg ~{} B",
             encoding.elapsed(),
@@ -375,6 +430,6 @@ mod tests {
 
         capturing.offer(&frame(64, 64, 120));
 
-        assert!(view.latest().is_some());
+        assert!(view.latest(320).is_some());
     }
 }

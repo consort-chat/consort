@@ -1075,7 +1075,7 @@ describe("AppShell", () => {
         selfVideo: { camera: true, trouble: null },
       });
 
-      expect(usePicture).toHaveBeenCalledWith("camera");
+      expect(usePicture).toHaveBeenCalledWith("camera", 320);
       expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
     });
 

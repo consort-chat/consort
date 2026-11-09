@@ -201,6 +201,83 @@ async fn one_account_can_hold_two_devices_that_can_see_each_other() {
     second_task.abort();
 }
 
+/// Issue #184, and the half a mock cannot settle: whether Synapse's stripped
+/// invite state really carries `is_direct` and the sender, and whether taking
+/// the invite writes this account's `m.direct`.
+#[tokio::test]
+#[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
+async fn message_pressed_from_both_sides_ends_up_in_one_room() {
+    let one_dir = tempfile::tempdir().unwrap();
+    let two_dir = tempfile::tempdir().unwrap();
+    let one_account = a_brand_new_account("direct-one").await;
+    let two_account = a_brand_new_account("direct-two").await;
+
+    let (one, one_profile) = consort_matrix::auth::login(&store(&one_dir), &one_account)
+        .await
+        .unwrap();
+    let (two, two_profile) = consort_matrix::auth::login(&store(&two_dir), &two_account)
+        .await
+        .unwrap();
+
+    let (one_seen, one_sink) = recorder();
+    let (two_seen, two_sink) = recorder();
+    let one_task = sync::start(one.clone(), one_sink);
+    let two_task = sync::start(two.clone(), two_sink);
+    wait_for(&one_seen, Connection::Live).await;
+    wait_for(&two_seen, Connection::Live).await;
+
+    let theirs = consort_matrix::rooms::direct(&one, &two_profile.user_id)
+        .await
+        .expect("the first press makes a room");
+
+    // A room lands in `invited_rooms` a few milliseconds before its stripped
+    // membership is readable, and both halves of the test need that membership.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let readable = match two.invited_rooms().into_iter().next() {
+            Some(room) => {
+                room.is_direct().await.unwrap_or(false) && room.invite_details().await.is_ok()
+            }
+            None => false,
+        };
+        if readable {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the invite never became readable on the other account"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let ours = consort_matrix::rooms::direct(&two, &one_profile.user_id)
+        .await
+        .expect("the second press takes the invite");
+
+    assert_eq!(ours, theirs, "both sides should be in one room");
+
+    // Taking the invite is what writes this account's `m.direct`, which is what
+    // makes every later press local. It arrives through sync, so it is waited on.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    loop {
+        let user_id = matrix_sdk::ruma::UserId::parse(&one_profile.user_id).unwrap();
+        if two
+            .get_dm_room(&user_id)
+            .is_some_and(|room| room.room_id().as_str() == theirs)
+        {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "joining the invite never wrote `m.direct`"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    one_task.abort();
+    two_task.abort();
+}
+
 #[tokio::test]
 #[ignore = "needs testing/synapse/up.sh and CONSORT_TEST_HOMESERVER"]
 async fn a_real_login_is_reported_unverified() {

@@ -132,6 +132,24 @@ needed. A grab is slow enough that a stop lands inside one, and without them a
 picture of somebody's screen reaches the call after they pressed stop. There is
 a hand-run test for exactly that in `crates/consort-video/tests/screens.rs`.
 
+### Only the Windows build updates itself, and that is not a gap
+
+`tauri-plugin-updater` sits behind the `self-update` Cargo feature, off by
+default, and only `release.yml`'s Windows job turns it on. Do not widen it to
+Linux and do not "fix" a `.deb` drawing no update bar: the plugin would reach
+for `pkexec dpkg -i` on a package `apt` is tracking, which is what #47 exists to
+replace with a repository.
+
+Three things that will cost a release if they are undone:
+`bundle.createUpdaterArtifacts` stays out of `tauri.conf.json` and lives in
+`tauri.updater.conf.json`, or every local build demands a signing key;
+`requireSignedVersion` needs `@tauri-apps/cli` 2.11.5 or newer to have signed
+the artifact, which `app/package.json` floors and `scripts/check-manifest.sh`
+checks; and the manifest carries `windows-x86_64` and nothing else.
+
+[docs/PLAN-self-update.md](docs/PLAN-self-update.md) has the rest, the Arch
+detail included, and the signing keypair, which nobody but Thomas holds.
+
 ### The matrix-sdk pin is load-bearing
 
 `Cargo.toml` pins `matrix-sdk` to git rev `3773300` of

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 
 import { ScreenGlyph } from "./ScreenGlyph";
 import "./ScreenStage.css";
@@ -17,6 +17,13 @@ interface Props {
    * and where its frames come from are the card's business, not the stage's.
    */
   picture?: ReactNode;
+  /**
+   * The box the picture fills, for whatever is measuring it.
+   *
+   * Handed in rather than measured here: the stage owns its own layout, and
+   * which pixels the picture is asked for is the card's business.
+   */
+  boxRef?: Ref<HTMLSpanElement>;
   /** Whether the card is already filling the window. */
   full: boolean;
   /** Fill the window with the card, or put it back. */
@@ -30,7 +37,7 @@ interface Props {
  * says which window layout is going out and nothing about what it says, and a
  * call with a screen in it is usually a call about that screen.
  */
-export function ScreenStage({ label, picture, full, onToggle }: Props) {
+export function ScreenStage({ label, picture, boxRef, full, onToggle }: Props) {
   return (
     /*
       One name whatever size the card is, with the state on `aria-pressed`, the
@@ -45,7 +52,7 @@ export function ScreenStage({ label, picture, full, onToggle }: Props) {
       title={full ? "Back to the card" : "Fill the window"}
       onClick={onToggle}
     >
-      <span className="call-stage__picture">
+      <span className="call-stage__picture" ref={boxRef}>
         <ScreenGlyph />
         {picture}
       </span>

@@ -10,6 +10,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const onThread = vi.hoisted(() => vi.fn());
+// The composer's own picker and clipboard, and the two sends they end in.
+const pickAttachment = vi.hoisted(() => vi.fn());
+const pasteAttachment = vi.hoisted(() => vi.fn());
+const threadAttachFile = vi.hoisted(() => vi.fn());
+const threadAttachPasted = vi.hoisted(() => vi.fn());
 const threadOpen = vi.hoisted(() => vi.fn());
 const threadSend = vi.hoisted(() => vi.fn());
 const resendState = vi.hoisted(() => vi.fn());
@@ -42,6 +47,10 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setPersonVolume,
   emojiSettings,
   emojiUsed,
+  pickAttachment,
+  pasteAttachment,
+  threadAttachFile,
+  threadAttachPasted,
 }));
 
 import { ThreadPanel } from "./ThreadPanel";
@@ -105,6 +114,10 @@ beforeEach(() => {
   emojiUsed.mockReset().mockResolvedValue({ recent: ["\u{1F44D}"], tone: 0 });
   audioSettings.mockReset().mockResolvedValue({ people: {} });
   setPersonVolume.mockReset().mockResolvedValue(undefined);
+  pickAttachment.mockReset().mockResolvedValue(null);
+  pasteAttachment.mockReset().mockResolvedValue(null);
+  threadAttachFile.mockReset().mockResolvedValue(undefined);
+  threadAttachPasted.mockReset().mockResolvedValue(undefined);
   onThread.mockReset().mockImplementation((handler: typeof publish) => {
     publish = handler;
     return Promise.resolve(() => {});
@@ -985,5 +998,228 @@ describe("who has read a reply", () => {
     });
 
     expect(faces()).toEqual([CLEO]);
+  });
+});
+
+/*
+  #134: the thread's composer could say things and not send anything. The panel
+  owns its own staged attachment, and what it sends has to name the thread
+  rather than the room.
+*/
+describe("attaching something to a reply", () => {
+  const CAT = {
+    path: "/home/ada/cat.png",
+    name: "cat.png",
+    size: 2048,
+  };
+
+  /** Press the paperclip with a file waiting behind the picker. */
+  async function picked(chosen: typeof CAT | null = CAT) {
+    pickAttachment.mockResolvedValue(chosen);
+    await userEvent.click(screen.getByRole("button", { name: "Attach a file" }));
+  }
+
+  function send() {
+    return userEvent.click(screen.getByRole("button", { name: "Send" }));
+  }
+
+  it("sends a picked file into the thread rather than into the room", async () => {
+    await opened();
+
+    await picked();
+    await send();
+
+    await waitFor(() =>
+      expect(threadAttachFile).toHaveBeenCalledWith(
+        GENERAL,
+        CAT.path,
+        null,
+        "$a:example.org",
+        false,
+      ),
+    );
+  });
+
+  it("says what is waiting to be sent, and how much of it", async () => {
+    // A staged attachment is a thing somebody can forget they did, and the box
+    // says nothing about it on its own.
+    await opened();
+
+    await picked();
+
+    expect(screen.getByText("cat.png")).toBeVisible();
+    expect(screen.getByText("2.0 KB")).toBeVisible();
+  });
+
+  it("sends what is in the box as the caption", async () => {
+    await opened();
+
+    await picked();
+    await userEvent.type(screen.getByRole("textbox"), "the one I meant");
+    await send();
+
+    await waitFor(() =>
+      expect(threadAttachFile).toHaveBeenCalledWith(
+        GENERAL,
+        CAT.path,
+        "the one I meant",
+        "$a:example.org",
+        false,
+      ),
+    );
+  });
+
+  it("sends with nothing typed, because a picture is a message", async () => {
+    await opened();
+
+    await picked();
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("answers one reply when somebody pressed Reply on it", async () => {
+    // The flag is the difference between an answer to that line and the next
+    // thing said in the thread, and every client draws the two differently.
+    await opened();
+
+    await userEvent.click(action("Reply", 1));
+    await picked();
+    await send();
+
+    await waitFor(() =>
+      expect(threadAttachFile).toHaveBeenCalledWith(
+        GENERAL,
+        CAT.path,
+        null,
+        "$a:example.org",
+        true,
+      ),
+    );
+  });
+
+  it("answers the root itself in a thread nobody has replied to", async () => {
+    await opened({ ...OPEN, messages: [] });
+
+    await picked();
+    await send();
+
+    await waitFor(() =>
+      expect(threadAttachFile).toHaveBeenCalledWith(
+        GENERAL,
+        CAT.path,
+        null,
+        "$root:example.org",
+        false,
+      ),
+    );
+  });
+
+  it("stages nothing when the picker was closed without choosing", async () => {
+    await opened();
+
+    await picked(null);
+
+    expect(screen.queryByText("cat.png")).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("takes it back out again, unsent", async () => {
+    await opened();
+
+    await picked();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Do not send cat.png" }),
+    );
+
+    expect(screen.queryByText("cat.png")).toBeNull();
+    expect(threadAttachFile).not.toHaveBeenCalled();
+  });
+
+  it("stages a screenshot pasted into its own box", async () => {
+    // Read in Rust rather than off the event: WebKitGTK hands the page no
+    // image at all. `RoomTimeline` carries the other half of this rule.
+    await opened();
+    pasteAttachment.mockResolvedValue({ name: "pasted.png", size: 4096 });
+
+    screen.getByRole("textbox").focus();
+    fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+
+    expect(await screen.findByText("pasted.png")).toBeVisible();
+    await send();
+    await waitFor(() =>
+      expect(threadAttachPasted).toHaveBeenCalledWith(
+        GENERAL,
+        null,
+        "$a:example.org",
+        false,
+      ),
+    );
+  });
+
+  it("leaves a paste aimed at anything else to the room", async () => {
+    // The mirror of the room's rule, which stands aside for this box. Both
+    // listeners are on the window, so without one of them standing aside a
+    // paste stages the same picture twice.
+    await opened();
+
+    fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+
+    expect(pasteAttachment).not.toHaveBeenCalled();
+  });
+
+  it("does not read the clipboard again while the key is held down", async () => {
+    await opened();
+
+    screen.getByRole("textbox").focus();
+    fireEvent.keyDown(window, { key: "v", ctrlKey: true, repeat: true });
+
+    expect(pasteAttachment).not.toHaveBeenCalled();
+  });
+
+  it("keeps the picture staged when the send failed", async () => {
+    // The panel still draws it, so pressing Send again has to find it there.
+    await opened();
+    threadAttachFile.mockRejectedValue({
+      message: "the homeserver said no",
+      detail: "",
+    });
+
+    await picked();
+    await send();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "the homeserver said no",
+    );
+    expect(screen.getByText("cat.png")).toBeVisible();
+  });
+
+  it("does not carry a staged picture into another thread", async () => {
+    // A picture answering one conversation is not an answer in the next, and
+    // sending it there is not something that can be taken back.
+    await opened();
+    await picked();
+
+    await act(async () => {
+      publish({
+        ...OPEN,
+        rootId: "$other:example.org",
+        root: said("$other:example.org", "somewhere else"),
+        messages: [],
+      });
+    });
+
+    expect(screen.queryByText("cat.png")).toBeNull();
+  });
+
+  it("drops a correction when something is staged instead", async () => {
+    // One box with one Send cannot both correct a message and send a file, and
+    // the attachment is what would go.
+    await opened();
+
+    await userEvent.click(action("Edit", 1));
+    await picked();
+
+    expect(screen.queryByText("Editing")).toBeNull();
+    expect(screen.getByRole("textbox")).toHaveValue("");
   });
 });

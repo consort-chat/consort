@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Consort",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "identifier": "chat.consort.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -25,6 +25,15 @@
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data: consortmedia: http://consortmedia.localhost; media-src 'self' consortmedia: http://consortmedia.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://consort-chat.github.io/consort/updater/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5RTIyM0M4QzVERDAxRjQKUldUMEFkM0Z5Q1BpZWZDbVJwa0YwbmdpQVpxVEV6Q1M0aEQ2VmtUVysvVldNNm5TOD",
+      "requireSignedVersion": true
     }
   },
   "bundle": {
