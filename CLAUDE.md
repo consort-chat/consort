@@ -382,9 +382,12 @@ crypto machine garbage-collects timed-out flows on every sync response and the
 arguments, call in, translate the result. If a command grows a branch worth
 testing, that branch is in the wrong crate.
 
-**Comments explain why, never what.** The repository holds a fairly high bar
-here. Read a neighbouring file before writing new ones. A comment that restates
-its line gets deleted in review.
+**Comments explain why, never what.** 1 line inline, 3 above a declaration, 5
+in a file header, never longer than the code described, and never more than 15
+lines anywhere. Anything longer is documentation and belongs in `docs/`. The
+rule, with what a comment is and is not for, is
+[`.claude/skills/comment-standard/SKILL.md`](.claude/skills/comment-standard/SKILL.md).
+Read it before writing one.
 
 **Errors carry two messages.** `consort_matrix::Error::user_message()` is written
 for a person and is what the UI renders. `Display` is for logs. Do not leak raw
@@ -473,4 +476,5 @@ before writing code, and pass its conventions into any subagent prompt:
 | `app/src/**/*.tsx` | `react-patterns`, `frontend-patterns`, `react-testing` |
 | `vite.config.ts`, build setup | `vite-patterns` |
 | Anything security-adjacent | `security-review` |
+| Any comment, header, or config prose | `comment-standard` |
 | A decision worth recording | `architecture-decision-records` |
