@@ -50,10 +50,11 @@ element-hq builds the same stack against upstream, so whatever that fork commit
 added has an upstream equivalent, which is the SDK's own `unstable-msc4354`
 feature that element-hq turns on through `matrix-sdk-ui`.
 
-**The audit list has become the measure of all this.** [PR
-#215](https://github.com/consort-chat/consort/pull/215), open and green, adds
-six ignore entries to `.cargo/audit.toml`, and six of the seven entries there
-after it merges say they come out only when one of these pins moves.
+**The audit list has become the measure of all this,** and it is shipped rather
+than proposed. [#215](https://github.com/consort-chat/consort/pull/215) is
+merged, so `.cargo/audit.toml` on `main` carries seven ignore entries, and six
+of them say they come out only when one of these pins moves.
+[DEPENDENCIES.md](DEPENDENCIES.md#advisories) is the index of them.
 
 ## The spike, and what it proved
 
@@ -127,16 +128,23 @@ events) are decisions rather than edits.
 
 ### What the audit list does
 
-Measured, by running `cargo audit` against main's lockfile and then against the
-spike's. Nineteen vulnerability rows before, fourteen after.
+Measured, by running `cargo audit` against `main`'s lockfile at `7c4ff08` and
+then against the spike's, both with the ignore file set aside so the rows are
+the advisories themselves rather than what CI reports. Eleven before, five
+after. The eleven are exactly the seven ignore entries' worth, `zip` counting
+four advisories against two copies of itself.
 
 | Advisory | Crate, before and after | Verdict |
 | --- | --- | --- |
 | RUSTSEC-2026-0292 | `imbl` 6.1.0 → 7.0.2, `imbl-sized-chunks` 0.1.3 → 0.2.0 | **Clears.** The ignore entry becomes unnecessary |
 | RUSTSEC-2026-0451 | `vodozemac` 0.10.0 → **0.11.2** | **Clears.** This is the reachable one |
-| RUSTSEC-2026-0367/0368/0369/0429 | `zip` 0.6.6 and 4.6.1 → 4.6.1 only | **Halves.** `webrtc-sys-build` moves 0.3.18 → 0.3.21 and uses `zip` 9.5.0. The remaining copy is `tauri-plugin-updater`'s |
+| RUSTSEC-2026-0367/0368/0369/0429 | `zip` 0.6.6 and 4.6.1 → 4.6.1 only | **Halves.** `webrtc-sys-build` moves 0.3.18 → 0.3.21 and uses `zip` 9.5.0, which is the first of the two moves the entry names. The remaining copy is `tauri-plugin-updater`'s, which is the other |
 | RUSTSEC-2026-0459 | `libsqlite3-sys` 0.35.0 → 0.38.2 | **Survives.** The fix is 0.39.0, which first arrives with `rusqlite` 0.41; `56bc5911` asks for 0.40.2 |
-| RUSTSEC-2026-0346/0347/0348/0349, 0381/0382/0383, 0414/0433 | `rustls`, `webpki`, `pulldown-cmark`: identical before and after | **Unaffected.** Not pin-bound, and #215 moves the versions |
+
+So six of the eleven rows go, and two of the seven entries come out of the file
+outright. Nothing regresses: the `rustls`, `webpki` and `pulldown-cmark`
+advisories #215 closed by moving versions stay closed, because cargo keeps the
+patched versions through the re-resolve.
 
 The vodozemac result deserves spelling out, because reading element-hq's
 manifest gets it wrong. That manifest asks for `vodozemac = "0.11.1"` and its
@@ -199,8 +207,8 @@ change: one database, at a path Consort made itself, with nobody less trusted
 able to write it or its `-wal`.
 
 **Four of the zip entries stay,** narrowed to `tauri-plugin-updater` alone,
-which is the second half the #215 comment already describes as a change of its
-own behind the `self-update` feature.
+which is the second of the two moves their entry already describes, behind the
+`self-update` feature and waiting on a wry bump rather than on a pin.
 
 **Three fork commits have no home.** Below.
 
@@ -387,10 +395,12 @@ two real clients in the state dialect, because nothing in CI can tell a call
 that connects from a call somebody can hear.
 
 **Stage 3: the ignore list shrinks.** `RUSTSEC-2026-0292` and
-`RUSTSEC-2026-0451` come out, the four zip entries have their comments narrowed
-to `tauri-plugin-updater`, and `RUSTSEC-2026-0459` has its "comes out when the
-matrix-sdk pin moves" line corrected, because it will not have. Gate: `cargo
-audit` green with a shorter file than it had.
+`RUSTSEC-2026-0451` come out of `.cargo/audit.toml` and out of
+[DEPENDENCIES.md](DEPENDENCIES.md#advisories)'s table with them, the four zip
+entries have their reasoning narrowed to `tauri-plugin-updater`, and
+`RUSTSEC-2026-0459` has its "the matrix-sdk pin moving" line corrected, because
+the pin will have moved and it will still be there. Gate: `cargo audit` green
+with five entries rather than seven.
 
 **Stage 4: the three features, re-proposed.** `KeyDistributionFailed` and
 `KeyDistributionRecovered` to element-hq, which takes pull requests. Until they
@@ -415,11 +425,12 @@ fixable today by moving these pins, as measured above. Every further advisory in
 the crypto stack will arrive the same way: fixed upstream, unreachable from
 here, and added to a list.
 
-**The ignore list becomes the shape of the problem.** Seven entries after #215,
-six of them waiting on a pin. The file is written so that each entry is a
-decision rather than a way to quiet a build, which is the right design, and it
-is exactly why a list of six entries all waiting on the same thing is a signal
-rather than a maintenance task. The habit it was built to avoid is the habit it
+**The ignore list becomes the shape of the problem.** Seven entries on `main`
+today, six of them waiting on a pin, and they are being carried in the shipped
+tree rather than argued about in a pull request. The file is written so that
+each entry is a decision rather than a way to quiet a build, which is the right
+design, and it is exactly why a list of six entries all waiting on the same
+thing is a signal rather than a maintenance task. The habit it was built to avoid is the habit it
 will teach if the pin never moves.
 
 **Nobody can be asked for help.** An archived upstream takes no issues and no
