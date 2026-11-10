@@ -1,0 +1,49 @@
+server_name: "consort.test"
+public_baseurl: http://localhost:8018/
+pid_file: /data/homeserver.pid
+
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses: ["0.0.0.0"]
+    resources:
+      - names: [client]
+        compress: false
+  - port: 8448
+    tls: true
+    type: http
+    bind_addresses: ["0.0.0.0"]
+    resources:
+      - names: [federation]
+        compress: false
+
+tls_certificate_path: "/config/tls.crt"
+tls_private_key_path: "/config/tls.key"
+federation_verify_certificates: false
+trusted_key_servers: []
+ip_range_blacklist: []
+
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+
+media_store_path: /data/media
+signing_key_path: "/data/homeserver.signing.key"
+report_stats: false
+
+# MSC4140 delayed events, which a call's dead man's switch arms on the way in.
+max_event_delay_duration: 1h
+
+enable_registration: true
+enable_registration_without_verification: true
+
+rc_login:
+  address: { per_second: 1000, burst_count: 1000 }
+  account: { per_second: 1000, burst_count: 1000 }
+  failed_attempts: { per_second: 1000, burst_count: 1000 }
+rc_registration: { per_second: 1000, burst_count: 1000 }
+rc_message: { per_second: 1000, burst_count: 1000 }
+rc_key_requests: { per_second: 1000, burst_count: 1000 }

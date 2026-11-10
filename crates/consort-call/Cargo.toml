@@ -59,3 +59,7 @@ consort-audio = { path = "../consort-audio" }
 
 # `start_paused`, so the join timeout is proven without a thirty second test.
 tokio = { workspace = true, features = ["test-util"] }
+
+# A fresh store directory per peer in the live call test, which is what makes a
+# login a new device holding its own cross-signing keys.
+tempfile = "3"

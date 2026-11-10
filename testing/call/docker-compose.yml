@@ -1,0 +1,71 @@
+# A Matrix + LiveKit + lk-jwt-service stack to throw away.
+# Never point this at anything real. Detail: docs/CALL-HARNESS.md
+
+networks:
+  call:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+services:
+  synapse:
+    image: ${SYNAPSE_IMAGE:-ghcr.io/element-hq/synapse:latest}
+    container_name: consort-call-synapse
+    environment:
+      SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
+      # Whoever ran up.sh owns ./data, and Synapse writes its signing key and
+      # database in there: a CI runner is not uid 1000.
+      UID: "${CONSORT_CALL_UID:-1000}"
+      GID: "${CONSORT_CALL_GID:-1000}"
+    volumes:
+      - ./homeserver.yaml:/config/homeserver.yaml:ro
+      - ./certs/federation.crt:/config/tls.crt:ro
+      - ./certs/federation.key:/config/tls.key:ro
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8018:8008"
+    networks:
+      call:
+        # lk-jwt resolves the server name from the OpenID token to this alias.
+        aliases:
+          - consort.test
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS http://localhost:8008/health || exit 1"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  livekit:
+    image: ${LIVEKIT_IMAGE:-livekit/livekit-server:v1.13.11}
+    container_name: consort-call-livekit
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "127.0.0.1:7880:7880"
+    networks:
+      call:
+        ipv4_address: 172.30.0.10
+
+  jwt:
+    image: ${LK_JWT_IMAGE:-ghcr.io/element-hq/lk-jwt-service:0.9.0}
+    container_name: consort-call-jwt
+    depends_on:
+      - synapse
+      - livekit
+    ports:
+      - "127.0.0.1:8070:8080"
+    networks:
+      - call
+    environment:
+      # An address, not a service name: it is handed back to a client on the host.
+      LIVEKIT_URL: ws://172.30.0.10:7880
+      LIVEKIT_KEY: consort_test_key
+      LIVEKIT_SECRET: consort_test_secret_0123456789ab
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: consort.test
+      # The federation certificate is self-signed.
+      LIVEKIT_INSECURE_SKIP_VERIFY_TLS: YES_I_KNOW_WHAT_I_AM_DOING
+      LIVEKIT_CS_API_URL_OVERRIDES: consort.test=http://synapse:8008
+      LIVEKIT_LOG_LEVEL: debug
