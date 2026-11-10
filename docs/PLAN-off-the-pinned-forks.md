@@ -124,6 +124,35 @@ those twelve is a migration, and the three that are not mechanical (the dialect
 collapse, the transport override replacing the fallback URL, and the two lost
 events) are decisions rather than edits.
 
+## A clang floor comes with the lockfile pins
+
+The three hand-pinned livekit entries above are not only a resolution problem.
+`webrtc-sys` 0.3.51 compiles against the hermetic libc++ baked into
+`libwebrtc.a`, reads that libc++'s own stated floor out of the artifact, and
+panics rather than start below it. Today the floor is **clang 21**:
+
+```
+clang++ is clang 14, but the hermetic libc++ shipped with this libwebrtc
+requires clang 21 or later.
+```
+
+`main` never meets it. `webrtc-sys` is 0.3.35 there, and 0.3.51 arrives with the
+migration.
+
+Two jobs build Rust in a `rust:1-bookworm` container, and bookworm's clang is
+14: `ci.yml`'s Rust job and the whole of `package-deb.yml`. The Rust one fails
+at `Clippy`, which skips every step after it, so the run reports five green jobs
+and has tested no Rust at all.
+
+The image cannot move. It is bookworm because the `.deb`'s glibc floor is
+bookworm's, which `package-deb.yml`'s header argues, and nothing newer in Debian
+carries clang 21 either. So both jobs add `apt.llvm.org`, install `clang-21`
+beside the distribution's clang, and set `CXX=clang++-21`. gcc stays the C
+compiler and bindgen keeps the libclang it had.
+
+Anybody building by hand needs the same floor. Arch and a current Fedora clear
+it already; a bookworm or noble machine does not.
+
 ## What the move buys
 
 ### What the audit list does

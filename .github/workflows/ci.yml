@@ -118,6 +118,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
+    env:
+      # The clang installed below, rather than the distribution's. Only C++
+      # needs it, so gcc stays the C compiler.
+      CXX: clang++-21
     defaults:
       run:
         # A job in a container gets `sh`, not bash, whatever the image has in
@@ -128,12 +132,28 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: An apt source for a clang new enough for libwebrtc
+        # webrtc-sys 0.3.51 refuses anything below clang 21 and bookworm ships
+        # 14. The image cannot move: the .deb's glibc floor chose it, which
+        # package-deb.yml argues. docs/PLAN-off-the-pinned-forks.md has the
+        # floor and where it is read from.
+        run: |
+          set -euo pipefail
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            -o /etc/apt/keyrings/apt-llvm-org.asc
+          echo 'deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' \
+            > /etc/apt/sources.list.d/llvm.list
+
       - name: System dependencies
         # webkit2gtk and friends are needed to compile the Tauri crate at all,
         # not just to run it. libssl and pkg-config are for the C half of
         # aws-lc-sys. libasound2-dev is cpal's, and is the one that is easy to
         # leave off: every desktop Linux has the runtime library already, so
         # nothing notices until a machine that only builds tries to.
+        #
+        # Both clangs: clang-21 compiles libwebrtc's C++ and the unversioned one
+        # is what bindgen finds a libclang through.
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends \
@@ -147,7 +167,8 @@ jobs:
             libssl-dev \
             pkg-config \
             cmake \
-            clang
+            clang \
+            clang-21
 
       - name: Toolchain components
         run: rustup component add rustfmt clippy llvm-tools-preview
