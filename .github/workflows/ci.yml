@@ -1,28 +1,6 @@
-# Consort CI, on GitHub Actions.
-#
-# ## Why it lives here and not on Forgejo
-#
-# It used to be .forgejo/workflows/ci.yml, and Forgejo was the place pull
-# requests arrived. GitHub is now that place, and it bills nothing for standard
-# runners on a public repository, so there is no reason to run the same jobs
-# twice. The Forgejo copy is gone rather than kept in step, and the mirror no
-# longer runs CI: it falls back to reading this directory, finds
-# `runs-on: ubuntu-latest`, and has no runner carrying that label.
-#
-# The free tier is only the standard runners. A larger runner is billed on a
-# public repository like any other, so nothing here may move to one.
-#
-# ## Who can make this run
-#
-# GitHub runs workflows for a first-time contributor's pull request only if the
-# repository says so, and the default is "Require approval for first-time
-# contributors". Leave it there or tighten it; the setting is under Actions in
-# the repository settings, and it is the equivalent of the approval Forgejo
-# used to give.
-#
-# `pull_request_target` is deliberately not used anywhere in this file and
-# should not be added. A workflow using it runs an untrusted branch with
-# repository secrets in scope.
+# Consort CI, on GitHub's standard runners: nothing here may move to a larger
+# one, which is billed. `pull_request_target` must not be added anywhere in this
+# file. The rest is in docs/CI.md.
 
 name: CI
 
@@ -146,14 +124,8 @@ jobs:
             > /etc/apt/sources.list.d/llvm.list
 
       - name: System dependencies
-        # webkit2gtk and friends are needed to compile the Tauri crate at all,
-        # not just to run it. libssl and pkg-config are for the C half of
-        # aws-lc-sys. libasound2-dev is cpal's, and is the one that is easy to
-        # leave off: every desktop Linux has the runtime library already, so
-        # nothing notices until a machine that only builds tries to.
-        #
-        # Both clangs: clang-21 compiles libwebrtc's C++ and the unversioned one
-        # is what bindgen finds a libclang through.
+        # A compile-time list, not a runtime one. docs/CI.md has what each is
+        # for.
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends \
@@ -191,15 +163,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: The keyring's zbus is not driven by tokio
-        # One zbus in the graph serves both Secret Service and whatever else
-        # pulls it in. Its `tokio` feature switches the blocking API over to
-        # `block_on`, and the keyring is read from inside an async command, so
-        # turning it on panics at startup with "Cannot start a runtime from
-        # within a runtime". Nothing catches that but running the application.
-        #
-        # Resolved into a variable rather than piped straight into grep, so a
-        # cargo that failed to answer fails the step instead of reading as a
-        # clean graph.
+        # zbus's `tokio` feature panics at startup when the keyring is read from
+        # an async command. docs/CI.md#one-zbus-without-its-tokio-feature
         run: |
           set -euo pipefail
           tree=$(cargo tree --workspace --locked --edges features --invert zbus)

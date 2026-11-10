@@ -1,24 +1,8 @@
-# A .deb, for Debian and Ubuntu.
+# A .deb, for Debian and Ubuntu. Called by release.yml once a tag has a release
+# page, and dispatchable on its own to backfill or rebuild a tag.
 #
-# Called by release.yml once a tag has a release page, and dispatchable on its
-# own to backfill a tag that was released before this file existed or to
-# rebuild one without touching the other packages.
-#
-# ## Why this builds in a bookworm container
-#
-# Because the glibc it links against is the oldest one it will run on, and
-# `ubuntu-latest` is noble. A package built there needs glibc 2.39, so it
-# installs on Debian 12 and then dies at startup with a version error, which is
-# worse than not being offered. Debian 12 is glibc 2.36 and carries
-# webkit2gtk-4.1, so building there covers Debian 12 and 13 and Ubuntu 24.04
-# onwards from one artefact.
-#
-# Ubuntu 22.04 is out of reach either way: it is glibc 2.35, older than
-# anything with webkit2gtk-4.1 in it, and 4.0 is not a version Tauri 2 builds
-# against.
-#
-# The system dependency list is the one ci.yml's Rust job uses, which is what
-# makes it known to compile rather than guessed.
+# Built in a bookworm container because the glibc it links against is the oldest
+# one it will run on: docs/CI.md#the-glibc-floor-and-the-container-images
 
 name: Debian package
 

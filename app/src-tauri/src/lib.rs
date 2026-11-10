@@ -109,32 +109,16 @@ async fn serve(
 
 /// Leave the voice channel on the way out.
 ///
-/// The one place every quit passes through: Ctrl+Q by way of
-/// [`commands::quit`], the window's close button, and a window manager closing
-/// the window. It has to exist at all because the event loop exits the process
-/// from inside `run` rather than returning, so nothing Tauri manages is ever
-/// dropped and the call teardown a sign-out gets from [`Drop`] never happens.
+/// The one place every quit passes through, because the event loop exits the
+/// process from inside `run` and nothing Tauri manages is ever dropped. On
+/// `ExitRequested` rather than `Exit`: `tauri-plugin-single-instance` releases
+/// its D-Bus name on `Exit`, and a wait there would hold the SQLite crypto
+/// store open with the guard already down. This blocks the thread that draws,
+/// so nothing should be on screen by the time it runs.
 ///
-/// On `ExitRequested` rather than `Exit`, which is later and reads like the
-/// more obvious last chance. The difference is the single-instance guard:
-/// plugin hooks run before this one and `tauri-plugin-single-instance` releases
-/// its D-Bus name on `Exit`, so a wait there would hold the SQLite crypto store
-/// open with the guard already down. A relaunch inside the wait would then be a
-/// second Consort fighting the first for that store, which is the one thing the
-/// guard exists to prevent. Here the guard is still up, and the worst a
-/// relaunch can do is hand its arguments to a process on its way out and appear
-/// to do nothing.
-///
-/// This blocks the thread that owns the event loop, which is the thread that
-/// draws. Nothing should be on screen by the time it runs: the close button has
-/// already destroyed the window, and [`commands::quit`] hides it before asking
-/// to exit for exactly this reason.
-///
-/// One thing this asks of whatever comes next: nothing prevents the exit today,
-/// and something that did (a tray icon, a "keep running in the background") would
-/// have to move this. The leave has already gone out by the time an exit is
-/// cancelled, and a session left in a channel it is still connected to would
-/// show as connected to nobody but itself.
+/// Nothing prevents the exit today. Something that did, such as a tray icon or
+/// a "keep running in the background", would have to move this, because the
+/// leave has already gone out by the time an exit is cancelled.
 fn on_the_way_out<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.state::<AppState>().leave_call_on_quit(LEAVE_ON_QUIT);
 }
@@ -152,23 +136,12 @@ pub fn run() {
         tracing::debug!("a rustls crypto provider was already installed");
     }
 
-    // Registered before anything touches the data directory.
-    //
-    // Two copies of Consort would share one SQLite crypto store and one
-    // session file. The store has a cross-process lock, so the second copy
-    // fails to open it, and both processes then disagree about who is signed
-    // in. It gets worse rather than better once verification lands: two
-    // processes racing on one crypto store is how device keys get dropped.
-    //
-    // Rather than make the storage layer safe for concurrent processes, which
-    // is a large amount of work for a case nobody wants, there is simply one
-    // Consort. A second launch hands its arguments to the first and exits, and
-    // the first raises its window, which is also what a user clicking the
-    // launcher icon twice actually expects.
-    //
-    // A profile is the deliberate exception. It moves the data directory, so
-    // the thing this protects is no longer shared, and running two accounts
-    // against each other is the whole point of having one. See `profile`.
+    // Registered before anything touches the data directory. Two copies would
+    // share one SQLite crypto store and one session file; the store's
+    // cross-process lock makes the second fail to open it and both then
+    // disagree about who is signed in. A second launch hands its arguments to
+    // the first, which raises its window. A profile is the exception, because
+    // it moves the data directory.
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init());
@@ -412,20 +385,12 @@ fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::erro
 /// A second Consort on one machine, for testing two accounts against each
 /// other.
 ///
-/// Set `CONSORT_PROFILE` to any name and that process gets its own data
-/// directory and drops the single-instance guard, so it runs beside the
-/// ordinary one. Unset, which is every real user, nothing about the
-/// application changes.
-///
-/// The guard is dropped rather than made per profile because it is a bundle
-/// identifier lock on Windows and macOS with nowhere to put a profile name.
-/// Two processes sharing *one* profile would still fight over one SQLite
-/// store, which is the thing the guard exists to prevent, so give each its own
-/// name.
-///
-/// Not a command-line flag because Tauri owns argument parsing and a webview
-/// process re-execs itself; an environment variable is inherited and a flag is
-/// not.
+/// `CONSORT_PROFILE` gives a process its own data directory and drops the
+/// single-instance guard. The guard is dropped rather than made per profile
+/// because it is a bundle identifier lock on Windows and macOS with nowhere to
+/// put a profile name, so two processes sharing one profile would still fight
+/// over one SQLite store. An environment variable rather than a flag, because
+/// Tauri owns argument parsing and a webview process re-execs itself.
 fn profile() -> Option<String> {
     std::env::var("CONSORT_PROFILE")
         .ok()
@@ -480,25 +445,11 @@ fn init_tracing() {
 
 /// The filter used when `RUST_LOG` says nothing.
 ///
-/// It opens with a bare `warn`, and that is the load-bearing part. `EnvFilter`
-/// gives a target matching no directive `OFF`, not the level of the most
-/// general directive, so a crate left out of a list is not quieter than the
-/// rest: it is silent at `error!` too. A leading bare directive is the only way
-/// to say "and everything else at this level", because
-/// `Builder::with_default_directive` applies only when the parsed filter came
-/// out empty.
-///
-/// That hole cost a debugging session. A log taken to find out why a call would
-/// not join contained nothing from `consort_call`, nothing from any
-/// `matrix_rtc_*` crate, and nothing from livekit, which between them are every
-/// line that has anything to say about joining a call. Naming crates is now the
-/// belt: the bare `warn` is the braces, and a crate added to the workspace
-/// tomorrow can no longer be silent by omission.
-///
-/// `matrix_sdk` stays named even though the bare directive already puts it at
-/// `warn`. At `info` it narrates every sync response and buries our own lines
-/// during exactly the debugging session where they matter, so it wants to be
-/// held down explicitly rather than by whatever the general level happens to be.
+/// The leading bare `warn` is load bearing: `EnvFilter` gives a target matching
+/// no directive `OFF` rather than the most general level, so a crate left out
+/// of a list is silent even at `error!`, and `with_default_directive` applies
+/// only when the parsed filter came out empty. `matrix_sdk` stays named because
+/// at `info` it narrates every sync response and buries our own lines.
 fn default_log_filter() -> &'static str {
     // `concat!` rather than a line continuation: rustfmt joins the lines of a
     // continued literal without removing their indentation, and the stray

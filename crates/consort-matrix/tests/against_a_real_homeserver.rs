@@ -6,15 +6,9 @@
 
 //! The half that needs a homeserver rather than a mock.
 //!
-//! `MatrixMockServer` covers more than it looks like it should: it can inject
-//! a to-device `m.key.verification.request` into a sync response, so most of
-//! the verification work is testable without any of this. What it cannot do is
-//! olm. A SAS handshake is real cryptography between two real devices, and
-//! there is no way to fake one side of it.
-//!
-//! So these are `#[ignore]`d and gated on `CONSORT_TEST_HOMESERVER`. A plain
-//! `cargo test` skips them, CI skips them, and nobody needs Docker to
-//! contribute. Run them deliberately:
+//! `MatrixMockServer` cannot do olm, and a SAS handshake is real cryptography
+//! between two real devices. So these are `#[ignore]`d and gated on
+//! `CONSORT_TEST_HOMESERVER`. Run them deliberately:
 //!
 //! ```sh
 //! testing/synapse/up.sh
@@ -22,17 +16,9 @@
 //! cargo test --workspace -- --ignored
 //! ```
 //!
-//! Running one with the variable unset fails rather than passing quietly. A
-//! test that reports success because it did nothing is worse than no test.
-//!
-//! Every test that verifies anything registers an account of its own. Two
-//! reasons, and both of them bite. A verification request goes to every device
-//! on the account and `cargo test` runs these at the same time, so two tests
-//! sharing an account would answer each other's requests. And the first login
-//! to an account is the one that bootstraps a cross-signing identity and keeps
-//! the private keys: log in twice to an account that already has an identity
-//! and neither device can sign anything, so the session under test can never
-//! become verified. A reused account makes those tests pass once.
+//! With the variable unset a test fails rather than passing quietly. Each one
+//! registers its own account: runs are concurrent, and only a first login keeps
+//! the cross-signing keys.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1973,20 +1959,12 @@ mod gate {
 
 /// A thread whose root somebody deleted, against a real homeserver.
 ///
-/// This is the one claim behind the fix for issue #100 that only a homeserver
-/// can settle, and it was a guess until it was checked. A bundled thread
-/// summary hangs off `unsigned`, a redaction strips `content` and leaves
-/// `unsigned` alone, and Synapse computes the aggregation when it serialises
-/// the event rather than when the event was written. So the tally is still on
-/// the wire after the root is deleted, and the room can go on drawing the one
-/// control that opens the replies.
-///
-/// Ruma is what does not carry it: `RedactedUnsigned` models
-/// `redacted_because` and nothing else, which is why `facts::deleted` reads
-/// the field off the raw JSON. A unit test proves that read against bytes this
-/// repository wrote. It cannot prove a homeserver still sends them, and if one
-/// stops, the feature breaks quietly into a door that is simply missing. That
-/// is what this is here to make loud.
+/// The one claim behind the fix for issue #100 that only a homeserver can
+/// settle. A bundled thread summary hangs off `unsigned`, a redaction leaves
+/// `unsigned` alone, and Synapse computes the aggregation when it serialises,
+/// so the tally survives the root's deletion. Ruma's `RedactedUnsigned` does
+/// not carry it, which is why `facts::deleted` reads the raw JSON, and a unit
+/// test cannot prove a homeserver still sends it.
 mod threads {
     use super::*;
     use consort_matrix::timeline;

@@ -11,14 +11,9 @@ use crate::dialect::Dialect;
 
 /// What went wrong, in categories somebody can act on.
 ///
-/// Five, not one, because they send a person to five different places. A room
-/// this account is not in is a sync that has not landed. A homeserver that
-/// will not answer is the same outage that is already breaking everything
-/// else. No voice server is a deployment that has none, or one this account
-/// is not allowed to use. Signalling is the call itself refusing, and is the
-/// only one where the network is fine and the call still will not happen. An
-/// unreadable dialect is none of those: nothing is broken anywhere, and the
-/// call is refused before it is attempted.
+/// Five, because they send a person to five different places. An unreadable
+/// dialect is none of the other four: nothing is broken anywhere, and the call
+/// is refused before it is attempted.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CallFailure {
     /// This account is not in that room, or sync has not delivered it yet.

@@ -129,6 +129,40 @@ of it, so another project's stale artifacts are evicted alongside ours.
 Everything under it is reproducible, so that costs a rebuild and nothing else.
 
 
+## The build profiles, and why they are tuned for memory
+
+**Release.** libwebrtc arrives with the voice layer and makes debug symbols
+enormous, so `strip = true` keeps the shipped binary something a person will
+download. Thin LTO is the cheap part of the size win and stays.
+
+`codegen-units = 1` is deliberately not set. It compiles each crate as one LLVM
+module instead of sixteen that build in parallel, so peak rustc memory scales
+with the whole crate rather than a slice. On matrix-sdk that is gigabytes, and
+cargo builds several such crates at once: measured on a 30 GB machine it
+produced three simultaneous multi-gigabyte rustc processes and exhausted a 15 GB
+swap file. Measured on this workspace it is worth 33 MB of binary against 40 MB,
+roughly 21%, and the packaged .deb is 16 MB either way once compressed. If
+binary size ever does matter, `codegen-units = 4` recovers most of the
+difference at a quarter of the peak memory. Do not go to 1.
+
+**Dev.** Full debuginfo is why a dev build peaked at four simultaneous ld.lld
+processes holding about 2.2 GB each.
+
+- `debug = "line-tables-only"` keeps the file and line numbers backtraces use
+  and drops the type and variable DWARF that is the bulk of the object files.
+- `split-debuginfo = "unpacked"` leaves debuginfo in the .o files instead of
+  copying it into the linked binary, so the linker stops rewriting hundreds of
+  megabytes of DWARF on every rebuild. Backtraces and gdb still resolve by
+  reading the .o files in the target dir.
+- `[profile.dev.package."*"] debug = false` because dependencies are rebuilt
+  almost never and relinked constantly, and nobody steps through their
+  debuginfo.
+
+`consort-video` and `zune-jpeg` are at `opt-level = 2` in dev. A 720p MJPEG
+frame is a JPEG decode and then a per-pixel conversion, 159 ms of CPU each at
+opt-level 0, which is 5.5 frames a second out of a camera offering 30 with one
+core held at 100%. [PERFORMANCE.md](PERFORMANCE.md) has the measurement.
+
 ## Building the Arch package by hand
 
 If `makepkg` stops with a missing `pnpm` dependency even though `pnpm --version`

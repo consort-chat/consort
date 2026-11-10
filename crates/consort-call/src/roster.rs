@@ -17,20 +17,11 @@ use matrix_rtc_transport::MediaStreamKind;
 
 /// Whether this membership has muted its microphone.
 ///
-/// Exactly [`camera_live`] negated, and for the same reason: the question is
-/// what the call can hear, and a membership publishing no microphone at all
-/// cannot be heard. It used to answer "not muted" for that, on the argument
-/// that publishing nothing is not a choice somebody made. The argument is
-/// wrong about the case it matters in. Joining from a lobby with the
-/// microphone off publishes no audio track, so the person who most needs to be
-/// told their microphone is off was the one person nobody could see it on, and
-/// they find out by talking to a room that cannot hear them.
-///
-/// It also puts us back in step with every other client. Element Call reads a
-/// missing publication as muted too.
-///
-/// The cost is an icon during the moment between a membership appearing and
-/// its first publication landing, which is a mute that is true while it lasts.
+/// A membership publishing no microphone at all cannot be heard, so it reads as
+/// muted, as in every other client including Element Call. Joining from a lobby
+/// with the microphone off publishes no audio track, and that person most needs
+/// telling. The cost is an icon between a membership appearing and its first
+/// publication landing.
 pub fn microphone_muted(member: &MediaParticipant) -> bool {
     !member
         .streams
@@ -65,17 +56,9 @@ pub fn screen_live(member: &MediaParticipant) -> bool {
 
 /// When this membership joined the call, `ours` standing in for our own.
 ///
-/// The transport reports arrivals, and an arrival is something somebody else
-/// does. LiveKit tells this client who turned up after it connected and there
-/// is no event in which it turns up itself, so our own membership came back
-/// with no time on it and the card belonging to the person reading it was the
-/// one card in the call with no "in call" line.
-///
-/// `ours` is the moment this session's join returned, which is a fact this
-/// process holds outright rather than one the SFU has to be asked for. It
-/// stands in for exactly one row: everybody else keeps the transport's record,
-/// which is the only thing that can be right about people who were already in
-/// the call when we arrived.
+/// LiveKit reports arrivals and has no event in which this client turns up
+/// itself, so our own membership came back with no time on it. `ours` is the
+/// moment this session's join returned and stands in for exactly that row.
 pub fn arrived_at(member: &MediaParticipant, ours: u64) -> Option<u64> {
     member.joined_at_ms.or(member.is_local.then_some(ours))
 }
@@ -179,18 +162,11 @@ pub fn with_since(
 /// Which membership each SFU participant identity belongs to.
 ///
 /// The pre-MSC4354 generation names a participant by the plain
-/// `{user}:{device}` string, and the server's own participant list carries
-/// both halves. So the name a notice arrives under can be looked up here
-/// rather than taken from what the notice says about itself.
-///
-/// Format-specific, and the format is the only one this build joins in: see
-/// [`crate::dialect::Dialect::readable`]. It used to be the MSC4195 hash of
-/// user, device and membership id, which is what the current generation uses;
-/// in this one those three are all one string, so the membership id the old
-/// call passed was never adding anything.
-///
-/// A membership with no attributable device has no identity to expect, so it
-/// is absent and nothing can be said about it. See `spoken_for`.
+/// `{user}:{device}` string, so the name a notice arrives under can be looked
+/// up rather than taken from what the notice says about itself.
+/// Format-specific, and the only one this build joins in:
+/// [`crate::dialect::Dialect::readable`]. A membership with no attributable
+/// device is absent.
 pub fn roll(memberships: &[MediaParticipant]) -> HashMap<String, String> {
     memberships
         .iter()
