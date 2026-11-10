@@ -98,6 +98,10 @@ fail the build on a vulnerability. On a dependency set this frozen that is the
 point: an advisory nobody can fix by moving a version is exactly the kind of
 thing that gets scrolled past when it is only a warning.
 
+Each runs in a job of its own, Advisories and Frontend advisories, so an open
+advisory reports beside the type check, the tests and the build rather than
+instead of them. Both read a lockfile and need nothing compiled.
+
 `pnpm audit` ignores nothing, and has no ignore file to do it with. The gate is
 `--audit-level=moderate`, so a low advisory is reported and passes while
 anything above it fails. The frontend half of this dependency set is not frozen
@@ -105,22 +109,27 @@ the way the Rust half is, so the first option below is almost always open there:
 eleven undici advisories (#136) went that way, on a jsdom bump inside the range
 `app/package.json` already allowed.
 
-One `cargo audit` advisory is ignored, in `.cargo/audit.toml`:
+Seven `cargo audit` advisories are ignored, in `.cargo/audit.toml`. The file
+carries the argument for each; this is the index.
 
 | Advisory | Crate | Why it is ignored | What takes it out |
 |---|---|---|---|
 | RUSTSEC-2026-0292 | `imbl-sized-chunks` 0.1.3 | A double free reachable only when an element's `Drop` panics. Nothing put in an imbl collection here has one: the timeline is an `ObservableVector<Arc<TimelineItem>>`, and what that bottoms out in is ruma event types, strings and counted pointers. | The matrix-sdk pin moving. Only imbl 7.0.2 asks for the patched `imbl-sized-chunks`, the pinned fork holds `imbl = "6.1.0"`, and upstream matrix-rust-sdk is already on 7.0.2. |
+| RUSTSEC-2026-0459 | `libsqlite3-sys` 0.35.0 | Uninitialized memory out of the bundled C SQLite, for a process that opens a crafted database and `-wal` pair. Consort opens one database, the store it made itself under the app data directory, and takes a path for one from nowhere else. | The matrix-sdk pin moving. rusqlite 0.37.0 asks for `libsqlite3-sys ^0.35.0`, the patched bundle is 0.39.0, and upstream matrix-sdk-sqlite is already on rusqlite 0.41.1. |
+| RUSTSEC-2026-0451 | `vodozemac` 0.10.0 | Reachable, and accepted on impact: the Olm ratchet leaves old root and chain keys in freed heap, which costs forward secrecy for earlier messages to anybody who can already read this process's memory and therefore already holds the live keys. | The matrix-sdk pin moving. matrix-sdk 0.18.0 asks for `vodozemac ^0.10.0`, the fix is 0.11.2, and upstream matrix-rust-sdk is already on it. |
+| RUSTSEC-2026-0367, 0368, 0369, 0429 | `zip` 0.6.6 and 4.6.1 | Four extraction flaws, at two call sites that extract no archive anybody else chose: `webrtc-sys-build`, a build dependency unpacking LiveKit's own release asset, and `tauri-plugin-updater`, compiled only under `self-update` and extracting signature-verified bytes in `#[cfg(windows)]` code. | Two moves. The MatrixRTC pin reaching a lockfile whose webrtc-sys matches webrtc-sys-build 0.3.20, which carries a different `WEBRTC_TAG`, and tauri-plugin-updater 2.14.1 with the wry 0.55 to 0.57 bump under it, as its own change. |
 
-That entry is the third option below, reached because the first two are closed:
-cargo refuses the version bump outright, and the fix is not in either fork but
-in a crate matrix-sdk pins.
+Every one of those is the third option below, reached because the first two are
+closed: cargo refuses the version bump outright, and the fix is in a crate one
+of the pins holds rather than in either fork.
 
 `cargo audit` also reports crates that are unmaintained, unsound or yanked, and
-those do not fail the build. Twenty-two of them do not: almost all are the GTK3
-bindings Tauri depends on, which this project cannot move and which say nothing
-about a vulnerability. Turning them into failures would mean a long ignore list
-on the first day and would teach everybody to add to it, which is the habit
-this is trying to avoid.
+those do not fail the build. Eighteen of them do not: the unic and
+proc-macro-error families, zbus's zvariant, two yanked crates, and unsoundness
+in glib, tokio and bitmaps. None is a vulnerability and most sit under
+dependencies this project cannot move. Turning them into failures would mean a
+long ignore list on the first day and would teach everybody to add to it, which
+is the habit this is trying to avoid.
 
 When a real advisory does fire, in order of preference:
 
