@@ -13,8 +13,10 @@ services:
     container_name: consort-call-synapse
     environment:
       SYNAPSE_CONFIG_PATH: /config/homeserver.yaml
-      UID: "1000"
-      GID: "1000"
+      # Whoever ran up.sh owns ./data, and Synapse writes its signing key and
+      # database in there: a CI runner is not uid 1000.
+      UID: "${CONSORT_CALL_UID:-1000}"
+      GID: "${CONSORT_CALL_GID:-1000}"
     volumes:
       - ./homeserver.yaml:/config/homeserver.yaml:ro
       - ./certs/federation.crt:/config/tls.crt:ro

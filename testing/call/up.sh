@@ -18,6 +18,12 @@ compose() {
   fi
 }
 
+# Handed to Synapse, which drops to them before writing ./data. Read rather
+# than assumed, because uid 1000 is this machine and not a CI runner.
+CONSORT_CALL_UID="$(id -u)"
+CONSORT_CALL_GID="$(id -g)"
+export CONSORT_CALL_UID CONSORT_CALL_GID
+
 mkdir -p data certs
 
 # Synapse wants a federation certificate even when nothing verifies it.
