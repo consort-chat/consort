@@ -365,6 +365,12 @@ types/market.types.ts         # camelCase with .types suffix
 
 ## Comments & Documentation
 
+This repository's own limits override what follows, including the JSDoc example
+below, which is longer than the function it describes. See
+[`comment-standard`](../comment-standard/SKILL.md): 1 line inline, 3 above a
+declaration, 5 in a header, never longer than the code described, 15 lines
+absolute.
+
 ### When to Comment
 
 ```typescript
