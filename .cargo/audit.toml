@@ -1,76 +1,13 @@
-# What `cargo audit` is allowed to pass over, and why.
-#
-# An entry here is a decision to accept a risk, not a way to quiet a build, so
-# every one carries the reason it does not reach this code and the thing that
-# has to happen before it can come out. docs/DEPENDENCIES.md has the order to
-# try before adding one: move the version, then rebase the fork, then this.
-#
-# Crates that are merely unmaintained, unsound or yanked do not fail the build
-# and do not belong here. Fourteen of those are reported today: the unic and
-# proc-macro-error families, zbus's zvariant, two yanked crates, and
-# unsoundness in glib and tokio.
+# What `cargo audit` is allowed to pass over. An entry is a decision to accept a
+# risk, not a way to quiet a build: docs/DEPENDENCIES.md#advisories has the
+# argument for each, the order to try before adding one, and what lifts it.
 
 [advisories]
 ignore = [
-  # RUSTSEC-2026-0459, uninitialized memory out of the C SQLite that
-  # libsqlite3-sys 0.35.0 bundles.
-  #
-  # Opening a database alongside a sibling `-wal` whose page size differs from
-  # the database's can make ordinary queries hand back stale bytes of the
-  # process's own memory. Local, and it needs the victim to open the crafted
-  # pair.
-  #
-  # Not reachable here. Consort opens one database, the matrix-sdk store at
-  # `SessionStore::store_path_for`, a digest-named directory under the Tauri
-  # app data directory that Consort made itself. No command and no setting
-  # takes a database path from anywhere else, so nobody less trusted gets to
-  # write that file or its `-wal`.
-  #
-  # Cannot be fixed by moving a version. The matrix-sdk pin moving is not
-  # enough, and this entry used to say it was: the move to
-  # matrix-org/matrix-rust-sdk@56bc591 took libsqlite3-sys from 0.35.0 to
-  # 0.38.2 and the advisory came with it. The first bundle carrying SQLite
-  # 3.54.0 is 0.39.0, which arrives with rusqlite 0.41, and 56bc591 asks for
-  # 0.40.2.
-  #
-  # Comes out when the matrix-sdk pin reaches a rev whose matrix-sdk-sqlite is
-  # on `rusqlite = "0.41"` or newer.
+  # Uninitialized memory out of the C SQLite libsqlite3-sys bundles.
   "RUSTSEC-2026-0459",
 
-  # RUSTSEC-2026-0367, 0368, 0369 and 0429, four flaws in `zip`'s extraction.
-  #
-  # Extraction keeps SUID, SGID and sticky bits off the archive (0367), creates
-  # symlinks without confining their targets to the destination (0368), applies
-  # Unix permissions through those symlinks (0369), and sizes a symlink target
-  # buffer from the declared uncompressed size, which aborts the process on a
-  # 112 byte archive claiming 2^62 bytes (0429).
-  #
-  # One call site now, and it extracts no archive anybody else chose.
-  #
-  # It used to be two. `webrtc-sys-build` was the other, and the move off the
-  # pinned forks closed it: the rev this workspace now pins resolves
-  # webrtc-sys-build 0.3.21, which uses `zip` 9.5.0 and is not affected. Only
-  # `zip` 4.6.1 is flagged, and `tauri-plugin-updater` 2.12.0 is its only
-  # parent. That was the first of the two moves this entry described, so what
-  # is left is the second.
-  #
-  # `tauri-plugin-updater` 2.12.0 sits behind the `self-update` feature, off by
-  # default and turned on only by release.yml's Windows job, so in every other
-  # build the crate is not compiled at all. Where it is, the call is
-  # `Update::extract_zip` inside `#[cfg(windows)]`, and 0367, 0368 and 0369 are
-  # Unix behaviours that do not arise there. Its bytes have also been through
-  # `verify_signature` before `install` sees them, so 0429 would need a crafted
-  # archive signed with the minisign key named in tauri.updater.conf.json,
-  # which nobody but Thomas holds, and would cost an abort of a process that is
-  # about to replace itself.
-  #
-  # Cannot be fixed by moving a version. The updater reaches `zip ^9` in
-  # 2.14.1, which wants a tauri runtime that carries wry 0.55 to 0.57, the
-  # webview this application draws in.
-  #
-  # Comes out when tauri-plugin-updater 2.14.1 and the wry bump under it land
-  # as a change of their own, where a dev build can be looked at rather than
-  # inferred from a green workspace.
+  # Four extraction flaws in `zip` 4.6.1, under tauri-plugin-updater.
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",

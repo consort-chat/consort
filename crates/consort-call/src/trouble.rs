@@ -3,34 +3,11 @@
 
 //! Why a call that looks fine cannot be heard.
 //!
-//! Phase 0 of `docs/PLAN-voice-call.md` found the failure this module exists
-//! for, by producing it: two sessions joined, both memberships published, both
-//! rosters correct, RTP flowing in both directions, and neither could decrypt
-//! a word the other said. Everything an interface normally draws said the call
-//! was working.
-//!
-//! It is not silent underneath, which is the whole opportunity. The media
-//! layer reports the frame cryptor's verdict per participant, and the core
-//! reports a media key that arrived and was refused, with the reason. So the
-//! honest answer to "why can nobody hear me" is available, and printing
-//! nothing would be a choice rather than a limitation.
-//!
-//! ## One sentence, and nobody's name in it
-//!
-//! What comes out of here is one sentence for the whole call. Naming the
-//! person would mean mapping a membership onto the roster, and the roster is
-//! per person while these reports are per membership, so the mapping is not
-//! total. In a voice channel with three people in it, "somebody" is enough to
-//! act on, and being sure of what is said matters more than being specific
-//! about who. Phase 5 is where that gets revisited against a real client.
-//!
-//! ## The half that is not wired up
-//!
-//! Everything above is about keys arriving. The other direction, our own key
-//! failing to reach the call, is the failure with no other symptom, and
-//! [`what_a_rollout_says`] is the whole of Consort's answer to it. Nothing
-//! feeds it today: see that function, and
-//! docs/PLAN-off-the-pinned-forks.md's stage 4.
+//! Everything an interface normally draws said the call was working while
+//! neither side could decrypt a word. It is not silent underneath: the media
+//! layer reports the frame cryptor's verdict per participant and the core
+//! reports a refused key with its reason. One sentence for the whole call and
+//! nobody's name in it, because the membership to person mapping is not total.
 
 use std::collections::BTreeMap;
 
@@ -235,33 +212,13 @@ pub fn is_the_end(status: &CallStatus) -> bool {
 
 /// What one media key rollout says about whether this session can be heard.
 ///
-/// The other direction from [`what_it_says`], and the only fault in this module
-/// that is about us rather than about somebody else: our own key failing to
-/// reach the rest of the call. Filed under a name no membership can have,
-/// because it names nobody. An empty `undelivered` is how the fault clears, and
-/// it is the only thing that can clear it: no report about a membership says
-/// anything about our own outgoing key.
+/// The other direction from [`what_it_says`], and the only fault here about us
+/// rather than somebody else. An empty `undelivered` is the only thing that
+/// clears it, and `at_join` separates the two sentences.
 ///
-/// `at_join` separates the two sentences. At the join nothing has ever worked
-/// and rejoining is part of the fix; later, the people already here can still
-/// hear us and only new arrivals cannot.
-///
-/// ## Nothing calls this yet
-///
-/// Upstream computes exactly this and will not quite let go of it.
-/// `EncryptionManager` records which recipients a rollout actually reached,
-/// keeps the rest in an `undelivered` map, retries them on backoff, and
-/// exposes the list on `RtcSession::undelivered_key_members`. `RtcCall::session`
-/// is public too. The one missing link is that `LiveKitCall` holds its
-/// `RtcCall` privately and offers no accessor, so there is no route from a
-/// joined call to the list; `LiveKitCall::session` is the SFU session, not that
-/// one.
-///
-/// So this is the surface kept warm for a one-line upstream addition, and the
-/// whole of docs/PLAN-off-the-pinned-forks.md's stage 4 is now that one line.
-/// Before the move off the forks the same capability arrived as two `CallEvent`
-/// variants Consort carried three fork commits for. The decision below is what
-/// those commits were worth, and it is still tested.
+/// Nothing calls this yet: `LiveKitCall` holds its `RtcCall` privately and
+/// offers no accessor, so `docs/PLAN-off-the-pinned-forks.md`'s stage 4 is one
+/// upstream line.
 pub fn what_a_rollout_says(undelivered: &[String], at_join: bool) -> (&'static str, Option<Fault>) {
     if undelivered.is_empty() {
         return (THIS_SESSION, None);

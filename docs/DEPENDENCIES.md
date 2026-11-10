@@ -9,8 +9,8 @@ Neither of the git pins is a personal fork any more. Both were, until the move
 described in [PLAN-off-the-pinned-forks.md](PLAN-off-the-pinned-forks.md), and
 what that cost and bought is written up there.
 
-The reasoning for each pin lives in the comment beside it in `Cargo.toml`. This
-file is the part that does not fit there: the process.
+This file is where the reasoning for each pin lives. The manifests carry a line
+each pointing here, and the process is written down below.
 
 ## The pins
 
@@ -87,7 +87,10 @@ field that only test fixtures read.
 These publish semver-compatible releases that do not compile with each other,
 so they are held at the versions `matrix-rust-rtc`'s own lockfile carries. A
 bare `cargo update` breaks the build with a type error inside a dependency
-rather than anything naming a version.
+rather than anything naming a version. Cargo cannot pin a transitive
+dependency from a manifest that does not name it, and naming all of them as
+direct dependencies to get `=` requirements would be a worse lie than the lock
+is.
 
 `livekit-signaling` joined the list on the move to element-hq, and is the
 current example of the whole problem: a fresh resolve picks 0.1.9, and `livekit`
@@ -117,7 +120,7 @@ eleven undici advisories (#136) went that way, on a jsdom bump inside the range
 `app/package.json` already allowed.
 
 Five `cargo audit` advisories are ignored, in `.cargo/audit.toml`. The file
-carries the argument for each; this is the index.
+carries one line per entry pointing here, and this file holds the argument.
 
 It was seven until the move off the pinned forks, and the two that came out are
 the point of having made the move: `RUSTSEC-2026-0292` (`imbl-sized-chunks`)
@@ -154,6 +157,21 @@ When a real advisory does fire, in order of preference:
    entry can come out. Never add one without that comment.
 
 An ignored advisory is a decision to accept a risk, so it should read like one.
+
+### What the four zip advisories are
+
+Extraction keeps SUID, SGID and sticky bits off the archive (0367), creates
+symlinks without confining their targets to the destination (0368), applies Unix
+permissions through those symlinks (0369), and sizes a symlink target buffer
+from the declared uncompressed size, which aborts the process on a 112 byte
+archive claiming 2^62 bytes (0429).
+
+Reachability at Consort's one call site, `Update::extract_zip` inside
+`#[cfg(windows)]`: 0367, 0368 and 0369 are Unix behaviours that do not arise
+there. 0429 would need a crafted archive signed with the minisign key named in
+`tauri.updater.conf.json`, which nobody but Thomas holds, because the bytes have
+been through `verify_signature` before `install` sees them. It would also cost
+an abort of a process that is about to replace itself.
 
 ## Adding a dependency
 

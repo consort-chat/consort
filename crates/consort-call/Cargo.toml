@@ -7,83 +7,55 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The MatrixRTC facade. `LiveKitCall::join` publishes membership, runs the dead
-# man's switch and the heartbeat, distributes media keys over Olm to-device,
-# discovers the LiveKit transport and connects to the SFU with E2EE on. All of
-# it, behind one call.
-#
-# Confined to `livekit.rs`, which is excluded from coverage for the same reason
-# `cpal_host.rs` is: CI has no SFU, so every line that talks to one is a line
-# no test can reach. Everything that decides anything sits behind
-# `CallTransport` and is tested against a fake.
+# The MatrixRTC facade, behind one `LiveKitCall::join`. Confined to
+# `livekit.rs`, which is excluded from coverage because CI has no SFU:
+# everything that decides anything sits behind `CallTransport` and is tested
+# against a fake.
 matrix-rtc-call-sdk = { workspace = true }
 
-# The types `LiveKitCall::publish` takes and returns, which live here rather
-# than being re-exported.
+# The types `LiveKitCall::publish` takes and returns.
 matrix-rtc-transport = { workspace = true }
 
-# `MembershipFormat`, which is the wire mode a `Dialect` maps onto;
-# `compat::room_state::participant_identity`, the `{user}:{device}` string this
-# generation names an SFU participant by, which `roster.rs` matches a
-# membership on and which is pure and tested; `LiveKitTransport`, which carries
-# the discovered service URL into a join; and `KeyRejection`, which rides
-# inside a discarded-key report.
+# `MembershipFormat` for `Dialect`, and `participant_identity`, the
+# `{user}:{device}` string `roster.rs` matches a membership on.
 matrix-rtc-core = { workspace = true }
 
-# `CallStatus`, for a call's end. `CallEvent` no longer has an `Ended` variant:
-# the end is on `LiveKitCall::subscribe_status` instead.
+# `CallStatus`: a call's end arrives on `LiveKitCall::subscribe_status`.
 matrix-rtc-call = { workspace = true }
 
-# One error type, which `LiveKitCallError::Transport` carries and `failure.rs`
-# has to classify. Adds nothing to the build: this crate already links the
-# LiveKit transport through the facade above.
+# The error type `failure.rs` classifies. Adds nothing: the facade links it.
 matrix-rtc-livekit = { workspace = true }
 
-# The `Client` and `Room` a join needs. Named directly rather than reached
-# through consort-matrix, because this crate wants the SDK types themselves
-# and the workspace pin already guarantees there is only one copy of them.
+# The `Client` and `Room` a join needs, named directly because the workspace pin
+# already guarantees one copy.
 matrix-sdk = { workspace = true }
 
-# For the `Participant` shape a roster is reported in, and for the one function
-# that fills it in: naming somebody is a per-room question and the room's member
-# store is the only thing that can answer it.
-#
-# This edge points one way and always will. `consort-matrix` must never depend
-# on this crate, because that would put libwebrtc in the way of every
-# `cargo test -p consort-matrix`, which is the loop most of this project is
-# developed in.
+# For the `Participant` shape and the room's member store, which names somebody.
+# This edge points one way: `consort-matrix` must never depend on this crate, or
+# libwebrtc sits in front of every `cargo test -p consort-matrix`.
 consort-matrix = { path = "../consort-matrix" }
 
 serde = { workspace = true }
 
-# `StreamExt::next`, to pull the decoded audio of one participant out of the
-# stream `RemoteTrackHandle` hands over. Confined to `livekit.rs`.
+# `StreamExt::next` on a participant's decoded audio. Confined to `livekit.rs`.
 futures-util = { workspace = true }
 
-# `Room::subscribe` and `DataPacket`, neither of which the LiveKit transport
-# re-exports. Confined to `livekit.rs`, and adds nothing to the build: this
-# crate already links libwebrtc through the transport above. See the workspace
-# manifest for why the features are left alone.
+# `Room::subscribe` and `DataPacket`. Confined to `livekit.rs`, and adds
+# nothing: the transport already links libwebrtc.
 livekit = { workspace = true }
 
-# For reading a homeserver's discovery document. `consort_call::discovery`
-# parses `.well-known/matrix/client` by hand rather than through ruma's typed
-# response, because that response is reached over the homeserver's API base
-# URL and the document lives on the server name, which are different hosts the
-# moment a deployment delegates.
+# `consort_call::discovery` parses `.well-known/matrix/client` by hand: ruma's
+# typed response is reached over the API base URL and the document lives on the
+# server name, which differ the moment a deployment delegates.
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# Only so one test can assert that the PCM this crate hands to a publication is
-# the PCM the gate produces. Nothing in the type system connects the two: the
-# audio crate knows nothing about calls, and this crate takes its format from
-# `AudioSourceConfig::default()`. A dev-dependency is the cheapest place to put
-# a check that would otherwise be a comment.
+# One test asserts the PCM handed to a publication is the PCM the gate produces,
+# and nothing in the type system connects the two.
 consort-audio = { path = "../consort-audio" }
 
-# `start_paused` runtimes, so the join timeout can be proven without a test
-# that takes thirty seconds to run.
+# `start_paused`, so the join timeout is proven without a thirty second test.
 tokio = { workspace = true, features = ["test-util"] }

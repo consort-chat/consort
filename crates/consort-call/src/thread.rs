@@ -3,35 +3,13 @@
 
 //! The thread that owns the call.
 //!
-//! `LiveKitCall::join` spawns its heartbeat, its dead man's switch and its media key
-//! distribution with `spawn_local`, because the command sender underneath is
-//! `?Send`. Called outside a `tokio::task::LocalSet` it panics. So the call
-//! gets a thread of its own, with a current-thread runtime and a `LocalSet` on
-//! it, and everything else reaches it through a channel.
-//!
-//! That is the shape [`consort_audio::AudioThread`] already has, for a
-//! different reason with the same consequence: a `cpal::Stream` is `!Send`, a
-//! `Call` is pinned to its `LocalSet`, and neither can be held in shared
-//! application state or across an await inside a Tauri command.
-//!
-//! [`consort_audio::AudioThread`]: https://docs.rs/consort-audio
-//!
-//! ## Where it differs from the audio thread
-//!
-//! Async channels both ways, where the audio thread uses `std::sync::mpsc`.
-//! The audio thread has to: its frames are posted by a realtime callback that
-//! must not await, and its loop is an ordinary blocking `recv`. This loop is
-//! async from top to bottom, and a blocking `recv` inside it would starve the
-//! very `spawn_local` tasks keeping the call alive. A missed heartbeat is a
-//! membership that expires, so that is not a small mistake.
-//!
-//! ## One thing at a time
-//!
-//! The loop does not read another command while a join is in flight. Somebody
-//! clicking a second channel during a slow connect is queued behind the first,
-//! not raced against it. That is a deliberate simplification: cancelling a
-//! half-finished join means unwinding a membership that may or may not have
-//! published, and the queue costs at most [`JOIN_TIMEOUT`] of waiting.
+//! `LiveKitCall::join` spawns with `spawn_local` and panics outside a
+//! `LocalSet`, so the call gets a thread with a current-thread runtime and
+//! everything reaches it through a channel. The channels are async both ways: a
+//! blocking `recv` would starve the `spawn_local` tasks keeping the call alive,
+//! and a missed heartbeat is a membership that expires. The loop reads no other
+//! command while a join is in flight, which costs at most [`JOIN_TIMEOUT`] of
+//! waiting.
 
 use std::future::Future;
 use std::thread::JoinHandle;
@@ -53,41 +31,23 @@ use crate::watching::{Eyes, Kind};
 
 /// How long a join may take before it is abandoned.
 ///
-/// Every step of one waits on something remote: the homeserver for the room
-/// and the membership, the authorisation service for a token, the SFU for the
-/// connection. Without a bound, one of them hanging leaves a voice channel
-/// showing "Connecting" for as long as the application runs, with no way back
-/// short of restarting it.
-///
-/// Thirty seconds is long enough that a slow but working connect is not cut
-/// off, and short enough that somebody has not yet given up on the software.
+/// Every step of a join waits on something remote, and without a bound a voice
+/// channel shows "Connecting" for as long as the application runs.
 pub const JOIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a leave may take before it is abandoned.
 ///
-/// Longer than one attempt at the request it is waiting for, which is the
-/// whole of the constraint. The bridge gives a membership send fifteen seconds
-/// before it calls the attempt dead, so a budget under that does not bound a
-/// hang: it abandons requests that were going to succeed, on any homeserver
-/// slower than the budget. What that costs is not abstract. The leave is
-/// cancelled in flight, the membership is never retracted, and the person is
-/// still sitting in the voice channel to everybody else in the space.
-///
-/// Waiting this long is free, because nobody is waiting on it. `Disconnected`
-/// goes out before the leave is awaited, so the interface has already closed
-/// the call by the time any of this runs.
-///
-/// Still bounded, and bounded below the dead man's switch that backs it up: a
-/// leave that has not landed within the membership's own keep-alive window has
-/// been overtaken by it.
+/// Longer than one attempt at the request it waits for: the bridge gives a
+/// membership send fifteen seconds, and a budget under that abandons requests
+/// that were going to succeed, leaving the person in the voice channel to
+/// everybody else. Free, because `Disconnected` goes out before the leave is
+/// awaited. Still bounded below the dead man's switch that backs it up.
 pub const LEAVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long a leave may take when the application is closing.
 ///
-/// The one case where the membership really is the expendable half. Dropping
-/// the handle waits for this thread, so a leave with no short bound on it is
-/// an application that will not close, and a person who cannot quit is a worse
-/// outcome than a ghost in a channel that the dead man's switch will clear.
+/// A leave with no short bound is an application that will not close, which is
+/// worse than a ghost the dead man's switch will clear.
 pub const SHUTDOWN_LEAVE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the roster watcher says to the loop.
@@ -923,19 +883,11 @@ fn shared(
 
 /// Put a video publication up, or take it down, and say whether one is up.
 ///
-/// Shared by the camera and the screen share, which differ only in which slot
-/// they fill, which queue feeds them and what they are called. The lifecycle is
-/// the same and the two ways of getting it wrong are both bad: a second
-/// publication for one source, or a retraction that leaves peers holding a
-/// decoder for a stream that will never carry another frame.
-///
-/// `size` of `None` means take it down. An already-absent publication is not a
-/// failure, and an already-present one is not republished: the interface may be
-/// asking because it lost track of what it is doing.
-///
-/// `retract` is the session's, not the publication's: see
-/// [`CallSession::retract_camera`] for what retracting the handle alone left
-/// behind.
+/// Shared by the camera and the screen share, which differ only in the slot,
+/// the queue and the name. `size` of `None` means take it down: an
+/// already-absent publication is not a failure and an already-present one is
+/// not republished. `retract` is the session's, not the publication's:
+/// [`CallSession::retract_camera`] says why.
 async fn publication<V, F, Fut, R, Gone>(
     slot: &mut Option<Showing>,
     frames: &Camera,

@@ -1,27 +1,10 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! Which generation of MatrixRTC a call is being held in.
+//! Which generation of MatrixRTC a call is held in.
 //!
-//! MatrixRTC has been rewritten twice and the deployments have not caught up
-//! together. A join in the wrong generation is the worst kind of failure to
-//! diagnose: it succeeds. Membership publishes, the SFU accepts the
-//! connection, the log says connected, and the people already in the channel
-//! see nobody arrive, because they are reading a different event type.
-//!
-//! So it is a named choice with three values rather than a default nobody
-//! looks at.
-//!
-//! ## What can and cannot be detected
-//!
-//! [`detect`] answers half the question, and it is the important half. See its
-//! documentation for why the other half is not answerable from here.
-//!
-//! ## Only one of the three works today
-//!
-//! [`Dialect::readable`] is the other constraint, and it is a property of this
-//! build rather than of any deployment. See it before adding a dialect or
-//! changing the default.
+//! A join in the wrong one succeeds and is invisible to the people already
+//! there, so it is a named choice rather than a default: `docs/CALLS.md`.
 
 use matrix_rtc_core::compat::MembershipFormat;
 
@@ -65,30 +48,10 @@ pub enum Dialect {
 
 /// Which dialect to speak in a room, given what is visible in it.
 ///
-/// One signal, and it is the only one available without a matrix-sdk feature
-/// this workspace does not enable: `live_state_memberships` is how many
-/// unexpired pre-MSC4354 room-state memberships the room holds, which is
-/// `Room::active_room_call_participants().len()`. Anybody in there through
-/// room state is somebody speaking [`Dialect::State`], and joining any other
-/// way makes this session invisible to them.
-///
-/// ## Why the other two cannot be told apart here
-///
-/// Nothing here can see MSC4354 sticky membership at all, for the reasons in
-/// [`Dialect::readable`], so an empty answer above means either "an empty
-/// channel" or "a channel full of people whose membership this build cannot
-/// see". Even once it can, [`Dialect::Current`] and
-/// [`Dialect::Sticky`] would still not be distinguishable by counting: a
-/// sticky-dialect join is deliberately additive and stays valid to a current
-/// peer, so both generations write an event that reads the same from outside.
-/// The difference is in the field names inside it and in which to-device type
-/// carries the media keys.
-///
-/// So detection can only ever push towards [`Dialect::State`], never away from
-/// it, and `fallback` is what an empty room gets. That asymmetry is the right
-/// way round: joining an empty channel in the wrong dialect is a call nobody
-/// has arrived at yet, while joining an occupied one in the wrong dialect is a
-/// call that looks connected and is not.
+/// One signal, `live_state_memberships`, which is
+/// `Room::active_room_call_participants().len()`. Detection can only push
+/// towards [`Dialect::State`], never away from it, and `fallback` is what an
+/// empty room gets. `docs/CALLS.md` has why the other two cannot be told apart.
 pub fn detect(live_state_memberships: usize, fallback: Dialect) -> Dialect {
     if live_state_memberships > 0 {
         return Dialect::State;
@@ -114,50 +77,21 @@ impl Dialect {
     /// Whether this build can read back the membership a call in this dialect
     /// publishes.
     ///
-    /// Only [`Dialect::State`] can, and the reason is a chain rather than a
-    /// preference. Each link was read rather than assumed, so it is written
-    /// down here to be re-checked rather than rediscovered:
-    ///
-    /// 1. A call's peers are read from the room's sticky events.
-    /// 2. Those are filled by exactly one call site in matrix-sdk,
-    ///    `sticky_manager.dispatch` in `matrix-sdk-base`'s `sliding_sync`.
-    /// 3. Consort syncs with `sync_with_result_callback`, which is sync v2 and
-    ///    never reaches that call site. Turning on `unstable-msc4354` does not
-    ///    change this: it adds the ruma types, not the ingestion.
-    ///
-    /// The fourth link used to be that the sticky bridge took room updates as
-    /// a second wake source in the room-state mode alone. That one is gone:
-    /// element-hq's room feed subscribes to room updates and sticky events
-    /// unconditionally, for every format. The first three stand, so the
-    /// conclusion does not move.
-    ///
-    /// So a call in the other two dialects connects, publishes membership,
-    /// carries RTP and shows an empty room to the person who joined it. That
-    /// is the failure this module opens by naming, which is why the LiveKit
-    /// transport refuses such a join rather than making it.
-    ///
-    /// This is a build limitation with an end date. When Consort moves to
-    /// sliding sync, this method and every refusal that consults it come out
-    /// together, and the tests below are what say so.
+    /// Only [`Dialect::State`] can: Consort syncs with
+    /// `sync_with_result_callback`, and the sticky events a call's peers are
+    /// read from are filled only on the sliding-sync path. A call in the other
+    /// two connects, publishes membership, carries RTP and shows an empty room.
+    /// This and every refusal that consults it come out when Consort moves to
+    /// sliding sync; `docs/CALLS.md` has the chain.
     pub fn readable(self) -> bool {
         matches!(self, Dialect::State)
     }
 }
 
 impl From<Dialect> for MembershipFormat {
-    /// Two wire modes for three peer generations, so one pair collapses.
-    ///
-    /// Element Call's 2025 sticky dialect is not a third format: upstream reads
-    /// it *inside* the room-state format, because Element Call wrote sticky
-    /// memberships beside its state events through the transition. So `Sticky`
-    /// and `State` answer the same, and the collapse is unobservable in
-    /// practice because [`Dialect::readable`] refuses a `Sticky` join before
-    /// this mapping is ever consulted.
-    ///
-    /// `Sticky` is kept rather than deleted because the variant names are a
-    /// settings file's contract in a stronger sense than a rename: the whole
-    /// file is one `serde_json::from_slice`, so an unknown dialect makes every
-    /// other setting in it revert to its default.
+    /// `Sticky` and `State` answer the same, because upstream reads the sticky
+    /// dialect inside the room-state format. `Sticky` is kept because the
+    /// variant names are a settings file's contract: `docs/CALLS.md`.
     fn from(dialect: Dialect) -> Self {
         match dialect {
             Dialect::Current => MembershipFormat::Msc,

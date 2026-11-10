@@ -3,22 +3,12 @@
 
 //! The transport that talks to a real SFU.
 //!
-//! Excluded from coverage, for the same reason `consort_audio`'s `cpal_host`
-//! is: CI has no SFU, so every line in here is a line no test can reach. It is
-//! kept correspondingly thin. Everything that decides anything, including
-//! which generation to speak and what a failure means, sits behind
-//! [`crate::CallTransport`] and is tested without it.
-//!
-//! What is left is very nearly one call. `LiveKitCall::join` publishes the
-//! membership, runs the dead man's switch and the heartbeat, distributes media
-//! keys over Olm to-device, discovers the LiveKit transport, and connects to
-//! the SFU with frame encryption on. There is nothing to reimplement.
-//!
-//! The exception is finding the SFU in the first place. Upstream discovery
-//! knows one of the two mechanisms MSC4143 left behind, and the one it does
-//! not know is the one Element Call uses and therefore the one most existing
-//! deployments have. So the other half is read here, and parsed in
-//! [`crate::discovery`] where a test can reach it.
+//! Excluded from coverage because CI has no SFU, so it is kept thin and
+//! everything that decides anything sits behind [`crate::CallTransport`]. The
+//! exception is finding the SFU: upstream discovery knows one of the two
+//! mechanisms MSC4143 left behind and not the one Element Call uses, so the
+//! other half is read here and parsed in [`crate::discovery`] where a test can
+//! reach it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -410,20 +400,11 @@ impl LiveKitSession {
 
     /// Tell the other Consort clients in the call what this session is doing.
     ///
-    /// Failure is logged and swallowed on purpose. This is an indicator on
-    /// somebody else's screen: a call is not worth ending over it, and the
-    /// deafening itself has already happened locally whatever the SFU makes of
-    /// this.
-    ///
-    /// Called on every roster change as well as on the button, because the
-    /// call thread re-pushes this session's audio state each time somebody
-    /// arrives. That is what tells a newcomer, who by definition missed the
-    /// announcement made before they were there. See [`crate::notices`].
-    ///
-    /// Mute is not in here and must not be. LiveKit already broadcasts a track
-    /// mute, every client including Element Call draws it, and announcing it
-    /// again would be a second source for one fact, disagreeing with the first
-    /// whenever a packet went missing.
+    /// Failure is logged and swallowed: this is an indicator on somebody else's
+    /// screen. Called on every roster change as well as on the button, which is
+    /// what tells a newcomer; see [`crate::notices`]. Mute is not in here and
+    /// must not be: LiveKit already broadcasts a track mute, and a second
+    /// source would disagree with the first whenever a packet went missing.
     async fn announce(&self, audio: SelfAudio) {
         let notice = Notice::new(self.call.membership_id(), audio.deafened, audio.away);
         let packet = DataPacket {
@@ -490,14 +471,11 @@ fn heard(known: &mut notices::Announced, event: livekit::RoomEvent) -> bool {
 /// Keep `deafened` up to date from what the Consort clients in the call say,
 /// this one included.
 ///
-/// Its own task because the room's event stream is the only place the others
-/// arrive, and nothing else in this crate reads it. `Room::subscribe` hands
-/// over an independent receiver, so this competes with nothing.
-///
-/// This session's own state arrives on `mine` instead, because LiveKit does
-/// not deliver a data message back to whoever published it. One task holds the
-/// map so that the local and the remote half cannot race to say what the call
-/// currently looks like.
+/// Its own task because the room's event stream is the only place other
+/// clients' notices arrive, and `Room::subscribe` hands over an independent
+/// receiver. This session's own state arrives on `mine`, because LiveKit does
+/// not deliver a data message back to whoever published it, and one task holds
+/// the map so the local and remote halves cannot race.
 ///
 /// Ends when the room does, or when the roster holding its handle is dropped.
 async fn watch_notices(
