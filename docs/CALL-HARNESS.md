@@ -128,6 +128,25 @@ in the other direction. The job builds `-p consort-call` only, so it needs
 clang-21 and five libraries rather than the GTK and WebKit the Rust job
 installs for the Tauri shell.
 
+It costs six and a half minutes on a cold cache, of which the call itself is
+twenty-four seconds and the rest is `cargo test -p consort-call` reaching the
+point of running it. That is cheap because `webrtc-sys` downloads a prebuilt
+libwebrtc rather than building one, and because nothing in the Tauri shell is
+compiled here.
+
+Two things it needs that no local run does, both found by the job failing:
+
+- **The host's own user id**, passed through to Synapse, which drops to it
+  before writing its state directory. A runner is uid 1001 and a developer
+  machine is often 1000, and the symptom of hardcoding either is Synapse
+  refusing to write its own signing key.
+- **`libglib2.0-dev`**. `webrtc-sys` probes glib-2.0, gobject-2.0 and gio-2.0
+  through pkg-config for their headers and unwraps the result. The Rust job
+  never notices, because `libgtk-3-dev` pulls them in. Nothing else on that
+  list needs widening: the X11, drm and gbm libraries webrtc-sys names beside
+  them are lazy loaded through vendored stub sources, so they need neither
+  headers nor a link, and libva is optional.
+
 The job greps the test's output for a receipt the test prints only after both
 assertions have held. Without that step the gate would be one renamed
 environment variable away from passing on a test that returned before it
