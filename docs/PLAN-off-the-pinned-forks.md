@@ -355,6 +355,10 @@ whole `CallEngine`, reactions and the raised hand.
 Named rather than guessed at, because a plan that hides these is worse than one
 that is shorter.
 
+All six are answered now, by executing the plan rather than by reading it.
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md) carries the answers
+and the two measurements the last two asked for.
+
 - **Whether `5a0fe1b` is upstream.** "Build the roster from publications, not
   just subscriptions" is behaviour inside the engine, not a type, so reading
   element-hq's `Participant` says nothing about it. It needs reading

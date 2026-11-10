@@ -1,0 +1,88 @@
+From 1734db0f16b29e049aace135e4d28b4cf40b627a Mon Sep 17 00:00:00 2001
+From: tominal <hello@kahusoftware.com>
+Date: Tue, 10 Nov 2026 13:53:21 -0600
+Subject: [PATCH] feat: expose the members a media key rollout did not reach
+
+`EncryptionManager` already records which recipients a rollout reached,
+keeps the rest in its `undelivered` map, and retries each one on backoff.
+The list is public as far as `BaseRtcRoom::undelivered_key_members`, and
+the upkeep consumes it internally, but no public type a host holds can
+read it: `RtcCall` does not expose it and `LiveKitCall` keeps its
+`RtcCall` private.
+
+So a host can be in a call where nobody can decrypt anything it sends and
+have no way to say so. It is the one fault in an encrypted call that the
+person causing it cannot see for themselves, because their own audio and
+video look fine locally.
+
+Two delegating accessors, no new types and no new events:
+
+- `RtcCall::undelivered_key_members`, beside
+  `subscribe_own_membership_lapsed`, which reaches the same per-slot state
+  by the same route.
+- `LiveKitCall::undelivered_key_members`, delegating to it.
+
+`matrix-rtc-core`'s own tests already pin the behaviour behind this,
+`an_undelivered_key_is_retried_on_backoff_until_delivered` and
+`an_undelivered_recipient_is_retried_without_making_signalling_unreachable`,
+both reading the list through `BaseRtcRoom::undelivered_key_members`. What
+is added here is reach rather than behaviour.
+
+A push would be better than a poll: `EncryptionManager::subscribe_undelivered`
+is already a `watch`, so a host could wake on a change rather than ask. It is
+`pub(crate)` and its value type `Undelivered` is private, so exposing it is a
+wider change than this one, and a caller that already wakes on membership
+changes can ask then. Happy to send that version instead if you would rather
+have it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ crates/matrix-rtc-call-sdk/src/livekit/call.rs | 10 ++++++++++
+ crates/matrix-rtc-call/src/client.rs           | 10 ++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/crates/matrix-rtc-call-sdk/src/livekit/call.rs b/crates/matrix-rtc-call-sdk/src/livekit/call.rs
+index ac27e0b..a354618 100644
+--- a/crates/matrix-rtc-call-sdk/src/livekit/call.rs
++++ b/crates/matrix-rtc-call-sdk/src/livekit/call.rs
+@@ -570,6 +570,16 @@ impl LiveKitCall {
+         self.bridge.key_for(identity).is_some()
+     }
+ 
++    /// The members this call's media key has not reached yet, by member id
++    /// (034 R32); `None` once the call is no longer joined.
++    ///
++    /// Nobody in it can decrypt anything we send, so a host that wants to say
++    /// so needs the list. The core already keeps it and retries each one on
++    /// backoff; this only hands it out.
++    pub async fn undelivered_key_members(&self) -> Option<Vec<String>> {
++        self.call.undelivered_key_members().await
++    }
++
+     /// Leave the call cleanly: send the leave event (cancelling the delayed
+     /// leave) and close the SFU connection.
+     ///
+diff --git a/crates/matrix-rtc-call/src/client.rs b/crates/matrix-rtc-call/src/client.rs
+index 963b839..51fdb07 100644
+--- a/crates/matrix-rtc-call/src/client.rs
++++ b/crates/matrix-rtc-call/src/client.rs
+@@ -1227,6 +1227,16 @@ impl<B: MatrixBackend + 'static> RtcCall<B> {
+             .subscribe_own_membership_lapsed(&self.slot_id)
+     }
+ 
++    /// The members a key rollout has not reached yet, by member id, retried
++    /// on backoff (034 R32); `None` once we are no longer joined.
++    pub async fn undelivered_key_members(&self) -> Option<Vec<String>> {
++        self.state
++            .lock()
++            .await
++            .rtc()
++            .undelivered_key_members(&self.slot_id)
++    }
++
+     /// The slot's raised hands, oldest first.
+     pub async fn raised_hands(&self) -> Vec<RaisedHand> {
+         self.state
+-- 
+2.56.0
+
