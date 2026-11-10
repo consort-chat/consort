@@ -463,12 +463,15 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
 
       - name: System dependencies
-        # Only consort-call is built here, so none of the GTK and WebKit the
-        # Rust job needs for the Tauri shell appears in this list.
+        # Only consort-call is built here, so none of the WebKit and GTK the
+        # Rust job needs for the Tauri shell appears in this list. glib does:
+        # webrtc-sys probes glib-2.0, gobject-2.0 and gio-2.0 for their headers
+        # and unwraps the result, and the Rust job gets them from libgtk-3-dev.
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             libasound2-dev \
+            libglib2.0-dev \
             libsqlite3-dev \
             libssl-dev \
             pkg-config \
