@@ -508,7 +508,8 @@ fn default_log_filter() -> &'static str {
     concat!(
         "warn,",
         "consort_app_lib=info,consort_matrix=info,consort_call=info,consort_audio=info,",
-        "matrix_rtc_bridge=info,matrix_rtc_core=info,matrix_rtc_livekit=info,matrix_rtc_media=info,",
+        "matrix_rtc_call=info,matrix_rtc_call_sdk=info,matrix_rtc_core=info,",
+        "matrix_rtc_livekit=info,matrix_rtc_matrix_sdk=info,matrix_rtc_transport=info,",
         "matrix_sdk=warn",
     )
 }
@@ -531,9 +532,16 @@ mod tests {
     #[test]
     fn every_crate_that_has_something_to_say_about_a_call_is_named() {
         // An omission here is not a crate that says less, it is one that says
-        // nothing above the bare level below. These four are the ones that
+        // nothing above the bare level below. These are the crates that
         // narrate a join, and a join is the thing this build is hardest to
         // diagnose.
+        //
+        // The MatrixRTC half of the list is a rename away from being silent
+        // rather than wrong, which is why it is asserted by name: the move off
+        // the pinned forks renamed `matrix_rtc_bridge` to
+        // `matrix_rtc_matrix_sdk` and split `matrix_rtc_media` into
+        // `matrix_rtc_transport` and `matrix_rtc_call_sdk`, and a filter naming
+        // the old ones parses perfectly and logs nothing.
         let filter = default_log_filter();
 
         for target in [
@@ -541,10 +549,12 @@ mod tests {
             "consort_matrix",
             "consort_call",
             "consort_audio",
-            "matrix_rtc_bridge",
+            "matrix_rtc_call",
+            "matrix_rtc_call_sdk",
             "matrix_rtc_core",
             "matrix_rtc_livekit",
-            "matrix_rtc_media",
+            "matrix_rtc_matrix_sdk",
+            "matrix_rtc_transport",
         ] {
             assert!(
                 filter.contains(&format!("{target}=info")),
@@ -569,7 +579,7 @@ mod tests {
 
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(target: "a_crate_nobody_thought_to_list", "the call did not join");
-            tracing::info!(target: "matrix_rtc_bridge", "the sticky bridge woke up");
+            tracing::info!(target: "matrix_rtc_matrix_sdk", "the sticky bridge woke up");
             tracing::info!(target: "matrix_sdk", "a sync response arrived");
         });
 

@@ -105,6 +105,11 @@ pub enum Error {
     #[error("a message with no text in it")]
     EmptyMessage,
 
+    /// The client was built without the event cache, so nothing can count
+    /// unread messages. See [`crate::receipts::count_unread`].
+    #[error("this client has no event cache, so nothing counts unread messages")]
+    NoEventCache,
+
     /// An edit of a message this account did not send.
     ///
     /// The homeserver would refuse it and every other client would ignore it,
@@ -292,6 +297,9 @@ impl Error {
                 "The homeserver could not complete that request. Please try again.".to_owned()
             }
             Self::NotLoggedIn => "No user is signed in.".to_owned(),
+            Self::NoEventCache => {
+                "Unread marks are unavailable: this session is not caching messages.".to_owned()
+            }
             Self::SessionStore { .. } => {
                 "Could not read or write the saved session on disk.".to_owned()
             }

@@ -22,7 +22,7 @@
 //!
 //! ## The shape
 //!
-//! [`CallThread`] owns the call, because `Call::join` pins its work to a
+//! [`CallThread`] owns the call, because `LiveKitCall::join` pins its work to a
 //! `LocalSet` and the result cannot leave the thread that made it.
 //! [`CallTransport`] is the seam that lets everything above the SFU be tested
 //! without one.

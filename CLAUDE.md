@@ -156,24 +156,38 @@ detail included, and the signing keypair, which nobody but Thomas holds.
 
 ### The matrix-sdk pin is load-bearing
 
-`Cargo.toml` pins `matrix-sdk` to git rev `3773300` of
-`BillCarsonFr/matrix-rust-sdk`, not a crates.io release.
+`Cargo.toml` pins `matrix-sdk` to git rev `56bc591` of
+`matrix-org/matrix-rust-sdk`, not a crates.io release.
 
-That rev must stay identical to the one `matrix-rust-rtc` pins. When the voice
-layer lands it takes a `matrix_sdk::Client`, and if the revs differ cargo
+That rev must stay identical to the one `matrix-rust-rtc` pins.
+`LiveKitCall::join` takes a `&matrix_sdk::Room`, and if the revs differ cargo
 resolves two copies of the SDK and produces `expected Client, found Client`
 errors that look like nonsense. Never bump this pin alone.
 
-The upstream repo is at `../matrix-rust-rtc` on this machine. Check
-`crates/matrix-rtc-livekit/Cargo.toml` there before touching the pin.
+Both pins are upstream now rather than personal forks, which is recent: the
+previous pair was `BillCarsonFr/matrix-rust-sdk` and
+`tominal/matrix-rust-rtc`, the second of them nine commits on top of a
+repository that was archived read-only in September 2026.
+[docs/PLAN-off-the-pinned-forks.md](docs/PLAN-off-the-pinned-forks.md) has what
+the move cost, what it bought, and the one capability it left behind.
+
+Check `Cargo.toml` in `element-hq/matrix-rust-rtc` before touching the pin.
 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) has what moves each pin, how to
-see how far behind the fork has fallen, and what to do about an advisory.
+see how far behind it has fallen, and what to do about an advisory.
 
 ### Call::join cannot live in a Tauri command
 
-`Call::join` drives `!Send` futures via `spawn_local` and panics outside a
-`tokio::task::LocalSet`. Tauri v2 commands run on a multi-threaded runtime and
+`LiveKitCall::join` drives `!Send` futures via `spawn_local` and panics outside
+a `tokio::task::LocalSet`. Tauri v2 commands run on a multi-threaded runtime and
 require `Send` futures. The two cannot meet.
+
+Worth knowing before trusting the rest of this section: the constraint is gone
+upstream. element-hq's `LiveKitCall::join` spawns through
+`matrix_rtc_core::executor`, which re-exports `tokio::task::spawn` and requires
+`Send`, so the thread below could become an ordinary task. Deliberately not
+taken in the same change as the migration, because the actor is also what keeps
+the call off the thread that draws: see
+[docs/PLAN-off-the-pinned-forks.md](docs/PLAN-off-the-pinned-forks.md)'s stage 5.
 
 The design is a call actor: a dedicated thread owning a current-thread runtime
 plus a `LocalSet`, holding the `Call`, reached over a command channel with an

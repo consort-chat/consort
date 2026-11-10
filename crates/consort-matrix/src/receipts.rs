@@ -42,6 +42,9 @@
 //! opens. What it does not cost is a second sync: the cache reads
 //! `subscribe_to_all_room_updates`, which is the same broadcast
 //! [`crate::rooms::watch`] and [`crate::timeline::watch`] are already on.
+//!
+//! Since matrix-sdk 0.19 the client builds and drives the cache itself, so
+//! there is nothing here to start. See [`count_unread`] for what is left.
 
 use matrix_sdk::room::Receipts;
 use matrix_sdk::ruma::{EventId, OwnedEventId};
@@ -49,23 +52,23 @@ use matrix_sdk::{Client, Room};
 
 use crate::error::{Error, Result};
 
-/// Start counting unread messages and mentions.
+/// Check that unread messages and mentions are being counted.
 ///
-/// Called once per signed-in client, before the sync loop starts. Calling it
-/// again is cheap and does nothing, which is what the SDK promises of
-/// `EventCache::subscribe`.
+/// Called once per signed-in client, before the sync loop starts. It used to
+/// subscribe the event cache; matrix-sdk 0.19 creates and drives the cache in
+/// the client instead, and turns it off through `ClientBuilder::with_event_cache`
+/// rather than by not subscribing. So what is left is the assertion, which was
+/// always the point: this is here so that a session which starts without counts
+/// is not silently one that will never have any.
 ///
-/// Failure means the client is shutting down, which is the only thing that can
-/// make it fail. Reported rather than ignored so a session that starts without
-/// counts is not silently one that will never have any.
+/// The cache is on by default and nothing in this crate turns it off, so the
+/// failure is unreachable today. Kept because it is one `with_event_cache(false)`
+/// away from being reachable, and the symptom would otherwise be an unread mark
+/// that never appears for anybody.
 pub fn count_unread(client: &Client) -> Result<()> {
-    // Lifted rather than given a variant of its own, on the same terms as the
-    // redaction in `timeline`: the event cache answers with its own error type
-    // and the SDK's error already has a case for it.
-    client
-        .event_cache()
-        .subscribe()
-        .map_err(matrix_sdk::Error::from)?;
+    if client.event_cache().is_none() {
+        return Err(Error::NoEventCache);
+    }
     Ok(())
 }
 

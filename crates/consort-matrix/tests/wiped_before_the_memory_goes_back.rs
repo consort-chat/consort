@@ -1,6 +1,9 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// Same reason as the crate: see src/lib.rs.
+#![recursion_limit = "256"]
+
 //! H8: secrets are overwritten before their memory is handed back.
 //!
 //! Its own binary because it installs a global allocator, and because the

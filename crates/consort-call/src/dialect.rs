@@ -23,15 +23,15 @@
 //! build rather than of any deployment. See it before adding a dialect or
 //! changing the default.
 
-use matrix_rtc_livekit::compat::ElementCallCompat;
+use matrix_rtc_core::compat::MembershipFormat;
 
 /// Which MatrixRTC generation to speak.
 ///
-/// Ours rather than `ElementCallCompat` directly, for two reasons. The
-/// upstream type is documented as scaffolding with a delete-by date, and
-/// keeping it out of Consort's own vocabulary means its removal is one
-/// mapping function to fix rather than every call site. And its names describe
-/// the wire format, where what a caller here is choosing is a peer generation.
+/// Ours rather than `MembershipFormat` directly, and the move off the pinned
+/// forks is what that bought: upstream went from three wire modes to two and
+/// the cost was one mapping function rather than every call site. The names
+/// still differ in kind, too. Upstream names a wire format; a caller here is
+/// choosing a peer generation, and there are three of those.
 ///
 /// Serialisable because it is a setting: an operator whose deployment this
 /// cannot detect writes the answer in `settings.json`, and the names on the
@@ -118,16 +118,18 @@ impl Dialect {
     /// preference. Each link was read rather than assumed, so it is written
     /// down here to be re-checked rather than rediscovered:
     ///
-    /// 1. `matrix-rtc-bridge` reads the peers of a call with
-    ///    `Room::live_sticky_events`.
-    /// 2. That is filled by exactly one call site in matrix-sdk,
+    /// 1. A call's peers are read from the room's sticky events.
+    /// 2. Those are filled by exactly one call site in matrix-sdk,
     ///    `sticky_manager.dispatch` in `matrix-sdk-base`'s `sliding_sync`.
     /// 3. Consort syncs with `sync_with_result_callback`, which is sync v2 and
     ///    never reaches that call site. Turning on `unstable-msc4354` does not
     ///    change this: it adds the ruma types, not the ingestion.
-    /// 4. The sticky bridge takes a second wake source, room updates, only in
-    ///    `ElementCallCompat::StateEvents`. In the other two it has no source
-    ///    at all, so it seeds an empty roster and then waits forever.
+    ///
+    /// The fourth link used to be that the sticky bridge took room updates as
+    /// a second wake source in the room-state mode alone. That one is gone:
+    /// element-hq's room feed subscribes to room updates and sticky events
+    /// unconditionally, for every format. The first three stand, so the
+    /// conclusion does not move.
     ///
     /// So a call in the other two dialects connects, publishes membership,
     /// carries RTP and shows an empty room to the person who joined it. That
@@ -142,12 +144,24 @@ impl Dialect {
     }
 }
 
-impl From<Dialect> for ElementCallCompat {
+impl From<Dialect> for MembershipFormat {
+    /// Two wire modes for three peer generations, so one pair collapses.
+    ///
+    /// Element Call's 2025 sticky dialect is not a third format: upstream reads
+    /// it *inside* the room-state format, because Element Call wrote sticky
+    /// memberships beside its state events through the transition. So `Sticky`
+    /// and `State` answer the same, and the collapse is unobservable in
+    /// practice because [`Dialect::readable`] refuses a `Sticky` join before
+    /// this mapping is ever consulted.
+    ///
+    /// `Sticky` is kept rather than deleted because the variant names are a
+    /// settings file's contract in a stronger sense than a rename: the whole
+    /// file is one `serde_json::from_slice`, so an unknown dialect makes every
+    /// other setting in it revert to its default.
     fn from(dialect: Dialect) -> Self {
         match dialect {
-            Dialect::Current => ElementCallCompat::Off,
-            Dialect::Sticky => ElementCallCompat::StickyEvents,
-            Dialect::State => ElementCallCompat::StateEvents,
+            Dialect::Current => MembershipFormat::Msc,
+            Dialect::Sticky | Dialect::State => MembershipFormat::RoomState,
         }
     }
 }
@@ -199,16 +213,12 @@ mod tests {
     #[test]
     fn each_dialect_maps_to_the_wire_mode_that_speaks_it() {
         assert_eq!(
-            ElementCallCompat::from(Dialect::Current),
-            ElementCallCompat::Off
+            MembershipFormat::from(Dialect::Current),
+            MembershipFormat::Msc
         );
         assert_eq!(
-            ElementCallCompat::from(Dialect::Sticky),
-            ElementCallCompat::StickyEvents
-        );
-        assert_eq!(
-            ElementCallCompat::from(Dialect::State),
-            ElementCallCompat::StateEvents
+            MembershipFormat::from(Dialect::State),
+            MembershipFormat::RoomState
         );
     }
 
@@ -265,18 +275,23 @@ mod tests {
     }
 
     #[test]
-    fn no_two_dialects_map_to_the_same_wire_mode() {
-        // The mapping is the whole crate's leverage over a failure that looks
-        // like success. Two dialects collapsing into one would make the
-        // choice unobservable at exactly the point it stopped working.
-        let modes = [Dialect::Current, Dialect::Sticky, Dialect::State]
-            .map(ElementCallCompat::from)
-            .map(|mode| format!("{mode:?}"));
+    fn the_one_pair_that_shares_a_wire_mode_is_a_pair_nothing_can_reach() {
+        // Two dialects collapsing into one would make the choice unobservable
+        // at exactly the point it stopped working, which is what the three-mode
+        // version of this test guarded. Upstream has two modes now, so the
+        // guarantee has to be made the other way round: the pair that shares a
+        // mode is a pair a join never gets to, because `readable` refuses
+        // `Sticky` first.
+        assert_eq!(
+            MembershipFormat::from(Dialect::Sticky),
+            MembershipFormat::from(Dialect::State)
+        );
+        assert!(!Dialect::Sticky.readable());
 
-        let mut unique = modes.to_vec();
-        unique.sort();
-        unique.dedup();
-
-        assert_eq!(unique.len(), modes.len(), "{modes:?}");
+        // And the pair that is still distinguishable stays so.
+        assert_ne!(
+            MembershipFormat::from(Dialect::Current),
+            MembershipFormat::from(Dialect::State)
+        );
     }
 }

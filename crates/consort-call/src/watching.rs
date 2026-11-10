@@ -17,7 +17,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant, VideoFrame};
+use matrix_rtc_call_sdk::Participant as MediaParticipant;
+use matrix_rtc_transport::{MediaStreamKind, VideoFrame};
 use serde::{Deserialize, Serialize};
 
 use crate::roster;
@@ -168,7 +169,9 @@ fn tighten(mut plane: Vec<u8>, stride: usize, width: usize, height: usize) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_rtc_media::{I420Buffer, StreamState, VideoRotation};
+    use matrix_rtc_call_sdk::ConnectionState;
+    use matrix_rtc_call_sdk::StreamState;
+    use matrix_rtc_transport::{I420Buffer, VideoRotation};
 
     fn member(member_id: &str, is_local: bool, kinds: &[MediaStreamKind]) -> MediaParticipant {
         MediaParticipant {
@@ -176,7 +179,9 @@ mod tests {
             user_id: format!("@{member_id}:example.org"),
             device_id: None,
             is_local,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams: kinds

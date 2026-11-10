@@ -1,6 +1,9 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// Same reason as the crate: see src/lib.rs.
+#![recursion_limit = "256"]
+
 //! The half that needs a homeserver rather than a mock.
 //!
 //! `MatrixMockServer` covers more than it looks like it should: it can inject

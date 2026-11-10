@@ -3,7 +3,7 @@
 
 //! The thread that owns the call.
 //!
-//! `Call::join` spawns its heartbeat, its dead man's switch and its media key
+//! `LiveKitCall::join` spawns its heartbeat, its dead man's switch and its media key
 //! distribution with `spawn_local`, because the command sender underneath is
 //! `?Send`. Called outside a `tokio::task::LocalSet` it panics. So the call
 //! gets a thread of its own, with a current-thread runtime and a `LocalSet` on

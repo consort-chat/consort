@@ -53,7 +53,7 @@ pub trait CallTransport: Send + 'static {
 /// A call this session is currently in.
 ///
 /// Not `Send`, and that is the whole reason the call thread exists. The real
-/// one is built by `Call::join`, which uses `spawn_local` for its heartbeat
+/// one is built by `LiveKitCall::join`, which uses `spawn_local` for its heartbeat
 /// and its key distribution, so it can only exist inside a `LocalSet` on the
 /// thread that made it. It cannot be held in shared application state and it
 /// cannot be moved across an await in a Tauri command.
