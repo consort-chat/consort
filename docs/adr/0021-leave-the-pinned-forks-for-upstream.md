@@ -1,16 +1,15 @@
 # ADR-0021: Leave the pinned forks for upstream, and pay for it in one change
 
 **Date**: 2026-11-10
-**Status**: proposed
+**Status**: accepted
 **Deciders**: tominal, with Claude Code
 
 Recorded as [PLAN-off-the-pinned-forks.md](../PLAN-off-the-pinned-forks.md)'s
 stage 0 gate, which asked for an ADR and said of itself that it was not one.
-`proposed` rather than `accepted` because the move is done and measured on
-[#217](https://github.com/consort-chat/consort/pull/217), which is a draft that
-is deliberately not for merge: the acceptance gate is a call held between two
-real clients, and nothing in CI can tell a call that connects from a call
-somebody can hear.
+`accepted` because the gate below was met. `ci.yml`'s job "A call two peers can
+hear" holds a call between two Consort peers through a real SFU and asserts
+spectrally that the second hears what the first published:
+[CALL-HARNESS.md](../CALL-HARNESS.md) has that harness and what it leaves out.
 
 ## Context
 
@@ -162,18 +161,18 @@ and `Cargo.lock` records both under `[[patch.unused]]`. Removing `async-compat`,
 --all-targets` and `cargo check -p consort-app --all-targets --features
 self-update`, which is the feature only the Windows release job turns on and so
 a graph nothing else resolves. The only lockfile movement in any of the three is
-the deletion of the `[[patch.unused]]` record itself. They are left in place
-here so that this change stays one thing; taking them out is a two line
-follow-up with the measurement above behind it.
+the deletion of the `[[patch.unused]]` record itself. Both are taken out here,
+on that measurement.
 
 ## When this would be revisited
 
-The gate is a call. Two real clients in the state dialect, heard by two people,
-because every other check this repository has passes already and none of them
-can tell a call that connects from a call somebody can hear. Until that
-happens, this stays `proposed` and #217 stays a draft.
+The gate was a call. Two real clients in the state dialect, heard by two
+people, because every other check this repository had passed already and none
+of them could tell a call that connects from a call somebody can hear. CI's "A
+call two peers can hear" job is that gate without the two people, and
+[CALL-HARNESS.md](../CALL-HARNESS.md) is where it is written down.
 
-After that, the open question is the two lost events. The choice is the
+The open question that remains is the two lost events. The choice is the
 [upstream patch](../upstream/0001-expose-the-members-a-media-key-rollout-did-not-reach.patch), a fork
 of element-hq, or a written decision to drop the capability. The first is narrow enough to be worth asking
 for, which is the one thing the archived fork made impossible.

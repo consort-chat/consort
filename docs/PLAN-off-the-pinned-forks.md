@@ -3,9 +3,9 @@
 What it would take for Consort to stop depending on two personal git forks and
 sit on officially maintained upstreams instead.
 
-This is an investigation, not a migration. No pin was changed in the branch
-that carries this file. The spike described below was run in a worktree and
-reverted.
+This was the investigation, not the migration: the spike described below was
+run in a worktree and reverted. The migration it argued for is
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md).
 
 Short version: the SDK half is nearly free and the MatrixRTC half is a real
 piece of work, the reachable crypto advisory does clear, the `LocalSet` the
@@ -423,9 +423,11 @@ frontend if the IPC shape moves. The two decisions inside it (what `Dialect`
 becomes, and what carries `.well-known` discovery) should be settled before the
 first edit rather than discovered in the compiler. Gate: `cargo test
 --workspace` green and off the network, clippy clean, coverage above 90%, the
-eight `#[ignore]` tests run against `testing/synapse`, and a call held between
-two real clients in the state dialect, because nothing in CI can tell a call
-that connects from a call somebody can hear.
+eight `#[ignore]` tests run against `testing/synapse`, and a call in the state
+dialect that is heard rather than merely connected. Done, and recorded in
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md). What holds the last
+of those is `ci.yml`'s job "A call two peers can hear":
+[CALL-HARNESS.md](CALL-HARNESS.md).
 
 **Stage 3: the ignore list shrinks.** `RUSTSEC-2026-0292` and
 `RUSTSEC-2026-0451` come out of `.cargo/audit.toml` and out of

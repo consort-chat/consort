@@ -6,12 +6,12 @@ module documentation points here rather than carrying this.
 ## The seam between the call thread and the SFU
 
 **Why it exists.** The only real implementation talks to an SFU through
-`matrix-rtc-livekit`, and CI has no SFU, so every line that talks to one is a
-line no test can reach. A call thread nobody tests is a call thread whose
-reconnect logic is discovered by a person clicking a channel twice. So
-`CallTransport`, `CallSession` and `Roster` are the seam: everything that
-decides anything sits above them and is tested against a fake, and
-`crate::livekit` is kept thin and excluded from coverage.
+`matrix-rtc-livekit`, and the jobs that measure coverage have no SFU, so every
+line that talks to one is a line those tests cannot reach. A call thread nobody
+tests is a call thread whose reconnect logic is discovered by a person clicking
+a channel twice. So `CallTransport`, `CallSession` and `Roster` are the seam:
+everything that decides anything sits above them and is tested against a fake,
+and `crate::livekit` is kept thin and excluded from coverage.
 
 **Why the traits are not object-safe.** `CallTransport::join` is an `async fn`
 in a trait, which cannot go behind `dyn`. That is deliberate. Unlike the audio
