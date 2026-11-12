@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use matrix_rtc_media::{Dimensions, QualityLimit, VideoDetail};
+use matrix_rtc_transport::{Dimensions, QualityLimit, VideoDetail};
 use serde::{Deserialize, Serialize};
 
 use crate::watching::Kind;

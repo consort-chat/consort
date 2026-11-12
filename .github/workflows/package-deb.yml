@@ -1,24 +1,8 @@
-# A .deb, for Debian and Ubuntu.
+# A .deb, for Debian and Ubuntu. Called by release.yml once a tag has a release
+# page, and dispatchable on its own to backfill or rebuild a tag.
 #
-# Called by release.yml once a tag has a release page, and dispatchable on its
-# own to backfill a tag that was released before this file existed or to
-# rebuild one without touching the other packages.
-#
-# ## Why this builds in a bookworm container
-#
-# Because the glibc it links against is the oldest one it will run on, and
-# `ubuntu-latest` is noble. A package built there needs glibc 2.39, so it
-# installs on Debian 12 and then dies at startup with a version error, which is
-# worse than not being offered. Debian 12 is glibc 2.36 and carries
-# webkit2gtk-4.1, so building there covers Debian 12 and 13 and Ubuntu 24.04
-# onwards from one artefact.
-#
-# Ubuntu 22.04 is out of reach either way: it is glibc 2.35, older than
-# anything with webkit2gtk-4.1 in it, and 4.0 is not a version Tauri 2 builds
-# against.
-#
-# The system dependency list is the one ci.yml's Rust job uses, which is what
-# makes it known to compile rather than guessed.
+# Built in a bookworm container because the glibc it links against is the oldest
+# one it will run on: docs/CI.md#the-glibc-floor-and-the-container-images
 
 name: Debian package
 
@@ -48,6 +32,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
+    env:
+      # The clang installed below, rather than the distribution's. Only C++
+      # needs it, so gcc stays the C compiler.
+      CXX: clang++-21
     defaults:
       run:
         # A job in a container gets `sh`, not bash, whatever the image has in
@@ -60,10 +48,25 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
+      - name: An apt source for a clang new enough for libwebrtc
+        # webrtc-sys 0.3.51 refuses anything below clang 21 and bookworm ships
+        # 14. The image cannot move: the .deb's glibc floor chose it, which
+        # this file's header argues. docs/PLAN-off-the-pinned-forks.md has the
+        # floor and where it is read from.
+        run: |
+          set -euo pipefail
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            -o /etc/apt/keyrings/apt-llvm-org.asc
+          echo 'deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' \
+            > /etc/apt/sources.list.d/llvm.list
+
       - name: System dependencies
         # gh is the last one and is not a build dependency: the runner image
         # has it and this container does not, and the release is uploaded to
         # from in here.
+        #
+        # Both clangs, for the reason ci.yml's Rust job gives.
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends \
@@ -78,6 +81,7 @@ jobs:
             pkg-config \
             cmake \
             clang \
+            clang-21 \
             gh
 
       - uses: actions/setup-node@v5

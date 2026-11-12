@@ -302,7 +302,7 @@ resource here. The full standard, and what gets a change sent back, is in
 [GNU Affero General Public License, version 3](LICENSE), and only version 3.
 
 Inherited rather than chosen: Consort links
-[`matrix-rust-rtc`](https://github.com/BillCarsonFr/matrix-rust-rtc) (now https://github.com/element-hq/matrix-rust-rtc), which is
+[`matrix-rust-rtc`](https://github.com/element-hq/matrix-rust-rtc), which is
 AGPL-3.0-only. If you run a modified Consort as a network service, the AGPL
 requires you to offer that modified source to its users.
 

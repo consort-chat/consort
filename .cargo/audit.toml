@@ -1,128 +1,13 @@
-# What `cargo audit` is allowed to pass over, and why.
-#
-# An entry here is a decision to accept a risk, not a way to quiet a build, so
-# every one carries the reason it does not reach this code and the thing that
-# has to happen before it can come out. docs/DEPENDENCIES.md has the order to
-# try before adding one: move the version, then rebase the fork, then this.
-#
-# Crates that are merely unmaintained, unsound or yanked do not fail the build
-# and do not belong here. Eighteen of those are reported today: the unic and
-# proc-macro-error families, zbus's zvariant, two yanked crates, and
-# unsoundness in glib, tokio and bitmaps.
+# What `cargo audit` is allowed to pass over. An entry is a decision to accept a
+# risk, not a way to quiet a build: docs/DEPENDENCIES.md#advisories has the
+# argument for each, the order to try before adding one, and what lifts it.
 
 [advisories]
 ignore = [
-  # RUSTSEC-2026-0292, double free in imbl-sized-chunks 0.1.3.
-  #
-  # `Chunk::{clear, drop_left, drop_right}` and `InlineArray::{clear,
-  # truncate}` drop their elements before updating the metadata saying which
-  # slots are live, so an element whose `Drop` panics leaves the collection
-  # believing the dropped elements are still there and drops them again later.
-  #
-  # Not reachable here. Nothing this workspace or matrix-sdk puts in an imbl
-  # collection has a `Drop` that can panic: the timeline is an
-  # `ObservableVector<Arc<TimelineItem>>` and what that bottoms out in is ruma
-  # event types, strings and counted pointers. A panic in `Drop` during
-  # unwinding aborts anyway, so the path needs one during ordinary execution,
-  # which none of these types has.
-  #
-  # Cannot be fixed by moving a version. Only imbl 7.0.2 asks for the patched
-  # `imbl-sized-chunks ^0.2.0`; every release from 4.0.0 to 7.0.1 asks for
-  # `^0.1.3`, and the pinned matrix-sdk fork holds `imbl = "6.1.0"`, so cargo
-  # refuses the bump rather than resolving it.
-  #
-  # Comes out when the matrix-sdk pin moves. Upstream
-  # matrix-org/matrix-rust-sdk is already on `imbl = "7.0.2"` and
-  # `eyeball-im = "0.9.1"`, so this clears itself the moment the fork carries
-  # that, and the fork's rev moves only with the matrix-rtc one. See the
-  # matrix-sdk entry in docs/DEPENDENCIES.md.
-  "RUSTSEC-2026-0292",
-
-  # RUSTSEC-2026-0459, uninitialized memory out of the C SQLite that
-  # libsqlite3-sys 0.35.0 bundles.
-  #
-  # Opening a database alongside a sibling `-wal` whose page size differs from
-  # the database's can make ordinary queries hand back stale bytes of the
-  # process's own memory. Local, and it needs the victim to open the crafted
-  # pair.
-  #
-  # Not reachable here. Consort opens one database, the matrix-sdk store at
-  # `SessionStore::store_path_for`, a digest-named directory under the Tauri
-  # app data directory that Consort made itself. No command and no setting
-  # takes a database path from anywhere else, so nobody less trusted gets to
-  # write that file or its `-wal`.
-  #
-  # Cannot be fixed by moving a version. rusqlite 0.37.0 asks for
-  # `libsqlite3-sys ^0.35.0`, and the first bundle carrying SQLite 3.54.0 is
-  # 0.39.0, which arrived with rusqlite 0.41.
-  #
-  # Comes out when the matrix-sdk pin moves. Upstream matrix-sdk-sqlite is
-  # already on `rusqlite = "0.41.1"`.
+  # Uninitialized memory out of the C SQLite libsqlite3-sys bundles.
   "RUSTSEC-2026-0459",
 
-  # RUSTSEC-2026-0451, vodozemac 0.10.0 leaves ratcheted Olm keys in freed heap.
-  #
-  # The Olm root key ratchet never zeroizes its HKDF output, so every ratchet
-  # step leaves a copy of the new root key and chain key in freed memory.
-  #
-  # Reachable, and the only entry here that is. It sits on the path every Olm
-  # session takes, so this is accepted on what it costs rather than on whether
-  # it is reached. Reading it takes a second primitive that can see this
-  # process's freed heap: another disclosure bug, a core dump, or swapped out
-  # pages. Whatever holds one of those already has the live account and the
-  # current chain keys, which vodozemac keeps in memory for as long as a
-  # session is open. What the missing zeroization adds is the chains already
-  # ratcheted past, so what is lost is forward secrecy for earlier messages
-  # rather than access to anything presently encrypted.
-  #
-  # Cannot be fixed by moving a version. matrix-sdk 0.18.0 asks for
-  # `vodozemac ^0.10.0` and the fix is 0.11.2.
-  #
-  # Comes out when the matrix-sdk pin moves. Upstream matrix-rust-sdk is
-  # already on `vodozemac = "0.11.2"`.
-  "RUSTSEC-2026-0451",
-
-  # RUSTSEC-2026-0367, 0368, 0369 and 0429, four flaws in `zip`'s extraction.
-  #
-  # Extraction keeps SUID, SGID and sticky bits off the archive (0367), creates
-  # symlinks without confining their targets to the destination (0368), applies
-  # Unix permissions through those symlinks (0369), and sizes a symlink target
-  # buffer from the declared uncompressed size, which aborts the process on a
-  # 112 byte archive claiming 2^62 bytes (0429).
-  #
-  # Two call sites, and neither extracts an archive somebody else chose.
-  #
-  # `webrtc-sys-build` 0.3.18 is a build dependency and ships in nothing. It
-  # pulls `webrtc-{triple}.zip` from livekit/rust-sdks' releases over HTTPS at
-  # its pinned `WEBRTC_TAG` and extracts it. Substituting that archive means
-  # owning LiveKit's release assets or the TLS to them, and the archive is the
-  # prebuilt libwebrtc this build links, so anybody who can already supplies
-  # native code to the application. The extraction flaws add nothing on top of
-  # that.
-  #
-  # `tauri-plugin-updater` 2.12.0 sits behind the `self-update` feature, off by
-  # default and turned on only by release.yml's Windows job, so in every other
-  # build the crate is not compiled at all. Where it is, the call is
-  # `Update::extract_zip` inside `#[cfg(windows)]`, and 0367, 0368 and 0369 are
-  # Unix behaviours that do not arise there. Its bytes have also been through
-  # `verify_signature` before `install` sees them, so 0429 would need a crafted
-  # archive signed with the minisign key named in tauri.updater.conf.json,
-  # which nobody but Thomas holds, and would cost an abort of a process that is
-  # about to replace itself.
-  #
-  # Cannot be fixed by moving a version, in either place. webrtc-sys 0.3.35
-  # asks for `webrtc-sys-build ^0.3.18`, and 0.3.20, the first of those to ask
-  # for `zip ^9`, also moves `WEBRTC_TAG` from webrtc-51ef663 to
-  # webrtc-89d790b, which is a different libwebrtc than these bindings were
-  # written against. The updater reaches `zip ^9` in 2.14.1, which wants a
-  # tauri runtime that carries wry 0.55 to 0.57, the webview this application
-  # draws in.
-  #
-  # Comes out in two parts. The first when the MatrixRTC pin moves to a
-  # lockfile carrying webrtc-sys 0.3.36 or newer alongside webrtc-sys-build
-  # 0.3.20. The second when tauri-plugin-updater 2.14.1 and the wry bump under
-  # it land as a change of their own, where a dev build can be looked at rather
-  # than inferred from a green workspace.
+  # Four extraction flaws in `zip` 4.6.1, under tauri-plugin-updater.
   "RUSTSEC-2026-0367",
   "RUSTSEC-2026-0368",
   "RUSTSEC-2026-0369",

@@ -3,38 +3,19 @@
 
 //! Getting everybody else's audio out of the call and into the speakers.
 //!
-//! ## The bug this exists because of
-//!
-//! Subscribing to a track is not the same as playing it. In a browser it very
-//! nearly is, because the LiveKit SDK attaches a subscribed track to an
-//! `<audio>` element and the page makes noise; every native binding leaves that
-//! to the application. A subscribed track here is a decoder writing PCM into a
-//! stream, and a stream nobody reads is frames decoded and dropped.
-//!
-//! Nothing reports it. The membership is published, the SFU is connected, the
-//! keys are exchanged, the frames decrypt, the roster fills in, and the call is
-//! silent. Consort shipped exactly that: the outgoing half was wired end to end
-//! and the incoming half stopped at the subscription, so everybody could hear
-//! us and we could hear nobody.
-//!
-//! ## The shape
-//!
-//! One task per participant, each pulling that participant's frames and
-//! handing them to [`Ears`]. They are started and stopped from the roster,
-//! because the roster is the one thing that already knows when somebody's
-//! stream appears and when they leave, and it is already consulted on every
-//! change for the sake of deafening.
-//!
-//! [`Ears`] is a trait rather than a channel because the thing on the other end
-//! is a sound card, and this crate must not know that. It is the mirror of
-//! [`crate::PublishedAudio`], which is a trait for the same reason going the
-//! other way.
+//! A subscribed track is a decoder writing PCM into a stream, and a stream
+//! nobody reads is frames decoded and dropped, with nothing anywhere reporting
+//! it: `docs/adr/0002-consort-mixes-the-call-itself.md`. One task per
+//! participant, started and stopped from the roster, which already knows when a
+//! stream appears and when somebody leaves. [`Ears`] is a trait because what is
+//! on the other end is a sound card, and this crate must not know that.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
+use matrix_rtc_call_sdk::Participant as MediaParticipant;
+use matrix_rtc_transport::MediaStreamKind;
 
 /// Somewhere to play what the other people in a call are saying.
 ///
@@ -73,36 +54,21 @@ pub trait Heard: Send + Sync + 'static {
     /// Say which person each membership currently in the call belongs to, as
     /// `(member_id, user_id)`.
     ///
-    /// The one thing the other side of this seam cannot work out for itself.
-    /// Everything above is keyed by membership, because that is what a queue of
-    /// audio belongs to: one person on a laptop and a phone is two streams and
-    /// mixing them into one queue would interleave them into noise. A person's
-    /// settings are keyed by *them*, because "this one is too loud" is not a
-    /// fact about a device. This is the only place both are known at once.
-    ///
-    /// Called on every roster change, and idempotent: it is a statement of who
-    /// is in the call now rather than a delta. Memberships absent from it have
-    /// gone, and whatever was hung on them should go too.
-    ///
-    /// Must not block, like everything else here.
+    /// The one thing the other side of the seam cannot work out for itself:
+    /// everything above is keyed by membership while a person's settings are
+    /// keyed by them, and this is the only place both are known. Called on
+    /// every roster change and idempotent, a statement of who is in the call
+    /// rather than a delta. Must not block.
     fn attribute(&self, whose: &[(String, String)]);
 }
 
 /// Something in a call worth making a sound about.
 ///
-/// What happened, never what to play. There are two settings on the other side
-/// of this seam, one for the chimes and one for the spoken notifications, and
-/// a cue may become either, both or neither. This crate does not know which
-/// are switched on and must not: it knows somebody arrived.
-///
-/// Named for the request rather than for the chime it used to be the only
-/// possible answer to, which also stops it colliding with the settings
-/// screen's test chime. Those two were the same word for two unrelated things.
-///
-/// Only what this session's own membership can be sure of. There is no
-/// "somebody muted" here and there should not be: mute is toggled far more
-/// often than people arrive, and a channel that pinged for every one of them
-/// is a channel people turn the sounds off in within the hour.
+/// What happened, never what to play: the two settings on the other side of the
+/// seam may make a cue either, both or neither. Only what this session's own
+/// membership can be sure of, and deliberately no "somebody muted", because a
+/// channel that pinged for every mute is a channel people turn the sounds off
+/// in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cue {
     /// Somebody joined the voice channel this session is in.
@@ -250,7 +216,8 @@ pub fn mono(samples: &[i16], channels: u32) -> Cow<'_, [i16]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_rtc_media::StreamState;
+    use matrix_rtc_call_sdk::ConnectionState;
+    use matrix_rtc_call_sdk::StreamState;
 
     fn member(member_id: &str, is_local: bool, kinds: &[MediaStreamKind]) -> MediaParticipant {
         MediaParticipant {
@@ -258,7 +225,9 @@ mod tests {
             user_id: format!("@{member_id}:example.org"),
             device_id: None,
             is_local,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams: kinds

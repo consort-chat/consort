@@ -1,6 +1,11 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// Proving the reqwest and tower retry future `Send` at `tokio::spawn` nests
+// deeper than the default 128 since matrix-sdk 0.19. A compiler limit, not a
+// breakage: see docs/PLAN-off-the-pinned-forks.md.
+#![recursion_limit = "256"]
+
 //! Matrix authentication and session persistence for Consort.
 //!
 //! Knows nothing about Tauri, the UI or voice, so it can be driven from a

@@ -3,9 +3,9 @@
 What it would take for Consort to stop depending on two personal git forks and
 sit on officially maintained upstreams instead.
 
-This is an investigation, not a migration. No pin was changed in the branch
-that carries this file. The spike described below was run in a worktree and
-reverted.
+This was the investigation, not the migration: the spike described below was
+run in a worktree and reverted. The migration it argued for is
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md).
 
 Short version: the SDK half is nearly free and the MatrixRTC half is a real
 piece of work, the reachable crypto advisory does clear, the `LocalSet` the
@@ -123,6 +123,35 @@ What the spike did **not** do is make `consort-call` compile. Working through
 those twelve is a migration, and the three that are not mechanical (the dialect
 collapse, the transport override replacing the fallback URL, and the two lost
 events) are decisions rather than edits.
+
+## A clang floor comes with the lockfile pins
+
+The three hand-pinned livekit entries above are not only a resolution problem.
+`webrtc-sys` 0.3.51 compiles against the hermetic libc++ baked into
+`libwebrtc.a`, reads that libc++'s own stated floor out of the artifact, and
+panics rather than start below it. Today the floor is **clang 21**:
+
+```
+clang++ is clang 14, but the hermetic libc++ shipped with this libwebrtc
+requires clang 21 or later.
+```
+
+`main` never meets it. `webrtc-sys` is 0.3.35 there, and 0.3.51 arrives with the
+migration.
+
+Two jobs build Rust in a `rust:1-bookworm` container, and bookworm's clang is
+14: `ci.yml`'s Rust job and the whole of `package-deb.yml`. The Rust one fails
+at `Clippy`, which skips every step after it, so the run reports five green jobs
+and has tested no Rust at all.
+
+The image cannot move. It is bookworm because the `.deb`'s glibc floor is
+bookworm's, which `package-deb.yml`'s header argues, and nothing newer in Debian
+carries clang 21 either. So both jobs add `apt.llvm.org`, install `clang-21`
+beside the distribution's clang, and set `CXX=clang++-21`. gcc stays the C
+compiler and bindgen keeps the libclang it had.
+
+Anybody building by hand needs the same floor. Arch and a current Fedora clear
+it already; a bookworm or noble machine does not.
 
 ## What the move buys
 
@@ -326,6 +355,10 @@ whole `CallEngine`, reactions and the raised hand.
 Named rather than guessed at, because a plan that hides these is worse than one
 that is shorter.
 
+All six are answered now, by executing the plan rather than by reading it.
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md) carries the answers
+and the two measurements the last two asked for.
+
 - **Whether `5a0fe1b` is upstream.** "Build the roster from publications, not
   just subscriptions" is behaviour inside the engine, not a type, so reading
   element-hq's `Participant` says nothing about it. It needs reading
@@ -390,9 +423,11 @@ frontend if the IPC shape moves. The two decisions inside it (what `Dialect`
 becomes, and what carries `.well-known` discovery) should be settled before the
 first edit rather than discovered in the compiler. Gate: `cargo test
 --workspace` green and off the network, clippy clean, coverage above 90%, the
-eight `#[ignore]` tests run against `testing/synapse`, and a call held between
-two real clients in the state dialect, because nothing in CI can tell a call
-that connects from a call somebody can hear.
+eight `#[ignore]` tests run against `testing/synapse`, and a call in the state
+dialect that is heard rather than merely connected. Done, and recorded in
+[ADR-0021](adr/0021-leave-the-pinned-forks-for-upstream.md). What holds the last
+of those is `ci.yml`'s job "A call two peers can hear":
+[CALL-HARNESS.md](CALL-HARNESS.md).
 
 **Stage 3: the ignore list shrinks.** `RUSTSEC-2026-0292` and
 `RUSTSEC-2026-0451` come out of `.cargo/audit.toml` and out of

@@ -16,122 +16,64 @@ repository = "https://github.com/consort-chat/consort"
 rust-version = "1.97"
 
 [workspace.dependencies]
-# The Matrix SDK pin.
-#
-# This rev is NOT arbitrary and MUST NOT be bumped in isolation. It is the rev
-# `matrix-rust-rtc` pins for every one of its crates, and when we add the voice
-# layer we link against that crate. If the two revs diverge, cargo resolves two
-# copies of matrix-sdk, and the `Client` this workspace builds is a different
-# type from the one matrix-rust-rtc's call API accepts. The failure is a wall of
-# "expected Client, found Client" at the call site, not a version warning.
-#
-# Bumping means bumping both, together, and rebuilding both.
-matrix-sdk = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", default-features = false, features = [
+# Must stay the exact rev matrix-rust-rtc pins, or cargo resolves two
+# matrix-sdks and the `Client` built here stops being the type the call API
+# accepts. Never bump it alone: docs/DEPENDENCIES.md
+matrix-sdk = { git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "56bc59112822e7eb25943a95e02502855cdeef2d", default-features = false, features = [
     "e2e-encryption",
     "sqlite",
     "rustls-aws-lc-rs",
     "automatic-room-key-forwarding",
-    # Turns what somebody typed into the HTML that rides beside it. Nothing
-    # here parses markdown itself: ruma decides what counts as formatting and
-    # returns nothing at all for text that has none, so a plain sentence stays
-    # a plain sentence on the wire.
+    # Nothing here parses markdown: ruma decides what counts as formatting and
+    # returns nothing for text that has none.
     "markdown",
 ] }
 
-# The same rev, resolved from the same git source, so this is the crate
-# matrix-sdk itself already links rather than a second copy. Directly named for
-# one reason: `matrix_sdk_base::crypto::secret_storage::DecodeError` is the type
-# that says whether a recovery key was mistyped or simply not this account's,
-# and matrix-sdk exposes the error carrying it without re-exporting the type.
-# If the rev above moves, this one moves with it.
-matrix-sdk-base = { git = "https://github.com/BillCarsonFr/matrix-rust-sdk", rev = "377330059c3a335ab36d190fc10b87de3427c6b3", default-features = false, features = [
+# Named directly only for
+# `matrix_sdk_base::crypto::secret_storage::DecodeError`, which matrix-sdk does
+# not re-export. Same git source and rev, so the same crate.
+matrix-sdk-base = { git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "56bc59112822e7eb25943a95e02502855cdeef2d", default-features = false, features = [
     "e2e-encryption",
 ] }
 
-# The MatrixRTC pin, and the reason the one above cannot move on its own.
-#
-# `Call::join` takes a `&matrix_sdk::Room`, so this rev's matrix-sdk pin and
-# ours have to be the same string. It is, and that was checked rather than
-# assumed: a spike compiled a function that only type-checks when the `Client`
-# this workspace builds and the one `matrix-rtc-livekit` expects are one type.
-#
-# A fork, because we now carry a patch: upstream enabled GCM frame encryption
-# on every call without asking whether the room was encrypted, which MSC4143
-# forbids and which leaves a conforming peer decoding ciphertext as audio.
-# `matrix-rtc-core` already documented the rule on `RoomEncryption::Unencrypted`
-# and the slot layer already implemented it, but the pre-MSC4354 Element Call
-# dialect has no `m.rtc.slot` event, so nothing consulted it. See
-# tominal/matrix-rust-rtc `fix/no-e2ee-in-unencrypted-rooms`.
-#
-# The fork carries eight commits on top of upstream main, plus one test, on
-# feature/plain-rooms-and-arrival-mute-rebased. When they land upstream this
-# goes back to BillCarsonFr and the rev moves with it.
-# Until then, note the risk a fork does not share with the matrix-sdk pin
-# above: it is ours to keep rebased, and a stale fork is a silent way to miss
-# upstream fixes. docs/DEPENDENCIES.md is how to find out how far behind it is.
-#
-# `matrix-sdk` feature: the SDK-backed command sender, the sticky bridge, and
-# the pre-2026 Element Call compatibility modes. Without it `call` is not
-# compiled at all and there is no `Call::join`.
-matrix-rtc-livekit = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "0427fc00038bb1dce07b8ff28910b6629964a3ad", features = [
+# The call facade behind its `matrix-sdk` feature: without it there is no
+# `LiveKitCall` and no join. This rev's matrix-sdk pin and ours must be the same
+# string: docs/DEPENDENCIES.md
+matrix-rtc-call-sdk = { git = "https://github.com/element-hq/matrix-rust-rtc", rev = "4b3cee57adfd5868eb8ebb3731d9011dfbd6d891", features = [
     "matrix-sdk",
 ] }
 
-# The transport-agnostic media model, named directly because the types
-# `Call::publish` takes and returns live here rather than being re-exported:
-# `PublishOptions`, `LocalTrackHandle`, `AudioFrame`, `CallEvent`,
-# `Participant`. Same git source and rev, so it is the crate matrix-rtc-livekit
-# already links rather than a second copy. If the rev above moves, this moves
-# with it.
-matrix-rtc-media = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "0427fc00038bb1dce07b8ff28910b6629964a3ad" }
+# The types `LiveKitCall::publish` takes and returns live here rather than being
+# re-exported.
+matrix-rtc-transport = { git = "https://github.com/element-hq/matrix-rust-rtc", rev = "4b3cee57adfd5868eb8ebb3731d9011dfbd6d891" }
 
-# Dev-only, and for exactly one type: `KeyRejection`, which rides inside
-# `matrix_rtc_media::CallEvent::KeyDiscarded` and is not re-exported by the
-# crate that carries it. Without it a test cannot construct the one event that
-# says why a media key was refused, which is the most useful thing Consort has
-# to tell somebody about a call nobody can hear. Same git source and rev, so it
-# is the crate already in the graph rather than a second copy.
-matrix-rtc-core = { git = "https://github.com/tominal/matrix-rust-rtc", rev = "0427fc00038bb1dce07b8ff28910b6629964a3ad" }
+# No longer dev-only, which it was when all it carried was `KeyRejection`.
+# `MembershipFormat`, `compat::room_state::participant_identity` and
+# `LiveKitTransport` all live here, and all three are on the join path.
+matrix-rtc-core = { git = "https://github.com/element-hq/matrix-rust-rtc", rev = "4b3cee57adfd5868eb8ebb3731d9011dfbd6d891" }
 
-# Eight crates in Cargo.lock are pinned by hand and are load-bearing.
-#
-# `livekit`, `livekit-api`, `livekit-datatrack`, `livekit-protocol`,
-# `livekit-runtime`, `libwebrtc`, `webrtc-sys` and `webrtc-sys-build` publish
-# semver-compatible releases that do not compile with each other. A fresh
-# resolve of the ranges matrix-rtc-livekit asks for failed three times in a
-# row before they were pinned to the versions that crate's own lock carries:
-# a missing field in `ConnectWhatsAppCallRequest`, then the same error one
-# version down, then a non-exhaustive `RtcConfiguration` built with a struct
-# expression.
-#
-# The consequence: a bare `cargo update` breaks the build, and the error is a
-# type error inside a dependency rather than anything naming a version. If it
-# happens, compare against matrix-rust-rtc's Cargo.lock at the rev above and
-# pin back to what it holds, parents before children (`livekit` before
-# `livekit-api`, `livekit-datatrack` before `livekit-protocol`).
-#
-# Not expressible here. Cargo has no way to pin a transitive dependency from a
-# manifest that does not name it, and naming all eight as direct dependencies
-# to get `=` requirements would be a worse lie than the lock is.
+# `CallStatus`, which is how a call's end is learned now that `CallEvent` has
+# no `Ended`, and `ReactionError`, which rides inside `LiveKitCallError`.
+matrix-rtc-call = { git = "https://github.com/element-hq/matrix-rust-rtc", rev = "4b3cee57adfd5868eb8ebb3731d9011dfbd6d891" }
 
-# Only for `StreamExt::next` on the `impl Stream` that matrix-sdk hands back
-# from `changes()`. Already in the graph by way of matrix-sdk, and no features
-# are requested here so cargo unifies the two into one compiled crate rather
-# than resolving a second copy.
+# Named for its error type alone, which `LiveKitCallError::Transport` carries
+# and `failure.rs` matches on.
+matrix-rtc-livekit = { git = "https://github.com/element-hq/matrix-rust-rtc", rev = "4b3cee57adfd5868eb8ebb3731d9011dfbd6d891" }
+
+# Nine livekit and webrtc crates are pinned by hand in Cargo.lock: they publish
+# semver-compatible releases that do not compile with each other, and a bare
+# `cargo update` breaks the build. docs/DEPENDENCIES.md has the list and the
+# order.
+
+# Only for `StreamExt::next` on the stream `changes()` hands back. No features,
+# so cargo unifies it with matrix-sdk's copy.
 futures-util = { version = "0.3", default-features = false }
 
-# Named directly only so `consort_call::livekit` can reach `Room::subscribe`
-# and `DataPacket`, which `matrix-rtc-livekit` does not re-export. Deafening
-# has no representation in MatrixRTC or LiveKit, so Consort clients tell each
-# other over the call's own data channel: see `consort_call::notices` for why
-# that rather than a participant attribute or a room event.
-#
-# No features and no default ones, so cargo unifies this with the copy
-# matrix-rtc-livekit already asks for rather than resolving a second one. The
-# version range is deliberately the same `^0.7` that crate uses: the exact
-# build is decided by the hand-pinned Cargo.lock entry above, and restating it
-# here as `=` would put the pin in two places that could disagree.
-livekit = { version = "0.7", default-features = false }
+# Named only so `consort_call::livekit` can reach `Room::subscribe` and
+# `DataPacket`, which `matrix-rtc-livekit` does not re-export. No features, so
+# cargo unifies it with that crate's copy; the exact build is the Cargo.lock
+# pin.
+livekit = { version = "0.9", default-features = false }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -141,49 +83,25 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
-# libwebrtc arrives with the voice layer and makes debug symbols enormous.
-# Stripping keeps the shipped binary something a person will actually download.
+# libwebrtc makes debug symbols enormous.
 strip = true
-# Thin LTO is the cheap part of the size win and stays.
 lto = "thin"
 
-# `codegen-units = 1` is deliberately NOT set here.
-#
-# It compiles each crate as one LLVM module instead of sixteen that build in
-# parallel, so peak rustc memory scales with the whole crate rather than a
-# slice. On matrix-sdk that is gigabytes, and cargo builds several such crates
-# at once: measured on a 30 GB machine it produced three simultaneous
-# multi-gigabyte rustc processes and exhausted a 15 GB swap file.
-#
-# Measured on this workspace it is worth 33 MB of binary against 40 MB, so
-# roughly 21%. Real, but not worth making the project hostile to build for: the
-# packaged .deb is 16 MB either way once compressed, and libwebrtc lands with
-# the voice layer and is larger than matrix-sdk.
-#
-# If binary size ever does matter, `codegen-units = 4` recovers most of the
-# difference at a quarter of the peak memory. Do not go to 1.
+# codegen-units = 1 is deliberately not set: gigabytes of peak rustc memory for
+# 21% of binary. docs/BUILDING.md
 
 [profile.dev]
-# Full debuginfo is the reason a dev build peaks at four simultaneous ld.lld
-# processes holding ~2.2 GB each. `line-tables-only` keeps the part backtraces
-# actually use, file and line numbers, and drops the type and variable DWARF
-# that makes up the bulk of the object files.
+# Backtraces keep file and line; the type DWARF is what made links heavy.
 debug = "line-tables-only"
-# Leave debuginfo in the .o files instead of copying it into the linked binary.
-# The linker stops rewriting hundreds of megabytes of DWARF on every rebuild,
-# which is where most of the ld.lld memory and wall-clock went. Backtraces and
-# gdb still resolve, they read the .o files in the target dir.
+# Debuginfo stays in the .o files so the linker stops rewriting it.
 split-debuginfo = "unpacked"
 
 [profile.dev.package."*"]
-# Dependencies get rebuilt almost never but are relinked constantly, and their
-# debuginfo is not something anyone steps through. Dropping it entirely shrinks
-# the target dir and the link set without costing anything in our own crates.
+# Dependencies are relinked constantly and nobody steps through them.
 debug = false
 
-# A 720p MJPEG frame is a JPEG decode and then a per-pixel conversion, and at
-# opt-level 0 that is 159 ms of CPU each: 5.5 frames a second out of a camera
-# offering 30, with one core held at 100%. See docs/PERFORMANCE.md.
+# A 720p MJPEG frame decodes at 5.5 frames a second at opt-level 0.
+# See docs/PERFORMANCE.md.
 [profile.dev.package.consort-video]
 opt-level = 2
 

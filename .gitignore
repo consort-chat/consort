@@ -42,3 +42,6 @@ Thumbs.db
 
 # The throwaway Synapse's state. Recreated by testing/synapse/up.sh.
 /testing/synapse/data
+# The throwaway call stack's state. Recreated by testing/call/up.sh.
+/testing/call/data
+/testing/call/certs

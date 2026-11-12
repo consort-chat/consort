@@ -11,24 +11,17 @@
 use std::collections::HashMap;
 
 use consort_matrix::Participant;
-use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant};
+use matrix_rtc_call_sdk::Participant as MediaParticipant;
+use matrix_rtc_core::compat::room_state;
+use matrix_rtc_transport::MediaStreamKind;
 
 /// Whether this membership has muted its microphone.
 ///
-/// Exactly [`camera_live`] negated, and for the same reason: the question is
-/// what the call can hear, and a membership publishing no microphone at all
-/// cannot be heard. It used to answer "not muted" for that, on the argument
-/// that publishing nothing is not a choice somebody made. The argument is
-/// wrong about the case it matters in. Joining from a lobby with the
-/// microphone off publishes no audio track, so the person who most needs to be
-/// told their microphone is off was the one person nobody could see it on, and
-/// they find out by talking to a room that cannot hear them.
-///
-/// It also puts us back in step with every other client. Element Call reads a
-/// missing publication as muted too.
-///
-/// The cost is an icon during the moment between a membership appearing and
-/// its first publication landing, which is a mute that is true while it lasts.
+/// A membership publishing no microphone at all cannot be heard, so it reads as
+/// muted, as in every other client including Element Call. Joining from a lobby
+/// with the microphone off publishes no audio track, and that person most needs
+/// telling. The cost is an icon between a membership appearing and its first
+/// publication landing.
 pub fn microphone_muted(member: &MediaParticipant) -> bool {
     !member
         .streams
@@ -63,17 +56,9 @@ pub fn screen_live(member: &MediaParticipant) -> bool {
 
 /// When this membership joined the call, `ours` standing in for our own.
 ///
-/// The transport reports arrivals, and an arrival is something somebody else
-/// does. LiveKit tells this client who turned up after it connected and there
-/// is no event in which it turns up itself, so our own membership came back
-/// with no time on it and the card belonging to the person reading it was the
-/// one card in the call with no "in call" line.
-///
-/// `ours` is the moment this session's join returned, which is a fact this
-/// process holds outright rather than one the SFU has to be asked for. It
-/// stands in for exactly one row: everybody else keeps the transport's record,
-/// which is the only thing that can be right about people who were already in
-/// the call when we arrived.
+/// LiveKit reports arrivals and has no event in which this client turns up
+/// itself, so our own membership came back with no time on it. `ours` is the
+/// moment this session's join returned and stands in for exactly that row.
 pub fn arrived_at(member: &MediaParticipant, ours: u64) -> Option<u64> {
     member.joined_at_ms.or(member.is_local.then_some(ours))
 }
@@ -176,23 +161,18 @@ pub fn with_since(
 
 /// Which membership each SFU participant identity belongs to.
 ///
-/// MSC4195 derives a LiveKit identity from the user, the device that sent the
-/// membership event and the membership id, and the server's own participant
-/// list carries all three. So the name a notice arrives under can be looked
-/// up here rather than taken from what the notice says about itself.
-///
-/// A membership with no attributable device has no identity to expect, so it
-/// is absent and nothing can be said about it. See `spoken_for`.
+/// The pre-MSC4354 generation names a participant by the plain
+/// `{user}:{device}` string, so the name a notice arrives under can be looked
+/// up rather than taken from what the notice says about itself.
+/// Format-specific, and the only one this build joins in:
+/// [`crate::dialect::Dialect::readable`]. A membership with no attributable
+/// device is absent.
 pub fn roll(memberships: &[MediaParticipant]) -> HashMap<String, String> {
     memberships
         .iter()
         .filter_map(|member| {
             let device_id = member.device_id.as_deref()?;
-            let identity = matrix_rtc_livekit::identity::pseudonymous_identity(
-                &member.user_id,
-                device_id,
-                &member.member_id,
-            );
+            let identity = room_state::participant_identity(&member.user_id, device_id);
             Some((identity, member.member_id.clone()))
         })
         .collect()
@@ -369,7 +349,7 @@ mod deafening {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_rtc_media::StreamState;
+    use matrix_rtc_call_sdk::{ConnectionState, StreamState};
 
     fn membership(user_id: &str, streams: Vec<StreamState>) -> MediaParticipant {
         MediaParticipant {
@@ -377,7 +357,9 @@ mod tests {
             user_id: user_id.to_owned(),
             device_id: None,
             is_local: false,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams,
@@ -455,6 +437,9 @@ mod tests {
         // the call whose arrival has to come from the client that arrived.
         let ours = MediaParticipant {
             is_local: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             ..membership("@ada:example.org", vec![])
         };
 
@@ -578,7 +563,8 @@ mod tests {
 #[cfg(test)]
 mod screens {
     use super::*;
-    use matrix_rtc_media::{MediaStreamKind, StreamState};
+    use matrix_rtc_call_sdk::{ConnectionState, StreamState};
+    use matrix_rtc_transport::MediaStreamKind;
 
     fn ada() -> Participant {
         Participant::named("@ada:example.org", "Ada")
@@ -590,7 +576,9 @@ mod screens {
             user_id: user_id.to_owned(),
             device_id: None,
             is_local: false,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams,
@@ -670,7 +658,8 @@ mod screens {
 #[cfg(test)]
 mod cameras {
     use super::*;
-    use matrix_rtc_media::{MediaStreamKind, StreamState};
+    use matrix_rtc_call_sdk::{ConnectionState, StreamState};
+    use matrix_rtc_transport::MediaStreamKind;
 
     fn ada() -> Participant {
         Participant::named("@ada:example.org", "Ada")
@@ -682,7 +671,9 @@ mod cameras {
             user_id: user_id.to_owned(),
             device_id: None,
             is_local: false,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams,
@@ -778,6 +769,7 @@ mod cameras {
 #[cfg(test)]
 mod speaking_for {
     use super::*;
+    use matrix_rtc_call_sdk::ConnectionState;
 
     fn joined(user_id: &str, device_id: &str, member_id: &str) -> MediaParticipant {
         MediaParticipant {
@@ -785,7 +777,9 @@ mod speaking_for {
             user_id: user_id.to_owned(),
             device_id: Some(device_id.to_owned()),
             is_local: false,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams: Vec::new(),
@@ -802,10 +796,9 @@ mod speaking_for {
 
     /// How the SFU names a membership, which is what a notice arrives under.
     fn identity_of(member: &MediaParticipant) -> String {
-        matrix_rtc_livekit::identity::pseudonymous_identity(
+        room_state::participant_identity(
             &member.user_id,
             member.device_id.as_deref().expect("a device"),
-            &member.member_id,
         )
     }
 

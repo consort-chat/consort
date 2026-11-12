@@ -1077,7 +1077,7 @@ impl Loaded {
             };
             for thread in asked {
                 let found = room
-                    .load_event_receipts(ReceiptType::Read, thread, &event_id)
+                    .load_event_receipts(ReceiptType::Read, &thread, &event_id)
                     .await;
                 let found = match found {
                     Ok(found) => found,

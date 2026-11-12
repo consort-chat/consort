@@ -3,22 +3,12 @@
 
 //! The transport that talks to a real SFU.
 //!
-//! Excluded from coverage, for the same reason `consort_audio`'s `cpal_host`
-//! is: CI has no SFU, so every line in here is a line no test can reach. It is
-//! kept correspondingly thin. Everything that decides anything, including
-//! which generation to speak and what a failure means, sits behind
-//! [`crate::CallTransport`] and is tested without it.
-//!
-//! What is left is very nearly one call. `Call::join` publishes the
-//! membership, runs the dead man's switch and the heartbeat, distributes media
-//! keys over Olm to-device, discovers the LiveKit transport, and connects to
-//! the SFU with frame encryption on. There is nothing to reimplement.
-//!
-//! The exception is finding the SFU in the first place. Upstream discovery
-//! knows one of the two mechanisms MSC4143 left behind, and the one it does
-//! not know is the one Element Call uses and therefore the one most existing
-//! deployments have. So the other half is read here, and parsed in
-//! [`crate::discovery`] where a test can reach it.
+//! Excluded from coverage because CI has no SFU, so it is kept thin and
+//! everything that decides anything sits behind [`crate::CallTransport`]. The
+//! exception is finding the SFU: upstream discovery knows one of the two
+//! mechanisms MSC4143 left behind and not the one Element Call uses, so the
+//! other half is read here and parsed in [`crate::discovery`] where a test can
+//! reach it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -26,11 +16,17 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use consort_matrix::{Participant, rooms};
-use matrix_rtc_livekit::{Call, CallError, CallOptions};
-use matrix_rtc_media::{
+use matrix_rtc_call::CallStatus;
+use matrix_rtc_call_sdk::{
+    CallEvent, LiveKitCall, LiveKitCallError, LiveKitCallOptions, Participant as MediaParticipant,
+};
+// Aliased because this crate's own `LiveKitTransport` is the `CallTransport`
+// implementation below, and upstream's is one entry out of a discovery
+// document.
+use matrix_rtc_core::LiveKitTransport as DiscoveredTransport;
+use matrix_rtc_transport::{
     AudioFrame, AudioSourceConfig, I420Buffer, LocalTrackHandle, MediaConstraints, MediaStreamKind,
-    Participant as MediaParticipant, PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation,
-    VideoSourceConfig,
+    PublishOptions, RemoteTrackHandle, VideoFrame, VideoRotation, VideoSourceConfig,
 };
 use matrix_sdk::Client;
 use matrix_sdk::ruma::{MilliSecondsSinceUnixEpoch, OwnedRoomId, RoomId};
@@ -254,7 +250,7 @@ impl Pulling {
 /// room's member store can answer. So the client and the room travel with the
 /// call rather than being looked up again.
 pub struct LiveKitSession {
-    call: Call,
+    call: LiveKitCall,
     client: Client,
     room_id: String,
     /// The microphone publication, kept so it can be muted.
@@ -275,7 +271,7 @@ pub struct LiveKitSession {
     ///
     /// A `RefCell` rather than a `Mutex` because a session never leaves the
     /// call thread. That is not a shortcut, it is the same constraint that put
-    /// the call on a thread of its own: `Call::join` drives `!Send` futures.
+    /// the call on a thread of its own: `LiveKitCall::join` drives `!Send` futures.
     playing: RefCell<HashMap<(String, Sound), Pulling>>,
     /// One task per remote picture being pulled, keyed by membership and kind.
     /// Two entries for somebody sending a camera and a screen at once.
@@ -322,7 +318,7 @@ impl CallTransport for LiveKitTransport {
         // the discovery below, because there is nothing to discover for a call
         // that is not going to happen.
         //
-        // `Call::join` would succeed. It would publish membership, get a
+        // `LiveKitCall::join` would succeed. It would publish membership, get a
         // token, connect to the SFU and carry RTP into a room this session can
         // never see anybody in. Naming the setting is the only version of that
         // a person can do anything about. See `Dialect::readable`.
@@ -354,12 +350,20 @@ impl CallTransport for LiveKitTransport {
             "joining the call"
         );
 
-        let call = Call::join(
+        let call = LiveKitCall::join(
             &room,
-            CallOptions {
-                element_call_compat: dialect.into(),
-                livekit_service_url_fallback: fallback,
-                ..CallOptions::default()
+            LiveKitCallOptions {
+                format: dialect.into(),
+                // An override now, where it used to be a fallback upstream
+                // consulted only if its own MSC4143 transports endpoint found
+                // nothing. In the room-state dialect that is the right way
+                // round and upstream's own examples do the same: the legacy
+                // JWT service is where this generation's tokens come from, and
+                // the MSC endpoint advertises an SFU that mints the wrong
+                // identity. `LiveKitTransport::service` is what says "the JWT
+                // service, not the SFU".
+                livekit_transport: fallback.map(DiscoveredTransport::service),
+                ..LiveKitCallOptions::default()
             },
         )
         .await
@@ -391,25 +395,16 @@ impl LiveKitSession {
             .engine()
             .unpublish(kind)
             .await
-            .map_err(|error| classify(&CallError::Media(error)))
+            .map_err(|error| classify(&LiveKitCallError::Media(error)))
     }
 
     /// Tell the other Consort clients in the call what this session is doing.
     ///
-    /// Failure is logged and swallowed on purpose. This is an indicator on
-    /// somebody else's screen: a call is not worth ending over it, and the
-    /// deafening itself has already happened locally whatever the SFU makes of
-    /// this.
-    ///
-    /// Called on every roster change as well as on the button, because the
-    /// call thread re-pushes this session's audio state each time somebody
-    /// arrives. That is what tells a newcomer, who by definition missed the
-    /// announcement made before they were there. See [`crate::notices`].
-    ///
-    /// Mute is not in here and must not be. LiveKit already broadcasts a track
-    /// mute, every client including Element Call draws it, and announcing it
-    /// again would be a second source for one fact, disagreeing with the first
-    /// whenever a packet went missing.
+    /// Failure is logged and swallowed: this is an indicator on somebody else's
+    /// screen. Called on every roster change as well as on the button, which is
+    /// what tells a newcomer; see [`crate::notices`]. Mute is not in here and
+    /// must not be: LiveKit already broadcasts a track mute, and a second
+    /// source would disagree with the first whenever a packet went missing.
     async fn announce(&self, audio: SelfAudio) {
         let notice = Notice::new(self.call.membership_id(), audio.deafened, audio.away);
         let packet = DataPacket {
@@ -476,14 +471,11 @@ fn heard(known: &mut notices::Announced, event: livekit::RoomEvent) -> bool {
 /// Keep `deafened` up to date from what the Consort clients in the call say,
 /// this one included.
 ///
-/// Its own task because the room's event stream is the only place the others
-/// arrive, and nothing else in this crate reads it. `Room::subscribe` hands
-/// over an independent receiver, so this competes with nothing.
-///
-/// This session's own state arrives on `mine` instead, because LiveKit does
-/// not deliver a data message back to whoever published it. One task holds the
-/// map so that the local and the remote half cannot race to say what the call
-/// currently looks like.
+/// Its own task because the room's event stream is the only place other
+/// clients' notices arrive, and `Room::subscribe` hands over an independent
+/// receiver. This session's own state arrives on `mine`, because LiveKit does
+/// not deliver a data message back to whoever published it, and one task holds
+/// the map so the local and remote halves cannot race.
 ///
 /// Ends when the room does, or when the roster holding its handle is dropped.
 async fn watch_notices(
@@ -583,14 +575,18 @@ impl CallSession for LiveKitSession {
     }
 
     async fn publish_share_audio(&self) -> Result<Self::ShareAudio, CallFailure> {
-        // Built by hand because upstream has no constructor for this kind. The
-        // PCM format is the microphone's, which is what `pump` produces.
+        // Off the microphone constructor because upstream has none for this
+        // kind, and a share's sound is a microphone-shaped publication with a
+        // different kind on it: same PCM format, which is what `pump`
+        // produces, and the video fields it carries are inert for an audio
+        // track.
         self.call
             .publish(PublishOptions {
                 kind: MediaStreamKind::ScreenShareAudio,
                 audio: Some(AudioSourceConfig::default()),
                 video: None,
                 simulcast: false,
+                ..PublishOptions::microphone()
             })
             .await
             .map_err(|error| classify(&error))
@@ -610,7 +606,7 @@ impl CallSession for LiveKitSession {
 
         track
             .set_muted(muted)
-            .map_err(|error| classify(&CallError::Media(error)))
+            .map_err(|error| classify(&LiveKitCallError::Media(error)))
     }
 
     async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure> {
@@ -931,6 +927,7 @@ impl CallSession for LiveKitSession {
             joined_at: self.joined_at,
             memberships: self.call.subscribe_participants(),
             reports: self.call.subscribe_call_events(),
+            status: self.call.subscribe_status(),
             faults: Faults::default(),
             client: self.client.clone(),
             room_id: self.room_id.clone(),
@@ -972,7 +969,11 @@ pub struct LiveKitRoster {
     memberships: watch::Receiver<Vec<MediaParticipant>>,
     /// Everything else the call has to say. Only the encryption reports are
     /// read here; the rest is phase 4's.
-    reports: broadcast::Receiver<matrix_rtc_media::CallEvent>,
+    reports: broadcast::Receiver<CallEvent>,
+    /// The call's own lifecycle, which is where its end lives now that
+    /// `CallEvent` has no `Ended`. A watch rather than a broadcast, so an end
+    /// cannot be missed by a reader that fell behind.
+    status: watch::Receiver<CallStatus>,
     /// What those reports currently add up to. See [`crate::trouble`].
     faults: Faults,
     client: Client,
@@ -1085,13 +1086,27 @@ impl Roster for LiveKitRoster {
         let Self {
             memberships,
             reports,
+            status,
             faults,
             announced,
             ..
         } = self;
 
+        // Read once before waiting on anything. A `watch` treats the value it
+        // already holds as seen, so a call that ended between the join and
+        // this subscription would never wake the arm below. The old
+        // `CallEvent::Ended` could not be missed that way: a broadcast
+        // receiver created before the event still received it.
+        if is_the_end(&status.borrow_and_update()) {
+            return None;
+        }
+
         loop {
-            tokio::select! {
+            // The status arm yields rather than diverging, because reading the
+            // value it woke for needs `status` back and `select!` still has it
+            // borrowed for the arm's own future. Every other arm diverges, so
+            // this is the only value the select produces.
+            let gone = tokio::select! {
                 changed = memberships.changed() => return changed.is_ok().then_some(()),
                 // Rare, and worth a full redraw when it happens: it is drawn
                 // beside the mute, in the roster, by name.
@@ -1109,11 +1124,6 @@ impl Roster for LiveKitRoster {
                     // anybody for. The cryptor reports its state per frame run
                     // rather than only on a transition, so most of these say
                     // what the last one said.
-                    Ok(event) if is_the_end(&event) => {
-                        // Nothing follows this one, so there is nothing left to
-                        // wait for. `None` is what this seam calls that.
-                        return None;
-                    }
                     Ok(event) => match what_it_says(&event) {
                         Some((member_id, fault)) => {
                             if faults.note(member_id, fault) {
@@ -1132,6 +1142,17 @@ impl Roster for LiveKitRoster {
                     }
                     Err(broadcast::error::RecvError::Closed) => return None,
                 },
+                // The call's own end, which used to arrive as
+                // `CallEvent::Ended`. Also every other move it makes, so the
+                // value has to be read rather than assumed: a join going from
+                // connecting to connected wakes this too and is not an ending.
+                changed = status.changed() => changed.is_err(),
+            };
+
+            if gone || is_the_end(&status.borrow_and_update()) {
+                // Nothing follows this, so there is nothing left to wait for.
+                // `None` is what this seam calls that.
+                return None;
             }
         }
     }
@@ -1169,7 +1190,7 @@ impl PublishedVideo for CameraTrack {
 
         self.0
             .capture_video(frame)
-            .map_err(|error| classify(&CallError::Media(error)))
+            .map_err(|error| classify(&LiveKitCallError::Media(error)))
     }
 }
 
@@ -1193,6 +1214,6 @@ impl PublishedAudio for Arc<dyn LocalTrackHandle> {
         self.as_ref()
             .capture_audio(frame)
             .await
-            .map_err(|error| classify(&CallError::Media(error)))
+            .map_err(|error| classify(&LiveKitCallError::Media(error)))
     }
 }

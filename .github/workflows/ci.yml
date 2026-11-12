@@ -1,28 +1,6 @@
-# Consort CI, on GitHub Actions.
-#
-# ## Why it lives here and not on Forgejo
-#
-# It used to be .forgejo/workflows/ci.yml, and Forgejo was the place pull
-# requests arrived. GitHub is now that place, and it bills nothing for standard
-# runners on a public repository, so there is no reason to run the same jobs
-# twice. The Forgejo copy is gone rather than kept in step, and the mirror no
-# longer runs CI: it falls back to reading this directory, finds
-# `runs-on: ubuntu-latest`, and has no runner carrying that label.
-#
-# The free tier is only the standard runners. A larger runner is billed on a
-# public repository like any other, so nothing here may move to one.
-#
-# ## Who can make this run
-#
-# GitHub runs workflows for a first-time contributor's pull request only if the
-# repository says so, and the default is "Require approval for first-time
-# contributors". Leave it there or tighten it; the setting is under Actions in
-# the repository settings, and it is the equivalent of the approval Forgejo
-# used to give.
-#
-# `pull_request_target` is deliberately not used anywhere in this file and
-# should not be added. A workflow using it runs an untrusted branch with
-# repository secrets in scope.
+# Consort CI, on GitHub's standard runners: nothing here may move to a larger
+# one, which is billed. `pull_request_target` must not be added anywhere in this
+# file. The rest is in docs/CI.md.
 
 name: CI
 
@@ -118,6 +96,10 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
+    env:
+      # The clang installed below, rather than the distribution's. Only C++
+      # needs it, so gcc stays the C compiler.
+      CXX: clang++-21
     defaults:
       run:
         # A job in a container gets `sh`, not bash, whatever the image has in
@@ -128,12 +110,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: An apt source for a clang new enough for libwebrtc
+        # webrtc-sys 0.3.51 refuses anything below clang 21 and bookworm ships
+        # 14. The image cannot move: the .deb's glibc floor chose it, which
+        # package-deb.yml argues. docs/PLAN-off-the-pinned-forks.md has the
+        # floor and where it is read from.
+        run: |
+          set -euo pipefail
+          install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            -o /etc/apt/keyrings/apt-llvm-org.asc
+          echo 'deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] http://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' \
+            > /etc/apt/sources.list.d/llvm.list
+
       - name: System dependencies
-        # webkit2gtk and friends are needed to compile the Tauri crate at all,
-        # not just to run it. libssl and pkg-config are for the C half of
-        # aws-lc-sys. libasound2-dev is cpal's, and is the one that is easy to
-        # leave off: every desktop Linux has the runtime library already, so
-        # nothing notices until a machine that only builds tries to.
+        # A compile-time list, not a runtime one. docs/CI.md has what each is
+        # for.
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends \
@@ -147,7 +139,8 @@ jobs:
             libssl-dev \
             pkg-config \
             cmake \
-            clang
+            clang \
+            clang-21
 
       - name: Toolchain components
         run: rustup component add rustfmt clippy llvm-tools-preview
@@ -170,15 +163,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: The keyring's zbus is not driven by tokio
-        # One zbus in the graph serves both Secret Service and whatever else
-        # pulls it in. Its `tokio` feature switches the blocking API over to
-        # `block_on`, and the keyring is read from inside an async command, so
-        # turning it on panics at startup with "Cannot start a runtime from
-        # within a runtime". Nothing catches that but running the application.
-        #
-        # Resolved into a variable rather than piped straight into grep, so a
-        # cargo that failed to answer fails the step instead of reading as a
-        # clean graph.
+        # zbus's `tokio` feature panics at startup when the keyring is read from
+        # an async command. docs/CI.md#one-zbus-without-its-tokio-feature
         run: |
           set -euo pipefail
           tree=$(cargo tree --workspace --locked --edges features --invert zbus)
@@ -449,3 +435,82 @@ jobs:
       # release it let through. This runs it against fixtures.
       - name: The update manifest gate still catches things
         run: scripts/check-manifest.test.sh
+
+  call:
+    name: A call two peers can hear
+    # On the runner host rather than in a container, because the harness is
+    # `docker compose` against config files in the repository and a container
+    # job reaches neither cleanly. docs/CALL-HARNESS.md has the rest.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CXX: clang++-21
+      CONSORT_TEST_CALL_HOMESERVER: http://localhost:8018
+      CONSORT_TEST_CALL_SFU: http://localhost:8070
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: An apt source for a clang new enough for libwebrtc
+        # Same floor as the Rust job: webrtc-sys 0.3.51 refuses anything below
+        # clang 21. Noble rather than bookworm, because this job is not in a
+        # container.
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /etc/apt/keyrings
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo tee /etc/apt/keyrings/apt-llvm-org.asc > /dev/null
+          echo 'deb [signed-by=/etc/apt/keyrings/apt-llvm-org.asc] http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' \
+            | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
+
+      - name: System dependencies
+        # Only consort-call is built here, so none of the WebKit and GTK the
+        # Rust job needs for the Tauri shell appears in this list. glib does:
+        # webrtc-sys probes glib-2.0, gobject-2.0 and gio-2.0 for their headers
+        # and unwraps the result, and the Rust job gets them from libgtk-3-dev.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libasound2-dev \
+            libglib2.0-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            pkg-config \
+            cmake \
+            clang-21
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Start the harness
+        run: testing/call/up.sh
+
+      - name: Two peers in one call
+        # `--nocapture` so the receipt reaches the log, and `tee` so the next
+        # step can read it.
+        run: |
+          set -euo pipefail
+          cargo test -p consort-call --test two_peers_hear_the_same_chime \
+            -- --nocapture | tee call.log
+
+      - name: The call test did not skip itself
+        # Without this the gate is one renamed variable away from passing on a
+        # test that returned before it measured anything. The receipt is
+        # printed only after both assertions have held.
+        run: |
+          set -euo pipefail
+          if ! grep -q 'the chime arrived:' call.log; then
+            echo
+            echo "The call test printed no receipt, so it skipped rather than ran."
+            echo "The two CONSORT_TEST_CALL_* variables are set on this job; check them."
+            exit 1
+          fi
+          grep 'the chime arrived:' call.log
+
+      - name: What the harness logged
+        if: failure()
+        run: docker compose -f testing/call/docker-compose.yml logs --tail 80
+
+      - name: Stop the harness
+        if: always()
+        run: testing/call/down.sh

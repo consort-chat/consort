@@ -5,87 +5,97 @@ version range, and none of them can be updated by `cargo update`. This is the
 written half of that: what each pin is, who owns it, what would move it, and
 how to find out how far behind it has fallen.
 
-The reasoning for each pin lives in the comment beside it in `Cargo.toml`. This
-file is the part that does not fit there: the process.
+Neither of the git pins is a personal fork any more. Both were, until the move
+described in [PLAN-off-the-pinned-forks.md](PLAN-off-the-pinned-forks.md), and
+what that cost and bought is written up there.
+
+This file is where the reasoning for each pin lives. The manifests carry a line
+each pointing here, and the process is written down below.
 
 ## The pins
 
-### matrix-sdk, someone else's fork
+### matrix-sdk, upstream at a rev
 
-`BillCarsonFr/matrix-rust-sdk` at `377330059c3a335ab36d190fc10b87de3427c6b3`,
+`matrix-org/matrix-rust-sdk` at `56bc59112822e7eb25943a95e02502855cdeef2d`,
 naming `matrix-sdk` and `matrix-sdk-base`.
 
-Not ours. It is the fork `matrix-rust-rtc` develops against, and the two revs
-have to be the same string or cargo resolves two copies of the SDK and the
-`Client` this workspace builds stops being the type the call API accepts.
+Upstream itself, pinned to a rev rather than forked: it is the rev
+`matrix-rust-rtc` develops against, and the two have to be the same string or
+cargo resolves two copies of the SDK and the `Client` this workspace builds
+stops being the type the call API accepts.
+
+The previous pin was `BillCarsonFr/matrix-rust-sdk` at `3773300`, a fork commit
+that is not an ancestor of upstream main.
 
 **Moves when** the MatrixRTC pin below moves, and never on its own.
 
-**Falls behind** upstream `matrix-org/matrix-rust-sdk`, which is where security
-fixes to the crypto stack land first. This is the pin that matters most for
-that reason and the one this project has least control over. The end state is
-being back on a crates.io release, which happens when the MSC4143 work merges
-upstream.
-
-### matrix-rtc-livekit, matrix-rtc-media, matrix-rtc-core, our fork
-
-`tominal/matrix-rust-rtc` at `0427fc00038bb1dce07b8ff28910b6629964a3ad`.
-
-A fork of `BillCarsonFr/matrix-rust-rtc`, rebased onto upstream
-`68e5bca` on 4 September 2026 and carrying eight commits on top of it plus one
-test, on `feature/plain-rooms-and-arrival-mute-rebased`. The oldest and most
-important is the one that stops media frames being encrypted in an unencrypted
-room, which MSC4143 forbids and which leaves a conforming peer decoding
-ciphertext as audio.
-
-The rebase is what brought in upstream `bec01a7`, which is the fix for a device
-that leaves a call and rejoins being unable to hear anyone who stayed. Key
-distribution compared participations by `member_id` alone, which is sound under
-MSC4143 where that id is fresh per join, and wrong in the pre-sticky Element
-Call dialect this build always speaks, where it is `{user}:{device}` and comes
-back reused. The comparison is now `(member_id, membership_ts)`.
-
-The previous rev, `934cdbad34bda1a8a170faa022dcdd5436f4072a`, sat on
-`7d9944fd6b02cbd09fc9cceff843c55ae2a8d4d8` and predates that fix. The branch it
-was on is still there, unrebased, as a record.
-
-**Moves when** one of those commits lands upstream, when upstream carries a fix
-this project needs, or when a change here needs a new field on one of the fork's
-types (ADR-0001 describes one that is outstanding).
-
-**Ours to keep rebased.** A stale fork is a silent way to miss upstream fixes,
-which is the risk this pin has and the matrix-sdk pin above does not.
+**Falls behind** upstream's own main, which is where security fixes to the
+crypto stack land first. Being on a rev of upstream rather than a fork of it is
+most of what this pin's risk used to be: a bump is now a fast-forward rather
+than a rebase. The end state is still a crates.io release, which happens when
+`matrix-rust-rtc` asks for one.
 
 **How far behind:**
 
 ```sh
-cd ../matrix-rust-rtc
-git fetch origin
-git log --oneline $(git merge-base HEAD origin/main)..origin/main | wc -l   # upstream commits we do not have
-git log --oneline $(git merge-base HEAD origin/main)..HEAD                  # ours they do not have
+git ls-remote https://github.com/matrix-org/matrix-rust-sdk main
 ```
 
-Rebasing means moving the rev in this workspace's `Cargo.toml` and the SDK rev
-with it, since the fork's own matrix-sdk pin may have moved too. Check
-`crates/matrix-rtc-livekit/Cargo.toml` in the fork before touching either. On
-the September 2026 rebase it had not moved, and the `[patch.crates-io]` set
-below was already identical, so only the three MatrixRTC revs changed.
+### Five matrix-rtc crates, upstream at a rev
 
-What that rebase cost on this side, as a guide to the next one: upstream had
-moved the media key bookkeeping out of `matrix-rtc-livekit` into a new
-`matrix-rtc-media::keys`, so four of the eight commits had to be re-landed
-against the new home rather than merged. In this workspace it was two test
-fixtures and one match arm, all of them named by the compiler.
+`element-hq/matrix-rust-rtc` at `4b3cee57adfd5868eb8ebb3731d9011dfbd6d891`,
+naming `matrix-rtc-call-sdk`, `matrix-rtc-transport`, `matrix-rtc-core`,
+`matrix-rtc-call` and `matrix-rtc-livekit`.
 
-### Eight livekit and webrtc crates, pinned in Cargo.lock
+Upstream, and not a fork. The previous pin was `tominal/matrix-rust-rtc` at
+`0427fc0`, nine commits on top of `BillCarsonFr/matrix-rust-rtc`, which was
+archived read-only on 20 September 2026 with its work moved to element-hq. Six
+of those nine commits are upstream in some form, the MSC4143 safety patch among
+them, in a better-placed version than ours. Three are not: see
+[PLAN-off-the-pinned-forks.md](PLAN-off-the-pinned-forks.md)'s stage 4, which is
+now one accessor rather than three commits.
+
+**Moves when** upstream carries a fix this project needs, or when a change here
+needs something upstream does not expose yet. A bump is a fast-forward and the
+repository takes issues and pull requests, which the archive did not.
+
+**How far behind:**
+
+```sh
+git ls-remote https://github.com/element-hq/matrix-rust-rtc main
+```
+
+Moving the rev means moving the SDK rev with it, since upstream's own matrix-sdk
+pin may have moved too. Check `Cargo.toml` in `element-hq/matrix-rust-rtc`
+before touching either, along with its `[patch.crates-io]` table, which this
+workspace replicates.
+
+What the move off the forks cost on this side, as a guide to the next bump:
+four mechanical changes in `consort-matrix` for three months of SDK drift, and
+in `consort-call` the crate renames plus thirteen named compile errors. Every
+one was named by the compiler except two, and those two are the ones to watch
+for: the `tracing` filter in `app/src-tauri/src/lib.rs` names crates as strings,
+so a rename there parses perfectly and logs nothing, and `Participant` lost a
+field that only test fixtures read.
+
+### Nine livekit and webrtc crates, pinned in Cargo.lock
 
 `livekit`, `livekit-api`, `livekit-datatrack`, `livekit-protocol`,
-`livekit-runtime`, `libwebrtc`, `webrtc-sys`, `webrtc-sys-build`.
+`livekit-runtime`, `livekit-signaling`, `libwebrtc`, `webrtc-sys`,
+`webrtc-sys-build`.
 
 These publish semver-compatible releases that do not compile with each other,
 so they are held at the versions `matrix-rust-rtc`'s own lockfile carries. A
 bare `cargo update` breaks the build with a type error inside a dependency
-rather than anything naming a version.
+rather than anything naming a version. Cargo cannot pin a transitive
+dependency from a manifest that does not name it, and naming all of them as
+direct dependencies to get `=` requirements would be a worse lie than the lock
+is.
+
+`livekit-signaling` joined the list on the move to element-hq, and is the
+current example of the whole problem: a fresh resolve picks 0.1.9, and `livekit`
+0.9.7 does not compile against it because its `SignalOptions` has no
+`use_legacy_data_streams` field.
 
 **Moves when** the MatrixRTC pin moves and its lockfile has moved with it. Pin
 parents before children: `livekit` before `livekit-api`, `livekit-datatrack`
@@ -109,24 +119,29 @@ the way the Rust half is, so the first option below is almost always open there:
 eleven undici advisories (#136) went that way, on a jsdom bump inside the range
 `app/package.json` already allowed.
 
-Seven `cargo audit` advisories are ignored, in `.cargo/audit.toml`. The file
-carries the argument for each; this is the index.
+Five `cargo audit` advisories are ignored, in `.cargo/audit.toml`. The file
+carries one line per entry pointing here, and this file holds the argument.
+
+It was seven until the move off the pinned forks, and the two that came out are
+the point of having made the move: `RUSTSEC-2026-0292` (`imbl-sized-chunks`)
+and `RUSTSEC-2026-0451` (`vodozemac`), the second of which was the only
+reachable advisory on the list. Measured rather than reasoned about: eleven
+vulnerability rows against the old lockfile with the ignore file set aside,
+five against this one.
 
 | Advisory | Crate | Why it is ignored | What takes it out |
 |---|---|---|---|
-| RUSTSEC-2026-0292 | `imbl-sized-chunks` 0.1.3 | A double free reachable only when an element's `Drop` panics. Nothing put in an imbl collection here has one: the timeline is an `ObservableVector<Arc<TimelineItem>>`, and what that bottoms out in is ruma event types, strings and counted pointers. | The matrix-sdk pin moving. Only imbl 7.0.2 asks for the patched `imbl-sized-chunks`, the pinned fork holds `imbl = "6.1.0"`, and upstream matrix-rust-sdk is already on 7.0.2. |
-| RUSTSEC-2026-0459 | `libsqlite3-sys` 0.35.0 | Uninitialized memory out of the bundled C SQLite, for a process that opens a crafted database and `-wal` pair. Consort opens one database, the store it made itself under the app data directory, and takes a path for one from nowhere else. | The matrix-sdk pin moving. rusqlite 0.37.0 asks for `libsqlite3-sys ^0.35.0`, the patched bundle is 0.39.0, and upstream matrix-sdk-sqlite is already on rusqlite 0.41.1. |
-| RUSTSEC-2026-0451 | `vodozemac` 0.10.0 | Reachable, and accepted on impact: the Olm ratchet leaves old root and chain keys in freed heap, which costs forward secrecy for earlier messages to anybody who can already read this process's memory and therefore already holds the live keys. | The matrix-sdk pin moving. matrix-sdk 0.18.0 asks for `vodozemac ^0.10.0`, the fix is 0.11.2, and upstream matrix-rust-sdk is already on it. |
-| RUSTSEC-2026-0367, 0368, 0369, 0429 | `zip` 0.6.6 and 4.6.1 | Four extraction flaws, at two call sites that extract no archive anybody else chose: `webrtc-sys-build`, a build dependency unpacking LiveKit's own release asset, and `tauri-plugin-updater`, compiled only under `self-update` and extracting signature-verified bytes in `#[cfg(windows)]` code. | Two moves. The MatrixRTC pin reaching a lockfile whose webrtc-sys matches webrtc-sys-build 0.3.20, which carries a different `WEBRTC_TAG`, and tauri-plugin-updater 2.14.1 with the wry 0.55 to 0.57 bump under it, as its own change. |
+| RUSTSEC-2026-0459 | `libsqlite3-sys` 0.38.2 | Uninitialized memory out of the bundled C SQLite, for a process that opens a crafted database and `-wal` pair. Consort opens one database, the store it made itself under the app data directory, and takes a path for one from nowhere else: `SessionStore::store_path_for` in `crates/consort-matrix/src/session.rs` is the only thing that builds that path. | A matrix-sdk pin whose matrix-sdk-sqlite is on rusqlite 0.41 or newer. The pin moving was not enough and this row used to say it would be: the move took the crate from 0.35.0 to 0.38.2 and the advisory came along. The patched bundle is 0.39.0, which arrives with rusqlite 0.41, and `56bc591` asks for 0.40.2. |
+| RUSTSEC-2026-0367, 0368, 0369, 0429 | `zip` 4.6.1 | Four extraction flaws, at one call site that extracts no archive anybody else chose: `tauri-plugin-updater`, compiled only under `self-update` and extracting signature-verified bytes in `#[cfg(windows)]` code. `webrtc-sys-build` was the other call site until the move off the forks took it to 0.3.21, which uses the patched `zip` 9.5.0. | tauri-plugin-updater 2.14.1 with the wry 0.55 to 0.57 bump under it, as its own change. That is the second of the two moves this row used to describe; the first is done. |
 
-Every one of those is the third option below, reached because the first two are
+Both of those are the third option below, reached because the first two are
 closed: cargo refuses the version bump outright, and the fix is in a crate one
-of the pins holds rather than in either fork.
+of the pins holds rather than in anything this workspace is free to move.
 
 `cargo audit` also reports crates that are unmaintained, unsound or yanked, and
-those do not fail the build. Eighteen of them do not: the unic and
+those do not fail the build. Fourteen of them do not: the unic and
 proc-macro-error families, zbus's zvariant, two yanked crates, and unsoundness
-in glib, tokio and bitmaps. None is a vulnerability and most sit under
+in glib and tokio. None is a vulnerability and most sit under
 dependencies this project cannot move. Turning them into failures would mean a
 long ignore list on the first day and would teach everybody to add to it, which
 is the habit this is trying to avoid.
@@ -134,12 +149,29 @@ is the habit this is trying to avoid.
 When a real advisory does fire, in order of preference:
 
 1. Move the version, if it is a crate this workspace is free to move.
-2. Rebase the fork, if the fix is upstream.
+2. Move the pin, if the fix is in a rev of `matrix-rust-sdk` or
+   `matrix-rust-rtc` newer than the one pinned. Both together: see the pins
+   above.
 3. Add it to `.cargo/audit.toml` under `[advisories] ignore`, with a comment
    saying why it does not reach this code or what has to happen before the
    entry can come out. Never add one without that comment.
 
 An ignored advisory is a decision to accept a risk, so it should read like one.
+
+### What the four zip advisories are
+
+Extraction keeps SUID, SGID and sticky bits off the archive (0367), creates
+symlinks without confining their targets to the destination (0368), applies Unix
+permissions through those symlinks (0369), and sizes a symlink target buffer
+from the declared uncompressed size, which aborts the process on a 112 byte
+archive claiming 2^62 bytes (0429).
+
+Reachability at Consort's one call site, `Update::extract_zip` inside
+`#[cfg(windows)]`: 0367, 0368 and 0369 are Unix behaviours that do not arise
+there. 0429 would need a crafted archive signed with the minisign key named in
+`tauri.updater.conf.json`, which nobody but Thomas holds, because the bytes have
+been through `verify_signature` before `install` sees them. It would also cost
+an abort of a process that is about to replace itself.
 
 ## Adding a dependency
 

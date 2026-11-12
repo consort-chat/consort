@@ -31,3 +31,4 @@ imperfect for now and the terms on which it would be revisited.
 | [0018](0018-sample-the-self-view-at-the-size-it-is-drawn.md) | Sample the self view at the size it is drawn | accepted |
 | [0019](0019-measure-the-stage-rather-than-guess-it.md) | Measure the stage filling the window, rather than guess at it | accepted |
 | [0020](0020-send-a-shares-sound-where-a-build-can-capture-it.md) | Send a share's sound on its own track, where a build can capture it | accepted |
+| [0021](0021-leave-the-pinned-forks-for-upstream.md) | Leave the pinned forks for upstream, and pay for it in one change | accepted |

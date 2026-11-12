@@ -4,7 +4,7 @@
 //! The two ends of the microphone agree on what a frame is.
 //!
 //! `consort-audio` produces mono 48 kHz `i16` because that is the only rate
-//! RNNoise was trained for. `matrix-rtc-media` wants mono 48 kHz `i16` because
+//! RNNoise was trained for. `matrix-rtc-transport` wants mono 48 kHz `i16` because
 //! that is what `AudioSourceConfig::default()` says. Neither knows about the
 //! other, and nothing in the type system connects them: the frames cross as a
 //! `Vec<i16>` and the format is restated on arrival.
@@ -15,7 +15,7 @@
 //! constant.
 
 use consort_audio::{FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE};
-use matrix_rtc_media::AudioSourceConfig;
+use matrix_rtc_transport::AudioSourceConfig;
 
 #[test]
 fn the_gate_and_the_publication_want_the_same_sample_rate() {
