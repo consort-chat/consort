@@ -15,13 +15,6 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/consort-chat/consort"
 rust-version = "1.97"
 
-# Required by element-hq's workspace, and a downstream workspace has to
-# replicate them or the SDK fails to build. Two entries rather than the SDK's
-# own three: element-hq drops `zxcvbn`, and so do we.
-[patch.crates-io]
-async-compat = { git = "https://github.com/element-hq/async-compat", rev = "5a27c8b290f1f1dcfc0c4ec22c464e38528aa591" }
-const_panic = { git = "https://github.com/jplatte/const_panic", rev = "e0b317a9a7bde2d48a7d15b6a60d70e4a41d3b5f" }
-
 [workspace.dependencies]
 # Must stay the exact rev matrix-rust-rtc pins, or cargo resolves two
 # matrix-sdks and the `Client` built here stops being the type the call API
