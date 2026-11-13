@@ -51,7 +51,7 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
                  libasound2-dev
 ```
 
-`clang` is `webrtc-sys`'. It compiles libwebrtc's C++ against the hermetic
+`clang` is `webrtc-sys`'s. It compiles libwebrtc's C++ against the hermetic
 libc++ baked into `libwebrtc.a`, reads that libc++'s own clang floor out of the
 artifact, and panics rather than start below it. The floor is 21 today, and
 Arch's clang is far past it. Debian and Ubuntu are not: bookworm ships clang 14,
