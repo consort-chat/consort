@@ -51,6 +51,14 @@ Two things follow from it that tie the workflows together:
 - The .deb's system dependency list is `ci.yml`'s Rust job's list, which is what
   makes it known to compile rather than guessed.
 
+The Arch package needs that same clang and is the one job with nowhere to put
+an apt source. It gets it from `packaging/arch/PKGBUILD`'s `makedepends`, which
+`makepkg --syncdeps` installs before `build()` runs, and Arch's clang is far
+past 21. That keeps the floor in the recipe rather than in the workflow, so
+somebody building the package by hand gets it too. The `-git` recipe in
+`packaging/aur/` carries the same entry and has to be pushed to the AUR
+separately.
+
 ## The Rust job's system dependencies
 
 webkit2gtk and friends are needed to compile the Tauri crate at all, not just to

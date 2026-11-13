@@ -42,7 +42,7 @@ otherwise pnpm is installed on its own.
 
 ```sh
 # Arch
-sudo pacman -S webkit2gtk-4.1 base-devel curl wget file openssl alsa-lib \
+sudo pacman -S webkit2gtk-4.1 base-devel clang curl wget file openssl alsa-lib \
                appmenu-gtk-module libayatana-appindicator librsvg
 
 # Debian / Ubuntu
@@ -50,6 +50,15 @@ sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
                  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
                  libasound2-dev
 ```
+
+`clang` is `webrtc-sys`'. It compiles libwebrtc's C++ against the hermetic
+libc++ baked into `libwebrtc.a`, reads that libc++'s own clang floor out of the
+artifact, and panics rather than start below it. The floor is 21 today, and
+Arch's clang is far past it. Debian and Ubuntu are not: bookworm ships clang 14,
+so building there by hand needs clang 21 from apt.llvm.org, which is what
+`.github/workflows/package-deb.yml` sets up. GCC is not an option on either,
+whatever its version: it ignores the `trivial_abi` on libc++'s `unique_ptr` and
+`shared_ptr`, which silently breaks their calling convention.
 
 The appindicator library is the tray icon's, and it behaves unlike anything else
 in those lists. Nothing links against it: `libappindicator-sys` opens it by name

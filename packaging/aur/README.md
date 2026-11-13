@@ -93,8 +93,11 @@ unconditional build dependency, so `cmake v0.1.58` compiles on every build and
 it looks like the binary is needed. It is not: on `x86_64-unknown-linux-gnu` the
 crate ships pre-generated bindings, `is_bindgen_required()` is false, and the
 builder falls through to the `cc` path. Verified by building with no `cmake`,
-`clang`, `go` or `nasm` anywhere on `PATH`. What the restricted `PATH` does not
-model is a missing *library* or header, so it does not replace the chroot.
+`clang`, `go` or `nasm` anywhere on `PATH`, which was before `webrtc-sys`
+0.3.51 made clang a genuine requirement. Only the `cmake` half of that result
+still stands; clang is a declared makedepend now. What the restricted `PATH`
+does not model is a missing *library* or header, so it does not replace the
+chroot.
 
 ## Things specific to this package
 
