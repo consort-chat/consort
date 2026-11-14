@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { arrange, moved, sectionsOf } from "./sections";
+import { UNJOINED, arrange, moved, sectionsOf } from "./sections";
 import type { Channel, CustomSection } from "./api";
 import type { Drawn } from "./sections";
 
@@ -101,6 +101,11 @@ function channel(id: string, kind: Channel["kind"] = "text"): Channel {
     unread: 0,
     mentions: 0,
   };
+}
+
+/** The same, for a room this account is not in. */
+function onOffer(id: string, kind: Channel["kind"] = "text"): Channel {
+  return { ...channel(id, kind), joined: false };
 }
 
 /** A section somebody made, under the one space these tests use. */
@@ -224,5 +229,77 @@ describe("sectionsOf", () => {
     const sections = sectionsOf([], [custom("custom-1", "Projects", [])], []);
 
     expect(sections.map((one) => one.label)).toEqual(["Projects"]);
+  });
+
+  describe("the rooms this account is not in", () => {
+    it("puts them in a group of their own rather than beside the rest", () => {
+      // #128: a space's unjoined children arrive in the same list as the
+      // channels somebody actually uses, and on a server of any size they
+      // outnumber them.
+      const channels = [channel("!a"), onOffer("!b"), onOffer("!c", "voice")];
+
+      expect(shapeOf(sectionsOf(channels, [], []))).toEqual([
+        { key: "text", rooms: ["!a"] },
+        { key: UNJOINED, rooms: ["!b", "!c"] },
+      ]);
+    });
+
+    it("holds both kinds, because joining is the question either way", () => {
+      const channels = [onOffer("!a"), onOffer("!b", "voice")];
+
+      expect(shapeOf(sectionsOf(channels, [], []))).toEqual([
+        { key: UNJOINED, rooms: ["!a", "!b"] },
+      ]);
+    });
+
+    it("is dropped when there is nothing on offer", () => {
+      // A built-in section's rule rather than a made one's: a heading over
+      // nothing reads as a list that failed to load, and there is nothing to
+      // put in this one by hand.
+      expect(shapeOf(sectionsOf([channel("!a")], [], []))).toEqual([
+        { key: "text", rooms: ["!a"] },
+      ]);
+    });
+
+    it("leaves a room somebody filed in a section of their own alone", () => {
+      // Putting it there was a choice. A group that swallowed it would be the
+      // sidebar overruling somebody, and the room would move the moment they
+      // were let in anyway.
+      const channels = [onOffer("!a"), onOffer("!b")];
+
+      expect(
+        shapeOf(
+          sectionsOf(channels, [custom("custom-1", "Projects", ["!a"])], []),
+        ),
+      ).toEqual([
+        { key: "custom-1", rooms: ["!a"] },
+        { key: UNJOINED, rooms: ["!b"] },
+      ]);
+    });
+
+    it("is drawn last until somebody drags it, sections and all", () => {
+      const channels = [channel("!a"), onOffer("!b")];
+      const sections = sectionsOf(
+        channels,
+        [custom("custom-1", "Projects", [])],
+        [],
+      );
+
+      expect(keysOf(sections)).toEqual(["text", "custom-1", UNJOINED]);
+    });
+
+    it("goes where somebody dragged it", () => {
+      const channels = [channel("!a"), onOffer("!b")];
+
+      expect(
+        keysOf(sectionsOf(channels, [], [UNJOINED, "text"])),
+      ).toEqual([UNJOINED, "text"]);
+    });
+
+    it("cannot be renamed or deleted", () => {
+      const sections = sectionsOf([onOffer("!a")], [], []);
+
+      expect(sections.map((one) => one.custom)).toEqual([false]);
+    });
   });
 });
