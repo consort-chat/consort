@@ -15,7 +15,15 @@
   position: absolute;
   top: var(--confirm-top, calc(100% + var(--space-1)));
   bottom: var(--confirm-bottom, auto);
-  right: 0;
+  /*
+    Which edge it lines up with, on the same terms as which way it opens: a
+    fact about where the anchor sits rather than about this panel. The default
+    is the anchor's right edge, which is what a control at the end of a row
+    wants. An anchor at the left of a left-aligned block sets the pair the
+    other way round.
+  */
+  left: var(--confirm-left, auto);
+  right: var(--confirm-right, 0);
   z-index: 20;
   width: 17rem;
   padding: var(--space-2);

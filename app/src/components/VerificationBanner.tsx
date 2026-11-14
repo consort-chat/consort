@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 
 import {
   asCommandError,
+  dismissVerificationWarning,
   verificationOtherSessionsExist,
   verificationRecoveryExists,
   verificationVerifyThisSession,
+  verificationWarningDismissed,
   type Verification,
 } from "../lib/api";
+import { Confirm } from "./Confirm";
 import { RecoveryKeyForm } from "./RecoveryKey";
 import "./VerificationBanner.css";
 
@@ -30,6 +33,12 @@ import "./VerificationBanner.css";
  * in. `unknown` still speaks, because it is not the same claim: it is the
  * launch state, it says only that nothing has looked yet, and going quiet for
  * it would render "not known" as "fine".
+ *
+ * The same reasoning is why #59 shrinks this rather than closing it. Both
+ * routes out need something somebody may not have, a second device or a key
+ * they kept, so for an account with neither this was a paragraph with nothing
+ * on the far side of it. Agreed to, it becomes one line and the way back,
+ * which keeps the fact on screen without the wall nobody can act on.
  */
 export function VerificationBanner({
   state,
@@ -51,9 +60,48 @@ export function VerificationBanner({
   const [recovery, setRecovery] = useState<boolean | null>(null);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  /**
+   * Whether this session has already been told what staying unverified costs.
+   *
+   * `null` until the answer is back, and nothing below the headline is drawn
+   * until then. The headline is true either way, so it goes up immediately;
+   * offering a choice before knowing whether it has already been made would
+   * flash a wall at somebody who settled this weeks ago.
+   */
+  const [dismissed, setDismissed] = useState<boolean | null>(null);
+  /** Asked for again from the short form. Local, and spent on a remount. */
+  const [expanded, setExpanded] = useState(false);
+  /** Whether the question in front of agreeing is open. */
+  const [asking, setAsking] = useState(false);
+
+  /** Whether the routes and the cost are on screen rather than one line. */
+  const long = dismissed === false || expanded;
 
   useEffect(() => {
     if (state !== "unverified") return;
+
+    let cancelled = false;
+    verificationWarningDismissed()
+      .then((answer) => {
+        if (!cancelled) setDismissed(answer);
+      })
+      .catch((raw: unknown) => {
+        console.error(
+          "could not find out whether this session has answered already",
+          asCommandError(raw).detail,
+        );
+        // Fail safe, and the one direction here that matters. An unreadable
+        // settings file must not be able to silence this.
+        if (!cancelled) setDismissed(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state]);
+
+  useEffect(() => {
+    if (state !== "unverified" || !long) return;
 
     let cancelled = false;
     verificationOtherSessionsExist()
@@ -90,7 +138,7 @@ export function VerificationBanner({
     return () => {
       cancelled = true;
     };
-  }, [state]);
+  }, [state, long]);
 
   function start() {
     setPending(true);
@@ -102,6 +150,28 @@ export function VerificationBanner({
         setFailure(error.message);
       })
       .finally(() => setPending(false));
+  }
+
+  /**
+   * Agree to carry on unverified, and shrink to the one line that stays true.
+   *
+   * Written down before it is drawn, which is the same rule the privacy screen
+   * follows: a banner that shrank on the press and came back at the next
+   * launch would look like the choice had been forgotten rather than never
+   * recorded. A save that fails leaves the warning in full and says why.
+   */
+  async function carryOn() {
+    setAsking(false);
+    setFailure(null);
+    try {
+      await dismissVerificationWarning();
+      setDismissed(true);
+      setExpanded(false);
+    } catch (raw: unknown) {
+      const error = asCommandError(raw);
+      console.error("could not record the answer", error.detail);
+      setFailure(error.message);
+    }
   }
 
   if (state === "verified") return null;
@@ -120,7 +190,7 @@ export function VerificationBanner({
       aria-label="Session verification"
     >
       <p className="verification__headline">{headline}</p>
-      {state === "unverified" && (
+      {state === "unverified" && long && (
         <>
           <p className="verification__detail">
             Messages encrypted before you signed in will not open here, and
@@ -174,11 +244,57 @@ export function VerificationBanner({
               )}
             </>
           )}
-          {failure !== null && (
-            <p className="verification__failure">{failure}</p>
-          )}
         </>
       )}
+
+      {state === "unverified" && failure !== null && (
+        <p className="verification__failure">{failure}</p>
+      )}
+
+      {/*
+        Held back until the answer is in. Either half drawn on a guess is the
+        wrong half for half of the launches it is drawn on.
+      */}
+      {state === "unverified" &&
+        dismissed !== null &&
+        (long ? (
+          <div className="verification__anchor">
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              aria-haspopup="dialog"
+              aria-expanded={asking}
+              onClick={() => setAsking((open) => !open)}
+            >
+              Continue without verifying
+            </button>
+            {asking && (
+              <Confirm
+                question="Carry on without verifying this session?"
+                detail="Messages that were encrypted before you signed in stay unreadable here. Encrypted voice channels will refuse this session, so nobody in one will be able to hear you. And other people's clients will go on warning about anything you send from this device. Nothing is deleted, and you can still verify later."
+                go="Continue unverified"
+                onConfirm={() => void carryOn()}
+                onCancel={() => setAsking(false)}
+              />
+            )}
+          </div>
+        ) : (
+          /*
+            One line and the way back. Expanding is local rather than a second
+            write: somebody looking at the routes again has not changed their
+            mind about the answer they already gave, and making them give it
+            twice is the nag this exists to end.
+          */
+          <div className="verification__actions">
+            <button
+              type="button"
+              className="button button--ghost button--small"
+              onClick={() => setExpanded(true)}
+            >
+              Verify
+            </button>
+          </div>
+        ))}
     </section>
   );
 }

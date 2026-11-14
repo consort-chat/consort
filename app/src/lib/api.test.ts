@@ -100,6 +100,8 @@ import {
   timelineUnreact,
   privacySettings,
   setPrivacySettings,
+  verificationWarningDismissed,
+  dismissVerificationWarning,
   notificationSettings,
   setNotificationSettings,
   resendState,
@@ -851,6 +853,21 @@ describe("event subscriptions", () => {
     expect(invoke).toHaveBeenCalledWith("set_privacy_settings", {
       privacy: { publicReadReceipts: false },
     });
+  });
+
+  it("asks whether this session has answered the carry-on question", async () => {
+    await verificationWarningDismissed();
+
+    expect(invoke).toHaveBeenCalledWith("verification_warning_dismissed");
+  });
+
+  it("names no device when recording the answer, because Rust reads it", async () => {
+    // The device the answer is keyed to is the one on the client rather than
+    // one named from here. A parameter would let the webview record a constant
+    // id, which every later sign-in would then inherit.
+    await dismissVerificationWarning();
+
+    expect(invoke).toHaveBeenCalledWith("dismiss_verification_warning");
   });
 
   it("reads when to interrupt somebody", async () => {
