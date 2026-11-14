@@ -33,7 +33,7 @@ pub use media::{Attachment, MAX_BYTES, bytes, media};
 pub use permalink::permalink;
 pub use reactions::Reactions;
 pub use read_by::{About, ReadBy, SHOWN};
-pub use sending::{Answering, Attaching, send_attachment};
+pub use sending::{Answering, Attaching, send_attachment, upload_limit, within_the_servers_limit};
 pub use thread::thread;
 
 use std::collections::{HashMap, HashSet};
