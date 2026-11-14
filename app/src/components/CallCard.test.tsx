@@ -666,7 +666,7 @@ describe("your own camera on the card", () => {
       }),
     );
 
-    expect(usePicture).toHaveBeenCalledWith("camera");
+    expect(usePicture).toHaveBeenCalledWith("camera", 320);
   });
 
   it("survives being dragged", () => {
@@ -777,7 +777,7 @@ describe("what other people are sending", () => {
       }),
     );
 
-    expect(usePicture).toHaveBeenCalledWith("camera");
+    expect(usePicture).toHaveBeenCalledWith("camera", 320);
     expect(useTheirPicture).not.toHaveBeenCalled();
   });
 
@@ -825,6 +825,57 @@ describe("what other people are sending", () => {
       "screen",
       1920,
     );
+  });
+
+  it("asks the full-window stage for the box it measures, not for the ceiling", async () => {
+    // The other half of #165's sentence, which is the size of the window. The
+    // ceiling is right for a maximised window on a 1080p display and over-asks
+    // on anything smaller: a picture made for 1920 and drawn in 1152 is paid
+    // for twice over, in the layer the SFU sends and in the encode.
+    const measured = Element.prototype.getBoundingClientRect;
+    // Two sizes, because the box the stage ends up in is the whole of this:
+    // the element is the same one before and after the click, so nothing is
+    // re-attached and no window resize fires.
+    Element.prototype.getBoundingClientRect = function () {
+      if (!this.classList?.contains("call-stage__picture")) {
+        return measured.call(this);
+      }
+      const full =
+        this.closest(".call-card")?.getAttribute("data-size") === "full";
+      const [width, height] = full ? [1152, 648] : [192, 108];
+      return {
+        left: 0,
+        top: 0,
+        width,
+        height,
+        right: width,
+        bottom: height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+
+    try {
+      render(
+        card(
+          inCall([
+            person("@bob:example.org", "Bob"),
+            sharer("@ada:example.org", "Ada"),
+          ]),
+        ),
+      );
+
+      await userEvent.click(stage());
+
+      expect(useTheirPicture).toHaveBeenCalledWith(
+        "@ada:example.org",
+        "screen",
+        1152,
+      );
+    } finally {
+      Element.prototype.getBoundingClientRect = measured;
+    }
   });
 
   it("asks for only a square's worth for a screen waiting under the stage", () => {
@@ -892,6 +943,42 @@ describe("screens being shared on the card", () => {
     expect(
       within(stage()!).getByRole("img", { name: "Your screen" }),
     ).toBeVisible();
+  });
+
+  it("asks for our own share at the size the stage is drawing it", async () => {
+    // Issue #194. The sender's own picture was bounded where it was sampled, so
+    // the stage got a tile's worth of pixels blown up to fill it whatever size
+    // the card was. Everybody else's share had already been fixed for #165.
+    usePicture.mockReturnValue(PICTURE);
+
+    render(card(inCall([person("@bob:example.org", "Bob")]), undefined, {
+      sharing: "DP-0",
+    }));
+    expect(usePicture).toHaveBeenCalledWith("screen", 480);
+
+    await userEvent.click(stage()!);
+
+    expect(usePicture).toHaveBeenCalledWith("screen", 1920);
+  });
+
+  it("asks for only a square's worth of our own share under the stage", async () => {
+    // Two shares, so ours is in the strip. A tile down there is the square a
+    // face is in and should cost what one costs.
+    usePicture.mockReturnValue(PICTURE);
+
+    render(
+      card(
+        inCall([
+          person("@bob:example.org", "Bob"),
+          sharer("@ada:example.org", "Ada"),
+        ]),
+        undefined,
+        { sharing: "DP-0" },
+      ),
+    );
+    await userEvent.click(within(strip()!).getAllByRole("button")[0]!);
+
+    expect(usePicture).toHaveBeenCalledWith("screen", 320);
   });
 
   it("puts somebody else's screen on the stage when theirs is the only one", () => {

@@ -44,7 +44,7 @@ const SETTLE_MS = 150;
  *
  * Words rather than pixel counts, because what somebody is choosing is "less".
  * The ceilings behind the words are
- * `docs/adr/0013-ask-for-a-picture-in-pixels.md`.
+ * `docs/adr/0013-ask-for-a-picture-in-pixels.md`, as narrowed by ADR-0016.
  */
 const QUALITIES: { value: PictureQuality; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -464,7 +464,7 @@ export function PersonMenu({
           </select>
           <p className="person-menu__note">
             {capped === "auto"
-              ? "As big as it is drawn. Just for you, on this computer."
+              ? "The best they are sending. Just for you, on this computer."
               : "Just for you, on this computer. Remembered for next time."}
           </p>
         </>

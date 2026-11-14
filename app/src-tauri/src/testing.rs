@@ -291,8 +291,8 @@ pub struct FakeCallTransport {
 #[derive(Clone, Default)]
 pub struct Asks(Arc<std::sync::Mutex<Vec<Pass>>>);
 
-/// What one pass of `request` asked for: a box per person per picture.
-pub type Pass = Vec<(String, consort_call::Kind, consort_call::Asked)>;
+/// What one pass of `request` asked for, per person per picture.
+pub type Pass = Vec<(String, consort_call::Kind, consort_call::Ask)>;
 
 impl Asks {
     /// How many passes there have been.
@@ -442,6 +442,7 @@ impl consort_call::Roster for FakeCallRoster {
 impl consort_call::CallSession for FakeCallSession {
     type Track = FakeCallTrack;
     type Video = FakeCallCamera;
+    type ShareAudio = FakeCallTrack;
     type Roster = FakeCallRoster;
 
     async fn publish_microphone(&self) -> Result<Self::Track, consort_call::CallFailure> {
@@ -467,6 +468,14 @@ impl consort_call::CallSession for FakeCallSession {
     }
 
     async fn retract_screen(&self) -> Result<(), consort_call::CallFailure> {
+        Ok(())
+    }
+
+    async fn publish_share_audio(&self) -> Result<Self::ShareAudio, consort_call::CallFailure> {
+        Ok(FakeCallTrack)
+    }
+
+    async fn retract_share_audio(&self) -> Result<(), consort_call::CallFailure> {
         Ok(())
     }
 

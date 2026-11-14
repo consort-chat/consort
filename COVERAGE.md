@@ -138,9 +138,9 @@ cargo test -p consort-video -- --ignored --test-threads=1
 ```
 
 **`crates/consort-call/src/livekit.rs`.** The same shape as `cpal_host.rs`, one
-layer out: every line talks to a LiveKit SFU, and a CI runner has none. There is
-no useful fake either, because what would be faked is `Call::join`, which is the
-entire dependency.
+layer out: every line talks to a LiveKit SFU, and the runner measuring coverage
+has none. There is no useful fake either, because what would be faked is
+`Call::join`, which is the entire dependency.
 
 It is thin on purpose and has to stay that way. Which MatrixRTC generation to
 speak (`dialect.rs`), what a failure means (`failure.rs`) and everything the call

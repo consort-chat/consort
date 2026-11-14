@@ -3,34 +3,21 @@
 
 //! Why a call that looks fine cannot be heard.
 //!
-//! Phase 0 of `docs/PLAN-voice-call.md` found the failure this module exists
-//! for, by producing it: two sessions joined, both memberships published, both
-//! rosters correct, RTP flowing in both directions, and neither could decrypt
-//! a word the other said. Everything an interface normally draws said the call
-//! was working.
-//!
-//! It is not silent underneath, which is the whole opportunity. The media
-//! layer reports the frame cryptor's verdict per participant, and the core
-//! reports a media key that arrived and was refused, with the reason. So the
-//! honest answer to "why can nobody hear me" is available, and printing
-//! nothing would be a choice rather than a limitation.
-//!
-//! ## One sentence, and nobody's name in it
-//!
-//! What comes out of here is one sentence for the whole call. Naming the
-//! person would mean mapping a membership onto the roster, and the roster is
-//! per person while these reports are per membership, so the mapping is not
-//! total. In a voice channel with three people in it, "somebody" is enough to
-//! act on, and being sure of what is said matters more than being specific
-//! about who. Phase 5 is where that gets revisited against a real client.
+//! Everything an interface normally draws said the call was working while
+//! neither side could decrypt a word. It is not silent underneath: the media
+//! layer reports the frame cryptor's verdict per participant and the core
+//! reports a refused key with its reason. One sentence for the whole call and
+//! nobody's name in it, because the membership to person mapping is not total.
 
 use std::collections::BTreeMap;
 
-use matrix_rtc_media::{CallEvent, FrameEncryptionDiagnostic, FrameEncryptionState};
+use matrix_rtc_call::CallStatus;
+use matrix_rtc_call_sdk::{CallEvent, FrameEncryptionDiagnostic};
+use matrix_rtc_transport::FrameEncryptionState;
 
 /// What a fault about this session itself is filed under.
 ///
-/// Not a membership. `KeyDistributionFailed` names nobody, because it is about
+/// Not a membership. [`what_a_rollout_says`] names nobody, because it is about
 /// our own key failing to reach the call rather than about anybody in it. It
 /// still needs a key so it can be replaced and cleared like the rest, and that
 /// key must not collide with a real one. Real ones are `_{user}_{device}`, so
@@ -190,22 +177,6 @@ pub fn what_it_says(event: &CallEvent) -> Option<(&str, Option<Fault>)> {
             state,
             diagnostic,
         } => Some((member_id, from_cryptor(state, diagnostic))),
-        // The other direction, and the only fault here that is about us: our
-        // own key failing to reach everybody else. Filed under a name no
-        // membership can have, because the event names nobody.
-        CallEvent::KeyDistributionFailed { reason, at_join } => Some((
-            THIS_SESSION,
-            Some(Fault::NotDistributed {
-                reason: reason.clone(),
-                at_join: *at_join,
-            }),
-        )),
-        // The way back down from the fault above, and the only one there is.
-        // Nothing else in this table can clear `THIS_SESSION`: the fault is
-        // about our own outgoing key, so no report about a membership says
-        // anything about it, and without this a notice about a call somebody
-        // has since fixed stays up for the rest of it.
-        CallEvent::KeyDistributionRecovered => Some((THIS_SESSION, None)),
         // A key that arrived and was refused, which knows why, unlike a key
         // that never arrived, which is guessing.
         CallEvent::KeyDiscarded {
@@ -218,18 +189,57 @@ pub fn what_it_says(event: &CallEvent) -> Option<(&str, Option<Fault>)> {
         )),
         // Their fault goes with them. Leaving it up would explain a call
         // somebody is no longer in.
-        CallEvent::ParticipantLeft { member_id } => Some((member_id, None)),
+        CallEvent::ParticipantLeft { member_id, .. } => Some((member_id, None)),
         _ => None,
     }
 }
 
-/// Whether this event means the call is over and nothing will follow.
+/// Whether the call is over and nothing will follow.
+///
+/// Reads a status rather than an event because `CallEvent` has no `Ended`
+/// variant any more: upstream moved a call's own lifecycle onto
+/// `LiveKitCall::subscribe_status`, away from the stream of things that happen
+/// to other people in it. That is the better place for it, and it means the
+/// end arrives on a watch channel which holds its value rather than on a
+/// broadcast a slow reader can miss.
 ///
 /// Here rather than beside the transport, for the reason [`what_it_says`] is:
 /// `livekit.rs` is excluded from coverage on the grounds that CI has no SFU,
 /// and a decision hidden behind that exclusion is an untested decision.
-pub fn is_the_end(event: &CallEvent) -> bool {
-    matches!(event, CallEvent::Ended { .. })
+pub fn is_the_end(status: &CallStatus) -> bool {
+    matches!(status, CallStatus::Ended { .. })
+}
+
+/// What one media key rollout says about whether this session can be heard.
+///
+/// The other direction from [`what_it_says`], and the only fault here about us
+/// rather than somebody else. An empty `undelivered` is the only thing that
+/// clears it, and `at_join` separates the two sentences.
+///
+/// Nothing calls this yet: `LiveKitCall` holds its `RtcCall` privately and
+/// offers no accessor, so `docs/PLAN-off-the-pinned-forks.md`'s stage 4 is one
+/// upstream line.
+pub fn what_a_rollout_says(undelivered: &[String], at_join: bool) -> (&'static str, Option<Fault>) {
+    if undelivered.is_empty() {
+        return (THIS_SESSION, None);
+    }
+
+    (
+        THIS_SESSION,
+        Some(Fault::NotDistributed {
+            reason: format!("{} did not get it", a_count_of(undelivered.len())),
+            at_join,
+        }),
+    )
+}
+
+/// "one member" or "3 members", for a sentence somebody reads.
+fn a_count_of(members: usize) -> String {
+    if members == 1 {
+        "one member".to_owned()
+    } else {
+        format!("{members} members")
+    }
 }
 
 /// What the frame cryptor's verdict means.
@@ -257,7 +267,7 @@ fn from_cryptor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_rtc_media::EndedReason;
+    use matrix_rtc_call::CallEnd;
 
     fn refused() -> Fault {
         Fault::KeyRefused {
@@ -345,16 +355,11 @@ mod tests {
         // screen: the fault is a fact about one rollout, and a call somebody
         // fixed mid-way through went on being described as broken.
         let mut faults = Faults::default();
-        let broke = CallEvent::KeyDistributionFailed {
-            reason: "1 of 1 member(s) did not get key index 1".to_owned(),
-            at_join: false,
-        };
-        let (member, fault) = what_it_says(&broke).expect("a distribution failure says something");
+        let (member, fault) = what_a_rollout_says(&["_@bob:example.org_PHONE".to_owned()], false);
         faults.note(member, fault);
         assert!(faults.sentence().is_some());
 
-        let mended = CallEvent::KeyDistributionRecovered;
-        let (member, fault) = what_it_says(&mended).expect("so does a recovery");
+        let (member, fault) = what_a_rollout_says(&[], false);
         faults.note(member, fault);
 
         assert_eq!(faults.sentence(), None);
@@ -366,17 +371,11 @@ mod tests {
         // cleared under another is a notice that never comes down, which is
         // exactly the bug this pair exists to fix and would be invisible in
         // the test above if either side used a real member id.
-        let broke = CallEvent::KeyDistributionFailed {
-            reason: "refused".to_owned(),
-            at_join: true,
-        };
-        let mended = CallEvent::KeyDistributionRecovered;
+        let (failed, _) = what_a_rollout_says(&["_@bob:example.org_PHONE".to_owned()], true);
+        let (recovered, _) = what_a_rollout_says(&[], true);
 
-        let failed = what_it_says(&broke);
-        let recovered = what_it_says(&mended);
-
-        assert_eq!(failed.map(|(member, _)| member), Some(THIS_SESSION));
-        assert_eq!(recovered.map(|(member, _)| member), Some(THIS_SESSION));
+        assert_eq!(failed, THIS_SESSION);
+        assert_eq!(recovered, THIS_SESSION);
     }
 
     #[test]
@@ -599,7 +598,7 @@ mod tests {
             key_index: Some(0),
             sender_user_id: Some("@ada:example.org".to_owned()),
             sender_device_id: Some("LAPTOP".to_owned()),
-            reason: matrix_rtc_core::KeyRejection::NotCrossSigned,
+            reason: matrix_rtc_core::KeyRejection::SenderNotConfirmed,
         };
 
         let said = what_it_says(&event);
@@ -607,45 +606,34 @@ mod tests {
         let Some((_, Some(Fault::KeyRefused { reason }))) = said else {
             panic!("{said:?}");
         };
-        assert!(reason.to_lowercase().contains("cross-signed"), "{reason}");
+        assert!(reason.to_lowercase().contains("confirm"), "{reason}");
     }
 
     #[test]
     fn our_own_key_failing_to_send_is_reported_against_no_membership() {
-        // The event names nobody, because it is about us. It still needs a key
-        // it can be cleared under, and that key must not be one a real
-        // membership could take.
-        let event = CallEvent::KeyDistributionFailed {
-            reason: "Encryption failed because cross-signing is not set up".to_owned(),
-            at_join: true,
-        };
+        // It names nobody, because it is about us. It still needs a key it can
+        // be cleared under, and that key must not be one a real membership
+        // could take: every member id in this generation is `{user}:{device}`.
+        let (member_id, fault) = what_a_rollout_says(&["_@bob:example.org_PHONE".to_owned()], true);
 
-        let said = what_it_says(&event);
-
-        let Some((member_id, Some(Fault::NotDistributed { reason, at_join }))) = said else {
-            panic!("{said:?}");
+        let Some(Fault::NotDistributed { at_join, .. }) = fault else {
+            panic!("{fault:?}");
         };
         assert!(!member_id.starts_with('_'), "{member_id}");
         assert!(member_id.contains(' '), "{member_id}");
-        assert!(reason.contains("cross-signing"), "{reason}");
         assert!(at_join);
     }
 
     #[test]
     fn a_later_distribution_failure_keeps_saying_it_was_later() {
-        // The flag is the whole reason the upstream event carries it, and
-        // dropping it here would collapse the two sentences into one.
-        let event = CallEvent::KeyDistributionFailed {
-            reason: "1 of 3 member(s) did not get key index 2".to_owned(),
-            at_join: false,
-        };
-
-        let said = what_it_says(&event);
+        // The flag is the whole reason the caller has to pass it, and dropping
+        // it would collapse the two sentences into one.
+        let (_, fault) = what_a_rollout_says(&["_@bob:example.org_PHONE".to_owned()], false);
 
         assert_eq!(
-            said.unwrap().1,
+            fault,
             Some(Fault::NotDistributed {
-                reason: "1 of 3 member(s) did not get key index 2".to_owned(),
+                reason: "one member did not get it".to_owned(),
                 at_join: false,
             })
         );
@@ -655,6 +643,7 @@ mod tests {
     fn somebody_leaving_takes_whatever_was_wrong_with_them() {
         let event = CallEvent::ParticipantLeft {
             member_id: "_@ada:example.org_LAPTOP".to_owned(),
+            participant_count: 1,
         };
 
         let said = what_it_says(&event);
@@ -669,6 +658,7 @@ mod tests {
         let event = CallEvent::ParticipantJoined {
             member_id: "_@ada:example.org_LAPTOP".to_owned(),
             user_id: "@ada:example.org".to_owned(),
+            participant_count: 2,
         };
 
         let said = what_it_says(&event);
@@ -679,25 +669,78 @@ mod tests {
     fn the_end_of_a_call_is_recognised() {
         // Nothing follows an `Ended`, so a reader that keeps waiting draws a
         // dead call as connected for as long as the application runs.
-        let event = CallEvent::Ended {
-            reason: EndedReason::ConnectionClosed {
-                message: "the focus closed the connection".to_owned(),
-            },
-        };
-
-        assert!(is_the_end(&event));
+        assert!(is_the_end(&CallStatus::Ended {
+            reason: CallEnd::Left,
+        }));
     }
 
     #[test]
-    fn an_ordinary_report_is_not_the_end() {
-        // Most of this stream arrives while a call is perfectly healthy, and
-        // treating one of those as an ending would close the call panel.
-        let event = CallEvent::FrameEncryptionState {
-            member_id: "_@ada:example.org_LAPTOP".to_owned(),
-            state: FrameEncryptionState::Ok,
-            diagnostic: FrameEncryptionDiagnostic::NotApplicable,
-        };
+    fn a_call_in_progress_is_not_the_end() {
+        // A status channel holds its value and is read on every wake, so
+        // treating any of the live states as an ending would close the call
+        // panel on a call that is fine.
+        assert!(!is_the_end(&CallStatus::Connecting));
+        assert!(!is_the_end(&CallStatus::Connected {
+            since_ms: 1,
+            degraded: false,
+        }));
+    }
 
-        assert!(!is_the_end(&event));
+    #[test]
+    fn a_rollout_that_reached_everybody_says_nothing_is_wrong() {
+        // The clear, and the shape the notice comes down in. An empty list is
+        // a healthy rollout rather than an absent one: upstream reports the
+        // recipients it missed, so "none" is the good answer.
+        assert_eq!(what_a_rollout_says(&[], false), (THIS_SESSION, None));
+        assert_eq!(what_a_rollout_says(&[], true), (THIS_SESSION, None));
+    }
+
+    #[test]
+    fn a_rollout_at_the_join_and_one_after_it_read_differently() {
+        // Two sentences rather than one, because they send somebody to
+        // different places, and the flag is the only thing that picks between
+        // them.
+        let missed = ["_@bob:example.org_PHONE".to_owned()];
+
+        let (_, at_join) = what_a_rollout_says(&missed, true);
+        let (_, later) = what_a_rollout_says(&missed, false);
+
+        assert!(
+            at_join
+                .expect("a missed recipient is a fault")
+                .sentence()
+                .contains("Nobody in this call can hear you")
+        );
+        assert!(
+            later
+                .expect("a missed recipient is a fault")
+                .sentence()
+                .contains("joining from now on")
+        );
+    }
+
+    #[test]
+    fn how_many_went_unreached_is_in_the_sentence() {
+        // The count is the shape of the problem: one person who cannot hear us
+        // and a whole call that cannot are the same fault and not the same
+        // news.
+        let one = what_a_rollout_says(&["_@bob:example.org_PHONE".to_owned()], false)
+            .1
+            .expect("a fault")
+            .sentence();
+        let three = what_a_rollout_says(
+            &[
+                "_@bob:example.org_PHONE".to_owned(),
+                "_@cyd:example.org_DESK".to_owned(),
+                "_@eve:example.org_TAB".to_owned(),
+            ],
+            false,
+        )
+        .1
+        .expect("a fault")
+        .sentence();
+
+        assert!(one.contains("one member"), "{one}");
+        assert!(three.contains("3 members"), "{three}");
     }
 }

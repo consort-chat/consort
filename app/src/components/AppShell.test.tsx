@@ -1075,7 +1075,7 @@ describe("AppShell", () => {
         selfVideo: { camera: true, trouble: null },
       });
 
-      expect(usePicture).toHaveBeenCalledWith("camera");
+      expect(usePicture).toHaveBeenCalledWith("camera", 320);
       expect(screen.getByRole("img", { name: "Your camera" })).toBeVisible();
     });
 
@@ -1107,7 +1107,7 @@ describe("AppShell", () => {
           participants: [{ id: "@ada:example.org", name: "Ada", muted: false }],
           trouble: null,
         },
-        selfScreen: { sharing: "DP-0 (2560x1440)", trouble: null },
+        selfScreen: { sharing: "DP-0 (2560x1440)", trouble: null, sound: false },
       });
 
       expect(

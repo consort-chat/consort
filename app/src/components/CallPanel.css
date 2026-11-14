@@ -396,6 +396,13 @@
   white-space: nowrap;
 }
 
+/* Quieter than the name beside it, which is the thing being looked for. */
+.call-panel__sharing-sound {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
 .call-panel__stop-sharing {
   flex: none;
   /* WCAG 2.5.8 again: the words must not be what decides the target. */

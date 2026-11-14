@@ -1,6 +1,9 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
+// Same reason as the crate: see src/lib.rs.
+#![recursion_limit = "256"]
+
 //! The half of the crate that talks to a homeserver.
 //!
 //! Everything here needs an HTTP server that answers like Synapse, which is
@@ -7363,9 +7366,9 @@ mod read_receipts {
 
     #[tokio::test]
     async fn a_message_nobody_has_read_is_counted_against_the_channel() {
-        // The whole of what `count_unread` is for. Without it the SDK's
-        // counters are zero for every room on the account forever, and the
-        // failure is silent: a room list that simply never marks anything.
+        // What the counting is for, and that it happens on a client this crate
+        // built. The silent failure it guards against is a room list that
+        // simply never marks anything.
         let server = MatrixMockServer::new().await;
         let (_dir, client) = signed_in(&server).await;
         server
@@ -7383,24 +7386,31 @@ mod read_receipts {
     }
 
     #[tokio::test]
-    async fn nothing_is_counted_without_anything_counting() {
-        // The other half, and the reason the test above is worth having: this
-        // is exactly what every build before this one did, and it looks like a
-        // room where nothing has been said.
+    async fn a_client_with_no_event_cache_says_so_rather_than_counting_nothing() {
+        // The other half, and it had to be rewritten rather than deleted.
+        //
+        // It used to sync a message without calling `count_unread` and assert
+        // a count of zero, because before matrix-sdk 0.19 the event cache had
+        // to be subscribed and nothing counted until it was. That is the
+        // failure `count_unread` was written to catch, and it is gone: the
+        // client creates and drives the cache itself now, so the message is
+        // counted whether anybody asks or not and the old assertion fails
+        // against the new SDK.
+        //
+        // What is left is the one way to still get counts of zero forever,
+        // which is a client built without a cache at all. Nothing in this
+        // crate does that, which is why `count_unread` is now a check rather
+        // than a subscribe, and this is what says the check works.
         let server = MatrixMockServer::new().await;
-        let (_dir, client) = signed_in(&server).await;
-        server
-            .sync_joined_room(&client, ruma::room_id!("!general:example.org"))
-            .await;
-        syncing_a_message(&server).await;
-
-        client
-            .sync_once(matrix_sdk::config::SyncSettings::default())
+        let client = matrix_sdk::Client::builder()
+            .homeserver_url(server.uri())
+            .with_event_cache(false)
+            .build()
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        assert_eq!(unread_in_the_room(&client).await, 0);
+        assert!(client.event_cache().is_none());
+        assert!(consort_matrix::count_unread(&client).is_err());
     }
 
     #[tokio::test]

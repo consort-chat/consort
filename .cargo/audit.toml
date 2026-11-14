@@ -1,39 +1,15 @@
-# What `cargo audit` is allowed to pass over, and why.
-#
-# An entry here is a decision to accept a risk, not a way to quiet a build, so
-# every one carries the reason it does not reach this code and the thing that
-# has to happen before it can come out. docs/DEPENDENCIES.md has the order to
-# try before adding one: move the version, then rebase the fork, then this.
-#
-# Crates that are merely unmaintained, unsound or yanked do not fail the build
-# and do not belong here. Twelve of those are reported today, almost all of
-# them the GTK3 bindings Tauri depends on.
+# What `cargo audit` is allowed to pass over. An entry is a decision to accept a
+# risk, not a way to quiet a build: docs/DEPENDENCIES.md#advisories has the
+# argument for each, the order to try before adding one, and what lifts it.
 
 [advisories]
 ignore = [
-  # RUSTSEC-2026-0292, double free in imbl-sized-chunks 0.1.3.
-  #
-  # `Chunk::{clear, drop_left, drop_right}` and `InlineArray::{clear,
-  # truncate}` drop their elements before updating the metadata saying which
-  # slots are live, so an element whose `Drop` panics leaves the collection
-  # believing the dropped elements are still there and drops them again later.
-  #
-  # Not reachable here. Nothing this workspace or matrix-sdk puts in an imbl
-  # collection has a `Drop` that can panic: the timeline is an
-  # `ObservableVector<Arc<TimelineItem>>` and what that bottoms out in is ruma
-  # event types, strings and counted pointers. A panic in `Drop` during
-  # unwinding aborts anyway, so the path needs one during ordinary execution,
-  # which none of these types has.
-  #
-  # Cannot be fixed by moving a version. Only imbl 7.0.2 asks for the patched
-  # `imbl-sized-chunks ^0.2.0`; every release from 4.0.0 to 7.0.1 asks for
-  # `^0.1.3`, and the pinned matrix-sdk fork holds `imbl = "6.1.0"`, so cargo
-  # refuses the bump rather than resolving it.
-  #
-  # Comes out when the matrix-sdk pin moves. Upstream
-  # matrix-org/matrix-rust-sdk is already on `imbl = "7.0.2"` and
-  # `eyeball-im = "0.9.1"`, so this clears itself the moment the fork carries
-  # that, and the fork's rev moves only with the matrix-rtc one. See the
-  # matrix-sdk entry in docs/DEPENDENCIES.md.
-  "RUSTSEC-2026-0292",
+  # Uninitialized memory out of the C SQLite libsqlite3-sys bundles.
+  "RUSTSEC-2026-0459",
+
+  # Four extraction flaws in `zip` 4.6.1, under tauri-plugin-updater.
+  "RUSTSEC-2026-0367",
+  "RUSTSEC-2026-0368",
+  "RUSTSEC-2026-0369",
+  "RUSTSEC-2026-0429",
 ]

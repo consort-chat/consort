@@ -1,25 +1,11 @@
 // Copyright 2026 The Consort contributors
 // SPDX-License-Identifier: AGPL-3.0-only
 
-//! The seam between the call thread and whatever is actually carrying a call.
+//! The seam between the call thread and whatever is carrying a call.
 //!
-//! One implementation talks to a real SFU through `matrix-rtc-livekit`. It
-//! lives in [`crate::livekit`], is excluded from coverage, and is the only
-//! part of this crate that links libwebrtc.
-//!
-//! The seam exists so that everything above it can be tested. A test that had
-//! to stand up an SFU would not be run, and a call thread nobody tests is a
-//! call thread whose reconnect logic is discovered by a person clicking a
-//! channel twice.
-//!
-//! ## Why these are not object-safe
-//!
-//! [`CallTransport::join`] is an `async fn` in a trait, which cannot be put
-//! behind `dyn`. That is fine here and deliberate: unlike the audio backends,
-//! which are chosen at runtime because a test and the application need
-//! different ones in the same binary, there is exactly one call transport per
-//! build. [`crate::CallThread`] is generic over it, and the choice is made
-//! once at the call site.
+//! The one real implementation is [`crate::livekit`], excluded from coverage
+//! and the only part of this crate that links libwebrtc. Why the seam exists
+//! and why these traits are not object-safe: `docs/CALLS.md`.
 
 use consort_matrix::Participant;
 
@@ -52,11 +38,9 @@ pub trait CallTransport: Send + 'static {
 
 /// A call this session is currently in.
 ///
-/// Not `Send`, and that is the whole reason the call thread exists. The real
-/// one is built by `Call::join`, which uses `spawn_local` for its heartbeat
-/// and its key distribution, so it can only exist inside a `LocalSet` on the
-/// thread that made it. It cannot be held in shared application state and it
-/// cannot be moved across an await in a Tauri command.
+/// Not `Send`, which is why the call thread exists: the real one is pinned to
+/// the `LocalSet` that made it, so it cannot be held in shared state or moved
+/// across an await in a Tauri command.
 #[allow(
     async_fn_in_trait,
     reason = "same as CallTransport above: the session is pinned to the call \
@@ -68,131 +52,104 @@ pub trait CallSession {
 
     /// The microphone publication this call hands back.
     ///
-    /// `'static` follows from [`PublishedAudio`], and it is load bearing: the
-    /// call thread moves one into a task of its own so the command loop stays
-    /// answerable while a frame is in flight. That is also why this is not
-    /// tied to the session's lifetime the way a borrow would be.
+    /// `'static` is load bearing: the call thread moves one into a task of its
+    /// own so the command loop stays answerable while a frame is in flight.
     type Track: PublishedAudio;
 
     /// The camera publication this call hands back, when there is one.
     type Video: PublishedVideo;
 
+    /// The publication a shared screen's own sound goes out on.
+    ///
+    /// A second audio publication rather than the microphone's: see
+    /// [`publish_share_audio`](Self::publish_share_audio).
+    type ShareAudio: PublishedAudio;
+
     /// Publish this session's microphone and hand back somewhere to push PCM.
     ///
-    /// Separate from joining because they fail differently and because the
-    /// call thread does something different with each: the session it holds,
-    /// the publication it hands to a task.
+    /// Separate from joining because they fail differently.
     async fn publish_microphone(&self) -> Result<Self::Track, CallFailure>;
 
     /// Publish this session's camera and hand back somewhere to push frames.
     ///
-    /// Not called at join, unlike the microphone. A camera goes up when
-    /// somebody asks for one and comes down when they stop asking, so this is
-    /// reached from the command channel rather than from the join path.
-    /// Taking it down again is [`retract_camera`](Self::retract_camera).
+    /// Not called at join, unlike the microphone: it is reached from the
+    /// command channel, and [`retract_camera`](Self::retract_camera) takes it
+    /// down.
     async fn publish_camera(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
 
     /// Take this session's camera down, so peers drop the stream and this
     /// session's own roster entry stops saying it is filming.
     ///
-    /// Here rather than on the publication. Retracting LiveKit's track handle
-    /// took the camera off the SFU and left it on the engine's roster, which
-    /// is where this session's own icon is read from, so the camera stayed
-    /// lit after it was switched off. Only the session can reach the engine.
-    ///
-    /// Already retracted is success: the room may have closed and taken every
-    /// publication with it, and a camera that is off twice is off.
+    /// Here rather than on the publication: retracting LiveKit's track handle
+    /// left the camera on the engine's roster, which is where this session's
+    /// own icon is read from, and only the session can reach the engine.
+    /// Already retracted is success.
     async fn retract_camera(&self) -> Result<(), CallFailure>;
 
     /// Publish this session's screen and hand back somewhere to push frames.
     ///
-    /// The same shape as [`publish_camera`](Self::publish_camera) and a
-    /// separate method rather than a parameter on it, because peers read the
-    /// two as different streams: `MediaStreamKind::ScreenShare` is what a
-    /// client draws large and a camera is what it draws in a tile. A session
-    /// may have both up at once.
-    ///
-    /// `size` is what the capture is actually producing, which for a window is
-    /// whatever size that window happens to be rather than one of a device's
-    /// negotiated modes.
+    /// A separate method rather than a parameter because peers read the two as
+    /// different streams and a session may have both up at once. `size` is what
+    /// the capture is producing, which for a window is whatever size it is.
     async fn publish_screen(&self, size: PictureSize) -> Result<Self::Video, CallFailure>;
 
     /// Take this session's screen share down. See
     /// [`retract_camera`](Self::retract_camera), which this mirrors.
     async fn retract_screen(&self) -> Result<(), CallFailure>;
 
+    /// Publish what the machine a share comes from is playing, and hand back
+    /// somewhere to push PCM.
+    ///
+    /// A track of its own, never the microphone's. Mixed in, a share's sound
+    /// could not be separated again: a listener who turned the sharer down
+    /// would lose the share with them, and a microphone carrying what the
+    /// speakers play feeds back. Peers read it as
+    /// `MediaStreamKind::ScreenShareAudio`.
+    async fn publish_share_audio(&self) -> Result<Self::ShareAudio, CallFailure>;
+
+    /// Take a shared screen's sound down. See
+    /// [`retract_screen`](Self::retract_screen), which this mirrors.
+    async fn retract_share_audio(&self) -> Result<(), CallFailure>;
+
     /// Mute or unmute this session's own microphone at the transport.
     ///
-    /// Not a description of the audio, and nothing on the frame path may ever
-    /// call this: see the header of [`crate::publish`] for what happened the
-    /// last time something did. This is a person pressing a button, which is
-    /// why it arrives on the command channel with the joins and the leaves
-    /// rather than beside the samples.
-    ///
-    /// Peers are told, by the transport, in the way every other client already
-    /// understands. That is the reason to mute here rather than to stop
-    /// pushing frames: a sender that goes quiet reads as a wedged client, and a
-    /// muted one reads as somebody who muted.
+    /// Nothing on the frame path may ever call this: see [`crate::publish`].
+    /// Muted at the transport rather than going quiet, because a sender that
+    /// goes quiet reads as a wedged client and a muted one reads as somebody
+    /// who muted.
     async fn set_muted(&self, muted: bool) -> Result<(), CallFailure>;
 
     /// Stop or resume receiving the audio of everybody else in the call.
     ///
-    /// The other half of a mute button, and a separate concern from it: mute is
-    /// about what leaves this machine, this is about what arrives. Nothing in
-    /// MatrixRTC or LiveKit has a name for it, so it is built out of per-stream
-    /// subscription state and it is this session's business alone.
-    ///
-    /// Whoever implements this owns keeping it true as people join. A person
-    /// who deafened and then had somebody walk into the channel must not start
-    /// hearing them.
-    ///
-    /// Telling anybody else is not part of this. See
-    /// [`announce_self`](Self::announce_self).
+    /// About what arrives rather than what leaves. Nothing in MatrixRTC or
+    /// LiveKit names it, so it is built from per-stream subscription state, and
+    /// the implementation owns keeping it true as people join.
     async fn set_deafened(&self, deafened: bool) -> Result<(), CallFailure>;
 
     /// Tell the other Consort clients in the call what this session is doing
     /// with its own audio.
     ///
-    /// Separate from the two setters above because it is a different kind of
-    /// act and because it does not correspond to either of them one for one.
-    /// Muting is already broadcast by the SFU and needs nothing here; deafening
-    /// and being away are invisible to everything in the stack and need all of
-    /// it. Folding this into `set_deafened` meant that adding a second thing
-    /// worth announcing had nowhere to go.
-    ///
-    /// Called on every roster change as well as on every button, because a
-    /// person who walks in has missed everything said before they arrived.
-    ///
-    /// A failure is the implementation's to log. This is an icon on somebody
-    /// else's screen: it is not worth ending a call over, and whatever was
-    /// announced has already happened locally.
+    /// Called on every roster change as well as every button, because somebody
+    /// who walks in missed what was said before they arrived. Mute is not in
+    /// here: the SFU already broadcasts it. A failure is the implementation's
+    /// to log.
     async fn announce_self(&self, audio: SelfAudio) -> Result<(), CallFailure>;
 
     /// Play everybody else in this call into `ears`, and keep doing it as
     /// people come and go.
     ///
-    /// Called on every roster change rather than once, so an implementation
-    /// must be idempotent: somebody already being played is left strictly
-    /// alone, because tearing a working audio path down and rebuilding it on
-    /// every membership change is audible. [`crate::hearing::changes`] is the
-    /// difference, as a value.
-    ///
-    /// Not `async` and not fallible, and the count it answers with is not a
-    /// failure either: a participant whose stream has not arrived yet is the
-    /// ordinary case. It is reported because nothing else need ever say so.
+    /// Called on every roster change rather than once, so it must be
+    /// idempotent: rebuilding a working audio path on every membership change
+    /// is audible, and [`crate::hearing::changes`] is the difference as a
+    /// value. The count it answers with is not a failure.
     fn listen(&self, ears: &Ears) -> Attached;
 
     /// Pull everybody else's camera and shared screen into `eyes`, and keep
     /// doing it as they switch them on and off.
     ///
-    /// [`listen`](Self::listen)'s sibling, driven by the same roster change and
-    /// idempotent on the same terms. Separate from it because the two ends are
-    /// different: audio is mixed into a sound card as it arrives, and a picture
-    /// is a still the window asks for when it draws one.
-    ///
-    /// Reported on the same terms as [`listen`](Self::listen), and for the
-    /// reason issue #185 was: a camera switched on mid-call publishes one
-    /// roster change, the announcement, and its track lands after it. Upstream
+    /// [`listen`](Self::listen)'s sibling, idempotent on the same terms.
+    /// Reported the same way for issue #185: a camera switched on mid-call
+    /// publishes one roster change and its track lands after it, and upstream
     /// inserts that subscription into a membership that already carries the
     /// stream, which publishes no roster, so nothing would ask again.
     fn watch(&self, eyes: &Eyes) -> Attached;
@@ -200,47 +157,27 @@ pub trait CallSession {
     /// Ask for everybody else's picture at the size it is drawn, under
     /// whatever cap was chosen for them.
     ///
-    /// [`watch`](Self::watch)'s sibling, driven by the same roster change, and
-    /// restated on every one of them rather than set once: a constraint is
-    /// keyed by membership, so somebody who rejoins arrives without theirs.
-    ///
-    /// Not fallible and not `async`. What this asks for is a cap rather than a
-    /// demand: the transport underneath is debounced, answers nothing, and is
-    /// free to deliver less than this under congestion.
-    ///
-    /// Which memberships to ask about is the implementation's business, for
-    /// the reason [`listen`](Self::listen) reads its own roster. A cap is
-    /// chosen per person and a stream belongs to a device, so a person on a
-    /// laptop and a phone is two asks.
+    /// Restated on every roster change rather than set once, because a
+    /// constraint is keyed by membership and somebody who rejoins arrives
+    /// without theirs. A cap rather than a demand, so the transport may deliver
+    /// less.
     fn request(&self, wanted: &Wanted);
 
     /// Start watching who is in the call.
     ///
-    /// Each call to this is an independent view of the same roster, so the
-    /// thread can read one now and hand another to the task that follows it
-    /// without either disturbing the other.
+    /// Each call is an independent view of the same roster.
     fn roster(&self) -> Self::Roster;
 
     /// Leave the call, unwinding membership and the media session.
     ///
-    /// By value, because leaving is the end of the session and anything that
-    /// could use it afterwards would be using a call that is over.
+    /// By value, because anything that could use the session afterwards would
+    /// be using a call that is over.
     async fn leave(self) -> Result<(), CallFailure>;
 }
 
 /// Who is in a call, and a way to wait for that to change.
 ///
-/// Two methods rather than a stream, because the two are asked at different
-/// moments and one of them is not cheap: [`now`](Roster::now) resolves display
-/// names, which is a read per person against the room's member store, and it
-/// should happen when there is something new to report rather than on a
-/// schedule.
-///
-/// This is the source the plan calls strictly better than reading room state,
-/// and it is only better for one channel: the one this session is sitting in.
-/// It comes from MatrixRTC signalling rather than from `m.room.state`, so it
-/// is right in every dialect, including the ones where room state shows
-/// nothing at all.
+/// Two methods rather than a stream: `docs/CALLS.md` has why.
 #[allow(
     async_fn_in_trait,
     reason = "same as the two traits above: awaited only on the call thread"
@@ -248,44 +185,26 @@ pub trait CallSession {
 pub trait Roster {
     /// Who is in the call right now, named for somebody to read.
     ///
-    /// Per human rather than per membership: a person on a laptop and a phone
-    /// is one entry. Empty is a real answer, for the moment between joining
-    /// and this session's own membership coming back round.
+    /// Per human rather than per membership. Empty is a real answer.
     async fn now(&self) -> Vec<Participant>;
 
     /// Which of the people in [`now`](Self::now) is this session's own user.
     ///
-    /// The roster deliberately includes us: a voice channel draws everybody in
-    /// it, and leaving the reader out would be a list that is wrong by one for
-    /// the one person looking at it. So something has to say which entry that
-    /// is, and this is the only layer that can: a `member_id` is per device and
-    /// a roster is per person, so the two cannot be matched up further down.
-    ///
-    /// `None` from an implementation that does not know, which is treated as
-    /// "none of them". Being wrong that way costs one chime at the start of a
-    /// call; being wrong by guessing would put somebody's own name in a
-    /// diff every time their second device connected.
+    /// A `member_id` is per device and a roster is per person, so the two
+    /// cannot be matched up further down: only this layer can say which entry
+    /// is ours. `None` is treated as none of them.
     fn me(&self) -> Option<String>;
 
     /// What is wrong with this call's audio, if anything.
     ///
-    /// Here rather than on a seam of its own because it changes for the same
-    /// reasons the roster does and is drawn in the same place. Two streams
-    /// would mean two watchers racing to describe one call, and whichever
-    /// spoke last would win. See [`crate::trouble`] for what these sentences
-    /// are and why there is only ever one.
+    /// Here rather than on a seam of its own, because it changes for the same
+    /// reasons the roster does and two watchers would race to describe one
+    /// call. See [`crate::trouble`].
     fn trouble(&self) -> Option<String>;
 
     /// Wait for anything about this call to be different.
     ///
-    /// `Some` means re-read and redraw; `None` means the call is over and
-    /// nothing will change again.
-    ///
-    /// A bare wake-up rather than a description of what moved. It used to
-    /// carry one, because who is talking arrived here too and cost nothing to
-    /// act on while a roster read costs a member-store lookup per person. Who
-    /// is talking is now measured from the audio itself, on the machine that
-    /// is playing it, so the only thing left on this seam is the expensive
-    /// kind. See `consort_audio::talking`.
+    /// `Some` means re-read and redraw, `None` means the call is over. A bare
+    /// wake-up rather than a description of what moved.
     async fn changed(&mut self) -> Option<()>;
 }

@@ -30,8 +30,12 @@ the card about one person caps it below that: #167,
 docs/adr/0013-ask-for-a-picture-in-pixels.md for the units and the ceilings,
 docs/PLAN-receiving-quality.md for what is left, which is the automatic cap
 from a connection going bad.
-Sharing system audio alongside a screen is not built either,
-and docs/PLAN-screen-share.md says what it would take. Deleting your own
+A shared screen's own sound is carried on a track of its own, and heard on
+every platform; sending one needs a build that can capture what the machine is
+playing, which today is Windows alone:
+docs/adr/0020-send-a-shares-sound-where-a-build-can-capture-it.md has what each
+platform can do and what is left, which is a PipeWire or libpulse backend for
+Linux and per-process loopback on Windows. Deleting your own
 message is not built either, and neither is upload progress, a thumbnail for a
 clip somebody sends, or a count on the icon when something is unread.
 
@@ -152,24 +156,38 @@ detail included, and the signing keypair, which nobody but Thomas holds.
 
 ### The matrix-sdk pin is load-bearing
 
-`Cargo.toml` pins `matrix-sdk` to git rev `3773300` of
-`BillCarsonFr/matrix-rust-sdk`, not a crates.io release.
+`Cargo.toml` pins `matrix-sdk` to git rev `56bc591` of
+`matrix-org/matrix-rust-sdk`, not a crates.io release.
 
-That rev must stay identical to the one `matrix-rust-rtc` pins. When the voice
-layer lands it takes a `matrix_sdk::Client`, and if the revs differ cargo
+That rev must stay identical to the one `matrix-rust-rtc` pins.
+`LiveKitCall::join` takes a `&matrix_sdk::Room`, and if the revs differ cargo
 resolves two copies of the SDK and produces `expected Client, found Client`
 errors that look like nonsense. Never bump this pin alone.
 
-The upstream repo is at `../matrix-rust-rtc` on this machine. Check
-`crates/matrix-rtc-livekit/Cargo.toml` there before touching the pin.
+Both pins are upstream now rather than personal forks, which is recent: the
+previous pair was `BillCarsonFr/matrix-rust-sdk` and
+`tominal/matrix-rust-rtc`, the second of them nine commits on top of a
+repository that was archived read-only in September 2026.
+[docs/PLAN-off-the-pinned-forks.md](docs/PLAN-off-the-pinned-forks.md) has what
+the move cost, what it bought, and the one capability it left behind.
+
+Check `Cargo.toml` in `element-hq/matrix-rust-rtc` before touching the pin.
 [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) has what moves each pin, how to
-see how far behind the fork has fallen, and what to do about an advisory.
+see how far behind it has fallen, and what to do about an advisory.
 
 ### Call::join cannot live in a Tauri command
 
-`Call::join` drives `!Send` futures via `spawn_local` and panics outside a
-`tokio::task::LocalSet`. Tauri v2 commands run on a multi-threaded runtime and
+`LiveKitCall::join` drives `!Send` futures via `spawn_local` and panics outside
+a `tokio::task::LocalSet`. Tauri v2 commands run on a multi-threaded runtime and
 require `Send` futures. The two cannot meet.
+
+Worth knowing before trusting the rest of this section: the constraint is gone
+upstream. element-hq's `LiveKitCall::join` spawns through
+`matrix_rtc_core::executor`, which re-exports `tokio::task::spawn` and requires
+`Send`, so the thread below could become an ordinary task. Deliberately not
+taken in the same change as the migration, because the actor is also what keeps
+the call off the thread that draws: see
+[docs/PLAN-off-the-pinned-forks.md](docs/PLAN-off-the-pinned-forks.md)'s stage 5.
 
 The design is a call actor: a dedicated thread owning a current-thread runtime
 plus a `LocalSet`, holding the `Call`, reached over a command channel with an
@@ -378,9 +396,12 @@ crypto machine garbage-collects timed-out flows on every sync response and the
 arguments, call in, translate the result. If a command grows a branch worth
 testing, that branch is in the wrong crate.
 
-**Comments explain why, never what.** The repository holds a fairly high bar
-here. Read a neighbouring file before writing new ones. A comment that restates
-its line gets deleted in review.
+**Comments explain why, never what.** 1 line inline, 3 above a declaration, 5
+in a file header, never longer than the code described, and never more than 15
+lines anywhere. Anything longer is documentation and belongs in `docs/`. The
+rule, with what a comment is and is not for, is
+[`.claude/skills/comment-standard/SKILL.md`](.claude/skills/comment-standard/SKILL.md).
+Read it before writing one.
 
 **Errors carry two messages.** `consort_matrix::Error::user_message()` is written
 for a person and is what the UI renders. `Display` is for logs. Do not leak raw
@@ -469,4 +490,5 @@ before writing code, and pass its conventions into any subagent prompt:
 | `app/src/**/*.tsx` | `react-patterns`, `frontend-patterns`, `react-testing` |
 | `vite.config.ts`, build setup | `vite-patterns` |
 | Anything security-adjacent | `security-review` |
+| Any comment, header, or config prose | `comment-standard` |
 | A decision worth recording | `architecture-decision-records` |

@@ -1741,6 +1741,15 @@ pub fn share_sources(state: State<'_, AppState>) -> Result<Vec<ShareSource>, Com
     share_sources_for(&state, || Box::new(ScreensHost::default()))
 }
 
+/// Whether this build can send a shared screen's own sound.
+///
+/// Read by the settings screen before it draws the switch, because a switch
+/// for a capture that cannot happen is a switch that lies about what it does.
+#[tauri::command]
+pub fn share_sound_available(state: State<'_, AppState>) -> bool {
+    state.share_sound_available()
+}
+
 #[tauri::command]
 pub fn set_share(state: State<'_, AppState>, source: Option<String>) -> SelfScreen {
     state.set_share(|| Box::new(ScreensHost::default()), source)
@@ -1752,16 +1761,16 @@ pub fn set_share(state: State<'_, AppState>, source: Option<String>) -> SelfScre
 /// frame is converted and nothing is encoded while nobody is drawing it. See
 /// `docs/adr/0007-draw-the-self-view-from-a-still.md`.
 #[tauri::command]
-pub fn self_view(state: State<'_, AppState>) -> Option<String> {
-    state.self_view()
+pub fn self_view(state: State<'_, AppState>, bound: u32) -> Option<String> {
+    state.self_view(bound)
 }
 
 /// The newest shared-screen frame for the call card, as a `data:` URL.
 ///
 /// The twin of [`self_view`], asked for the same way and for the same reasons.
 #[tauri::command]
-pub fn screen_view(state: State<'_, AppState>) -> Option<String> {
-    state.screen_view()
+pub fn screen_view(state: State<'_, AppState>, bound: u32) -> Option<String> {
+    state.screen_view(bound)
 }
 
 /// The newest picture somebody else in the call is sending, as a `data:` URL.

@@ -4,6 +4,34 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.14.0 (2026-11-13)
+
+### Added
+
+- Play a shared screen's sound (@tominal)
+- Send a shared screen's sound as a track of its own (@tominal)
+- A switch for a share's sound, where there is one to switch (@tominal)
+- Say when a share is carrying this machine's sound (@tominal)
+- Let a sender choose how much camera it sends (@tominal)
+
+### Documentation
+
+- Plan for getting off the pinned forks (@tominal)
+- #215 is merged, so measure the audit delta against it (@tominal)
+- Plan for getting off the pinned forks (@tominal)
+- Write the comment standard into the repository (@tominal)
+- Record the decision to leave the forks, and what it cost (@tominal)
+- #127, cut comment blocks to the project standard in the files #217 touched (@tominal)
+- What the call job costs, and the two things CI needs that a laptop does not (@tominal)
+- The gate was met, so ADR-0021 is accepted (@tominal)
+
+### Fixed
+
+- Ask the full-window stage for the box it measures (@tominal)
+- Sample the self view at the size the card is drawing it (@tominal)
+- Move quinn-proto past three remote panics (@tominal)
+- Ask a share for its best, because its other rung is 3 fps (@tominal)
+
 ## 0.13.0 (2026-10-10)
 
 ### Added

@@ -3,21 +3,17 @@
 
 //! Getting everybody else's pictures out of the call and onto the card.
 //!
-//! [`crate::hearing`]'s mirror, and the same bug was waiting here: a
-//! subscribed video track is a decoder writing frames into a stream, and a
-//! stream nobody reads is frames decoded and dropped. Consort shipped exactly
-//! that for cameras and shared screens, so two people could each send both and
-//! each see neither.
-//!
-//! [`Seen`] is a trait for the reason [`crate::hearing::Heard`] is one: what is
-//! on the other end is a webview, and this crate must not know that. What
-//! arrives there is a still, asked for at the size it is drawn:
+//! [`crate::hearing`]'s mirror: a decoder writing into a stream nobody reads is
+//! frames decoded and dropped. [`Seen`] is a trait because what is on the other
+//! end is a webview, and this crate must not know that. What arrives there is a
+//! still, asked for at the size it is drawn:
 //! `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use matrix_rtc_media::{MediaStreamKind, Participant as MediaParticipant, VideoFrame};
+use matrix_rtc_call_sdk::Participant as MediaParticipant;
+use matrix_rtc_transport::{MediaStreamKind, VideoFrame};
 use serde::{Deserialize, Serialize};
 
 use crate::roster;
@@ -69,13 +65,10 @@ pub struct IncomingPicture {
 /// Somewhere to put the pictures the other people in a call are sending.
 ///
 /// `Send + Sync` because one is shared by every pump task at once, and
-/// `'static` because those tasks outlive the call that started them by however
-/// long it takes them to notice.
-///
-/// Keyed by membership, like the audio and for the same reason: a picture
-/// belongs to the device sending it. The person it belongs to travels with
-/// every frame rather than being declared in a pass of its own, because unlike
-/// a queue of audio a still needs nothing hung on it between frames.
+/// `'static` because those tasks outlive the call. Keyed by membership, because
+/// a picture belongs to the device sending it, and the person travels with
+/// every frame because unlike audio a still needs nothing hung on it between
+/// frames.
 pub trait Seen: Send + Sync + 'static {
     /// Keep this frame as the newest one `member_id`, who is `user_id`, is
     /// sending of `kind`.
@@ -99,15 +92,10 @@ pub type Eyes = Arc<dyn Seen>;
 
 /// Everybody in `participants` whose `kind` we should be pulling.
 ///
-/// Our own membership is excluded, for the reason
-/// [`crate::hearing::audible`] excludes it: the SFU does not send it back.
-///
-/// A muted one is excluded too, which is where this parts company with the
-/// audio. A muted microphone is attached anyway so that unmuting is instant,
-/// and the cost is nothing because no samples arrive. A camera that is off has
-/// a picture behind it that somebody switched off on purpose, and the roster
-/// draws no square for it either way: `roster::camera_live` is the one answer
-/// to who has something worth drawing.
+/// Our own membership is excluded because the SFU does not send it back. A
+/// muted one is too, unlike the audio: a muted microphone is attached so
+/// unmuting is instant, but a camera that is off was switched off on purpose
+/// and the roster draws no square for it either way.
 pub fn wanted(participants: &[MediaParticipant], kind: Kind) -> BTreeSet<String> {
     participants
         .iter()
@@ -120,12 +108,9 @@ pub fn wanted(participants: &[MediaParticipant], kind: Kind) -> BTreeSet<String>
 /// One decoded frame, out from behind the strides it arrived with.
 ///
 /// By value, so a frame whose rows are already tight is moved rather than
-/// copied, which is every frame from a publisher whose width is a multiple of
-/// the decoder's alignment.
-///
-/// `frame.rotation` is ignored. Nothing Consort publishes sets one, and
-/// honouring it means transposing three planes per frame for the clients that
-/// might: see the ADR.
+/// copied. `frame.rotation` is ignored: nothing Consort publishes sets one, and
+/// honouring it means transposing three planes per frame. See
+/// `docs/adr/0014-ask-for-a-remote-picture-at-the-size-it-is-drawn.md`.
 pub fn incoming(frame: VideoFrame) -> IncomingPicture {
     let buffer = frame.buffer;
     let (width, height) = (buffer.width, buffer.height);
@@ -168,7 +153,9 @@ fn tighten(mut plane: Vec<u8>, stride: usize, width: usize, height: usize) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use matrix_rtc_media::{I420Buffer, StreamState, VideoRotation};
+    use matrix_rtc_call_sdk::ConnectionState;
+    use matrix_rtc_call_sdk::StreamState;
+    use matrix_rtc_transport::{I420Buffer, VideoRotation};
 
     fn member(member_id: &str, is_local: bool, kinds: &[MediaStreamKind]) -> MediaParticipant {
         MediaParticipant {
@@ -176,7 +163,9 @@ mod tests {
             user_id: format!("@{member_id}:example.org"),
             device_id: None,
             is_local,
-            reachable: true,
+            connection: ConnectionState::Connected,
+            unable_to_decrypt: None,
+            hand_raised_position: None,
             hand_raised_at_ms: None,
             joined_at_ms: None,
             streams: kinds

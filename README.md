@@ -179,7 +179,7 @@ Not built by CI, because nobody has said where an `.rpm` would be tested.
 `pnpm tauri build` writes one locally alongside the `.deb`:
 
 ```sh
-sudo dnf install ./target/release/bundle/rpm/Consort-0.13.0-1.x86_64.rpm
+sudo dnf install ./target/release/bundle/rpm/Consort-0.14.0-1.x86_64.rpm
 ```
 
 There is no AppImage on purpose. linuxdeploy cannot parse the `.relr.dyn`
@@ -302,7 +302,7 @@ resource here. The full standard, and what gets a change sent back, is in
 [GNU Affero General Public License, version 3](LICENSE), and only version 3.
 
 Inherited rather than chosen: Consort links
-[`matrix-rust-rtc`](https://github.com/BillCarsonFr/matrix-rust-rtc) (now https://github.com/element-hq/matrix-rust-rtc), which is
+[`matrix-rust-rtc`](https://github.com/element-hq/matrix-rust-rtc), which is
 AGPL-3.0-only. If you run a modified Consort as a network service, the AGPL
 requires you to offer that modified source to its users.
 
