@@ -4,6 +4,16 @@ What changed in each release, taken from the commit messages. Consort is
 pre-1.0 and its versions say so: anything can move between minor versions,
 and the patch number is where most of the work has landed so far.
 
+## 0.14.1 (2026-11-14)
+
+### Documentation
+
+- Finish the sentence that says whose dependency clang is (@tominal)
+
+### Fixed
+
+- The updater public key, all of it (@tominal)
+
 ## 0.14.0 (2026-11-13)
 
 ### Added
