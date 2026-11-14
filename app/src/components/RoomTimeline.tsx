@@ -45,6 +45,7 @@ import {
   type Participant,
   type Timeline,
 } from "../lib/api";
+import { useEmoteNames } from "../lib/emotes";
 import { ComposerAttach } from "./ComposerAttach";
 import { ComposerEmoji } from "./ComposerEmoji";
 import { ComposerStaged, type Staged } from "./ComposerStaged";
@@ -171,6 +172,11 @@ export function RoomTimeline({
 }) {
   const [timeline, setTimeline] = useState<Timeline>(NO_TIMELINE);
   const [names, setNames] = useState<Record<string, string>>({});
+  /*
+    What this room's image packs call each custom emoji, for the pills under a
+    message. Read once per room rather than per pill: see `useEmoteNames`.
+  */
+  const shortcodes = useEmoteNames(channel.id);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1281,6 +1287,7 @@ export function RoomTimeline({
           roomId={channel.id}
           selfId={selfId}
           known={known}
+          shortcodes={shortcodes}
           container={scroller}
           onAbout={(person, at) => setOpened({ person, at })}
           onReact={(eventId, key, mine) => {

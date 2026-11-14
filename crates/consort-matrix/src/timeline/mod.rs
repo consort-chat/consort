@@ -744,9 +744,7 @@ impl Loaded {
         let mut changed = false;
         for event in events {
             if let Some(one) = facts::annotation(event) {
-                changed |= self
-                    .reactions
-                    .added(&one.event_id, &one.target, &one.key, &one.sender);
+                changed |= self.reactions.added(one);
                 continue;
             }
             if let Some(one) = facts::replacement(event) {

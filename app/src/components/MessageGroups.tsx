@@ -624,28 +624,53 @@ function EditedMark() {
  * webview as a URL it could fetch itself is a read receipt nobody asked for
  * and an IP address nobody gave.
  *
- * `alt` is empty because the button around it is already labelled. See
- * [`nameOfKey`] for what that label says and why it is not the shortcode.
+ * `alt` is empty because the button around it is already labelled. `title` is
+ * the shortcode where there is one, so hovering a pill says what to type to
+ * send the same emoji back, which is the job MSC2545 gives that attribute.
  */
-function ReactionKey({ code }: { code: string }) {
+function ReactionKey({
+  code,
+  named,
+}: {
+  code: string;
+  named: string | undefined;
+}) {
   const source = mxcUrl(code);
   if (source === undefined) {
     return <span aria-hidden="true">{code}</span>;
   }
-  return <img className="timeline__reaction-image" src={source} alt="" />;
+  return (
+    <img
+      className="timeline__reaction-image"
+      src={source}
+      alt=""
+      title={named}
+    />
+  );
 }
 
 /**
  * What to call one key when reading the pill out.
  *
- * MSC2545 carries the shortcode alongside the key on the reaction event, and
- * that is the name this should say. Nothing surfaces it yet: the aggregation
- * in `consort-matrix` keeps the key and the count, and reading the packs is
- * #20. Until then the honest answer is what kind of thing it is, rather than
- * a URI read out character by character.
+ * An ordinary key is its own name. A custom emoji is an `mxc://` URI, which
+ * read out character by character is the one thing this must not say, and the
+ * name for it comes from one of two places.
+ *
+ * `sent` is what the sender called it, carried beside the relation, which is
+ * where Cinny puts it and reads it from. `known` is what this account's own
+ * packs call the same address, which is #20's half: see `useEmoteNames`.
+ *
+ * The sender's wins, because two clients read the shortcode out of their own
+ * packs and can disagree, and what was sent is what was meant. Where neither
+ * answers, the honest thing is to say what kind of thing it is.
  */
-function nameOfKey(code: string): string {
-  return mxcUrl(code) === undefined ? code : "Custom reaction";
+function nameOfKey(
+  code: string,
+  sent: string | undefined,
+  known: ReadonlyMap<string, string> | undefined,
+): string {
+  if (mxcUrl(code) === undefined) return code;
+  return sent ?? known?.get(code) ?? "Custom reaction";
 }
 
 /**
@@ -724,6 +749,7 @@ export function MessageGroups({
   threadRoot,
   selfId,
   known,
+  shortcodes,
   container,
   openingId,
   copiedId,
@@ -785,6 +811,15 @@ export function MessageGroups({
    * redaction and a missing key both look like.
    */
   known?: ReadonlyMap<string, Message>;
+  /**
+   * What this room's own image packs call each custom emoji, by `mxc://` URI.
+   *
+   * Only read for a reaction, and only where the sender sent no name of their
+   * own. An emoji in the middle of a sentence arrives with its shortcode on
+   * the `img` and needs nothing from here. See `useEmoteNames` in
+   * `lib/emotes`, and `nameOfKey` below for which answer wins.
+   */
+  shortcodes?: ReadonlyMap<string, string>;
   /**
    * Where to look for the message a reply names, when one is pressed.
    *
@@ -1274,13 +1309,18 @@ export function MessageGroups({
                                   type="button"
                                   className="timeline__reaction"
                                   aria-pressed={one.mine !== undefined}
-                                  aria-label={`${nameOfKey(one.key)}, ${one.count}`}
+                                  aria-label={`${nameOfKey(one.key, one.shortcode, shortcodes)}, ${one.count}`}
                                   disabled={onReact === undefined}
                                   onClick={() =>
                                     onReact?.(message.id, one.key, one.mine)
                                   }
                                 >
-                                  <ReactionKey code={one.key} />
+                                  <ReactionKey
+                                    code={one.key}
+                                    named={
+                                      one.shortcode ?? shortcodes?.get(one.key)
+                                    }
+                                  />
                                   <span
                                     className="timeline__reaction-count"
                                     aria-hidden="true"
