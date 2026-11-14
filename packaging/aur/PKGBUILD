@@ -69,7 +69,10 @@ depends=(
   'hicolor-icon-theme'
   'libayatana-appindicator'
 )
-makedepends=('cargo' 'git' 'nodejs>=24' 'pnpm')
+# clang because webrtc-sys compiles against the hermetic libc++ inside
+# libwebrtc.a: gcc ignores its trivial_abi and silently breaks unique_ptr's
+# calling convention. The version floor is read from the artifact, not from us.
+makedepends=('cargo' 'clang' 'git' 'nodejs>=24' 'pnpm')
 
 provides=("$_pkgname")
 conflicts=("$_pkgname")
